@@ -1,0 +1,126 @@
+/*
+ * MIT License
+ *
+ * Copyright (c) 2020 Dario Kondratiuk
+ * Modifications copyright (c) Microsoft Corporation.
+ */
+using System;
+using System.Threading.Tasks;
+using NUnit.Framework;
+using PlaywrightSharp.NUnit;
+
+namespace PlaywrightSharp.Tests
+{
+    /// <summary>
+    /// Official <c>locator.waitForFunction()</c>.
+    /// </summary>
+    [TestFixture]
+    public class LocatorWaitForFunctionTests : PageTestEx
+    {
+        [PlaywrightTest("locator-wait-for-function.spec.ts", "Waits until the element predicate is truthy")]
+        [Test]
+        [Timeout(30_000)]
+        public async Task WaitForFunctionShouldResolveWhenPredicateBecomesTruthy()
+        {
+            await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
+            await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
+            IPage page = await context.NewPageAsync().ConfigureAwait(false);
+            await page.SetContentAsync("<div id=\"s\">wait</div>").ConfigureAwait(false);
+
+            Task<IJSHandle> waitTask = ((Locator)page.Locator("#s")).WaitForFunctionAsync("el => el.textContent === 'ready'");
+            await page.EvaluateAsync("document.getElementById('s').textContent = 'ready'").ConfigureAwait(false);
+            IJSHandle handle = await waitTask.ConfigureAwait(false);
+
+            Assert.That(handle, Is.Not.Null);
+        }
+
+        [PlaywrightTest("locator-wait-for-function.spec.ts", "Passes arg as the second parameter")]
+        [Test]
+        [Timeout(30_000)]
+        public async Task WaitForFunctionShouldPassArgToPredicate()
+        {
+            await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
+            await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
+            IPage page = await context.NewPageAsync().ConfigureAwait(false);
+            await page.SetContentAsync("<div id=\"s\">wait</div>").ConfigureAwait(false);
+
+            Task<IJSHandle> waitTask = ((Locator)page.Locator("#s")).WaitForFunctionAsync(
+                "(el, expected) => el.textContent === expected",
+                "ready");
+            await page.EvaluateAsync("document.getElementById('s').textContent = 'ready'").ConfigureAwait(false);
+            IJSHandle handle = await waitTask.ConfigureAwait(false);
+
+            Assert.That(handle, Is.Not.Null);
+        }
+
+        [PlaywrightTest("locator-wait-for-function.spec.ts", "Re-resolves after the node is replaced")]
+        [Test]
+        [Timeout(30_000)]
+        public async Task WaitForFunctionShouldReResolveReplacedNode()
+        {
+            await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
+            await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
+            IPage page = await context.NewPageAsync().ConfigureAwait(false);
+            await page.SetContentAsync("<div id=\"s\">wait</div>").ConfigureAwait(false);
+
+            Task<IJSHandle> waitTask = ((Locator)page.Locator("#s")).WaitForFunctionAsync("el => el.textContent === 'ready'");
+            await page.EvaluateAsync(@"(() => {
+                const n = document.createElement('div');
+                n.id = 's';
+                n.textContent = 'ready';
+                document.getElementById('s').replaceWith(n);
+            })()").ConfigureAwait(false);
+            IJSHandle handle = await waitTask.ConfigureAwait(false);
+
+            Assert.That(handle, Is.Not.Null);
+        }
+
+        [PlaywrightTest("locator-wait-for-function.spec.ts", "Times out when the element is missing")]
+        [Test]
+        [Timeout(30_000)]
+        public async Task WaitForFunctionShouldTimeoutWhenMissing()
+        {
+            await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
+            await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
+            IPage page = await context.NewPageAsync().ConfigureAwait(false);
+            await page.SetContentAsync("<div></div>").ConfigureAwait(false);
+
+            TimeoutException ex = Assert.ThrowsAsync<TimeoutException>(
+                async () => await ((Locator)page.Locator("#missing")).WaitForFunctionAsync("el => true", options: new() { Timeout = 200 }).ConfigureAwait(false));
+            Assert.That(ex.Message, Does.Contain("locator.waitForFunction"));
+            Assert.That(ex.Message, Does.Contain("Timeout 200ms exceeded."));
+        }
+
+        [PlaywrightTest("locator-wait-for-function.spec.ts", "Times out when the predicate stays falsy")]
+        [Test]
+        [Timeout(30_000)]
+        public async Task WaitForFunctionShouldTimeoutWhenFalsy()
+        {
+            await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
+            await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
+            IPage page = await context.NewPageAsync().ConfigureAwait(false);
+            await page.SetContentAsync("<div id=\"s\">wait</div>").ConfigureAwait(false);
+
+            TimeoutException ex = Assert.ThrowsAsync<TimeoutException>(
+                async () => await ((Locator)page.Locator("#s")).WaitForFunctionAsync("el => false", options: new() { Timeout = 200 }).ConfigureAwait(false));
+            Assert.That(ex.Message, Does.Contain("locator.waitForFunction"));
+        }
+
+        [PlaywrightTest("locator-wait-for-function.spec.ts", "Is strict")]
+        [Test]
+        [Timeout(30_000)]
+        public async Task WaitForFunctionShouldThrowWhenTwoMatch()
+        {
+            await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
+            await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
+            IPage page = await context.NewPageAsync().ConfigureAwait(false);
+            await page.SetContentAsync("<div class=\"x\"></div><div class=\"x\"></div>").ConfigureAwait(false);
+
+            PlaywrightSharpException ex = Assert.CatchAsync<PlaywrightSharpException>(
+                () => ((Locator)page.Locator(".x")).WaitForFunctionAsync("el => true", options: new() { Timeout = 2000 }));
+
+            Assert.That(ex, Is.Not.Null);
+            Assert.That(ex.Message, Does.Contain("strict mode violation"));
+        }
+    }
+}

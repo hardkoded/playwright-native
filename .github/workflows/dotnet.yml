@@ -1,0 +1,143 @@
+name: build
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - release-*
+  merge_group:
+  pull_request:
+    paths:
+    - '**.yml'
+    - '**.cs'
+    - '**.json'
+    - '**.csproj'
+    - '**.runsettings'
+
+env:
+  DOTNET_VERSION: '10.0.x'
+  # Pin BrowserFetcher's cache to a job-local path so actions/cache can
+  # restore the binaries deterministically across runs.
+  PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.ms-playwright
+
+jobs:
+  build:
+    name: ${{ matrix.browser }}-${{ matrix.mode }}-${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Chromium — full coverage on Linux + Windows, headless + headful.
+          - { os: ubuntu-latest,  browser: chromium, mode: headless }
+          - { os: ubuntu-latest,  browser: chromium, mode: headful  }
+          - { os: windows-latest, browser: chromium, mode: headless }
+          - { os: windows-latest, browser: chromium, mode: headful  }
+          # WebKit — full test suite against the protocol stack.
+          # macOS + Linux headless. Expect failures until WebKit catches up.
+          - { os: macos-14,       browser: webkit,   mode: headless }
+          - { os: ubuntu-latest,  browser: webkit,   mode: headless }
+    steps:
+    - uses: actions/checkout@v4
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: ${{ env.DOTNET_VERSION }}
+    - name: Install system dependencies (Linux, Chromium)
+      if: matrix.os == 'ubuntu-latest' && matrix.browser == 'chromium'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libgbm-dev xvfb
+    - name: Install system dependencies (Linux, WebKit)
+      if: matrix.os == 'ubuntu-latest' && matrix.browser == 'webkit'
+      run: |
+        sudo apt-get update
+        # Ubuntu 24.04 WebKit deps. Mirrors upstream Playwright's nativeDeps.ts
+        # (ubuntu24.04-x64). Re-sync against
+        # microsoft/playwright/packages/playwright-core/src/server/registry/nativeDeps.ts
+        # when the Ubuntu release bumps — package names change between LTS
+        # versions (e.g. libgles2-mesa → libgles2, libevent-2.1-7 →
+        # libevent-2.1-7t64). We intentionally do NOT swallow apt failures: a
+        # missing package means the browser will crash at runtime with an
+        # obscure dynamic-loader error.
+        sudo apt-get install -y \
+          gstreamer1.0-libav gstreamer1.0-plugins-bad gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
+          libatk-bridge2.0-0t64 libatk1.0-0t64 libatomic1 libavif16 libcairo-gobject2 libcairo2 \
+          libdbus-1-3 libdrm2 libenchant-2-2 libepoxy0 libevent-2.1-7t64 libflite1 \
+          libfontconfig1 libfreetype6 libgbm1 libgdk-pixbuf-2.0-0 libgles2 libglib2.0-0t64 \
+          libgstreamer-gl1.0-0 libgstreamer-plugins-bad1.0-0 libgstreamer-plugins-base1.0-0 libgstreamer1.0-0 \
+          libgtk-4-1 libharfbuzz-icu0 libharfbuzz0b libhyphen0 libicu74 libjpeg-turbo8 \
+          liblcms2-2 libmanette-0.2-0 libopus0 libpango-1.0-0 libpangocairo-1.0-0 libpng16-16t64 \
+          libsecret-1-0 libvpx9 libwayland-client0 libwayland-egl1 libwayland-server0 \
+          libwebp7 libwebpdemux2 libwoff1 libx11-6 libx264-164 libxkbcommon0 libxml2 libxslt1.1
+    - name: Cache browser binaries
+      uses: actions/cache@v4
+      with:
+        path: ${{ env.PLAYWRIGHT_BROWSERS_PATH }}
+        # Re-key whenever pinned revisions (BrowserData.cs) OR the extraction
+        # logic (ArchiveExtractor.cs) change. The latter matters because zips
+        # produced before the symlink fix were cached as broken trees on Linux:
+        # libWPEWebKit-2.0.so.1 ended up as a 26-byte text placeholder and the
+        # dynamic loader rejected it as "file too short".
+        key: ${{ runner.os }}-pw-browsers-${{ hashFiles('src/PlaywrightSharp/BrowserData.cs', 'src/PlaywrightSharp/ArchiveExtractor.cs') }}
+        # No restore-keys fallback: we want a stale cache to be a clean miss
+        # rather than a partial restore that masks broken binaries.
+    - name: Create HTTPS certificate (Linux)
+      if: matrix.os == 'ubuntu-latest' && matrix.browser == 'chromium'
+      run: |
+        mkdir -p src/PlaywrightSharp.TestServer
+        dotnet dev-certs https --clean
+        dotnet dev-certs https -ep src/PlaywrightSharp.TestServer/testCert.cer
+        sudo openssl x509 -inform der -in src/PlaywrightSharp.TestServer/testCert.cer -out /usr/local/share/ca-certificates/testCert.crt -outform pem
+        sudo update-ca-certificates
+    - name: Create HTTPS certificate (Windows)
+      if: matrix.os == 'windows-latest'
+      shell: pwsh
+      run: |
+        dotnet dev-certs https --clean
+        dotnet dev-certs https -ep src/PlaywrightSharp.TestServer/testCert.cer
+    - name: Check formatting
+      if: ${{ matrix.os == 'ubuntu-latest' && matrix.browser == 'chromium' && matrix.mode == 'headless' }}
+      run: dotnet format whitespace ./src/PlaywrightSharp.sln --verify-no-changes && dotnet format style ./src/PlaywrightSharp.sln --verify-no-changes
+    - name: Check no puppeteer references
+      if: ${{ matrix.os == 'ubuntu-latest' && matrix.browser == 'chromium' && matrix.mode == 'headless' }}
+      run: |
+        chmod +x ./.github/workflows/no-puppeteer.sh
+        ./.github/workflows/no-puppeteer.sh
+    - name: Build
+      run: dotnet build ./src/PlaywrightSharp.sln
+    - name: Disable AppArmor (Linux)
+      if: matrix.os == 'ubuntu-latest'
+      run: echo 0 | sudo tee /proc/sys/kernel/apparmor_restrict_unprivileged_userns || true
+    - name: Test (Chromium, Linux headless)
+      if: ${{ matrix.browser == 'chromium' && matrix.os == 'ubuntu-latest' && matrix.mode == 'headless' }}
+      env:
+        PRODUCT: CHROMIUM
+      run: |
+        dotnet test ./src/PlaywrightSharp.Tests/PlaywrightSharp.Tests.csproj --no-build -f net10.0 -s src/PlaywrightSharp.Tests/test.runsettings
+    - name: Test (Chromium, Linux headful)
+      if: ${{ matrix.browser == 'chromium' && matrix.os == 'ubuntu-latest' && matrix.mode == 'headful' }}
+      env:
+        PRODUCT: CHROMIUM
+      run: |
+        xvfb-run --auto-servernum --server-args="-screen 0 1280x960x24" -- \
+          dotnet test ./src/PlaywrightSharp.Tests/PlaywrightSharp.Tests.csproj --no-build -f net10.0 -s src/PlaywrightSharp.Tests/test.runsettings
+    - name: Test (Chromium, Windows)
+      if: ${{ matrix.browser == 'chromium' && matrix.os == 'windows-latest' }}
+      env:
+        PRODUCT: CHROMIUM
+      run: |
+        dotnet test ./src/PlaywrightSharp.Tests/PlaywrightSharp.Tests.csproj --no-build -f net10.0 -s src/PlaywrightSharp.Tests/test.runsettings
+    - name: Test (WebKit)
+      if: matrix.browser == 'webkit'
+      env:
+        PRODUCT: WEBKIT
+      run: |
+        # Known-failing tests on WebKit are marked in PlaywrightSharp.Nunit's
+        # TestExpectations.local.json (browser+platform+mode aware). The JSON
+        # currently covers WK feature gaps (ExposeFunction, AddInitScript,
+        # AddScriptTag/AddStyleTag, EmulateMedia, PDF, screenshots, SetContent,
+        # SetViewportSize) and the macOS-14 inner-target hang. Retire entries
+        # as the underlying work lands.
+        dotnet test ./src/PlaywrightSharp.Tests/PlaywrightSharp.Tests.csproj --no-build -f net10.0 -s src/PlaywrightSharp.Tests/test.runsettings

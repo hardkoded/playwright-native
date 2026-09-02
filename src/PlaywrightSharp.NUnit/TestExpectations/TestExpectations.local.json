@@ -1,0 +1,397 @@
+[
+  {
+    "testIdPattern": "[headful.spec.ts] *",
+    "platforms": ["darwin", "linux", "win32"],
+    "parameters": [],
+    "expectations": ["FAIL"]
+  },
+  {
+    "testIdPattern": "[page-goto.spec.ts] should work when navigating to 404",
+    "platforms": ["darwin", "linux", "win32"],
+    "parameters": [],
+    "expectations": ["FAIL"]
+  },
+  {
+    "testIdPattern": "[browsercontext-page-event.spec.ts] *",
+    "platforms": ["darwin", "linux", "win32"],
+    "parameters": ["firefox"],
+    "expectations": ["FAIL"],
+    "comment": "BrowserContext.WaitForPageAsync hangs on Firefox when window.open popup event is not delivered"
+  },
+  {
+    "testIdPattern": "[page-wait-for-url.spec.ts] *",
+    "platforms": ["darwin", "linux", "win32"],
+    "parameters": ["firefox"],
+    "expectations": ["FAIL"],
+    "comment": "WaitForURLAsync needs verification on Firefox driver"
+  },
+  {
+    "testIdPattern": "[web-socket.spec.ts] should emit error",
+    "platforms": ["darwin", "linux", "win32"],
+    "parameters": ["firefox"],
+    "expectations": ["FAIL"]
+  },
+  {
+    "testIdPattern": "[page-route.spec.ts] should fail navigation when aborting main resource",
+    "platforms": ["darwin", "linux", "win32"],
+    "parameters": ["firefox"],
+    "expectations": ["FAIL"]
+  },
+  {
+    "testIdPattern": "[page-route.spec.ts] should be abortable with custom error codes",
+    "platforms": ["darwin", "linux", "win32"],
+    "parameters": ["firefox"],
+    "expectations": ["FAIL"]
+  },
+  {
+    "testIdPattern": "[elementhandle-select-text.spec.ts] *",
+    "platforms": ["darwin", "linux", "win32"],
+    "parameters": ["firefox"],
+    "expectations": ["FAIL"]
+  },
+  {
+    "testIdPattern": "[page-keyboard.spec.ts] should press the meta*",
+    "platforms": ["darwin", "linux", "win32"],
+    "parameters": ["firefox"],
+    "expectations": ["FAIL"]
+  },
+  {
+    "testIdPattern": "[page-network-idle.spec.ts] should wait for networkidle from the popup",
+    "platforms": ["darwin", "linux", "win32"],
+    "parameters": ["firefox"],
+    "expectations": ["FAIL"]
+  },
+  {
+    "testIdPattern": "[page-autowaiting-basic.spec.ts] should work with noWaitAfter: true",
+    "platforms": ["darwin", "linux", "win32"],
+    "parameters": ["firefox"],
+    "expectations": ["FAIL"]
+  },
+  {
+    "testIdPattern": "[beforeunload.spec.ts] *",
+    "platforms": ["darwin", "linux", "win32"],
+    "parameters": ["firefox"],
+    "expectations": ["FAIL"]
+  },
+  {
+    "testIdPattern": "[beforeunload.spec.ts] *",
+    "platforms": ["darwin", "linux", "win32"],
+    "parameters": ["headful"],
+    "expectations": ["FAIL"]
+  },
+  {
+    "testIdPattern": "[browsercontext-credentials.spec.ts] *",
+    "platforms": ["darwin", "linux", "win32"],
+    "parameters": ["firefox"],
+    "expectations": ["FAIL"]
+  },
+  {
+    "testIdPattern": "[browsercontext-credentials.spec.ts] *",
+    "platforms": ["darwin", "linux", "win32"],
+    "parameters": ["headful"],
+    "expectations": ["FAIL"]
+  },
+  {
+    "testIdPattern": "[download.spec.ts] *",
+    "platforms": ["darwin", "linux", "win32"],
+    "parameters": ["firefox"],
+    "expectations": ["FAIL"]
+  },
+  {
+    "testIdPattern": "[download.spec.ts] *",
+    "platforms": ["darwin", "linux", "win32"],
+    "parameters": ["headful"],
+    "expectations": ["FAIL"]
+  },
+  {
+    "testIdPattern": "[downloads-path.spec.ts] *",
+    "platforms": ["darwin", "linux", "win32"],
+    "parameters": ["firefox"],
+    "expectations": ["FAIL"]
+  },
+  {
+    "testIdPattern": "[downloads-path.spec.ts] *",
+    "platforms": ["darwin", "linux", "win32"],
+    "parameters": ["headful"],
+    "expectations": ["FAIL"]
+  },
+  {
+    "testIdPattern": "[elementhandle-bounding-box.spec.ts] *",
+    "platforms": ["darwin", "linux", "win32"],
+    "parameters": ["firefox"],
+    "expectations": ["FAIL"]
+  },
+  {
+    "testIdPattern": "[elementhandle-bounding-box.spec.ts] *",
+    "platforms": ["darwin", "linux", "win32"],
+    "parameters": ["headful"],
+    "expectations": ["FAIL"]
+  },
+  {
+    "testIdPattern": "[elementhandle-click.spec.ts] *",
+    "platforms": ["darwin", "linux", "win32"],
+    "parameters": ["firefox"],
+    "expectations": ["FAIL"]
+  },
+  {
+    "testIdPattern": "[elementhandle-click.spec.ts] *",
+    "platforms": ["darwin", "linux", "win32"],
+    "parameters": ["headful"],
+    "expectations": ["FAIL"]
+  },
+  {
+    "testIdPattern": "[elementhandle-content-frame.spec.ts] *",
+    "platforms": ["darwin", "linux", "win32"],
+    "parameters": ["firefox"],
+    "expectations": ["FAIL"]
+  },
+  {
+    "testIdPattern": "[elementhandle-content-frame.spec.ts] *",
+    "platforms": ["darwin", "linux", "win32"],
+    "parameters": ["headful"],
+    "expectations": ["FAIL"]
+  },
+  {
+    "testIdPattern": "[elementhandle-convenience.spec.ts] *",
+    "platforms": ["darwin", "linux", "win32"],
+    "parameters": ["firefox"],
+    "expectations": ["FAIL"]
+  },
+  {
+    "testIdPattern": "[elementhandle-convenience.spec.ts] *",
+    "platforms": ["darwin", "linux", "win32"],
+    "parameters": ["headful"],
+    "expectations": ["FAIL"]
+  },
+  {
+    "testIdPattern": "[elementhandle-eval-on-selector.spec.ts] *",
+    "platforms": ["darwin", "linux", "win32"],
+    "parameters": ["firefox"],
+    "expectations": ["FAIL"]
+  },
+  {
+    "testIdPattern": "[elementhandle-eval-on-selector.spec.ts] *",
+    "platforms": ["darwin", "linux", "win32"],
+    "parameters": ["headful"],
+    "expectations": ["FAIL"]
+  },
+  {
+    "testIdPattern": "[elementhandle-misc.spec.ts] *",
+    "platforms": ["darwin", "linux", "win32"],
+    "parameters": ["firefox"],
+    "expectations": ["FAIL"]
+  },
+  {
+    "testIdPattern": "[elementhandle-misc.spec.ts] *",
+    "platforms": ["darwin", "linux", "win32"],
+    "parameters": ["headful"],
+    "expectations": ["FAIL"]
+  },
+  {
+    "testIdPattern": "[elementhandle-owner-frame.spec.ts] *",
+    "platforms": ["darwin", "linux", "win32"],
+    "parameters": ["firefox"],
+    "expectations": ["FAIL"]
+  },
+  {
+    "testIdPattern": "[elementhandle-owner-frame.spec.ts] *",
+    "platforms": ["darwin", "linux", "win32"],
+    "parameters": ["headful"],
+    "expectations": ["FAIL"]
+  },
+  {
+    "testIdPattern": "[elementhandle-query-selector.spec.ts] *",
+    "platforms": ["darwin", "linux", "win32"],
+    "parameters": ["firefox"],
+    "expectations": ["FAIL"]
+  },
+  {
+    "testIdPattern": "[elementhandle-query-selector.spec.ts] *",
+    "platforms": ["darwin", "linux", "win32"],
+    "parameters": ["headful"],
+    "expectations": ["FAIL"]
+  },
+  {
+    "testIdPattern": "[elementhandle-scroll-into-view.spec.ts] *",
+    "platforms": ["darwin", "linux", "win32"],
+    "parameters": ["firefox"],
+    "expectations": ["FAIL"]
+  },
+  {
+    "testIdPattern": "[elementhandle-scroll-into-view.spec.ts] *",
+    "platforms": ["darwin", "linux", "win32"],
+    "parameters": ["headful"],
+    "expectations": ["FAIL"]
+  },
+  {
+    "testIdPattern": "[elementhandle-select-text.spec.ts] *",
+    "platforms": ["darwin", "linux", "win32"],
+    "parameters": ["headful"],
+    "expectations": ["FAIL"]
+  },
+  {
+    "testIdPattern": "[elementhandle-wait-for-element-state.spec.ts] *",
+    "platforms": ["darwin", "linux", "win32"],
+    "parameters": ["firefox"],
+    "expectations": ["FAIL"]
+  },
+  {
+    "testIdPattern": "[elementhandle-wait-for-element-state.spec.ts] *",
+    "platforms": ["darwin", "linux", "win32"],
+    "parameters": ["headful"],
+    "expectations": ["FAIL"]
+  },
+  {
+    "testIdPattern": "[emulation-focus.spec.ts] *",
+    "platforms": ["darwin", "linux", "win32"],
+    "parameters": ["firefox"],
+    "expectations": ["FAIL"]
+  },
+  {
+    "testIdPattern": "[emulation-focus.spec.ts] *",
+    "platforms": ["darwin", "linux", "win32"],
+    "parameters": ["headful"],
+    "expectations": ["FAIL"]
+  },
+  {
+    "testIdPattern": "[eval-on-selector-all.spec.ts] *",
+    "platforms": ["darwin", "linux", "win32"],
+    "parameters": ["firefox"],
+    "expectations": ["FAIL"]
+  },
+  {
+    "testIdPattern": "[eval-on-selector-all.spec.ts] *",
+    "platforms": ["darwin", "linux", "win32"],
+    "parameters": ["headful"],
+    "expectations": ["FAIL"]
+  },
+  {
+    "testIdPattern": "[eval-on-selector.spec.ts] *",
+    "platforms": ["darwin", "linux", "win32"],
+    "parameters": ["firefox"],
+    "expectations": ["FAIL"]
+  },
+  {
+    "testIdPattern": "[eval-on-selector.spec.ts] *",
+    "platforms": ["darwin", "linux", "win32"],
+    "parameters": ["headful"],
+    "expectations": ["FAIL"]
+  },
+  {
+    "testIdPattern": "[frame-hierarchy.spec.ts] *",
+    "platforms": ["darwin", "linux", "win32"],
+    "parameters": ["firefox"],
+    "expectations": ["FAIL"]
+  },
+  {
+    "testIdPattern": "[frame-hierarchy.spec.ts] *",
+    "platforms": ["darwin", "linux", "win32"],
+    "parameters": ["headful"],
+    "expectations": ["FAIL"]
+  },
+  {
+    "testIdPattern": "[page-click.spec.ts] *",
+    "platforms": ["darwin", "linux", "win32"],
+    "parameters": ["firefox"],
+    "expectations": ["FAIL"]
+  },
+  {
+    "testIdPattern": "[page-click.spec.ts] *",
+    "platforms": ["darwin", "linux", "win32"],
+    "parameters": ["headful"],
+    "expectations": ["FAIL"]
+  },
+  {
+    "testIdPattern": "[page-fill.spec.ts] *",
+    "platforms": ["darwin", "linux", "win32"],
+    "parameters": ["firefox"],
+    "expectations": ["FAIL"]
+  },
+  {
+    "testIdPattern": "[page-fill.spec.ts] *",
+    "platforms": ["darwin", "linux", "win32"],
+    "parameters": ["headful"],
+    "expectations": ["FAIL"]
+  },
+  {
+    "testIdPattern": "[page-select-option.spec.ts] *",
+    "platforms": ["darwin", "linux", "win32"],
+    "parameters": ["firefox"],
+    "expectations": ["FAIL"]
+  },
+  {
+    "testIdPattern": "[page-select-option.spec.ts] *",
+    "platforms": ["darwin", "linux", "win32"],
+    "parameters": ["headful"],
+    "expectations": ["FAIL"]
+  },
+  {
+    "testIdPattern": "[queryselector.spec.ts] *",
+    "platforms": ["darwin", "linux", "win32"],
+    "parameters": ["firefox"],
+    "expectations": ["FAIL"]
+  },
+  {
+    "testIdPattern": "[queryselector.spec.ts] *",
+    "platforms": ["darwin", "linux", "win32"],
+    "parameters": ["headful"],
+    "expectations": ["FAIL"]
+  },
+  {
+    "testIdPattern": "[page-add-init-script.spec.ts] should work after a cross origin navigation",
+    "platforms": ["darwin", "linux", "win32"],
+    "parameters": ["firefox"],
+    "expectations": ["FAIL"]
+  },
+  {
+    "testIdPattern": "[page-add-init-script.spec.ts] should work after a cross origin navigation",
+    "platforms": ["darwin", "linux", "win32"],
+    "parameters": ["headful"],
+    "expectations": ["FAIL"]
+  },
+  {
+    "testIdPattern": "[page-request-continue.spec.ts] should amend method on main request",
+    "platforms": ["darwin", "linux", "win32"],
+    "parameters": ["firefox"],
+    "expectations": ["FAIL"]
+  },
+  {
+    "testIdPattern": "[page-request-continue.spec.ts] should amend method on main request",
+    "platforms": ["darwin", "linux", "win32"],
+    "parameters": ["headful"],
+    "expectations": ["FAIL"]
+  },
+  {
+    "testIdPattern": "[page-route.spec.ts] should work with encoded server",
+    "platforms": ["darwin", "linux", "win32"],
+    "parameters": ["firefox"],
+    "expectations": ["FAIL"]
+  },
+  {
+    "testIdPattern": "[page-route.spec.ts] should work with encoded server",
+    "platforms": ["darwin", "linux", "win32"],
+    "parameters": ["headful"],
+    "expectations": ["FAIL"]
+  },
+  {
+    "testIdPattern": "[direct/page-content-and-media.cs] PdfAsyncShouldReturnPdfBytes",
+    "platforms": ["darwin", "linux", "win32"],
+    "parameters": ["webkit"],
+    "expectations": ["SKIP"],
+    "comment": "PDF generation is Headless-Chromium-only (CDP Page.printToPDF); WebKit has no equivalent, so WKPage.PdfAsync throws NotSupportedException. Permanent skip, not a gap."
+  },
+  {
+    "testIdPattern": "[direct/page-console.cs] should work",
+    "platforms": ["darwin"],
+    "parameters": ["webkit"],
+    "expectations": ["SKIP"],
+    "comment": "macOS-14 WebKit 2251 uses per-frame Console sessions. Console.enable is not sent on the page target (upstream wkPage gates it behind !enableFrameSessions), so page.Console never fires until frame sessions are modeled."
+  },
+  {
+    "testIdPattern": "[direct/page-event-pageerror.cs] should fire",
+    "platforms": ["darwin"],
+    "parameters": ["webkit"],
+    "expectations": ["SKIP"],
+    "comment": "Same macOS-14 WebKit 2251 frame-session gap: javascript errors arrive via Console.messageAdded (source=javascript), which is unavailable without per-frame Console.enable."
+  }
+]

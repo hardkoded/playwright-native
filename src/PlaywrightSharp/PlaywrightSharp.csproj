@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Title>PlaywrightSharp</Title>
+    <PackageId>PlaywrightSharp</PackageId>
+    <Summary>The .NET port of Playwright, used to automate Chromium, Firefox and WebKit with a single API.</Summary>
+    <Description>Playwright enables reliable end-to-end testing for modern web apps. It is built to enable cross-browser web automation that is ever-green, capable, reliable and fast.</Description>
+    <TargetFramework>net10.0</TargetFramework>
+    <DebugType>embedded</DebugType>
+    <DebugSymbols>true</DebugSymbols>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <DocumentationFile>bin\$(Configuration)\net10.0\PlaywrightSharp.xml</DocumentationFile>
+    <RunWithWarnings>true</RunWithWarnings>
+    <StyleCopTreatErrorsAsWarnings>false</StyleCopTreatErrorsAsWarnings>
+    <CodeAnalysisRuleSet>../PlaywrightSharp.ruleset</CodeAnalysisRuleSet>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <RootNamespace>PlaywrightSharp</RootNamespace>
+    <ReleaseVersion>0.0.0</ReleaseVersion>
+    <BuildFromSource>True</BuildFromSource>
+    <AnalysisMode>AllEnabledByDefault</AnalysisMode>
+    <NoWarn>1701;1702;CS0067;1734;CS0612;CS1574;CS0419</NoWarn>
+    <AssemblyName>PlaywrightSharp</AssemblyName>
+    <GeneratePackageOnBuild>True</GeneratePackageOnBuild>
+  </PropertyGroup>
+  <Import Project="../Common/Dependencies.props" />
+  <Import Project="../Common/SignAssembly.props" />
+  <Import Project="../Common/PackageInfo.props" />
+  <ItemGroup>
+    <PackageReference Include="Esprima" Version="3.0.5" />
+    <PackageReference Include="Microsoft.Extensions.Logging" Version="9.0.3" />
+    <PackageReference Include="Macross.Json.Extensions" Version="3.0.0" />
+    <PackageReference Include="Microsoft.SourceLink.GitHub" Version="8.0.0" PrivateAssets="All" />
+    <!-- Binary-compatible public API surface (IPage, IBrowser, ...). Exclude Node driver
+         build targets so .playwright/node is not copied into our (or consumers') output. -->
+    <PackageReference Include="Microsoft.Playwright" Version="1.62.0">
+      <PrivateAssets>build;buildTransitive;analyzers</PrivateAssets>
+      <ExcludeAssets>build;buildTransitive;analyzers</ExcludeAssets>
+    </PackageReference>
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="Helpers/deviceDescriptorsSource.json" />
+    <EmbeddedResource Include="Helpers/clockSource.js" />
+  </ItemGroup>
+</Project>

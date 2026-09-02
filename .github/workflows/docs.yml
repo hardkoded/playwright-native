@@ -1,0 +1,74 @@
+# Publish DocFX to GitHub Pages.
+# Site: https://hardkoded.github.io/playwright-sharp
+#
+# One-time repo settings (Settings → Pages):
+#   Build and deployment → Source: GitHub Actions
+# The first successful deploy on main creates the github-pages environment.
+#
+# Same build command locally and in CI (from the repo root):
+#   dotnet tool update -g docfx --version 2.74.1
+#   docfx docfx_project/docfx.json
+# Output: docfx_project/_site
+#
+# DocFX 2.74.1 is pinned because it matches the existing material template
+# in docfx_project/. Newer DocFX default templates overlay that theme poorly.
+# 8.0.x is the DocFX tool runtime; 10.0.x matches the library TargetFramework
+# used if metadata generation starts picking up src/PlaywrightSharp.
+#
+# Pull requests only build. Deploy runs on push to main (and workflow_dispatch
+# from main) so feature branches cannot publish the live site.
+
+name: docs
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+  pull_request:
+    paths:
+      - 'docfx_project/**'
+      - 'src/PlaywrightSharp/**'
+      - '.github/workflows/docs.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: |
+          8.0.x
+          10.0.x
+    - name: Install DocFX
+      run: dotnet tool update -g docfx --version 2.74.1
+    - name: Build DocFX site
+      run: docfx docfx_project/docfx.json
+    - name: Upload Pages artifact
+      uses: actions/upload-pages-artifact@v3
+      with:
+        path: docfx_project/_site
+
+  deploy:
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+    - name: Deploy to GitHub Pages
+      id: deployment
+      uses: actions/deploy-pages@v4

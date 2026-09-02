@@ -1,0 +1,28 @@
+name: Code Style Checks
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+env:
+  DOTNET_VERSION: '10.0.x'
+
+jobs:
+  style:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: ${{ env.DOTNET_VERSION }}
+    - name: Check formatting
+      run: dotnet format whitespace ./src/PlaywrightSharp.sln --verify-no-changes && dotnet format style ./src/PlaywrightSharp.sln --verify-no-changes
+    - name: We shouldn't mention puppeteer
+      run: |
+        chmod +x ./.github/workflows/no-puppeteer.sh
+        ./.github/workflows/no-puppeteer.sh
