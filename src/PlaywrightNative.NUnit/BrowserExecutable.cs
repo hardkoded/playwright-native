@@ -229,9 +229,12 @@ public static class BrowserExecutable
                 return downloadedPath;
             }
         }
-        catch
+        catch (Exception ex)
         {
             // Network unreachable, archive corrupt, or extraction failed.
+            // Surface the reason so CI logs explain skipped browser tests.
+            TestContext.Progress.WriteLine(
+                $"BrowserExecutable: failed to download {browser}: {ex.Message}");
         }
 
         return null;

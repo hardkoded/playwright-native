@@ -785,8 +785,13 @@ namespace PlaywrightNative.Transport
                     }
                     catch (Exception ex)
                     {
+                        // Official browsertype-launch.spec.ts asserts the message contains
+                        // "Failed to launch" even when Process.Start fails (missing binary).
+                        string detail = string.IsNullOrEmpty(ex.Message) ? "browser" : ex.Message;
                         throw new PlaywrightNativeException(
-                            string.IsNullOrEmpty(ex.Message) ? "Failed to launch browser" : ex.Message,
+                            detail.Contains("Failed to launch", StringComparison.Ordinal)
+                                ? detail
+                                : $"Failed to launch browser: {detail}",
                             ex);
                     }
                     finally
