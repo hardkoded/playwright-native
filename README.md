@@ -54,7 +54,8 @@ dotnet add package PlaywrightNative
 ## Quick Start
 
 ```cs
-await using IBrowser browser = await Playwright.LaunchChromiumAsync();
+using var playwright = await Playwright.CreateAsync();
+await using IBrowser browser = await playwright.Chromium.LaunchAsync();
 await using IBrowserContext context = await browser.NewContextAsync();
 IPage page = await context.NewPageAsync();
 await page.GotoAsync("https://www.bing.com");
@@ -64,8 +65,9 @@ byte[] png = await page.ScreenshotAsync();
 Firefox and WebKit use the same pattern:
 
 ```cs
-await using IBrowser firefox = await Playwright.LaunchFirefoxAsync();
-await using IBrowser webkit = await Playwright.LaunchWebkitAsync();
+using var playwright = await Playwright.CreateAsync();
+await using IBrowser firefox = await playwright.Firefox.LaunchAsync();
+await using IBrowser webkit = await playwright.Webkit.LaunchAsync();
 ```
 
 Pass a `BrowserTypeLaunchOptions` bag to set `ExecutablePath`, `Headless`, and other launch options. When `ExecutablePath` is omitted, `BrowserFetcher` downloads and caches the pinned browser build.
@@ -75,7 +77,8 @@ Pass a `BrowserTypeLaunchOptions` bag to set `ExecutablePath`, `Headless`, and o
 ### Evaluate in browser context
 
 ```cs
-await using IBrowser browser = await Playwright.LaunchChromiumAsync();
+using var playwright = await Playwright.CreateAsync();
+await using IBrowser browser = await playwright.Chromium.LaunchAsync();
 await using IBrowserContext context = await browser.NewContextAsync();
 IPage page = await context.NewPageAsync();
 await page.GotoAsync("https://www.example.com/");
@@ -89,7 +92,8 @@ Console.WriteLine($"{dimensions["width"]}x{dimensions["height"]}");
 ### Intercept network requests
 
 ```cs
-await using IBrowser browser = await Playwright.LaunchChromiumAsync();
+using var playwright = await Playwright.CreateAsync();
+await using IBrowser browser = await playwright.Chromium.LaunchAsync();
 await using IBrowserContext context = await browser.NewContextAsync();
 IPage page = await context.NewPageAsync();
 await page.RouteAsync("**/*", route =>

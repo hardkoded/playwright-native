@@ -15,7 +15,8 @@ using PlaywrightNative;
 string url = "https://www.somepage.com";
 string file = "somepage.png";
 
-await using var browser = await Playwright.LaunchChromiumAsync(new BrowserTypeLaunchOptions
+using var playwright = await Playwright.CreateAsync();
+await using var browser = await playwright.Chromium.LaunchAsync(new BrowserTypeLaunchOptions
 {
     Headless = false,
 });

@@ -1,6 +1,21 @@
 # Changelog
 
-## Unreleased — Direct browser architecture (Breaking)
+## Unreleased — Upstream CreateAsync entry point
+
+Restored the official microsoft/playwright-dotnet launch shape while keeping the
+direct protocol stacks (no Node.js driver):
+
+```csharp
+using var playwright = await Playwright.CreateAsync();
+await using IBrowser browser = await playwright.Chromium.LaunchAsync();
+```
+
+`IPlaywright` exposes `Chromium` / `Firefox` / `Webkit`, `Devices`, `Selectors`,
+and `APIRequest`. Static `Playwright.Chromium` and the older
+`LaunchChromiumAsync` / `LaunchFirefoxAsync` / `LaunchWebkitAsync` helpers remain
+as convenience wrappers.
+
+## Previous — Direct browser architecture (Breaking)
 
 This release rewrites the internals from a Node.js-driver-based architecture to a
 **pure .NET implementation** that talks to browsers over their native protocols
@@ -11,27 +26,26 @@ direct launch entry points plus the retained page/context/frame contracts.
 
 #### Entry point
 
-`Playwright.CreateAsync()` and the driver-era browser-type factory are removed.
-The old `LaunchChromiumDirectAsync` name is also gone — use `LaunchChromiumAsync`,
-`LaunchFirefoxAsync`, and `LaunchWebkitAsync`.
+The first direct-CDP cut temporarily replaced `Playwright.CreateAsync()` with
+`LaunchChromiumAsync` / `LaunchFirefoxAsync` / `LaunchWebkitAsync`. CreateAsync
+is restored above; the Launch* helpers remain as wrappers.
 
 ```csharp
-// Before (removed)
+// Official (restored)
 using var playwright = await Playwright.CreateAsync();
 await using var browser = await playwright.Chromium.LaunchAsync();
 
-// After
+// Convenience wrappers (still available)
 await using IBrowser browser = await Playwright.LaunchChromiumAsync();
 ```
 
 When `ExecutablePath` is omitted, `BrowserFetcher` downloads the pinned browser
 build into the local cache (`PLAYWRIGHT_BROWSERS_PATH` if set).
 
-#### Removed interfaces
+#### Removed interfaces (first direct cut)
 
-- `IPlaywright` — replaced by the `Playwright` static class
-- Driver-era `IBrowserType` obtained from `CreateAsync()` — replaced by
-  `Playwright.LaunchChromiumAsync` / `LaunchFirefoxAsync` / `LaunchWebkitAsync`
+- Driver-era channel `IBrowserType` obtained only from the Node driver —
+  replaced by direct `BrowserTypeInfo` implementing `Microsoft.Playwright.IBrowserType`
 - `ILocator` / `IFrameLocator` — not yet implemented in the earliest direct cut
   (later waves restored locator work; see `tasks/todo.md`)
 - `IPageAssertions` / `ILocatorAssertions` — not yet implemented in the earliest

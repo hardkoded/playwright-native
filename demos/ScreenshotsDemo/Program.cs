@@ -12,7 +12,8 @@ namespace ScreenshotsDemo
             BrowserFetcher fetcher = new BrowserFetcher();
             InstalledBrowser installed = await fetcher.DownloadAsync();
 
-            await using var browser = await Playwright.LaunchChromiumAsync(new BrowserTypeLaunchOptions
+            using var playwright = await Playwright.CreateAsync();
+            await using var browser = await playwright.Chromium.LaunchAsync(new BrowserTypeLaunchOptions
             {
                 ExecutablePath = installed.GetExecutablePath(),
                 Headless = true,

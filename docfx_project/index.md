@@ -18,7 +18,7 @@ footer{
     </div>
     <div class="minitext">
     .NET library to automate Chromium, Firefox and WebKit with a single API.
-    Conceptual pages use LaunchChromiumAsync / BrowserFetcher. The generated API reference is being rebuilt and is not published yet.
+    Conceptual pages use Playwright.CreateAsync / BrowserFetcher. The generated API reference is being rebuilt and is not published yet.
     </div>
     <div class="buttons-unit">
       <a href="documentation/index.md" class="button"><i class="glyphicon glyphicon-send"></i>Get Started</a>

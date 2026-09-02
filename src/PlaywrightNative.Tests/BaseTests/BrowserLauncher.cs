@@ -13,16 +13,17 @@ namespace PlaywrightNative.Tests
 {
     /// <summary>
     /// Cross-browser launch helper for tests in <c>Direct/</c> and other
-    /// product-agnostic fixtures. Routes <see cref="Playwright"/>'s
-    /// browser-specific launchers based on the <c>PRODUCT</c> environment
-    /// variable and pulls the executable path from
-    /// <see cref="BrowserExecutable"/> in PlaywrightNative.NUnit.
+    /// product-agnostic fixtures. Routes <see cref="Playwright.CreateAsync"/>
+    /// browser types based on the <c>PRODUCT</c> environment variable and pulls
+    /// the executable path from <see cref="BrowserExecutable"/> in
+    /// PlaywrightNative.NUnit.
     /// </summary>
     /// <remarks>
     /// Tests that hard-target a specific browser (e.g. the <c>Chromium/CR*</c>
-    /// protocol fixtures) should keep calling <see cref="Playwright.LaunchChromiumAsync"/>
-    /// directly — this helper is only for the public-API surface that runs against
-    /// every product.
+    /// protocol fixtures) should keep calling
+    /// <c>Playwright.Chromium.LaunchAsync</c> (or the
+    /// <see cref="Playwright.LaunchChromiumAsync"/> wrapper) directly — this
+    /// helper is only for the public-API surface that runs against every product.
     /// </remarks>
     internal static class BrowserLauncher
     {
@@ -49,17 +50,18 @@ namespace PlaywrightNative.Tests
             BrowserTypeLaunchOptions resolved = await BrowserExecutable.CreateLaunchOptionsAsync(browserName).ConfigureAwait(false);
             options.ExecutablePath = resolved.ExecutablePath;
 
+            using IPlaywright playwright = await Playwright.CreateAsync().ConfigureAwait(false);
             if (browserName == "webkit")
             {
-                return await Playwright.LaunchWebkitAsync(options).ConfigureAwait(false);
+                return await playwright.Webkit.LaunchAsync(options).ConfigureAwait(false);
             }
 
             if (browserName == "firefox")
             {
-                return await LaunchFirefoxAsync(options).ConfigureAwait(false);
+                return await LaunchFirefoxAsync(playwright, options).ConfigureAwait(false);
             }
 
-            return await Playwright.LaunchChromiumAsync(options).ConfigureAwait(false);
+            return await playwright.Chromium.LaunchAsync(options).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -82,11 +84,11 @@ namespace PlaywrightNative.Tests
             }
         }
 
-        private static async Task<IBrowser> LaunchFirefoxAsync(BrowserTypeLaunchOptions options)
+        private static async Task<IBrowser> LaunchFirefoxAsync(IPlaywright playwright, BrowserTypeLaunchOptions options)
         {
             try
             {
-                return await Playwright.LaunchFirefoxAsync(options).ConfigureAwait(false);
+                return await playwright.Firefox.LaunchAsync(options).ConfigureAwait(false);
             }
             catch (Exception ex)
             {

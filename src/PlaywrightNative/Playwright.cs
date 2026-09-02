@@ -15,7 +15,10 @@ using PlaywrightNative.Helpers;
 namespace PlaywrightNative
 {
     /// <summary>
-    /// Entry point for direct-CDP / direct-Juggler browser automation.
+    /// Entry point for direct-CDP / direct-Juggler / direct-WIP browser automation.
+    /// Matches the official microsoft/playwright-dotnet shape:
+    /// <c>using var playwright = await Playwright.CreateAsync();</c>
+    /// then <c>await playwright.Chromium.LaunchAsync()</c>.
     /// </summary>
     [SuppressMessage("Microsoft.Design", "CA1724", Justification = "Playwright is the entrypoint for all languages.")]
     public static class Playwright
@@ -24,20 +27,23 @@ namespace PlaywrightNative
         public const int DefaultTimeout = 30_000;
 
         /// <summary>
-        /// Chromium browser type. Use <see cref="IBrowserType.LaunchAsync"/>
-        /// to start a Chromium browser.
+        /// Chromium browser type. Prefer <see cref="CreateAsync"/> then
+        /// <c>playwright.Chromium</c> for the official API shape. Use
+        /// <see cref="IBrowserType.LaunchAsync"/> to start a Chromium browser.
         /// </summary>
         public static IBrowserType Chromium => BrowserTypeInfo.Chromium;
 
         /// <summary>
-        /// Firefox browser type. Use <see cref="IBrowserType.LaunchAsync"/>
-        /// to start a Firefox browser.
+        /// Firefox browser type. Prefer <see cref="CreateAsync"/> then
+        /// <c>playwright.Firefox</c> for the official API shape. Use
+        /// <see cref="IBrowserType.LaunchAsync"/> to start a Firefox browser.
         /// </summary>
         public static IBrowserType Firefox => BrowserTypeInfo.Firefox;
 
         /// <summary>
-        /// WebKit browser type. Use <see cref="IBrowserType.LaunchAsync"/>
-        /// to start a WebKit browser.
+        /// WebKit browser type. Prefer <see cref="CreateAsync"/> then
+        /// <c>playwright.Webkit</c> for the official API shape. Use
+        /// <see cref="IBrowserType.LaunchAsync"/> to start a WebKit browser.
         /// </summary>
         public static IBrowserType Webkit => BrowserTypeInfo.Webkit;
 
@@ -76,8 +82,19 @@ namespace PlaywrightNative
             => GetBySelectorScript.SetTestIdAttributeName(attributeName);
 
         /// <summary>
-        /// Launches a Chromium browser. When <paramref name="options"/> is <c>null</c>
-        /// or <c>options.ExecutablePath</c> is <c>null</c>, Chromium is downloaded via
+        /// Creates a Playwright instance. Official entry point — same shape as
+        /// <c>Microsoft.Playwright.Playwright.CreateAsync()</c>, without a Node.js driver.
+        /// </summary>
+        /// <returns>An <see cref="IPlaywright"/> with Chromium, Firefox, and WebKit browser types.</returns>
+        public static Task<IPlaywright> CreateAsync()
+            => Task.FromResult<IPlaywright>(new PlaywrightImpl());
+
+        /// <summary>
+        /// Launches a Chromium browser. Prefer
+        /// <c>await (await Playwright.CreateAsync()).Chromium.LaunchAsync(options)</c>
+        /// or <c>await Playwright.Chromium.LaunchAsync(options)</c>.
+        /// When <paramref name="options"/> is <c>null</c> or
+        /// <c>options.ExecutablePath</c> is <c>null</c>, Chromium is downloaded via
         /// a default <see cref="BrowserFetcher"/> if not already cached.
         /// </summary>
         /// <param name="options">Optional launch options.</param>
@@ -109,8 +126,11 @@ namespace PlaywrightNative
         }
 
         /// <summary>
-        /// Launches a Firefox browser. When <paramref name="options"/> is <c>null</c>
-        /// or <c>options.ExecutablePath</c> is <c>null</c>, Firefox is downloaded via
+        /// Launches a Firefox browser. Prefer
+        /// <c>await (await Playwright.CreateAsync()).Firefox.LaunchAsync(options)</c>
+        /// or <c>await Playwright.Firefox.LaunchAsync(options)</c>.
+        /// When <paramref name="options"/> is <c>null</c> or
+        /// <c>options.ExecutablePath</c> is <c>null</c>, Firefox is downloaded via
         /// a default <see cref="BrowserFetcher"/> if not already cached.
         /// </summary>
         /// <param name="options">Optional launch options.</param>
@@ -136,8 +156,11 @@ namespace PlaywrightNative
         }
 
         /// <summary>
-        /// Launches a WebKit browser. When <paramref name="options"/> is <c>null</c>
-        /// or <c>options.ExecutablePath</c> is <c>null</c>, WebKit is downloaded via
+        /// Launches a WebKit browser. Prefer
+        /// <c>await (await Playwright.CreateAsync()).Webkit.LaunchAsync(options)</c>
+        /// or <c>await Playwright.Webkit.LaunchAsync(options)</c>.
+        /// When <paramref name="options"/> is <c>null</c> or
+        /// <c>options.ExecutablePath</c> is <c>null</c>, WebKit is downloaded via
         /// a default <see cref="BrowserFetcher"/> if not already cached.
         /// </summary>
         /// <param name="options">Optional launch options.</param>
