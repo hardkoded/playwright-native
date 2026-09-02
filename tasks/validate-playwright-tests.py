@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Validate PlaywrightSharp [PlaywrightTest] attributes against microsoft/playwright.
+"""Validate PlaywrightNative [PlaywrightTest] attributes against microsoft/playwright.
 
 Checks:
-1. Every NUnit [Test] in src/PlaywrightSharp.Tests has [PlaywrightTest].
+1. Every NUnit [Test] in src/PlaywrightNative.Tests has [PlaywrightTest].
 2. Every [PlaywrightTest] file argument is a real *.spec.ts under
    microsoft/playwright tests/page or tests/library.
 3. Every portable official test() / it() title in those suites has a local twin.
@@ -218,7 +218,7 @@ def main() -> int:
     args = parser.parse_args()
 
     root = repo_root()
-    tests_dir = root / "src" / "PlaywrightSharp.Tests"
+    tests_dir = root / "src" / "PlaywrightNative.Tests"
     pw_tests = Path(args.playwright_dir) / "tests"
     if not pw_tests.is_dir():
         print(f"error: {pw_tests} does not exist", file=sys.stderr)

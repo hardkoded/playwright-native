@@ -17,7 +17,7 @@ Official Playwright:
 - `ITracing.GroupEndAsync`
 
 Implement against the existing `ITracing` in
-`src/PlaywrightSharp/Contracts/ITracing.cs`. Groups must show up in the
+`src/PlaywrightNative/Contracts/ITracing.cs`. Groups must show up in the
 trace the same session already writes (Chrome JSON after Start/Stop, or
 the chunk file). Do **not** no-op. Do **not** invent a zip Trace Viewer
 or a second tracer. Do **not** map `TracesDir` onto zip traces (still

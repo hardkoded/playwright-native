@@ -7,11 +7,11 @@
 		<ReleaseVersion>$(AssemblyVersion)</ReleaseVersion>
 		<FileVersion>$(AssemblyVersion)</FileVersion>
 		<NoDefaultExcludes>true</NoDefaultExcludes>
-		<Authors>Microsoft</Authors>
-		<Owners>Microsoft</Owners>
-		<PackageProjectUrl>https://github.com/microsoft/playwright-sharp</PackageProjectUrl>
+		<Authors>Hardkoded</Authors>
+		<Owners>Hardkoded</Owners>
+		<PackageProjectUrl>https://github.com/hardkoded/playwright-native</PackageProjectUrl>
 		<PackageTags>headless,chrome,firefox,webkit,playwright</PackageTags>
-		<RepositoryUrl>https://github.com/microsoft/playwright-sharp.git</RepositoryUrl>
+		<RepositoryUrl>https://github.com/hardkoded/playwright-native.git</RepositoryUrl>
 		<PackageReleaseNotes><![CDATA[
 ]]></PackageReleaseNotes>
 	</PropertyGroup>

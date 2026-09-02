@@ -1,0 +1,61 @@
+/*
+ * MIT License
+ *
+ * Copyright (c) 2020 Dario Kondratiuk
+ * Modifications copyright (c) Microsoft Corporation.
+ */
+using System.Threading.Tasks;
+using Microsoft.AspNetCore.Http;
+using NUnit.Framework;
+using PlaywrightNative.NUnit;
+
+namespace PlaywrightNative.Tests.Chromium
+{
+    /// <summary>
+    /// Integration tests for <c>CRPage.AddStyleTagAsync</c>.
+    /// </summary>
+    [TestFixture]
+    public class CRStyleTagTests : CRTestBase
+    {
+        [PlaywrightTest("page-add-style-tag.spec.ts", "should add style with inline content")]
+        [Test, Timeout(TestConstants.DefaultTestTimeout)]
+        public async Task ShouldAddStyleWithInlineContent()
+        {
+            await Page.GoToAsync("data:text/html,<div id='d'>text</div>").ConfigureAwait(false);
+
+            await Page.AddStyleTagAsync(content: "#d { color: rgb(255, 0, 0); }").ConfigureAwait(false);
+
+            string color = await Page.EvaluateAsync<string>(
+                "getComputedStyle(document.getElementById('d')).color").ConfigureAwait(false);
+            Assert.That(color, Is.EqualTo("rgb(255, 0, 0)"));
+        }
+
+        [PlaywrightTest("page-add-style-tag.spec.ts", "should add style with url")]
+        [Test, Timeout(TestConstants.DefaultTestTimeout)]
+        public async Task ShouldAddStyleWithUrl()
+        {
+            Server.SetRoute("/red.css", context =>
+            {
+                context.Response.ContentType = "text/css";
+                return context.Response.WriteAsync("#d { color: rgb(0, 128, 0); }");
+            });
+
+            await Page.GoToAsync(TestConstants.ServerUrl + "/empty.html").ConfigureAwait(false);
+            await Page.SetContentAsync("<div id='d'>text</div>").ConfigureAwait(false);
+            await Page.AddStyleTagAsync(url: TestConstants.ServerUrl + "/red.css").ConfigureAwait(false);
+
+            string color = await Page.EvaluateAsync<string>(
+                "getComputedStyle(document.getElementById('d')).color").ConfigureAwait(false);
+            Assert.That(color, Is.EqualTo("rgb(0, 128, 0)"));
+        }
+
+        [PlaywrightTest("page-add-style-tag.spec.ts", "should throw when neither url nor content")]
+        [Test, Timeout(TestConstants.DefaultTestTimeout)]
+        public void ShouldThrowWhenNeitherUrlNorContent()
+        {
+            System.ArgumentException ex = Assert.ThrowsAsync<System.ArgumentException>(
+                () => Page.AddStyleTagAsync());
+            Assert.That(ex.Message, Does.Contain("url").Or.Contain("content"));
+        }
+    }
+}

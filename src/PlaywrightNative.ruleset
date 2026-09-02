@@ -1,0 +1,64 @@
+﻿<RuleSet Name="Rules for PlaywrightNative" Description="Rules for PlaywrightNative" ToolsVersion="10.0">
+ <Rules AnalyzerId="StyleCop.Analyzers" RuleNamespace="StyleCop.Analyzers">
+    <Rule Id="SA1633" Action="None" />
+    <Rule Id="SA1200" Action="None" />
+    <Rule Id="SA1601" Action="None" /> <!--A C# partial element is missing a documentation header.-->
+    <Rule Id="SA1623" Action="None" />
+    <Rule Id="SA1625" Action="None" /><!--Should not copy paste comments.-->
+    <Rule Id="SA1101" Action="None" />
+    <Rule Id="SA1128" Action="None" />
+    <Rule Id="SA1309" Action="None" />
+    <Rule Id="SA0001" Action="None" />
+    <Rule Id="SX1309" Action="Error" />
+    <!-- Temporary: inheritdoc noise during Microsoft.Playwright interface migration. -->
+    <Rule Id="SA1648" Action="None" />
+    <Rule Id="SA1611" Action="None" />
+    <Rule Id="SA1615" Action="None" />
+  </Rules>
+  <Rules AnalyzerId="Microsoft.CodeQuality.Analyzers" RuleNamespace="Microsoft.CodeQuality.Analyzers">
+    <Rule Id="CA1014" Action="None" /> <!-- Mark assemblies with CLSCompliant. We can't mark as CLSComplient because ILoggerFactory it's not marked.-->
+    <Rule Id="CA1054" Action="None" /> <!-- Overloads to System.Uri-->
+    <Rule Id="CA1056" Action="None" /> <!-- Change string to System.Uri-->
+    <Rule Id="CA1040" Action="None" /> <!-- Avoid empty interfaces-->
+    <Rule Id="CA2007" Action="Error" /> <!-- Use ConfigureAwait -->
+    <Rule Id="CA1819" Action="Info" /> <!-- Properties should not return arrays. -->
+    <Rule Id="CA1815" Action="Info" /> <!-- should override equality and inequality. -->
+    <Rule Id="CA2227" Action="Info" /> <!-- Change '...' to be read-only by removing the property setter. -->
+    <Rule Id="CA1200" Action="Info" /> <!-- Avoid using cref tags with a prefix -->
+    <Rule Id="CA2101" Action="None" /> <!-- Marshaling for P/Invoke-->
+    <Rule Id="CA1801" Action="Info" /><!-- Unused parameter-->
+    <Rule Id="CA1822" Action="None" /><!-- Method can be marked as static-->
+    <Rule Id="CA1823" Action="Error" /><!-- avoid unused fields-->
+    <Rule Id="CA1031" Action="None"/> <!-- Use specific exceptions-->
+    <Rule Id="CA1508" Action="None"/> <!-- Avoid dead conditional code. This is a good report but there are many false positives reported.-->
+    <Rule Id="CA1510" Action="None"/> <!-- Use ArgumentNullException.ThrowIfNull -->
+    <Rule Id="CA1514" Action="None"/> <!-- Use ArgumentOutOfRangeException.ThrowIfNegative -->
+    <Rule Id="CA1816" Action="None"/> <!-- Call GC.SuppressFinalize correctly -->
+    <Rule Id="CA1847" Action="None"/> <!-- Use string.Contains(char) -->
+    <Rule Id="CA1848" Action="None"/> <!-- Use LoggerMessage delegates -->
+    <Rule Id="CA1849" Action="None"/> <!-- Use async overloads -->
+    <Rule Id="CA1852" Action="None"/> <!-- Seal internal types -->
+    <Rule Id="CA1859" Action="None"/> <!-- Use concrete types for performance -->
+    <Rule Id="CA1860" Action="None"/> <!-- Prefer Length/Count over Any() -->
+    <Rule Id="CA1867" Action="None"/> <!-- Use char overload -->
+    <Rule Id="CA1873" Action="None"/> <!-- Avoid StringBuilder.Append(char.ToString()) -->
+    <Rule Id="CA1874" Action="None"/> <!-- Pass cancellation token -->
+    <Rule Id="CA2254" Action="None"/> <!-- Log message template should not vary -->
+    <Rule Id="CA1311" Action="None"/> <!-- Specify culture for string.ToUpper/ToLower -->
+    <Rule Id="CA1716" Action="None"/> <!-- Identifier Not matches a reserved language keyword -->
+  </Rules>
+  <Rules AnalyzerId="Microsoft.Analyzers.ManagedCodeAnalysis" RuleNamespace="Microsoft.Rules.Managed">
+    <Rule Id="CA1003" Action="None" /><!-- Use EvenArgs... how about no?-->
+    <Rule Id="CA1303" Action="None" />
+    <Rule Id="CA1304" Action="None" /><!-- ToLower with locale-->
+    <Rule Id="CA1305" Action="None" /><!-- ChangeType with locale-->
+    <Rule Id="CA1307" Action="None" /><!-- GetHashCode with locale settings-->
+    <Rule Id="CA1725" Action="Error" /><!-- Parameter names should match base declaration-->
+    <Rule Id="CA1812" Action="None" /><!-- Avoid uninstantiated internal classes. CA1812 fails to evaluate classes used for deserialization see https://github.com/dotnet/roslyn-analyzers/issues/3210 -->
+  </Rules>
+  <Rules AnalyzerId="Microsoft.VisualStudio.Threading.Analyzers" RuleNamespace="Microsoft.VisualStudio.Threading.Analyzers">
+    <Rule Id="VSTHRD200" Action="Error" /><!-- Use Async naming convention -->
+    <Rule Id="VSTHRD003" Action="Hidden" /><!-- Avoid awaiting or returning a Task representing work that was not started within your context as that can lead to deadlocks -->
+    <Rule Id="VSTHRD110" Action="None" /><!-- Observe the awaitable result of this method call -->
+  </Rules>
+</RuleSet>

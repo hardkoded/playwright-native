@@ -18,8 +18,8 @@ jobs:
       with:
         dotnet-version: ${{ env.DOTNET_VERSION }}
     - name: Build Release
-      run: dotnet build ./src/PlaywrightSharp.sln -c Release
+      run: dotnet build ./src/PlaywrightNative.sln -c Release
     - name: Pack
-      run: dotnet pack ./src/PlaywrightSharp/PlaywrightSharp.csproj -c Release --no-build -o ./nupkgs
+      run: dotnet pack ./src/PlaywrightNative/PlaywrightNative.csproj -c Release --no-build -o ./nupkgs
     - name: Push to NuGet
       run: dotnet nuget push ./nupkgs/*.nupkg --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate

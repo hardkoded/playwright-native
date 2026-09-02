@@ -2,7 +2,7 @@
 
 ## Goal
 
-PlaywrightSharp is a .NET port of Microsoft Playwright for automating Chromium, Firefox, and WebKit browsers.
+PlaywrightNative is a .NET port of Microsoft Playwright for automating Chromium, Firefox, and WebKit browsers.
 Inspired by the original Playwright library, adapted to C# idioms and .NET practices.
 
 Public launch entry points are `Playwright.LaunchChromiumAsync`, `LaunchFirefoxAsync`,
@@ -26,31 +26,31 @@ Then stop.
 
 ```bash
 # Build
-dotnet build ./src/PlaywrightSharp.sln
+dotnet build ./src/PlaywrightNative.sln
 
 # Chromium — matches CI (ubuntu/windows, headless + headful)
-PRODUCT=CHROMIUM dotnet test ./src/PlaywrightSharp.Tests/PlaywrightSharp.Tests.csproj -f net10.0 -s src/PlaywrightSharp.Tests/test.runsettings
+PRODUCT=CHROMIUM dotnet test ./src/PlaywrightNative.Tests/PlaywrightNative.Tests.csproj -f net10.0 -s src/PlaywrightNative.Tests/test.runsettings
 
 # WebKit — matches CI (macos-14 + ubuntu, headless)
-PRODUCT=WEBKIT dotnet test ./src/PlaywrightSharp.Tests/PlaywrightSharp.Tests.csproj -f net10.0 -s src/PlaywrightSharp.Tests/test.runsettings
+PRODUCT=WEBKIT dotnet test ./src/PlaywrightNative.Tests/PlaywrightNative.Tests.csproj -f net10.0 -s src/PlaywrightNative.Tests/test.runsettings
 
 # Firefox — launches today; not in the CI matrix
-PRODUCT=FIREFOX dotnet test ./src/PlaywrightSharp.Tests/PlaywrightSharp.Tests.csproj -f net10.0 -s src/PlaywrightSharp.Tests/test.runsettings
+PRODUCT=FIREFOX dotnet test ./src/PlaywrightNative.Tests/PlaywrightNative.Tests.csproj -f net10.0 -s src/PlaywrightNative.Tests/test.runsettings
 
 # Run a single test class
-PRODUCT=CHROMIUM dotnet test ./src/PlaywrightSharp.Tests/PlaywrightSharp.Tests.csproj --filter "ClassName=PlaywrightSharp.Tests.PlaywrightTests" -f net10.0
+PRODUCT=CHROMIUM dotnet test ./src/PlaywrightNative.Tests/PlaywrightNative.Tests.csproj --filter "ClassName=PlaywrightNative.Tests.PlaywrightTests" -f net10.0
 
 # Run a single test method
-PRODUCT=CHROMIUM dotnet test ./src/PlaywrightSharp.Tests/PlaywrightSharp.Tests.csproj --filter "FullyQualifiedName~ShouldCreateNewPage" -f net10.0
+PRODUCT=CHROMIUM dotnet test ./src/PlaywrightNative.Tests/PlaywrightNative.Tests.csproj --filter "FullyQualifiedName~ShouldCreateNewPage" -f net10.0
 
 # Lint (run before pushing — CI enforces this)
-dotnet format whitespace ./src/PlaywrightSharp.sln --verify-no-changes && dotnet format style ./src/PlaywrightSharp.sln --verify-no-changes
+dotnet format whitespace ./src/PlaywrightNative.sln --verify-no-changes && dotnet format style ./src/PlaywrightNative.sln --verify-no-changes
 ```
 
 **Environment variables**: `PRODUCT` (CHROMIUM/FIREFOX/WEBKIT), `HEADLESS` (true/false), `SLOW_MO` (ms delay).
 Always set `PRODUCT` explicitly when running tests.
 
-**HTTPS tests** require: `dotnet dev-certs https -ep src/PlaywrightSharp.TestServer/testCert.cer`
+**HTTPS tests** require: `dotnet dev-certs https -ep src/PlaywrightNative.TestServer/testCert.cer`
 
 ## C# Code Style (Error-Level Rules)
 
@@ -58,7 +58,7 @@ These rules cause build failures. Violating them will break CI:
 
 | Rule | Requirement |
 |------|-------------|
-| `TreatWarningsAsErrors` | All warnings are errors in library project (`PlaywrightSharp.csproj`) |
+| `TreatWarningsAsErrors` | All warnings are errors in library project (`PlaywrightNative.csproj`) |
 | `AnalysisMode=AllEnabledByDefault` | All code analysis rules active by default (StyleCop 1.2, Roslynator 4.12, VSTHRD analyzers) |
 | `SX1309` (error) | Private fields must use `_camelCase` prefix |
 | `CA2007` (error) | `ConfigureAwait(false)` required on every `await` |
@@ -89,7 +89,7 @@ These rules cause build failures. Violating them will break CI:
 ### Project Structure
 
 ```
-PlaywrightSharp/                    ← Main library (netstandard2.1 + net10.0)
+PlaywrightNative/                    ← Main library (netstandard2.1 + net10.0)
   ├── Chromium/                     ← Direct CDP (CRPage, CRNetworkManager, ...)
   ├── Firefox/                      ← Direct Juggler (FFPage, FFConnection, ...)
   ├── WebKit/                       ← Direct WIP (WKPage, WKConnection, ...)
@@ -97,17 +97,17 @@ PlaywrightSharp/                    ← Main library (netstandard2.1 + net10.0)
   ├── Helpers/                      ← Internal utilities
   └── Contracts/                    ← Interface definitions
 
-PlaywrightSharp.NUnit/              ← NUnit fixtures + PlaywrightTestAttribute
+PlaywrightNative.NUnit/              ← NUnit fixtures + PlaywrightTestAttribute
   ├── PageTest.cs / ContextTest.cs / BrowserTest.cs / PlaywrightTest.cs
   ├── WorkerAwareTest.cs / SkipAttribute.cs
   └── TestExpectations/             ← JSON skip/fail expectations per browser/platform
 
-PlaywrightSharp.Tests/              ← Test suite (NUnit 4.1, net10.0)
+PlaywrightNative.Tests/              ← Test suite (NUnit 4.1, net10.0)
   ├── BaseTests/                    ← BrowserLauncher, BrowserExecutableFixture, PageTestEx
   ├── Chromium/                     ← CRTestBase protocol-level Chromium tests
   └── *.cs                          ← Public-API tests plus fetcher / installer unit tests
 
-PlaywrightSharp.TestServer/         ← HTTP/HTTPS server for test fixtures
+PlaywrightNative.TestServer/         ← HTTP/HTTPS server for test fixtures
 ```
 
 ### Key Design Patterns
@@ -124,18 +124,18 @@ PlaywrightSharp.TestServer/         ← HTTP/HTTPS server for test fixtures
 
 - **Framework**: NUnit 4.1 with `Microsoft.NET.Test.Sdk 17.12`.
 - **NUnit fixtures**: `PlaywrightTest` → `BrowserTest` → `ContextTest` → `PageTest`
-  in `PlaywrightSharp.NUnit`. Tests wrap those as `PlaywrightTestEx` / `BrowserTestEx` /
+  in `PlaywrightNative.NUnit`. Tests wrap those as `PlaywrightTestEx` / `BrowserTestEx` /
   `ContextTestEx` / `PageTestEx` (adds the shared HTTP/HTTPS servers). The old
-  `PlaywrightSharpBaseTest` hierarchy is gone.
+  `PlaywrightNativeBaseTest` hierarchy is gone.
 - **Chromium protocol tests**: `Chromium/CRTestBase` launches via `ChromiumBrowserType` and
   exercises `CRPage` / `CRBrowser` directly.
 - **`[PlaywrightTest]` attribute**: Links each test to its upstream spec file. Also implements the test expectations system — checks `TestExpectations.local.json` to skip/fail tests per browser/platform/mode.
-- **`[Skip]`**: `PlaywrightSharp.NUnit.SkipAttribute` skips by browser/OS flags. Also see
+- **`[Skip]`**: `PlaywrightNative.NUnit.SkipAttribute` skips by browser/OS flags. Also see
   `BrowserLauncher.SkipUnlessChromium()` for Chromium-only Direct tests.
 - **Test pattern**: `[PlaywrightTest("spec-file.ts", "test name")]` + `[Test, Timeout(TestConstants.DefaultTestTimeout)]`.
 - **Assertions**: NUnit constraint model — `Assert.That(value, Is.EqualTo(...))`, `Does.Contain(...)`, `Has.Exactly(n).Items`, etc.
 - **`TestConstants`**: Provides server URLs (port 8081/8082), browser product detection, default launch/timeout options.
-- **Test expectations**: `TestExpectations.local.json` in `PlaywrightSharp.NUnit` controls which tests are expected to skip/fail/pass per browser+platform+mode combination. Tests marked `skip`/`fail`/`timeout` are automatically skipped via `PlaywrightTestAttribute`.
+- **Test expectations**: `TestExpectations.local.json` in `PlaywrightNative.NUnit` controls which tests are expected to skip/fail/pass per browser+platform+mode combination. Tests marked `skip`/`fail`/`timeout` are automatically skipped via `PlaywrightTestAttribute`.
 - **Golden rule**: Tests must always match upstream. Never modify tests to match local code.
 
 ### CI Matrix
@@ -144,7 +144,7 @@ CI (`.github/workflows/dotnet.yml`) runs `net10.0` with `test.runsettings` (1-ho
 session timeout). Matrix:
 
 - Chromium headless + headful on `ubuntu-latest` and `windows-latest`
-  (`PRODUCT=CHROMIUM`, full `PlaywrightSharp.Tests` suite)
+  (`PRODUCT=CHROMIUM`, full `PlaywrightNative.Tests` suite)
 - WebKit headless on `macos-14` and `ubuntu-latest`
   (`PRODUCT=WEBKIT`, full suite; known gaps live in `TestExpectations.local.json`)
 

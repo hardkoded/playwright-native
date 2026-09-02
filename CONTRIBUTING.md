@@ -1,6 +1,6 @@
 # How to Contribute
 
-If you are interested in contributing to Playwright Sharp, Thank you!
+If you are interested in contributing to PlaywrightNative, Thank you!
 
 Coding is not for lonely wolves. Welcome to the pack!
 
@@ -16,9 +16,9 @@ information on pull requests.
 
 ## Core Guidelines
 
-The primary goal is to create an API as close as possible to Playwright. A developer should be able to switch easily to Playwright Sharp and vice-versa.
+The primary goal is to create an API as close as possible to Playwright. A developer should be able to switch easily to PlaywrightNative and vice-versa.
 
-Playwright Sharp should have a .NET/C# flavor.
+PlaywrightNative should have a .NET/C# flavor.
 
  * A developer should be able to inject its objects using dependency injection.
  * Getter functions should be expressed as properties.
@@ -36,11 +36,11 @@ Though this list will change over time, these are the things to consider now:
 
 ### Dotnet Format
 
-CI runs `dotnet format` against `src/PlaywrightSharp.sln`. From the repo root:
+CI runs `dotnet format` against `src/PlaywrightNative.sln`. From the repo root:
 
 ```powershell
-dotnet format whitespace ./src/PlaywrightSharp.sln --verify-no-changes
-dotnet format style ./src/PlaywrightSharp.sln --verify-no-changes
+dotnet format whitespace ./src/PlaywrightNative.sln --verify-no-changes
+dotnet format style ./src/PlaywrightNative.sln --verify-no-changes
 ```
 
 To apply formatting, drop `--verify-no-changes`.
@@ -59,7 +59,7 @@ Don’t worry about commit messages or about how many commits your PR has. [Your
 
 There is no driver process and nothing to copy into `bin/`. Tests resolve
 browsers through `BrowserFetcher` (and the `BrowserExecutable` helper in
-`PlaywrightSharp.NUnit`). The first run downloads the pinned Chromium / Firefox /
+`PlaywrightNative.NUnit`). The first run downloads the pinned Chromium / Firefox /
 WebKit build into the local cache (`PLAYWRIGHT_BROWSERS_PATH` if set).
 
 ### Running Tests Locally
@@ -71,7 +71,7 @@ This happens because you're missing a certificate. To generate one, you can use 
 In your repository root, run the following:
 
 ```powershell
-dotnet dev-certs https -ep src/PlaywrightSharp.TestServer/testCert.cer
+dotnet dev-certs https -ep src/PlaywrightNative.TestServer/testCert.cer
 ```
 
 Always set `PRODUCT` (`CHROMIUM`, `FIREFOX`, or `WEBKIT`). A bare `dotnet test`
@@ -83,21 +83,21 @@ Chromium (matches CI):
 
 ```powershell
 $env:PRODUCT = "CHROMIUM"
-dotnet test .\src\PlaywrightSharp.Tests\PlaywrightSharp.Tests.csproj -f net10.0 -s src/PlaywrightSharp.Tests/test.runsettings
+dotnet test .\src\PlaywrightNative.Tests\PlaywrightNative.Tests.csproj -f net10.0 -s src/PlaywrightNative.Tests/test.runsettings
 ```
 
 WebKit (matches CI):
 
 ```powershell
 $env:PRODUCT = "WEBKIT"
-dotnet test .\src\PlaywrightSharp.Tests\PlaywrightSharp.Tests.csproj -f net10.0 -s src/PlaywrightSharp.Tests/test.runsettings
+dotnet test .\src\PlaywrightNative.Tests\PlaywrightNative.Tests.csproj -f net10.0 -s src/PlaywrightNative.Tests/test.runsettings
 ```
 
 Firefox launches today but is not in CI:
 
 ```powershell
 $env:PRODUCT = "FIREFOX"
-dotnet test .\src\PlaywrightSharp.Tests\PlaywrightSharp.Tests.csproj -f net10.0 -s src/PlaywrightSharp.Tests/test.runsettings
+dotnet test .\src\PlaywrightNative.Tests\PlaywrightNative.Tests.csproj -f net10.0 -s src/PlaywrightNative.Tests/test.runsettings
 ```
 
 On Unix, prefix the same `dotnet test` line with `PRODUCT=CHROMIUM` (or
@@ -107,7 +107,7 @@ Narrow a run with `--filter` on a class or method name, for example:
 
 ```powershell
 $env:PRODUCT = "CHROMIUM"
-dotnet test .\src\PlaywrightSharp.Tests\PlaywrightSharp.Tests.csproj -f net10.0 --filter "FullyQualifiedName~ShouldCreateNewPage"
+dotnet test .\src\PlaywrightNative.Tests\PlaywrightNative.Tests.csproj -f net10.0 --filter "FullyQualifiedName~ShouldCreateNewPage"
 ```
 
 Additionally, you can use the Test Explorer if you're using Visual Studio.
@@ -116,7 +116,7 @@ Remember to set `PRODUCT` in the test environment there too.
 ## Documentation site
 
 Conceptual docs live in `docfx_project/` and are published to
-<https://hardkoded.github.io/playwright-sharp> by `.github/workflows/docs.yml`.
+<https://hardkoded.github.io/playwright-native> by `.github/workflows/docs.yml`.
 
 One-time GitHub setting (repo admin): **Settings → Pages → Source: GitHub Actions**.
 After that, every push to `main` that builds successfully updates the site.

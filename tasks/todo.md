@@ -12,7 +12,7 @@ It is not a new roadmap. See GitHub issues for current work.
 
 ## Previous: Drop `Direct` test filename/class prefix
 
-- [x] Rename `src/PlaywrightSharp.Tests/Direct/Direct*.cs` to drop the `Direct` filename and class prefix (`DirectPageFocusTests` → `PageFocusTests`). Keep the `Direct/` folder, `PlaywrightSharp.Tests.Direct` namespace, and `[Category("DirectConnection")]`. Historical wave notes below still use the old names.
+- [x] Rename `src/PlaywrightNative.Tests/Direct/Direct*.cs` to drop the `Direct` filename and class prefix (`DirectPageFocusTests` → `PageFocusTests`). Keep the `Direct/` folder, `PlaywrightNative.Tests.Direct` namespace, and `[Category("DirectConnection")]`. Historical wave notes below still use the old names.
 
 ## Previous: Upstream test parity — exhausted (no remaining portable titles)
 
@@ -4701,7 +4701,7 @@ Local branch → test → merge to `main` (no per-wave PRs). Do not start shadow
 ### Local-Only Development (April-May 2026) — archived
 Driver-era note: at the time, old driver-based tests could not run on mac26-arm64
 and validation used `dotnet test --filter "Category=DirectConnection"`.
-CI now runs the full `PlaywrightSharp.Tests` suite with `PRODUCT=CHROMIUM` or
+CI now runs the full `PlaywrightNative.Tests` suite with `PRODUCT=CHROMIUM` or
 `PRODUCT=WEBKIT` (see `.github/workflows/dotnet.yml`).
 
 ### Weekly Targets (April 13 - May 13)

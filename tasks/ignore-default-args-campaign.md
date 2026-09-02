@@ -14,7 +14,7 @@ If you were started to keep moving, **do not stop after one wave** and **do not 
 Official Playwright:
 
 - `BrowserTypeLaunchOptions.IgnoreDefaultArgs` as a list of default
-  argument names to omit, without dropping the rest of PlaywrightSharp's
+  argument names to omit, without dropping the rest of PlaywrightNative's
   defaults
 - Keep the existing `bool` form (`true` = ignore all defaults except
   required plumbing such as remote debugging)

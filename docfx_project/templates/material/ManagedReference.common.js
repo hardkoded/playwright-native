@@ -188,7 +188,7 @@ function getDefinitions(category) {
 function handleItem(vm, gitContribute, gitUrlPattern) {
   // get contribution information
   vm.sourceurl = common.getViewSourceHref(vm, null, gitUrlPattern);
-  vm.docurl = "https://github.com/microsoft/playwright-sharp/issues/new?title=Improve%20" + vm.name[0].value + "&body=Explain%20how%20would%20you%20like%20this%20document%20to%20be%20improved.%0ASource URL: " +
+  vm.docurl = "https://github.com/hardkoded/playwright-native/issues/new?title=Improve%20" + vm.name[0].value + "&body=Explain%20how%20would%20you%20like%20this%20document%20to%20be%20improved.%0ASource URL: " +
     vm.sourceurl.replace("#", "%23");
   
   // set to null incase mustache looks up

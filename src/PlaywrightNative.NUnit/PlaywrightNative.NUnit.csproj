@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>PlaywrightNative.NUnit</AssemblyName>
+    <RootNamespace>PlaywrightNative.NUnit</RootNamespace>
+    <Nullable>disable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Playwright.NUnit" Version="1.62.0" />
+    <PackageReference Include="NUnit" Version="4.1.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\PlaywrightNative\PlaywrightNative.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="TestExpectations\TestExpectations.local.json" />
+  </ItemGroup>
+</Project>

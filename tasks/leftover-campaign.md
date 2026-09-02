@@ -8,12 +8,12 @@ If you were started by a Cursor Automation, or the user said "keep going", **do 
 
 ## Goal
 
-Port the remaining official Playwright public API that PlaywrightSharp still lacks, one wave at a time, until the hunt is exhausted.
+Port the remaining official Playwright public API that PlaywrightNative still lacks, one wave at a time, until the hunt is exhausted.
 
 A leftover is a **real** method, option, overload, or enum that:
 
 1. Exists on official Playwright (Node) and/or `microsoft/playwright-dotnet`, and
-2. Is missing or incomplete on PlaywrightSharp's public surface, and
+2. Is missing or incomplete on PlaywrightNative's public surface, and
 3. Can be implemented against the **direct** Chromium (CDP) and WebKit stacks in this repo (no Node.js driver).
 
 Do **not** invent convenience wrappers, rename existing APIs, or pad the campaign with fakes.
@@ -46,7 +46,7 @@ No pull requests. No `ManagePullRequest`. Owner merges by ff-merge to `main`.
 
 Compare, in this order:
 
-- `src/PlaywrightSharp/Contracts/` (`IPage`, `IFrame`, `IElementHandle`, `IBrowser`, `IBrowserContext`, `IRoute`, `IRequest`, `IResponse`, `ITracing`, `IAPIRequest`, `BrowserContextOptions`, `BrowserTypeLaunchOptions`)
+- `src/PlaywrightNative/Contracts/` (`IPage`, `IFrame`, `IElementHandle`, `IBrowser`, `IBrowserContext`, `IRoute`, `IRequest`, `IResponse`, `ITracing`, `IAPIRequest`, `BrowserContextOptions`, `BrowserTypeLaunchOptions`)
 - Official Playwright docs / Node types
 - `microsoft/playwright-dotnet` public interfaces when the checkout exists (`../../microsoft/playwright-dotnet` or clone it)
 
@@ -110,12 +110,12 @@ killall -9 chrome chrome_crashpad_handler || true
 export DOTNET_ROOT="$HOME/.dotnet"
 export PATH="$DOTNET_ROOT:$PATH"
 
-dotnet build ./src/PlaywrightSharp/PlaywrightSharp.csproj -f net10.0
+dotnet build ./src/PlaywrightNative/PlaywrightNative.csproj -f net10.0
 
-PRODUCT=CHROMIUM dotnet test ./src/PlaywrightSharp.Tests/PlaywrightSharp.Tests.csproj \
+PRODUCT=CHROMIUM dotnet test ./src/PlaywrightNative.Tests/PlaywrightNative.Tests.csproj \
   -f net10.0 --filter "FullyQualifiedName~<YourNewTestClass>" --no-restore
 
-PRODUCT=WEBKIT dotnet test ./src/PlaywrightSharp.Tests/PlaywrightSharp.Tests.csproj \
+PRODUCT=WEBKIT dotnet test ./src/PlaywrightNative.Tests/PlaywrightNative.Tests.csproj \
   -f net10.0 --filter "FullyQualifiedName~<YourNewTestClass>" --no-restore
 ```
 

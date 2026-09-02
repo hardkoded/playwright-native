@@ -1,5 +1,5 @@
 ---
-title: Playwright Sharp
+title: Playwright Native
 documentType: index
 ---
 <style type="text/css">
@@ -11,10 +11,10 @@ footer{
 <div class="hero">
   <div class="wrap">
     <div class="text">
-      <strong>Playwright Sharp</strong>
+      <strong>Playwright Native</strong>
     </div>
     <div class="buttons-unit-small">
-      <a class="version-link" href="https://github.com/microsoft/playwright-sharp/releases">Release Notes</a><span>|</span><a class="github-link" href="https://github.com/microsoft/playwright-sharp">View on GitHub</a>
+      <a class="version-link" href="https://github.com/hardkoded/playwright-native/releases">Release Notes</a><span>|</span><a class="github-link" href="https://github.com/hardkoded/playwright-native">View on GitHub</a>
     </div>
     <div class="minitext">
     .NET library to automate Chromium, Firefox and WebKit with a single API.
@@ -22,7 +22,7 @@ footer{
     </div>
     <div class="buttons-unit">
       <a href="documentation/index.md" class="button"><i class="glyphicon glyphicon-send"></i>Get Started</a>
-      <a href="https://github.com/microsoft/playwright-sharp/releases" class="button"><i class="glyphicon glyphicon-download"></i>Download</a>
+      <a href="https://github.com/hardkoded/playwright-native/releases" class="button"><i class="glyphicon glyphicon-download"></i>Download</a>
     </div>
   </div>
 </div>
@@ -33,7 +33,7 @@ footer{
         <i class="glyphicon glyphicon-globe"></i>
         <section>
             <h2>Support for all browsers</h2>
-          <p class="lead">Playwright-Sharp has full API coverage for all modern browsers, including Google Chrome and Microsoft Edge (with Chromium), Apple Safari (with WebKit) and Mozilla Firefox.</p>
+          <p class="lead">PlaywrightNative has full API coverage for all modern browsers, including Google Chrome and Microsoft Edge (with Chromium), Apple Safari (with WebKit) and Mozilla Firefox.</p>
         </section>
       </div>
     </div>

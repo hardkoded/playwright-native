@@ -61,7 +61,7 @@ When leftover hunt is exhausted: follow `tasks/upstream-test-parity-campaign.md`
 Use a **schedule** (every 2–4 hours). Do **not** trigger on push to `main` (that cancels an in-flight run).
 
 ```
-Continue the PlaywrightSharp compatibility campaigns on hardkoded/playwright-sharp.
+Continue the PlaywrightNative compatibility campaigns on hardkoded/playwright-native.
 
 Read tasks/campaign-chain.md and tasks/todo.md Current Phase. Follow the playbook named there.
 

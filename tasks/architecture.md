@@ -1,4 +1,4 @@
-# PlaywrightSharp Architecture
+# PlaywrightNative Architecture
 
 ## Project Goal
 
@@ -39,7 +39,7 @@ leftover Node-driver or Channel RPC plumbing.
 ### Directory layout (library)
 
 ```
-src/PlaywrightSharp/
+src/PlaywrightNative/
   ├── Transport/
   │   ├── Protocol/               # ProtocolRequest, ProtocolResponse
   │   ├── WebSocketTransport.cs   # WebSocket-based transport
@@ -95,16 +95,16 @@ tracked on GitHub, not as a new phase table here.
 
 ## Reference Codebases
 
-### Old PlaywrightSharp (direct connections)
+### Old PlaywrightNative (direct connections)
 **Path**: `../../hardkoded/playwright-sharp-old/`
 
 Useful for C#-specific patterns:
-- `src/PlaywrightSharp.Abstractions/Transport/WebSocketTransport.cs` — WebSocket transport
-- `src/PlaywrightSharp.Chromium/ChromiumProcessManager.cs` — process lifecycle state machine
-- `src/PlaywrightSharp.Chromium/ChromiumConnection.cs` — CDP connection routing
-- `src/PlaywrightSharp.Chromium/ChromiumSession.cs` — CDP session handling
-- `src/PlaywrightSharp.Firefox/FirefoxConnection.cs` — Firefox connection
-- `src/PlaywrightSharp.Abstractions/` — shared abstractions
+- `src/PlaywrightNative.Abstractions/Transport/WebSocketTransport.cs` — WebSocket transport
+- `src/PlaywrightNative.Chromium/ChromiumProcessManager.cs` — process lifecycle state machine
+- `src/PlaywrightNative.Chromium/ChromiumConnection.cs` — CDP connection routing
+- `src/PlaywrightNative.Chromium/ChromiumSession.cs` — CDP session handling
+- `src/PlaywrightNative.Firefox/FirefoxConnection.cs` — Firefox connection
+- `src/PlaywrightNative.Abstractions/` — shared abstractions
 
 ### Upstream Playwright (TypeScript canonical implementation)
 **Path**: `../../microsoft/playwright/`

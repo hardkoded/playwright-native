@@ -5,7 +5,7 @@
         {
           "cwd": "../",
           "files": [
-            "src/PlaywrightSharp/**.csproj"
+            "src/PlaywrightNative/**.csproj"
           ]
         }
       ],
@@ -71,11 +71,11 @@
     "cleanupCacheHistory": false,
     "disableGitFeatures": false,
     "globalMetadata": {
-      "_appTitle": "Playwright Sharp",
+      "_appTitle": "Playwright Native",
       "_enableSearch": true
     },
     "sitemap": {
-      "baseUrl": "https://hardkoded.github.io/playwright-sharp/"
+      "baseUrl": "https://hardkoded.github.io/playwright-native/"
     }
   }
 }
