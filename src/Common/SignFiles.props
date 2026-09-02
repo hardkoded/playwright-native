@@ -1,8 +1,0 @@
-<Project>
-  <ItemGroup>
-    <FilesToSign Include="$(OutputPath)\$(AssemblyName).dll">
-      <Authenticode>Microsoft400</Authenticode>
-      <StrongName>None</StrongName>
-    </FilesToSign>
-  </ItemGroup>
-</Project>

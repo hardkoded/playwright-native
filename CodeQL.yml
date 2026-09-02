@@ -1,3 +1,0 @@
-path_classifiers:
-  tests:
-    - "src/Playwright.Tests/**"
