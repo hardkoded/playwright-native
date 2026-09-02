@@ -4,7 +4,6 @@
  * Copyright (c) 2020 Dario Kondratiuk
  * Modifications copyright (c) Microsoft Corporation.
  */
-#pragma warning disable CA1062
 using System.Collections.Generic;
 using System.Text.Json;
 using System.Threading.Tasks;
