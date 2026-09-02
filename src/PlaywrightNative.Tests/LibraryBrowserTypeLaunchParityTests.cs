@@ -52,8 +52,9 @@ namespace PlaywrightNative.Tests
         [Timeout(TestConstants.DefaultTestTimeout)]
         public void ShouldThrowIfUserDataDirOptionIsPassed()
         {
+            // Validation runs before a browser binary is required.
             PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
-                () => LaunchAsync(new BrowserTypeLaunchOptions { UserDataDir = "random-path" }));
+                () => CurrentBrowserType().LaunchAsync(new BrowserTypeLaunchOptions { UserDataDir = "random-path" }));
             Assert.That(error.Message, Does.Contain("userDataDir option is not supported in `browserType.launch`. Use `browserType.launchPersistentContext` instead"));
         }
 
@@ -63,7 +64,7 @@ namespace PlaywrightNative.Tests
         public void ShouldThrowIfUserDataDirIsPassedAsAnArgument()
         {
             PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
-                () => LaunchAsync(new BrowserTypeLaunchOptions
+                () => CurrentBrowserType().LaunchAsync(new BrowserTypeLaunchOptions
                 {
                     Args = new[] { "--user-data-dir=random-path", "--profile=random-path" },
                 }));
@@ -76,7 +77,7 @@ namespace PlaywrightNative.Tests
         public void ShouldThrowIfPortOptionIsPassed()
         {
             PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
-                () => LaunchAsync(new BrowserTypeLaunchOptions { Port = 1234 }));
+                () => CurrentBrowserType().LaunchAsync(new BrowserTypeLaunchOptions { Port = 1234 }));
             Assert.That(error.Message, Does.Contain("Cannot specify a port without launching as a server."));
         }
 
@@ -103,7 +104,7 @@ namespace PlaywrightNative.Tests
             }
 
             PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
-                () => LaunchAsync(new BrowserTypeLaunchOptions { Args = new[] { "http://example.com" } }));
+                () => CurrentBrowserType().LaunchAsync(new BrowserTypeLaunchOptions { Args = new[] { "http://example.com" } }));
             Assert.That(error.Message, Does.Contain("can not specify page"));
         }
 
