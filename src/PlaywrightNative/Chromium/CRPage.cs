@@ -1,7 +1,7 @@
 /*
  * Copyright (c) 2020 Darío Kondratiuk
  * Copyright (c) 2020 Meir Blachman
- * Modifications copyright (c) Microsoft Corporation. 
+ * Modifications copyright (c) Microsoft Corporation.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -4071,7 +4071,7 @@ namespace PlaywrightNative.Chromium
             JsonElement p = parameters.Value;
 
             // DevTools replays buffered logs with executionContextId = 0 after
-            // Runtime.enable. Those objects are already gone (puppeteer#3865).
+            // Runtime.enable. Those objects are already gone.
             if (p.TryGetProperty("executionContextId", out JsonElement ctxIdEl)
                 && ctxIdEl.TryGetInt32(out int replayContextId)
                 && replayContextId == 0)

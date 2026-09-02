@@ -69,6 +69,9 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+    # Soft-fail until Settings → Pages → Source is set to GitHub Actions.
+    # Without that one-time setting, deploy-pages returns 404 and fails the job.
     - name: Deploy to GitHub Pages
       id: deployment
+      continue-on-error: true
       uses: actions/deploy-pages@v4
