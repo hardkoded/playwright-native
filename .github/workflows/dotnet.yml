@@ -25,6 +25,11 @@ jobs:
   build:
     name: ${{ matrix.browser }}-${{ matrix.mode }}-${{ matrix.os }}
     runs-on: ${{ matrix.os }}
+    # Soft-fail WebKit at the job level: the long Linux WK suite can hit
+    # runner shutdown/cancel mid-run, and step continue-on-error does not
+    # cover cancellation. Chromium stays hard at the job level (tests still
+    # soft-fail via step continue-on-error below).
+    continue-on-error: ${{ matrix.browser == 'webkit' }}
     strategy:
       fail-fast: false
       matrix:
@@ -34,12 +39,10 @@ jobs:
           - { os: ubuntu-latest,  browser: chromium, mode: headful  }
           - { os: windows-latest, browser: chromium, mode: headless }
           - { os: windows-latest, browser: chromium, mode: headful  }
-          # WebKit — macOS headless only for now. The ubuntu-latest WebKit job
-          # routinely hits runner shutdown mid-suite (~25m, OOM/infra cancel);
-          # step continue-on-error does not cover cancellation, so that cell
-          # stayed red. Re-add Linux WK once the suite is leaner or expectations
-          # shrink runtime.
+          # WebKit — full test suite against the protocol stack.
+          # macOS + Linux headless. Expect failures until WebKit catches up.
           - { os: macos-14,       browser: webkit,   mode: headless }
+          - { os: ubuntu-latest,  browser: webkit,   mode: headless }
     steps:
     - uses: actions/checkout@v4
     - name: Setup .NET
