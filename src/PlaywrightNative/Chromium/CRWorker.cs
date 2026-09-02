@@ -166,9 +166,7 @@ namespace PlaywrightNative.Chromium
                 context = new CRExecutionContext(_session, contextId);
             }
 
-#pragma warning disable CA2000
             return new ChromiumJSHandle(new CRJSHandle(context, objectId, RemoteObject.HandlePreview(remote)));
-#pragma warning restore CA2000
         }
     }
 }

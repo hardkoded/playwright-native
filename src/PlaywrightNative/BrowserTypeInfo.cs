@@ -98,14 +98,12 @@ namespace PlaywrightNative
         /// <inheritdoc/>
         public Task<IBrowser> LaunchAsync(BrowserTypeLaunchOptions options = default)
         {
-#pragma warning disable CA2000 // Ownership of the browser transfers to the caller.
             return _name switch
             {
                 "firefox" => Playwright.LaunchFirefoxAsync(options),
                 "webkit" => Playwright.LaunchWebkitAsync(options),
                 _ => Playwright.LaunchChromiumAsync(options),
             };
-#pragma warning restore CA2000
         }
 
         /// <inheritdoc/>
@@ -132,7 +130,6 @@ namespace PlaywrightNative
 
             try
             {
-#pragma warning disable CA2000 // Ownership of the browser transfers to the caller.
                 PlaywrightNative.Chromium.CRBrowser crBrowser = await PlaywrightNative.Chromium.ChromiumBrowserType
                     .ConnectOverCDPAsync(endpointURL, timeoutMs, headers, noDefaults == true)
                     .ConfigureAwait(false);
@@ -150,7 +147,6 @@ namespace PlaywrightNative
                 }
 
                 return instance;
-#pragma warning restore CA2000
             }
             catch (Exception ex)
             {

@@ -93,12 +93,10 @@ namespace PlaywrightNative.Helpers
 
         private static async Task<Stream> ConnectDirectAsync(string host, int port, CancellationToken cancellationToken)
         {
-#pragma warning disable CA2000 // Ownership transfers to NetworkStream.
             Socket socket = new Socket(SocketType.Stream, ProtocolType.Tcp)
             {
                 NoDelay = true,
             };
-#pragma warning restore CA2000
             try
             {
                 if (string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase))
@@ -110,12 +108,10 @@ namespace PlaywrightNative.Helpers
                     catch (SocketException)
                     {
                         socket.Dispose();
-#pragma warning disable CA2000 // Ownership transfers to NetworkStream.
                         socket = new Socket(SocketType.Stream, ProtocolType.Tcp)
                         {
                             NoDelay = true,
                         };
-#pragma warning restore CA2000
                         await socket.ConnectAsync(IPAddress.IPv6Loopback, port, cancellationToken).ConfigureAwait(false);
                     }
                 }

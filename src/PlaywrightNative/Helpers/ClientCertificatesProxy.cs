@@ -949,9 +949,7 @@ namespace PlaywrightNative.Helpers
         {
             IReadOnlyList<string> offered = ParseAlpnFromClientHello(clientHello)
                 ?? new[] { "http/1.1" };
-#pragma warning disable CA2000 // PrependStream does not own the browser socket.
             PrependStream browserPrefixed = new(browser, clientHello);
-#pragma warning restore CA2000
             SslStream serverTls = null;
             SslStream browserTls = null;
             try

@@ -15,7 +15,6 @@ using Microsoft.Playwright;
 using PlaywrightNative.Chromium;
 using PlaywrightNative.Helpers;
 #pragma warning disable SA1201
-#pragma warning disable CA2000
 
 namespace PlaywrightNative
 {
@@ -1565,14 +1564,12 @@ namespace PlaywrightNative
                         }
 
                         string preview = RemoteObject.HandlePreview(remote);
-#pragma warning disable CA2000
                         if (RemoteObject.IsNode(remote))
                         {
                             return new ChromiumElementHandle(new CRElementHandle(_crPage, context, objectId, "JSHandle@node"));
                         }
 
                         return new ChromiumJSHandle(new CRJSHandle(context, objectId, preview), _crPage);
-#pragma warning restore CA2000
                     },
                     pollingInterval,
                     resolvedTimeout,
@@ -2149,9 +2146,7 @@ namespace PlaywrightNative
             try
             {
                 CRElementHandle crHandle = await _crPage.ResolveBackendNodeAsync(e.BackendNodeId, e.Session).ConfigureAwait(false);
-#pragma warning disable CA2000
                 element = crHandle == null ? null : new ChromiumElementHandle(crHandle);
-#pragma warning restore CA2000
             }
             catch (PlaywrightNativeException)
             {

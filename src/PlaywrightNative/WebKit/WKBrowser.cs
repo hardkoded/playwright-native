@@ -717,12 +717,10 @@ namespace PlaywrightNative.WebKit
             JsonElement p = parameters.Value;
             string uuid = p.TryGetProperty("uuid", out JsonElement uuidEl) ? uuidEl.GetString() : string.Empty;
             string error = p.TryGetProperty("error", out JsonElement errorEl) ? errorEl.GetString() : null;
-#pragma warning disable CA2000 // Page ownership stays with the context; TryRemove only looks up the download owner.
             if (!string.IsNullOrEmpty(uuid) && _downloads.TryRemove(uuid, out WKPage page))
             {
                 page.OnDownloadFinished(uuid, error);
             }
-#pragma warning restore CA2000
         }
 
         private void OnPageProxyCreated(JsonElement? parameters)
@@ -863,13 +861,11 @@ namespace PlaywrightNative.WebKit
                 return;
             }
 
-#pragma warning disable CA2000 // DidClose releases the page; this is not a create path.
             if (_pages.TryRemove(pageProxyId, out WKPage page))
             {
                 page.WKContext?.RemovePage(page);
                 page.DidClose();
             }
-#pragma warning restore CA2000
         }
 
         private void OnPageProxyMessageReceived(string pageProxyId, ProtocolResponse message)

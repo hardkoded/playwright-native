@@ -6,7 +6,6 @@
  */
 using System;
 #pragma warning disable SA1201
-#pragma warning disable CA2000
 using System.Collections.Generic;
 using System.Text.Json;
 using System.Threading.Tasks;

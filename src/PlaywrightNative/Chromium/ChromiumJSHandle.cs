@@ -6,7 +6,6 @@
  */
 using System;
 #pragma warning disable SA1201
-#pragma warning disable CA2000
 using System.Collections.Generic;
 using System.Text.Json;
 using System.Threading.Tasks;
@@ -172,14 +171,12 @@ namespace PlaywrightNative.Chromium
             string preview = RemoteObject.HandlePreview(remote);
 
             // Ownership of the inner CRJSHandle transfers to the instance (DisposeAsync).
-#pragma warning disable CA2000
             if (RemoteObject.IsNode(remote) && _page != null)
             {
                 return new ChromiumElementHandle(new CRElementHandle(_page, _crHandle.ExecutionContext, objectId, "JSHandle@node"));
             }
 
             return new ChromiumJSHandle(new CRJSHandle(_crHandle.ExecutionContext, objectId, preview), _page);
-#pragma warning restore CA2000
         }
     }
 }

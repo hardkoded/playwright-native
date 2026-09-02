@@ -66,6 +66,7 @@ These rules cause build failures. Violating them will break CI:
 | `CA1725` (error) | Parameter names must match base declaration |
 | `CA1823` (error) | No unused private fields |
 | `CA1062` (disabled in ruleset) | Validate arguments of public methods — off globally; thin `*CompatExtensions` passthroughs would otherwise need null checks on every parameter |
+| `CA2000` (disabled in ruleset) | Dispose objects before losing scope — off globally; many false positives on intentional ownership transfer (returned browsers/pages/handles, HttpClient handlers, wrapped streams) |
 | `csharp_style_var_for_built_in_types` (error) | **Never use `var` for built-in types** (`int`, `string`, `bool`, etc.) — use explicit types |
 | `dotnet_style_readonly_field` (error) | Fields that are never reassigned must be `readonly` |
 | `SA1204/SA1202` | Static members before instance members. Never place a static method after instance methods |

@@ -23,7 +23,6 @@
  * SOFTWARE.
  */
 #pragma warning disable SA1201
-#pragma warning disable CA2000
 using System;
 using System.Collections.Generic;
 using System.Linq;

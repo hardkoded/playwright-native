@@ -256,7 +256,6 @@ namespace PlaywrightNative.Helpers
                     }
 
                     // Ownership of the response transfers to the caller.
-#pragma warning disable CA2000
                     APIResponse result = new APIResponse(
                         (int)response.StatusCode,
                         response.ReasonPhrase ?? string.Empty,
@@ -266,7 +265,6 @@ namespace PlaywrightNative.Helpers
                         tlsCapture.Details,
                         timing.Result,
                         rawHeaders);
-#pragma warning restore CA2000
 
                     bool fail = failOnStatusCode ?? _standalone?.FailOnStatusCode ?? false;
                     if (fail && !result.Ok)

@@ -309,9 +309,7 @@ namespace PlaywrightNative.Transport
                         "Unable to attach redirected stderr for the Windows fd-3/4 process; .NET internals changed.");
                 }
 
-#pragma warning disable CA2000 // Ownership transfers to Process via reflection.
                 standardErrorField.SetValue(process, CreateReader(stderrParent));
-#pragma warning restore CA2000
             }
 
             if (startInfo.RedirectStandardOutput && stdoutParent != IntPtr.Zero)
@@ -322,17 +320,13 @@ namespace PlaywrightNative.Transport
                         "Unable to attach redirected stdout for the Windows fd-3/4 process; .NET internals changed.");
                 }
 
-#pragma warning disable CA2000 // Ownership transfers to Process via reflection.
                 standardOutputField.SetValue(process, CreateReader(stdoutParent));
-#pragma warning restore CA2000
             }
         }
 
         private static StreamReader CreateReader(IntPtr handle)
         {
-#pragma warning disable CA2000 // FileStream takes ownership of the SafeFileHandle.
             FileStream stream = new FileStream(new SafeFileHandle(handle, ownsHandle: true), FileAccess.Read);
-#pragma warning restore CA2000
             return new StreamReader(stream, Encoding.UTF8);
         }
 

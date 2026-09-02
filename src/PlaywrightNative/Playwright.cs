@@ -86,7 +86,6 @@ namespace PlaywrightNative
             {
                 string executablePath = await ResolveExecutablePathAsync(SupportedBrowser.Chromium, options).ConfigureAwait(false);
 
-#pragma warning disable CA2000 // Ownership of crBrowser transfers to ChromiumBrowser.
                 PlaywrightNative.Chromium.CRBrowser crBrowser = await PlaywrightNative.Chromium.ChromiumBrowserType
                     .LaunchAsync(executablePath, options.Headless, args: ToArgArray(options.Args), proxy: options.Proxy, chromiumSandbox: options.ChromiumSandbox, timeout: ResolveTimeout(options), ignoreDefaultArgs: options.IgnoreDefaultArgs, environment: options.Env, loggerFactory: options.LoggerFactory, devtools: options.Devtools, handleSIGINT: HandleSIGINT(options), handleSIGTERM: HandleSIGTERM(options), handleSIGHUP: HandleSIGHUP(options), ignoreDefaultArgsList: options.IgnoreDefaultArgsList)
                     .ConfigureAwait(false);
@@ -98,7 +97,6 @@ namespace PlaywrightNative
                 ((PlaywrightNative.Helpers.IHasTracesDir)chromium).TracesDir = options.TracesDir;
                 ((PlaywrightNative.Helpers.IHasArtifactsDir)chromium).ArtifactsDir = options.ArtifactsDir;
                 return chromium;
-#pragma warning restore CA2000
             }
             catch (Exception ex)
             {
@@ -121,13 +119,11 @@ namespace PlaywrightNative
             {
                 string executablePath = await ResolveExecutablePathAsync(SupportedBrowser.Firefox, options).ConfigureAwait(false);
 
-#pragma warning disable CA2000 // Ownership of ffBrowser transfers to FirefoxBrowser.
                 PlaywrightNative.Firefox.FFBrowser ffBrowser = await PlaywrightNative.Firefox.FirefoxBrowserType
                     .LaunchAsync(executablePath, options.Headless, args: ToArgArray(options.Args), timeout: ResolveTimeout(options), environment: options.Env, loggerFactory: options.LoggerFactory, handleSIGINT: HandleSIGINT(options), handleSIGTERM: HandleSIGTERM(options), handleSIGHUP: HandleSIGHUP(options), firefoxUserPrefs: options.FirefoxUserPrefs)
                     .ConfigureAwait(false);
 
                 return new PlaywrightNative.Firefox.FirefoxBrowser(ffBrowser);
-#pragma warning restore CA2000
             }
             catch (Exception ex)
             {
@@ -150,7 +146,6 @@ namespace PlaywrightNative
             {
                 string executablePath = await ResolveExecutablePathAsync(SupportedBrowser.Webkit, options).ConfigureAwait(false);
 
-#pragma warning disable CA2000 // Ownership of wkBrowser transfers to the caller.
                 WebKit.WKBrowser wkBrowser = await WebKit.WebkitBrowserType
                     .LaunchAsync(executablePath, options.Headless, args: ToArgArray(options.Args), proxy: options.Proxy, timeout: ResolveTimeout(options), environment: options.Env, loggerFactory: options.LoggerFactory, handleSIGINT: HandleSIGINT(options), handleSIGTERM: HandleSIGTERM(options), handleSIGHUP: HandleSIGHUP(options))
                     .ConfigureAwait(false);
@@ -161,7 +156,6 @@ namespace PlaywrightNative
                 ((PlaywrightNative.Helpers.IHasTracesDir)wkBrowser).TracesDir = options.TracesDir;
                 ((PlaywrightNative.Helpers.IHasArtifactsDir)wkBrowser).ArtifactsDir = options.ArtifactsDir;
                 return wkBrowser;
-#pragma warning restore CA2000
             }
             catch (Exception ex)
             {
@@ -186,11 +180,8 @@ namespace PlaywrightNative
                 string executablePath = await ResolveExecutablePathAsync(SupportedBrowser.Chromium, options).ConfigureAwait(false);
                 bool ownsUserDataDir = string.IsNullOrEmpty(userDataDir);
                 string resolvedDir = ResolveUserDataDir(userDataDir);
-#pragma warning disable CA2000 // Ownership of certsProxy transfers to the persistent context.
                 Proxy launchProxy = StartPersistentClientCertificates(options, out certsProxy);
-#pragma warning restore CA2000
 
-#pragma warning disable CA2000 // Ownership of crBrowser transfers to ChromiumBrowser.
                 PlaywrightNative.Chromium.CRBrowser crBrowser = await PlaywrightNative.Chromium.ChromiumBrowserType
                     .LaunchAsync(
                         executablePath,
@@ -218,7 +209,6 @@ namespace PlaywrightNative
                 };
                 ((PlaywrightNative.Helpers.IHasTracesDir)instance).TracesDir = options.TracesDir;
                 ((PlaywrightNative.Helpers.IHasArtifactsDir)instance).ArtifactsDir = options.ArtifactsDir;
-#pragma warning restore CA2000
                 IBrowserContext context = instance.PersistentContext();
                 if (context is PlaywrightNative.Chromium.ChromiumBrowserContext chromiumCerts)
                 {
@@ -251,7 +241,6 @@ namespace PlaywrightNative
             bool ownsUserDataDir = string.IsNullOrEmpty(userDataDir);
             string resolvedDir = ResolveUserDataDir(userDataDir);
 
-#pragma warning disable CA2000 // Ownership of ffBrowser transfers to FirefoxBrowser.
             PlaywrightNative.Firefox.FFBrowser ffBrowser = await PlaywrightNative.Firefox.FirefoxBrowserType
                 .LaunchAsync(
                     executablePath,
@@ -270,7 +259,6 @@ namespace PlaywrightNative
                 .ConfigureAwait(false);
 
             PlaywrightNative.Firefox.FirefoxBrowser instance = new(ffBrowser);
-#pragma warning restore CA2000
             IBrowserContext context = instance.PersistentContext();
             await ApplyPersistentEmulationAsync(context, options).ConfigureAwait(false);
             return context;
@@ -293,11 +281,8 @@ namespace PlaywrightNative
                 string executablePath = await ResolveExecutablePathAsync(SupportedBrowser.Webkit, options).ConfigureAwait(false);
                 bool ownsUserDataDir = string.IsNullOrEmpty(userDataDir);
                 string resolvedDir = ResolveUserDataDir(userDataDir);
-#pragma warning disable CA2000 // Ownership of webkitCertsProxy transfers to the persistent context.
                 Proxy webkitLaunchProxy = StartPersistentClientCertificates(options, out webkitCertsProxy);
-#pragma warning restore CA2000
 
-#pragma warning disable CA2000 // Ownership of wkBrowser transfers to the returned context.
                 WebKit.WKBrowser wkBrowser = await WebKit.WebkitBrowserType
                     .LaunchAsync(
                         executablePath,
@@ -319,7 +304,6 @@ namespace PlaywrightNative
                 wkBrowser.LaunchProxy = options.Proxy;
                 ((PlaywrightNative.Helpers.IHasTracesDir)wkBrowser).TracesDir = options.TracesDir;
                 ((PlaywrightNative.Helpers.IHasArtifactsDir)wkBrowser).ArtifactsDir = options.ArtifactsDir;
-#pragma warning restore CA2000
                 IBrowserContext context = wkBrowser.PersistentContext();
                 if (context is WebKit.WKBrowserContext webkitCerts)
                 {

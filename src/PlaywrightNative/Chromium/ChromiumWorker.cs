@@ -50,9 +50,7 @@ namespace PlaywrightNative.Chromium
         public async Task<IJSHandle> EvaluateHandleAsync(string expression, object arg = default)
         {
             string toEval = arg == null ? EvaluateWithArg.InvokeIfFunction(expression) : EvaluateWithArg.Wrap(expression, arg);
-#pragma warning disable CA2000 // Ownership transfers to the returned ChromiumJSHandle
             CRJSHandle handle = await _worker.EvaluateHandleAsync(toEval).ConfigureAwait(false);
-#pragma warning restore CA2000
             return WrapHandle(handle);
         }
 
