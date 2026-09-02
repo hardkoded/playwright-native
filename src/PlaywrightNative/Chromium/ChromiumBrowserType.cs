@@ -1,7 +1,7 @@
 /*
  * Copyright (c) 2020 Dario Kondratiuk
  * Copyright (c) 2020 Meir Blachman
- * Modifications copyright (c) Microsoft Corporation. 
+ * Modifications copyright (c) Microsoft Corporation.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
