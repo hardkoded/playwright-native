@@ -31,6 +31,8 @@
     <Rule Id="CA1823" Action="Error" /><!-- avoid unused fields-->
     <Rule Id="CA1031" Action="None"/> <!-- Use specific exceptions-->
     <Rule Id="CA1508" Action="None"/> <!-- Avoid dead conditional code. This is a good report but there are many false positives reported.-->
+    <Rule Id="CA1062" Action="None"/> <!-- Validate arguments of public methods. Thin *CompatExtensions passthroughs would need null checks on every parameter; null fails at the callee the same as calling Microsoft.Playwright directly.-->
+    <Rule Id="CA2000" Action="None"/> <!-- Dispose objects before losing scope. False positives on intentional ownership transfer (browser/page/handle returned to caller, HttpClient takes handler, stream wraps socket).-->
     <Rule Id="CA1510" Action="None"/> <!-- Use ArgumentNullException.ThrowIfNull -->
     <Rule Id="CA1514" Action="None"/> <!-- Use ArgumentOutOfRangeException.ThrowIfNegative -->
     <Rule Id="CA1816" Action="None"/> <!-- Call GC.SuppressFinalize correctly -->

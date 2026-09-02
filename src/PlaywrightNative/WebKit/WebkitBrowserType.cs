@@ -226,11 +226,9 @@ namespace PlaywrightNative.WebKit
                 WKBrowser browser;
                 try
                 {
-#pragma warning disable CA2000 // Ownership of the returned WKBrowser transfers to the caller.
                     browser = await WKBrowser
                         .ConnectAsync(connection, processManager, loggerFactory, persistent)
                         .ConfigureAwait(false);
-#pragma warning restore CA2000
                 }
                 catch (TargetClosedException ex)
                 {

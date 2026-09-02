@@ -177,7 +177,6 @@ namespace PlaywrightNative.Firefox
             bool? strictSelectors = default,
             IEnumerable<ClientCertificate> clientCertificates = default)
         {
-#pragma warning disable CA2000 // Context lifetime is owned by the returned page.
             IBrowserContext context = await NewContextAsync(
                 extraHTTPHeaders: extraHTTPHeaders,
                 userAgent: userAgent,
@@ -213,7 +212,6 @@ namespace PlaywrightNative.Firefox
                 recordHarUrlRegex: recordHarUrlRegex,
                 strictSelectors: strictSelectors,
                 clientCertificates: clientCertificates).ConfigureAwait(false);
-#pragma warning restore CA2000
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
             if (context is FirefoxBrowserContext owned)
             {

@@ -234,7 +234,6 @@ namespace PlaywrightNative.Firefox
                 transport = new PipeTransport(childReads, childWrites, loggerFactory);
                 connection = new FFConnection(transport, loggerFactory);
 
-#pragma warning disable CA2000 // Ownership of the returned FFBrowser transfers to the caller.
                 FFBrowser browser;
                 try
                 {
@@ -273,7 +272,6 @@ namespace PlaywrightNative.Firefox
                         $"Logs:\n{(logs.Length == 0 ? "<empty>" : logs)}",
                         ex);
                 }
-#pragma warning restore CA2000
 
                 processManager = null;
                 connection = null;

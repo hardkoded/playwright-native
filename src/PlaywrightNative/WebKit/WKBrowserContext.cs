@@ -880,13 +880,11 @@ namespace PlaywrightNative.WebKit
                 TaskCompletionSource<WKPage> tcs = null;
                 lock (_pageHandoffLock)
                 {
-#pragma warning disable CA2000 // Early page is returned to NewPageAsync; the context owns it.
                     if (!_earlyPages.TryRemove(pageProxyId, out earlyPage))
                     {
                         tcs = new TaskCompletionSource<WKPage>(TaskCreationOptions.RunContinuationsAsynchronously);
                         _pendingPageCreations.TryAdd(pageProxyId, tcs);
                     }
-#pragma warning restore CA2000
                 }
 
                 // If the pageProxyCreated event already fired, claim it from the early-arrival map.

@@ -171,9 +171,7 @@ namespace PlaywrightNative.WebKit
 
             // Bound the wait: a lost response faults the command with a labelled timeout
             // (naming the method) rather than hanging. Disposed when the response settles.
-#pragma warning disable CA2000 // Disposed in the ContinueWith below once the response task settles.
             System.Threading.CancellationTokenSource timeoutCts = new(CommandTimeoutMs);
-#pragma warning restore CA2000
             timeoutCts.Token.Register(() =>
             {
                 if (_callbacks.TryRemove(id, out TaskCompletionSource<JsonElement?> timedOut))

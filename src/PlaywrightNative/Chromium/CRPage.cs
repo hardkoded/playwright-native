@@ -721,12 +721,10 @@ namespace PlaywrightNative.Chromium
             CloseOwnedOopifWorkers(targetId);
             _oopifParents.TryRemove(targetId, out _);
             _oopifSwappedIn.TryRemove(targetId, out _);
-#pragma warning disable CA2000
             if (_oopifSessions.TryRemove(targetId, out CRSession session))
             {
                 _networkManager.RemoveWorkerSession(session);
             }
-#pragma warning restore CA2000
         }
 
         /// <summary>
@@ -4113,14 +4111,10 @@ namespace PlaywrightNative.Chromium
 
             if (RemoteObject.IsNode(remote))
             {
-#pragma warning disable CA2000
                 return new ChromiumElementHandle(new CRElementHandle(this, context, objectId, "JSHandle@node"));
-#pragma warning restore CA2000
             }
 
-#pragma warning disable CA2000
             return new ChromiumJSHandle(new CRJSHandle(context, objectId, RemoteObject.HandlePreview(remote)), this);
-#pragma warning restore CA2000
         }
 
         private void OnExceptionThrown(JsonElement? parameters)

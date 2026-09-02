@@ -355,7 +355,6 @@ namespace PlaywrightNative.Chromium
             {
                 transport = await WebSocketTransport.ConnectAsync(webSocketUrl, headerList, timeout).ConfigureAwait(false);
                 connection = new CRConnection(transport, loggerFactory: null);
-#pragma warning disable CA2000 // Ownership of the browser transfers to the caller.
                 Task<CRBrowser> connect = CRBrowser.ConnectAsync(
                     connection,
                     transport,
@@ -371,7 +370,6 @@ namespace PlaywrightNative.Chromium
                 }
 
                 CRBrowser browser = await connect.ConfigureAwait(false);
-#pragma warning restore CA2000
                 transport = null;
                 connection = null;
                 return browser;
@@ -476,7 +474,6 @@ namespace PlaywrightNative.Chromium
 
         private static HttpClient CreateDiscoveryClient(int timeout, IEnumerable<KeyValuePair<string, string>> headers)
         {
-#pragma warning disable CA2000 // Ownership of the handler transfers to HttpClient.
             HttpClientHandler handler = new HttpClientHandler
             {
                 ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator,
@@ -496,7 +493,6 @@ namespace PlaywrightNative.Chromium
             {
                 Timeout = TimeSpan.FromMilliseconds(timeout > 0 ? timeout : 30_000),
             };
-#pragma warning restore CA2000
             ApplyConnectHeaders(client, headers);
             return client;
         }

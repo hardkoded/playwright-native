@@ -14,7 +14,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#pragma warning disable CA1062
 using System.Text.RegularExpressions;
 using Microsoft.Playwright;
 using PlaywrightNative.Helpers;

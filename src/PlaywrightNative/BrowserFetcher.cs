@@ -311,13 +311,10 @@ namespace PlaywrightNative
 
         private HttpClient BuildHttpClient()
         {
-            // CA2000: ownership of the handler is transferred to HttpClient via disposeHandler: true.
-#pragma warning disable CA2000
             HttpClientHandler handler = new()
             {
                 CheckCertificateRevocationList = true,
             };
-#pragma warning restore CA2000
 
             if (WebProxy != null)
             {
