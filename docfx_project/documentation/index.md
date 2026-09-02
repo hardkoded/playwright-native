@@ -15,7 +15,8 @@ Browsers download automatically the first time you launch if they are not alread
 ```cs
 using PlaywrightNative;
 
-await using var browser = await Playwright.LaunchChromiumAsync();
+using var playwright = await Playwright.CreateAsync();
+await using var browser = await playwright.Chromium.LaunchAsync();
 var page = await browser.NewPageAsync();
 await page.GoToAsync("https://www.bing.com");
 await page.ScreenshotAsync(path: "bing.png");
@@ -24,14 +25,16 @@ await page.ScreenshotAsync(path: "bing.png");
 Launch Firefox or WebKit the same way:
 
 ```cs
-await using var firefox = await Playwright.LaunchFirefoxAsync();
-await using var webkit = await Playwright.LaunchWebkitAsync();
+using var playwright = await Playwright.CreateAsync();
+await using var firefox = await playwright.Firefox.LaunchAsync();
+await using var webkit = await playwright.Webkit.LaunchAsync();
 ```
 
 Pass `BrowserTypeLaunchOptions` when you need a headed window, a specific binary, or logging:
 
 ```cs
-await using var browser = await Playwright.LaunchChromiumAsync(new BrowserTypeLaunchOptions
+using var playwright = await Playwright.CreateAsync();
+await using var browser = await playwright.Chromium.LaunchAsync(new BrowserTypeLaunchOptions
 {
     Headless = false,
     ExecutablePath = "/path/to/chromium",
@@ -40,13 +43,14 @@ await using var browser = await Playwright.LaunchChromiumAsync(new BrowserTypeLa
 
 ## Browsers
 
-`LaunchChromiumAsync`, `LaunchFirefoxAsync`, and `LaunchWebkitAsync` download the matching browser through `BrowserFetcher` when `ExecutablePath` is omitted. You can also download ahead of time:
+`playwright.Chromium.LaunchAsync` (and Firefox / WebKit) download the matching browser through `BrowserFetcher` when `ExecutablePath` is omitted. You can also download ahead of time:
 
 ```cs
 var fetcher = new BrowserFetcher();
 InstalledBrowser installed = await fetcher.DownloadAsync();
 
-await using var browser = await Playwright.LaunchChromiumAsync(new BrowserTypeLaunchOptions
+using var playwright = await Playwright.CreateAsync();
+await using var browser = await playwright.Chromium.LaunchAsync(new BrowserTypeLaunchOptions
 {
     ExecutablePath = installed.GetExecutablePath(),
 });
@@ -63,7 +67,8 @@ Older samples launched a Node.js driver and copied platform-specific binaries in
 ```cs
 using PlaywrightNative;
 
-await using var browser = await Playwright.LaunchFirefoxAsync();
+using var playwright = await Playwright.CreateAsync();
+await using var browser = await playwright.Firefox.LaunchAsync();
 var page = await browser.NewPageAsync();
 await page.GoToAsync("https://www.example.com/");
 var dimensions = await page.EvaluateAsync<Dictionary<string, int>>(@"() => ({
@@ -78,7 +83,8 @@ Console.WriteLine($"{dimensions["width"]}x{dimensions["height"]}");
 ```cs
 using PlaywrightNative;
 
-await using var browser = await Playwright.LaunchChromiumAsync();
+using var playwright = await Playwright.CreateAsync();
+await using var browser = await playwright.Chromium.LaunchAsync();
 var page = await browser.NewPageAsync();
 await page.RouteAsync("**/*", route =>
 {
@@ -93,7 +99,8 @@ await page.GoToAsync("https://todomvc.com");
 ```cs
 using PlaywrightNative;
 
-await using var browser = await Playwright.LaunchWebkitAsync();
+using var playwright = await Playwright.CreateAsync();
+await using var browser = await playwright.Webkit.LaunchAsync();
 
 var contextOptions = new BrowserContextOptions(Playwright.Devices["iPhone 11 Pro"])
 {

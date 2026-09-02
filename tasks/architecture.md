@@ -9,8 +9,9 @@ Juggler for Firefox, WebKit Inspection Protocol for WebKit).
 **Why**: Eliminates Node.js runtime dependency, reduces latency (no interprocess
 serialization hop), gives full control, and dramatically reduces package size.
 
-That replacement is done. Public launch entry points are
-`Playwright.LaunchChromiumAsync`, `LaunchFirefoxAsync`, and `LaunchWebkitAsync`.
+That replacement is done. Public launch matches upstream playwright-dotnet:
+`Playwright.CreateAsync()` then `playwright.Chromium.LaunchAsync()` /
+`Firefox` / `Webkit`. Convenience `LaunchChromiumAsync` helpers remain.
 
 ## GitHub Tracking
 
@@ -21,7 +22,8 @@ That replacement is done. Public launch entry points are
 ## Current Architecture
 
 ```
-User Code → Playwright.LaunchChromiumAsync / LaunchFirefoxAsync / LaunchWebkitAsync
+User Code → Playwright.CreateAsync() → IPlaywright
+         → playwright.Chromium / Firefox / Webkit .LaunchAsync()
          → IPage / IBrowser (public API)
          → CR* / FF* / WK* implementations (and adapters)
          → CRSession / FFSession / WKSession

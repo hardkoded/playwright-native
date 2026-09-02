@@ -5,8 +5,11 @@
 PlaywrightNative is a .NET port of Microsoft Playwright for automating Chromium, Firefox, and WebKit browsers.
 Inspired by the original Playwright library, adapted to C# idioms and .NET practices.
 
-Public launch entry points are `Playwright.LaunchChromiumAsync`, `LaunchFirefoxAsync`,
-and `LaunchWebkitAsync`. There is no Node.js driver.
+Public launch entry points match upstream playwright-dotnet:
+`Playwright.CreateAsync()` returns `IPlaywright`, then
+`playwright.Chromium.LaunchAsync()` / `Firefox` / `Webkit`.
+There is no Node.js driver. Static `Playwright.Chromium` /
+`LaunchChromiumAsync` helpers remain for convenience.
 
 ## Compatibility campaigns
 
@@ -112,10 +115,11 @@ PlaywrightNative.TestServer/         ← HTTP/HTTPS server for test fixtures
 
 ### Key Design Patterns
 
-- **Direct browser connections**: `Playwright.LaunchChromiumAsync` / `LaunchFirefoxAsync` /
-  `LaunchWebkitAsync` spawn the browser and speak its native protocol. `Transport/` is
-  `PipeTransport`, `WebSocketTransport`, and `BrowserProcessManager` — browser I/O, not
-  leftover Node-driver plumbing.
+- **Direct browser connections**: `Playwright.CreateAsync()` then
+ `playwright.Chromium` / `Firefox` / `Webkit` `.LaunchAsync()` spawn the browser
+ and speak its native protocol. `Transport/` is
+ `PipeTransport`, `WebSocketTransport`, and `BrowserProcessManager` — browser I/O, not
+ leftover Node-driver plumbing.
 - **InternalsVisibleTo**: The main library exposes internals to tests via strong-name signed assemblies (keys in `src/keys/`).
 - **ConfigureAwait(false) everywhere**: All async code uses `.ConfigureAwait(false)` to avoid deadlocks in sync-over-async scenarios.
 - **Typed protocol messages**: Do not poke at `JsonElement` with `TryGetProperty` for protocol messages with a known shape. Create a proper type for the message (a class/record with `[JsonPropertyName]` for the wire names) and deserialize into it. Reserve raw `JsonElement` for genuinely dynamic/unknown-shape payloads (e.g. by-value evaluation results).
