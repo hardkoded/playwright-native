@@ -4071,7 +4071,7 @@ namespace PlaywrightNative.Chromium
             JsonElement p = parameters.Value;
 
             // DevTools replays buffered logs with executionContextId = 0 after
-            // Runtime.enable. Those objects are already gone (puppeteer#3865).
+            // Runtime.enable. Those objects are already gone (upstream#3865).
             if (p.TryGetProperty("executionContextId", out JsonElement ctxIdEl)
                 && ctxIdEl.TryGetInt32(out int replayContextId)
                 && replayContextId == 0)

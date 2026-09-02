@@ -785,9 +785,10 @@ namespace PlaywrightNative.Transport
                     }
                     catch (Exception ex)
                     {
-                        throw new PlaywrightNativeException(
-                            string.IsNullOrEmpty(ex.Message) ? "Failed to launch browser" : ex.Message,
-                            ex);
+                        // Official Node errors start with "Failed to launch" so
+                        // browsertype-launch.spec.ts can match that substring.
+                        string detail = string.IsNullOrEmpty(ex.Message) ? "browser" : "browser: " + ex.Message;
+                        throw new PlaywrightNativeException("Failed to launch " + detail, ex);
                     }
                     finally
                     {
