@@ -8,7 +8,7 @@ If you were started by a Cursor Automation, or the user said "keep going" / "nex
 
 ## Goal
 
-Port official Playwright Node tests from `/tmp/playwright/tests/page/` and `/tmp/playwright/tests/library/` into PlaywrightSharp.
+Port official Playwright Node tests from `/tmp/playwright/tests/page/` and `/tmp/playwright/tests/library/` into PlaywrightNative.
 
 Golden rule: **tests must match upstream**. Use the exact spec file name and the exact `test(...)` / `it(...)` title in `[PlaywrightTest]`. Never weaken an assertion to match local code. If a ported test fails, **fix the library**.
 
@@ -67,7 +67,7 @@ Co-authored-by: `Darío Kondratiuk <dariokondratiuk@gmail.com>`.
 
 ## Test file conventions
 
-- New file: `src/PlaywrightSharp.Tests/<SpecName>Tests.cs` (no `Direct` filename/class prefix)
+- New file: `src/PlaywrightNative.Tests/<SpecName>Tests.cs` (no `Direct` filename/class prefix)
 - MIT header like other public-API tests
 - `[TestFixture]`
 - `[PlaywrightTest("exact-upstream-file.spec.ts", "exact upstream title")]`
@@ -76,7 +76,7 @@ Co-authored-by: `Darío Kondratiuk <dariokondratiuk@gmail.com>`.
 - Server: `TestConstants.ServerUrl` (`http://localhost:8081`), `EmptyPage`, `CrossProcessHttpPrefix`. `SimpleServer` via `TestServerSetup.Server` for `SetRoute` / `SetRedirect`
 - Map TS → C#: `setContent` → `SetContentAsync`, `$eval` → `EvalOnSelectorAsync`, `$` → `QuerySelectorAsync`, `evaluateHandle` → `EvaluateHandleAsync`, `jsonValue` → `JsonValueAsync`, `asElement` → `AsElement`
 - `EvaluateAsync` is raw `Runtime.evaluate` — wrap page functions in an IIFE / function string
-- NUnit: `Assert.That(...)`. `Assert.ThrowsAsync<TimeoutException>` is exact-type. `Assert.CatchAsync` for `PlaywrightSharpException` (sync — no `.ConfigureAwait`)
+- NUnit: `Assert.That(...)`. `Assert.ThrowsAsync<TimeoutException>` is exact-type. `Assert.CatchAsync` for `PlaywrightNativeException` (sync — no `.ConfigureAwait`)
 - `ConfigureAwait(false)` on every `await`
 - No `var` for built-in types. Private fields `_camelCase`. CRLF on `.cs` and `tasks/todo.md`
 - `List<T>` for IEnumerable overloads. `foreach` on `ChildFrames`
@@ -91,12 +91,12 @@ killall -9 chrome chrome_crashpad_handler || true
 export DOTNET_ROOT="$HOME/.dotnet"
 export PATH="$DOTNET_ROOT:$PATH"
 
-dotnet build ./src/PlaywrightSharp/PlaywrightSharp.csproj -f net10.0
+dotnet build ./src/PlaywrightNative/PlaywrightNative.csproj -f net10.0
 
-PRODUCT=CHROMIUM dotnet test ./src/PlaywrightSharp.Tests/PlaywrightSharp.Tests.csproj \
+PRODUCT=CHROMIUM dotnet test ./src/PlaywrightNative.Tests/PlaywrightNative.Tests.csproj \
   -f net10.0 --filter "FullyQualifiedName~<YourNewTestClass>" --no-restore
 
-PRODUCT=WEBKIT dotnet test ./src/PlaywrightSharp.Tests/PlaywrightSharp.Tests.csproj \
+PRODUCT=WEBKIT dotnet test ./src/PlaywrightNative.Tests/PlaywrightNative.Tests.csproj \
   -f net10.0 --filter "FullyQualifiedName~<YourNewTestClass>" --no-restore
 ```
 

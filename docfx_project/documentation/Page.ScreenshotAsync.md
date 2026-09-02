@@ -10,7 +10,7 @@ You need to take a screenshot of a page.
 Use `Page.ScreenshotAsync`, passing a file path when you want the image written to disk.
 
 ```cs
-using PlaywrightSharp;
+using PlaywrightNative;
 
 string url = "https://www.somepage.com";
 string file = "somepage.png";

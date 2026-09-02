@@ -80,33 +80,33 @@ jobs:
         # produced before the symlink fix were cached as broken trees on Linux:
         # libWPEWebKit-2.0.so.1 ended up as a 26-byte text placeholder and the
         # dynamic loader rejected it as "file too short".
-        key: ${{ runner.os }}-pw-browsers-${{ hashFiles('src/PlaywrightSharp/BrowserData.cs', 'src/PlaywrightSharp/ArchiveExtractor.cs') }}
+        key: ${{ runner.os }}-pw-browsers-${{ hashFiles('src/PlaywrightNative/BrowserData.cs', 'src/PlaywrightNative/ArchiveExtractor.cs') }}
         # No restore-keys fallback: we want a stale cache to be a clean miss
         # rather than a partial restore that masks broken binaries.
     - name: Create HTTPS certificate (Linux)
       if: matrix.os == 'ubuntu-latest' && matrix.browser == 'chromium'
       run: |
-        mkdir -p src/PlaywrightSharp.TestServer
+        mkdir -p src/PlaywrightNative.TestServer
         dotnet dev-certs https --clean
-        dotnet dev-certs https -ep src/PlaywrightSharp.TestServer/testCert.cer
-        sudo openssl x509 -inform der -in src/PlaywrightSharp.TestServer/testCert.cer -out /usr/local/share/ca-certificates/testCert.crt -outform pem
+        dotnet dev-certs https -ep src/PlaywrightNative.TestServer/testCert.cer
+        sudo openssl x509 -inform der -in src/PlaywrightNative.TestServer/testCert.cer -out /usr/local/share/ca-certificates/testCert.crt -outform pem
         sudo update-ca-certificates
     - name: Create HTTPS certificate (Windows)
       if: matrix.os == 'windows-latest'
       shell: pwsh
       run: |
         dotnet dev-certs https --clean
-        dotnet dev-certs https -ep src/PlaywrightSharp.TestServer/testCert.cer
+        dotnet dev-certs https -ep src/PlaywrightNative.TestServer/testCert.cer
     - name: Check formatting
       if: ${{ matrix.os == 'ubuntu-latest' && matrix.browser == 'chromium' && matrix.mode == 'headless' }}
-      run: dotnet format whitespace ./src/PlaywrightSharp.sln --verify-no-changes && dotnet format style ./src/PlaywrightSharp.sln --verify-no-changes
+      run: dotnet format whitespace ./src/PlaywrightNative.sln --verify-no-changes && dotnet format style ./src/PlaywrightNative.sln --verify-no-changes
     - name: Check no puppeteer references
       if: ${{ matrix.os == 'ubuntu-latest' && matrix.browser == 'chromium' && matrix.mode == 'headless' }}
       run: |
         chmod +x ./.github/workflows/no-puppeteer.sh
         ./.github/workflows/no-puppeteer.sh
     - name: Build
-      run: dotnet build ./src/PlaywrightSharp.sln
+      run: dotnet build ./src/PlaywrightNative.sln
     - name: Disable AppArmor (Linux)
       if: matrix.os == 'ubuntu-latest'
       run: echo 0 | sudo tee /proc/sys/kernel/apparmor_restrict_unprivileged_userns || true
@@ -115,29 +115,29 @@ jobs:
       env:
         PRODUCT: CHROMIUM
       run: |
-        dotnet test ./src/PlaywrightSharp.Tests/PlaywrightSharp.Tests.csproj --no-build -f net10.0 -s src/PlaywrightSharp.Tests/test.runsettings
+        dotnet test ./src/PlaywrightNative.Tests/PlaywrightNative.Tests.csproj --no-build -f net10.0 -s src/PlaywrightNative.Tests/test.runsettings
     - name: Test (Chromium, Linux headful)
       if: ${{ matrix.browser == 'chromium' && matrix.os == 'ubuntu-latest' && matrix.mode == 'headful' }}
       env:
         PRODUCT: CHROMIUM
       run: |
         xvfb-run --auto-servernum --server-args="-screen 0 1280x960x24" -- \
-          dotnet test ./src/PlaywrightSharp.Tests/PlaywrightSharp.Tests.csproj --no-build -f net10.0 -s src/PlaywrightSharp.Tests/test.runsettings
+          dotnet test ./src/PlaywrightNative.Tests/PlaywrightNative.Tests.csproj --no-build -f net10.0 -s src/PlaywrightNative.Tests/test.runsettings
     - name: Test (Chromium, Windows)
       if: ${{ matrix.browser == 'chromium' && matrix.os == 'windows-latest' }}
       env:
         PRODUCT: CHROMIUM
       run: |
-        dotnet test ./src/PlaywrightSharp.Tests/PlaywrightSharp.Tests.csproj --no-build -f net10.0 -s src/PlaywrightSharp.Tests/test.runsettings
+        dotnet test ./src/PlaywrightNative.Tests/PlaywrightNative.Tests.csproj --no-build -f net10.0 -s src/PlaywrightNative.Tests/test.runsettings
     - name: Test (WebKit)
       if: matrix.browser == 'webkit'
       env:
         PRODUCT: WEBKIT
       run: |
-        # Known-failing tests on WebKit are marked in PlaywrightSharp.Nunit's
+        # Known-failing tests on WebKit are marked in PlaywrightNative.Nunit's
         # TestExpectations.local.json (browser+platform+mode aware). The JSON
         # currently covers WK feature gaps (ExposeFunction, AddInitScript,
         # AddScriptTag/AddStyleTag, EmulateMedia, PDF, screenshots, SetContent,
         # SetViewportSize) and the macOS-14 inner-target hang. Retire entries
         # as the underlying work lands.
-        dotnet test ./src/PlaywrightSharp.Tests/PlaywrightSharp.Tests.csproj --no-build -f net10.0 -s src/PlaywrightSharp.Tests/test.runsettings
+        dotnet test ./src/PlaywrightNative.Tests/PlaywrightNative.Tests.csproj --no-build -f net10.0 -s src/PlaywrightNative.Tests/test.runsettings

@@ -15,7 +15,7 @@ All 10 plan tasks completed and green. Final-review concurrency fix applied in `
 ## Validation at session end
 
 ```
-dotnet build ./src/PlaywrightSharp.sln                      → 0 errors
+dotnet build ./src/PlaywrightNative.sln                      → 0 errors
 dotnet test ... --filter "Category=DirectConnection"         → 63 passed / 0 failed / 0 skipped (17s)
 dotnet format whitespace --verify-no-changes                 → clean
 dotnet format style --verify-no-changes                      → clean

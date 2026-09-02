@@ -7,11 +7,11 @@ You need library logs to debug a launch or protocol problem.
 
 ## Solution
 
-Pass an `ILoggerFactory` on `BrowserTypeLaunchOptions`. PlaywrightSharp uses it while launching and talking to the browser.
+Pass an `ILoggerFactory` on `BrowserTypeLaunchOptions`. PlaywrightNative uses it while launching and talking to the browser.
 
 ```cs
 using Microsoft.Extensions.Logging;
-using PlaywrightSharp;
+using PlaywrightNative;
 
 ILoggerFactory loggerFactory = LoggerFactory.Create(builder =>
 {

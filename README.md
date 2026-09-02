@@ -1,16 +1,16 @@
-# PlaywrightSharp
+# PlaywrightNative
 
-[![NuGet version](https://buildstats.info/nuget/PlaywrightSharp)](https://www.nuget.org/packages/PlaywrightSharp)
+[![NuGet version](https://buildstats.info/nuget/PlaywrightNative)](https://www.nuget.org/packages/PlaywrightNative)
 [![Join Slack](https://img.shields.io/badge/join-slack-infomational)](https://join.slack.com/t/playwright/shared_invite/enQtOTEyMTUxMzgxMjIwLThjMDUxZmIyNTRiMTJjNjIyMzdmZDA3MTQxZWUwZTFjZjQwNGYxZGM5MzRmNzZlMWI5ZWUyOTkzMjE5Njg1NDg)
 [![Backers](https://opencollective.com/hardkoded-projects/backers/badge.svg)](https://opencollective.com/hardkoded-projects)
 
-PlaywrightSharp is a .NET library to automate [Chromium](https://www.chromium.org/Home), Firefox, and WebKit with a **pure .NET implementation** — no Node.js, no driver process, no PowerShell scripts.
+PlaywrightNative is a .NET library to automate [Chromium](https://www.chromium.org/Home), Firefox, and WebKit with a **pure .NET implementation** — no Node.js, no driver process, no PowerShell scripts.
 
 Chromium is the primary, fully supported browser. Firefox and WebKit launch today through the same API; Firefox is not in CI yet.
 
-## Why PlaywrightSharp instead of playwright-dotnet?
+## Why PlaywrightNative instead of playwright-dotnet?
 
-**PlaywrightSharp is a community-first project, created by the community, for the community.**
+**PlaywrightNative is a community-first project, created by the community, for the community.**
 
 [Microsoft's playwright-dotnet](https://github.com/microsoft/playwright-dotnet) is a thin auto-generated wrapper around a bundled Node.js process. After years of accumulated community frustration — [89% of open issues unanswered](tasks/playwright-dotnet-pain-points-report.md), top feature requests open for 4+ years, and a widening gap with the Node.js version — we decided to build something better.
 
@@ -18,7 +18,7 @@ Chromium is the primary, fully supported browser. Firefox and WebKit launch toda
 
 The playwright-dotnet library ships an entire **Node.js runtime** inside your NuGet package. This means bloated CI/CD pipelines (teams have reported [300 GB/month in build artifacts](https://github.com/microsoft/playwright-dotnet/issues/1850) just from Node.js binaries), incompatibility with AOT compilation and trimmed publish, and a multi-step installation ritual involving PowerShell scripts buried inside `bin/` folders.
 
-PlaywrightSharp talks to the browser directly (CDP for Chromium, Juggler for Firefox, WebKit Inspection Protocol for WebKit). No Node.js. No driver process. No PowerShell scripts. Just `dotnet add package` and you're ready to go.
+PlaywrightNative talks to the browser directly (CDP for Chromium, Juggler for Firefox, WebKit Inspection Protocol for WebKit). No Node.js. No driver process. No PowerShell scripts. Just `dotnet add package` and you're ready to go.
 
 ### All the good parts of Playwright
 
@@ -36,19 +36,19 @@ Our goal is full feature parity with Playwright — including the features the .
 ### Simple installation
 
 ```
-dotnet add package PlaywrightSharp
+dotnet add package PlaywrightNative
 ```
 
 That's it. No PowerShell scripts. No `playwright.ps1` hidden in your build output. No `dotnet build` before you can install browsers. `BrowserFetcher` downloads browsers automatically when you launch.
 
 ### Open to the community
 
-PlaywrightSharp welcomes contributions. We review PRs, we respond to issues, and we build what the community needs. This isn't a publish-only project with a locked-down contribution model — it's a project that grows with its users.
+PlaywrightNative welcomes contributions. We review PRs, we respond to issues, and we build what the community needs. This isn't a publish-only project with a locked-down contribution model — it's a project that grows with its users.
 
 ## Installation
 
 ```
-dotnet add package PlaywrightSharp
+dotnet add package PlaywrightNative
 ```
 
 ## Quick Start
@@ -102,10 +102,10 @@ await page.GotoAsync("https://todomvc.com");
 
 ## Useful Links
 
-* [Documentation](https://hardkoded.github.io/playwright-sharp)
-* [StackOverflow](https://stackoverflow.com/search?q=playwright-sharp)
-* [Issues](https://github.com/hardkoded/playwright-sharp/issues?utf8=%E2%9C%93&q=is%3Aissue)
+* [Documentation](https://hardkoded.github.io/playwright-native)
+* [StackOverflow](https://stackoverflow.com/search?q=playwright-native)
+* [Issues](https://github.com/hardkoded/playwright-native/issues?utf8=%E2%9C%93&q=is%3Aissue)
 
 ## Contributing
 
-We welcome contributions! Check out the [open issues](https://github.com/hardkoded/playwright-sharp/issues) to get started, or open a new one if you have an idea. PRs are reviewed and merged — not ignored.
+We welcome contributions! Check out the [open issues](https://github.com/hardkoded/playwright-native/issues) to get started, or open a new one if you have an idea. PRs are reviewed and merged — not ignored.

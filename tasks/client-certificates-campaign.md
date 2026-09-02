@@ -50,7 +50,7 @@ Continue Wave numbers from `tasks/todo.md`.
 
 ## Conventions
 
-Same C# rules as `tasks/leftover-campaign.md`. HTTPS fixtures: `dotnet dev-certs https -ep src/PlaywrightSharp.TestServer/testCert.cer` when needed.
+Same C# rules as `tasks/leftover-campaign.md`. HTTPS fixtures: `dotnet dev-certs https -ep src/PlaywrightNative.TestServer/testCert.cer` when needed.
 
 ## When exhausted
 

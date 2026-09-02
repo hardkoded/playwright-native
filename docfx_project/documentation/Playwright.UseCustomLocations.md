@@ -10,7 +10,7 @@ You want browsers downloaded to a specific directory instead of the default Play
 Pass a cache path to `BrowserFetcher`, then launch with that executable:
 
 ```cs
-using PlaywrightSharp;
+using PlaywrightNative;
 
 var fetcher = new BrowserFetcher(new BrowserFetcherOptions
 {
@@ -29,4 +29,4 @@ You can also set the `PLAYWRIGHT_BROWSERS_PATH` environment variable so every de
 
 To use a browser you already installed, skip the fetcher and set `ExecutablePath` on `BrowserTypeLaunchOptions`.
 
-Older samples also accepted a driver executable path. PlaywrightSharp no longer ships or copies a Node.js driver.
+Older samples also accepted a driver executable path. PlaywrightNative no longer ships or copies a Node.js driver.

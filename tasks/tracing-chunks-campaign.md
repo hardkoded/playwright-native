@@ -17,7 +17,7 @@ Official Playwright:
 - `ITracing.StopChunkAsync` (path)
 
 Implement against the existing `ITracing` Start/Stop in
-`src/PlaywrightSharp/Contracts/ITracing.cs`. Do **not** invent a second
+`src/PlaywrightNative/Contracts/ITracing.cs`. Do **not** invent a second
 tracer. Do **not** implement `GroupAsync` / `GroupEndAsync` as no-ops
 (those stay on the leftover skip list).
 

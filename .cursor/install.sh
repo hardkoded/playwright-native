@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Cloud Agent install script for PlaywrightSharp.
+# Cloud Agent install script for PlaywrightNative.
 #
 # Runs after the repository is checked out, on top of a base snapshot that
 # already provides the .NET 10 SDK, Node.js, and Chromium's system libraries
@@ -30,14 +30,14 @@ CHROMIUM_DIR="$CACHE_DIR/chromium-${CHROMIUM_BUILD}"
 # The Cloud Agent dev environment only exercises net10.0 -- the test suite always
 # runs with `-f net10.0` -- so we build that target framework here to warm the
 # build without depending on the packaging-only netstandard2.1 output.
-echo "==> Building PlaywrightSharp.sln (net10.0)"
-dotnet build ./src/PlaywrightSharp.sln -f net10.0
+echo "==> Building PlaywrightNative.sln (net10.0)"
+dotnet build ./src/PlaywrightNative.sln -f net10.0
 
 echo "==> Creating HTTPS development certificate for the test server"
 dotnet dev-certs https --clean
-dotnet dev-certs https -ep src/PlaywrightSharp.TestServer/testCert.cer
+dotnet dev-certs https -ep src/PlaywrightNative.TestServer/testCert.cer
 
-# PlaywrightSharp's own BrowserFetcher pins a Chromium revision whose archive is
+# PlaywrightNative's own BrowserFetcher pins a Chromium revision whose archive is
 # no longer served by the Playwright CDN, so we provision Chromium with the
 # official Playwright CLI instead. BrowserExecutableFixture then discovers it by
 # walking the ms-playwright cache: it expects `chromium-<build>/chrome-linux/chrome`

@@ -96,7 +96,7 @@ await page.Keyboard.TypeAsync("hello");
 await page.Touchscreen.TapAsync(x, y);
 ```
 
-Every call above flows through `IBrowser`/`IPage`/`IElementHandle`/`IRoute`/`IMouse`/etc. The concrete backing types are `PlaywrightSharp.Direct.*` classes that wrap `PlaywrightSharp.Chromium.CR*` which talk to Chromium via raw CDP. No Node.js driver, no channel plumbing in the hot path.
+Every call above flows through `IBrowser`/`IPage`/`IElementHandle`/`IRoute`/`IMouse`/etc. The concrete backing types are `PlaywrightNative.Direct.*` classes that wrap `PlaywrightNative.Chromium.CR*` which talk to Chromium via raw CDP. No Node.js driver, no channel plumbing in the hot path.
 
 ---
 
@@ -112,7 +112,7 @@ In rough dependency order:
 
 1. **Merge 6.7a** — ready commit `8fe9c75` on `feature/remove-driver-phase6.7a`. Needs codex:review.
 
-2. **Phase 6.4 — delete legacy class implementations**. Remove `src/PlaywrightSharp/Page.cs`, `Frame.cs`, `Browser.cs`, `BrowserContext.cs`, `ElementHandle.cs`, `JSHandle.cs`, `Locator.cs`, `FrameLocator.cs`, `BrowserType.cs`, the concrete `Playwright` class, and `Playwright.CreateAsync` (the static driver entry point). Their only consumers were the legacy tests (now deleted after 6.7a), so this should compile cleanly.
+2. **Phase 6.4 — delete legacy class implementations**. Remove `src/PlaywrightNative/Page.cs`, `Frame.cs`, `Browser.cs`, `BrowserContext.cs`, `ElementHandle.cs`, `JSHandle.cs`, `Locator.cs`, `FrameLocator.cs`, `BrowserType.cs`, the concrete `Playwright` class, and `Playwright.CreateAsync` (the static driver entry point). Their only consumers were the legacy tests (now deleted after 6.7a), so this should compile cleanly.
    - Watch out for:
      - The IPlaywright interface — keep or delete? If no one implements it, delete.
      - browser-type contract — same question.

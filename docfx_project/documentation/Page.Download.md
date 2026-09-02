@@ -34,14 +34,14 @@ var downloadTask = page.WaitForDownloadAsync();
 `IDownload` lets you read the file, delete it, or save it somewhere else.
 
 ```cs
-using PlaywrightSharp;
+using PlaywrightNative;
 
 await using var browser = await Playwright.LaunchChromiumAsync(new BrowserTypeLaunchOptions
 {
     Headless = false,
 });
 var page = await browser.NewPageAsync(acceptDownloads: true);
-await page.GoToAsync("https://github.com/hardkoded/playwright-sharp/releases");
+await page.GoToAsync("https://github.com/hardkoded/playwright-native/releases");
 
 var downloadTask = page.WaitForDownloadAsync();
 

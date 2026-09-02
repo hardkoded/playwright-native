@@ -57,7 +57,7 @@
             "group": "test",
             "args": [
                 "test",
-                "${workspaceFolder}/src/PlaywrightSharp.Tests/PlaywrightSharp.Tests.csproj",
+                "${workspaceFolder}/src/PlaywrightNative.Tests/PlaywrightNative.Tests.csproj",
                 "-f",
                 "netcoreapp3.1"
             ]

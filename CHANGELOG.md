@@ -73,7 +73,7 @@ Retained in that cut: `GotoAsync`, `ClickAsync`, `FillAsync`, `TypeAsync`, `Pres
 
 Public `IPage` / `IFrame` / `IElementHandle` / `IBrowserContext` (and related
 models) now come from the `Microsoft.Playwright` package. In-repo generated
-duplicates of those types were removed. PlaywrightSharp-only extras stay in
+duplicates of those types were removed. PlaywrightNative-only extras stay in
 `Contracts/` (`IAccessibility`, `ICoverage`, `IGenericAssertions`,
 `BrowserContextOptions`, coverage models, and related enums).
 

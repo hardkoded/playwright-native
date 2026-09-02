@@ -233,11 +233,11 @@ Community PRs for features (like Windows ARM64 NuGet packages, #3288/#3289) face
 
 The .NET port is treated as a **thin, auto-generated wrapper** around the Node.js Playwright core. Feature requests that would require .NET-specific engineering effort (removing Node.js, visual testing, sync API, test runner features) are systematically deferred or rejected. The project publishes version bumps that track upstream Playwright releases, but invests minimal effort in .NET-specific quality, features, or community engagement.
 
-### The Opportunity for PlaywrightSharp
+### The Opportunity for PlaywrightNative
 
-The community's top demands align precisely with PlaywrightSharp's architectural direction:
+The community's top demands align precisely with PlaywrightNative's architectural direction:
 
-| Community Demand | PlaywrightSharp Advantage |
+| Community Demand | PlaywrightNative Advantage |
 |-----------------|--------------------------|
 | Remove Node.js dependency | Direct driver communication — no Node.js |
 | Simpler installation | Pure .NET NuGet package |

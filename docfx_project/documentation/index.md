@@ -1,11 +1,11 @@
-# PlaywrightSharp
+# PlaywrightNative
 
-PlaywrightSharp is a .NET library to automate Chromium, Firefox, and WebKit. It talks to the browser directly — there is no Node.js driver process to copy or configure.
+PlaywrightNative is a .NET library to automate Chromium, Firefox, and WebKit. It talks to the browser directly — there is no Node.js driver process to copy or configure.
 
 ## Installation
 
 ```
-dotnet add package PlaywrightSharp
+dotnet add package PlaywrightNative
 ```
 
 Browsers download automatically the first time you launch if they are not already cached.
@@ -13,7 +13,7 @@ Browsers download automatically the first time you launch if they are not alread
 ## Quick start
 
 ```cs
-using PlaywrightSharp;
+using PlaywrightNative;
 
 await using var browser = await Playwright.LaunchChromiumAsync();
 var page = await browser.NewPageAsync();
@@ -61,7 +61,7 @@ Older samples launched a Node.js driver and copied platform-specific binaries in
 ### Evaluate in the page
 
 ```cs
-using PlaywrightSharp;
+using PlaywrightNative;
 
 await using var browser = await Playwright.LaunchFirefoxAsync();
 var page = await browser.NewPageAsync();
@@ -76,7 +76,7 @@ Console.WriteLine($"{dimensions["width"]}x{dimensions["height"]}");
 ### Intercept network requests
 
 ```cs
-using PlaywrightSharp;
+using PlaywrightNative;
 
 await using var browser = await Playwright.LaunchChromiumAsync();
 var page = await browser.NewPageAsync();
@@ -91,7 +91,7 @@ await page.GoToAsync("https://todomvc.com");
 ### Mobile and geolocation
 
 ```cs
-using PlaywrightSharp;
+using PlaywrightNative;
 
 await using var browser = await Playwright.LaunchWebkitAsync();
 
@@ -114,4 +114,4 @@ await page.ScreenshotAsync(path: "colosseum-iphone.png");
 * [How to take screenshots](Page.ScreenshotAsync.md)
 * [How to download a file](Page.Download.md)
 * [How to get internal logs](Playwright.Logger.md)
-* [Issues](https://github.com/hardkoded/playwright-sharp/issues)
+* [Issues](https://github.com/hardkoded/playwright-native/issues)
