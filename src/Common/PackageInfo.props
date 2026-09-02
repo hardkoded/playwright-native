@@ -12,6 +12,7 @@
 		<PackageProjectUrl>https://github.com/hardkoded/playwright-native</PackageProjectUrl>
 		<PackageTags>headless,chrome,firefox,webkit,playwright</PackageTags>
 		<RepositoryUrl>https://github.com/hardkoded/playwright-native.git</RepositoryUrl>
+		<PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
 		<PackageReleaseNotes><![CDATA[
 ]]></PackageReleaseNotes>
 	</PropertyGroup>

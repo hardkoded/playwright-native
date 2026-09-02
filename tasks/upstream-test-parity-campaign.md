@@ -68,7 +68,7 @@ Co-authored-by: `Darío Kondratiuk <dariokondratiuk@gmail.com>`.
 ## Test file conventions
 
 - New file: `src/PlaywrightNative.Tests/<SpecName>Tests.cs` (no `Direct` filename/class prefix)
-- MIT header like other public-API tests
+- Apache-2.0 header like other public-API tests
 - `[TestFixture]`
 - `[PlaywrightTest("exact-upstream-file.spec.ts", "exact upstream title")]`
 - `[Test] [Timeout(30_000)]` (or `TestConstants.DefaultTestTimeout`)
