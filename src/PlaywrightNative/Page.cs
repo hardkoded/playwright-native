@@ -2213,7 +2213,16 @@ namespace PlaywrightNative
 
         Task IPage.DragAndDropAsync(string source, string target, PageDragAndDropOptions options) => Task.CompletedTask;
 
-        Task IPage.EmulateMediaAsync(PageEmulateMediaOptions options) => Task.CompletedTask;
+        async Task IPage.EmulateMediaAsync(PageEmulateMediaOptions options)
+        {
+            if (options == null)
+            {
+                return;
+            }
+
+            await EmulateMediaAsync(options.Media, options.ColorScheme).ConfigureAwait(false);
+            await EmulateMediaAsync(options.ReducedMotion, options.ForcedColors, options.Contrast).ConfigureAwait(false);
+        }
 
         async Task<JsonElement?> IPage.EvalOnSelectorAllAsync(string selector, string expression, object arg)
             => await EvalOnSelector.OnArrayAsync<JsonElement?>(
@@ -2256,11 +2265,11 @@ namespace PlaywrightNative
 
         IFrame IPage.Frame(string name) => FrameLookup.ByName(Frames, name);
 
-        IFrame IPage.FrameByUrl(string url) => null!;
+        IFrame IPage.FrameByUrl(string url) => FrameByUrl(url, null, null);
 
-        IFrame IPage.FrameByUrl(Regex url) => null!;
+        IFrame IPage.FrameByUrl(Regex url) => FrameByUrl(null, url, null);
 
-        IFrame IPage.FrameByUrl(Func<string, bool> url) => null!;
+        IFrame IPage.FrameByUrl(Func<string, bool> url) => FrameByUrl(null, null, url);
 
         IFrameLocator IPage.FrameLocator(string selector) => new FrameLocator(MainFrame, selector);
 

@@ -16,6 +16,7 @@
  */
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Sockets;
@@ -244,7 +245,17 @@ namespace PlaywrightNative.Helpers
         }
 
 #pragma warning disable SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
-        Task<T> IAPIResponse.JsonAsync<T>(JsonSerializerOptions options) => Task.FromResult<T>(default!);
+        async Task<T> IAPIResponse.JsonAsync<T>(JsonSerializerOptions options)
+        {
+            EnsureNotDisposed();
+            if (_body.Length == 0)
+            {
+                return default!;
+            }
+
+            using MemoryStream stream = new MemoryStream(_body, writable: false);
+            return await JsonSerializer.DeserializeAsync<T>(stream, options).ConfigureAwait(false);
+        }
 #pragma warning restore SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
     }
 }

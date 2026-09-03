@@ -1111,11 +1111,11 @@ namespace PlaywrightNative.Firefox
 
         IFrame IPage.Frame(string name) => FrameLookup.ByName(Frames, name);
 
-        IFrame IPage.FrameByUrl(string url) => null!;
+        IFrame IPage.FrameByUrl(string url) => FrameByUrl(url, null, null);
 
-        IFrame IPage.FrameByUrl(Regex url) => null!;
+        IFrame IPage.FrameByUrl(Regex url) => FrameByUrl(null, url, null);
 
-        IFrame IPage.FrameByUrl(Func<string, bool> url) => null!;
+        IFrame IPage.FrameByUrl(Func<string, bool> url) => FrameByUrl(null, null, url);
 
         IFrameLocator IPage.FrameLocator(string selector) => new FrameLocator(MainFrame, selector);
 
