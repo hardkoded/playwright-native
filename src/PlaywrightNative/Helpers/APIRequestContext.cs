@@ -2807,26 +2807,163 @@ namespace PlaywrightNative.Helpers
             }
         }
 
-#pragma warning disable SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
-        IFormData IAPIRequestContext.CreateFormData() => null!;
+#pragma warning disable SA1137, SA1201, SA1202, SA1204, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648, CA1846
+        private Task<IAPIResponse> FetchWithOptionsAsync(string url, string defaultMethod, APIRequestContextOptions options)
+        {
+            options ??= new APIRequestContextOptions();
+            string method = options.Method ?? defaultMethod ?? "GET";
+            string data = options.Data ?? options.DataString;
+            object json = options.DataObject;
+            byte[] dataBytes = options.DataByte;
+            IEnumerable<KeyValuePair<string, string>> queryParams = ConvertQueryParams(options.Params, options.ParamsString);
+            return FetchAsync(
+                url,
+                method: method,
+                data: data,
+                headers: options.Headers,
+                failOnStatusCode: options.FailOnStatusCode,
+                timeout: options.Timeout,
+                maxRedirects: options.MaxRedirects,
+                ignoreHTTPSErrors: options.IgnoreHTTPSErrors ?? false,
+                json: json,
+                form: options.Form,
+                multipart: options.Multipart,
+                queryParams: queryParams,
+                maxRetries: options.MaxRetries ?? 0,
+                dataBytes: dataBytes);
+        }
 
-        Task<IAPIResponse> IAPIRequestContext.DeleteAsync(string url, APIRequestContextOptions options) => Task.FromResult<IAPIResponse>(default!);
+        private Task<IAPIResponse> FetchRequestWithOptionsAsync(IRequest request, APIRequestContextOptions options)
+        {
+            if (request == null)
+            {
+                throw new ArgumentNullException(nameof(request));
+            }
 
-        Task<IAPIResponse> IAPIRequestContext.FetchAsync(string urlOrRequest, APIRequestContextOptions options) => Task.FromResult<IAPIResponse>(default!);
+            options ??= new APIRequestContextOptions();
+            string method = options.Method ?? request.Method ?? "GET";
+            IEnumerable<KeyValuePair<string, string>> headers = options.Headers ?? request.Headers;
+            string data = options.Data ?? options.DataString;
+            object json = options.DataObject;
+            byte[] dataBytes = options.DataByte;
+            if (data == null && json == null && dataBytes == null && options.Form == null && options.Multipart == null)
+            {
+                dataBytes = request.PostDataBuffer;
+                if (dataBytes == null)
+                {
+                    data = request.PostData;
+                }
+            }
 
-        Task<IAPIResponse> IAPIRequestContext.FetchAsync(IRequest urlOrRequest, APIRequestContextOptions options) => Task.FromResult<IAPIResponse>(default!);
+            IEnumerable<KeyValuePair<string, string>> queryParams = ConvertQueryParams(options.Params, options.ParamsString);
+            return FetchAsync(
+                request.Url,
+                method: method,
+                data: data,
+                headers: headers,
+                failOnStatusCode: options.FailOnStatusCode,
+                timeout: options.Timeout,
+                maxRedirects: options.MaxRedirects,
+                ignoreHTTPSErrors: options.IgnoreHTTPSErrors ?? false,
+                json: json,
+                form: options.Form,
+                multipart: options.Multipart,
+                queryParams: queryParams,
+                maxRetries: options.MaxRetries ?? 0,
+                dataBytes: dataBytes);
+        }
 
-        Task<IAPIResponse> IAPIRequestContext.GetAsync(string url, APIRequestContextOptions options) => Task.FromResult<IAPIResponse>(default!);
+        private static IEnumerable<KeyValuePair<string, string>> ConvertQueryParams(
+            IEnumerable<KeyValuePair<string, object>> parameters,
+            string paramsString)
+        {
+            if (parameters == null && string.IsNullOrEmpty(paramsString))
+            {
+                return null;
+            }
 
-        Task<IAPIResponse> IAPIRequestContext.HeadAsync(string url, APIRequestContextOptions options) => Task.FromResult<IAPIResponse>(default!);
+            List<KeyValuePair<string, string>> result = new List<KeyValuePair<string, string>>();
+            if (parameters != null)
+            {
+                foreach (KeyValuePair<string, object> entry in parameters)
+                {
+                    if (string.IsNullOrEmpty(entry.Key))
+                    {
+                        continue;
+                    }
 
-        Task<IAPIResponse> IAPIRequestContext.PatchAsync(string url, APIRequestContextOptions options) => Task.FromResult<IAPIResponse>(default!);
+                    result.Add(new KeyValuePair<string, string>(entry.Key, FormatQueryParamValue(entry.Value)));
+                }
+            }
 
-        Task<IAPIResponse> IAPIRequestContext.PostAsync(string url, APIRequestContextOptions options) => Task.FromResult<IAPIResponse>(default!);
+            if (!string.IsNullOrEmpty(paramsString))
+            {
+                foreach (string part in paramsString.Split('&', StringSplitOptions.RemoveEmptyEntries))
+                {
+                    int eq = part.IndexOf('=');
+                    if (eq <= 0)
+                    {
+                        result.Add(new KeyValuePair<string, string>(Uri.UnescapeDataString(part), string.Empty));
+                        continue;
+                    }
 
-        Task<IAPIResponse> IAPIRequestContext.PutAsync(string url, APIRequestContextOptions options) => Task.FromResult<IAPIResponse>(default!);
+                    string key = Uri.UnescapeDataString(part[..eq]);
+                    string value = Uri.UnescapeDataString(part[(eq + 1)..].Replace('+', ' '));
+                    result.Add(new KeyValuePair<string, string>(key, value));
+                }
+            }
 
-        Task<string> IAPIRequestContext.StorageStateAsync(APIRequestContextStorageStateOptions options) => Task.FromResult<string>(default!);
-#pragma warning restore SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
+            return result;
+        }
+
+        private static string FormatQueryParamValue(object value)
+        {
+            if (value == null)
+            {
+                return string.Empty;
+            }
+
+            if (value is bool boolean)
+            {
+                return boolean ? "true" : "false";
+            }
+
+            if (value is IFormattable formattable)
+            {
+                return formattable.ToString(null, CultureInfo.InvariantCulture);
+            }
+
+            return Convert.ToString(value, CultureInfo.InvariantCulture) ?? string.Empty;
+        }
+
+        IFormData IAPIRequestContext.CreateFormData() => new FormData();
+
+        Task<IAPIResponse> IAPIRequestContext.DeleteAsync(string url, APIRequestContextOptions options) =>
+            FetchWithOptionsAsync(url, "DELETE", options);
+
+        Task<IAPIResponse> IAPIRequestContext.FetchAsync(string urlOrRequest, APIRequestContextOptions options) =>
+            FetchWithOptionsAsync(urlOrRequest, options?.Method ?? "GET", options);
+
+        Task<IAPIResponse> IAPIRequestContext.FetchAsync(IRequest urlOrRequest, APIRequestContextOptions options) =>
+            FetchRequestWithOptionsAsync(urlOrRequest, options);
+
+        Task<IAPIResponse> IAPIRequestContext.GetAsync(string url, APIRequestContextOptions options) =>
+            FetchWithOptionsAsync(url, "GET", options);
+
+        Task<IAPIResponse> IAPIRequestContext.HeadAsync(string url, APIRequestContextOptions options) =>
+            FetchWithOptionsAsync(url, "HEAD", options);
+
+        Task<IAPIResponse> IAPIRequestContext.PatchAsync(string url, APIRequestContextOptions options) =>
+            FetchWithOptionsAsync(url, "PATCH", options);
+
+        Task<IAPIResponse> IAPIRequestContext.PostAsync(string url, APIRequestContextOptions options) =>
+            FetchWithOptionsAsync(url, "POST", options);
+
+        Task<IAPIResponse> IAPIRequestContext.PutAsync(string url, APIRequestContextOptions options) =>
+            FetchWithOptionsAsync(url, "PUT", options);
+
+        Task<string> IAPIRequestContext.StorageStateAsync(APIRequestContextStorageStateOptions options) =>
+            StorageStateAsync(options?.Path, options?.IndexedDB);
+#pragma warning restore SA1137, SA1201, SA1202, SA1204, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648, CA1846
     }
 }

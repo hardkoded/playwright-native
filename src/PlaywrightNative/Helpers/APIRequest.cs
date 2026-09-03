@@ -64,7 +64,29 @@ namespace PlaywrightNative.Helpers
         }
 
 #pragma warning disable SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
-        Task<IAPIRequestContext> IAPIRequest.NewContextAsync(APIRequestNewContextOptions options) => Task.FromResult<IAPIRequestContext>(default!);
+        Task<IAPIRequestContext> IAPIRequest.NewContextAsync(APIRequestNewContextOptions options)
+        {
+            options ??= new APIRequestNewContextOptions();
+            HttpCredentials[] credentials = null;
+            if (options.HttpCredentials != null)
+            {
+                credentials = new[] { options.HttpCredentials };
+            }
+
+            return NewContextAsync(
+                ignoreHTTPSErrors: options.IgnoreHTTPSErrors ?? false,
+                extraHTTPHeaders: options.ExtraHTTPHeaders,
+                baseURL: options.BaseURL,
+                userAgent: options.UserAgent,
+                timeout: options.Timeout,
+                failOnStatusCode: options.FailOnStatusCode ?? false,
+                maxRedirects: options.MaxRedirects,
+                storageState: options.StorageState,
+                storageStatePath: options.StorageStatePath,
+                httpCredentials: credentials,
+                proxy: options.Proxy,
+                clientCertificates: options.ClientCertificates);
+        }
 #pragma warning restore SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
     }
 }

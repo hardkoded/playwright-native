@@ -552,9 +552,22 @@ namespace PlaywrightNative.Chromium
                 strict ?? (_page.Context is IHasStrictSelectors s && s.StrictSelectors));
 
 #pragma warning disable SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
-        Task<IElementHandle> IFrame.AddScriptTagAsync(FrameAddScriptTagOptions options) => Task.FromResult<IElementHandle>(default!);
+        Task<IElementHandle> IFrame.AddScriptTagAsync(FrameAddScriptTagOptions options)
+            => _page.AddScriptTagAsync(new PageAddScriptTagOptions
+            {
+                Url = options?.Url,
+                Path = options?.Path,
+                Content = options?.Content,
+                Type = options?.Type,
+            });
 
-        Task<IElementHandle> IFrame.AddStyleTagAsync(FrameAddStyleTagOptions options) => Task.FromResult<IElementHandle>(default!);
+        Task<IElementHandle> IFrame.AddStyleTagAsync(FrameAddStyleTagOptions options)
+            => _page.AddStyleTagAsync(new PageAddStyleTagOptions
+            {
+                Url = options?.Url,
+                Path = options?.Path,
+                Content = options?.Content,
+            });
 
         Task IFrame.CheckAsync(string selector, FrameCheckOptions options) => Task.CompletedTask;
 
@@ -636,7 +649,7 @@ namespace PlaywrightNative.Chromium
 
         Task IFrame.PressAsync(string selector, string key, FramePressOptions options) => Task.CompletedTask;
 
-        Task<IElementHandle> IFrame.QuerySelectorAsync(string selector, FrameQuerySelectorOptions options) => Task.FromResult<IElementHandle>(default!);
+        Task<IElementHandle> IFrame.QuerySelectorAsync(string selector, FrameQuerySelectorOptions options) => QuerySelectorAsync(selector);
 
         Task<IResponse> IFrame.RunAndWaitForNavigationAsync(Func<Task> action, FrameRunAndWaitForNavigationOptions options) => Task.FromResult<IResponse>(default!);
 

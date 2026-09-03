@@ -2182,9 +2182,11 @@ namespace PlaywrightNative
 
         Task IPage.AddLocatorHandlerAsync(ILocator locator, Func<Task> handler, PageAddLocatorHandlerOptions options) => Task.CompletedTask;
 
-        Task<IElementHandle> IPage.AddScriptTagAsync(PageAddScriptTagOptions options) => Task.FromResult<IElementHandle>(default!);
+        Task<IElementHandle> IPage.AddScriptTagAsync(PageAddScriptTagOptions options)
+            => AddScriptTagAsync(options?.Url, options?.Path, options?.Content, options?.Type);
 
-        Task<IElementHandle> IPage.AddStyleTagAsync(PageAddStyleTagOptions options) => Task.FromResult<IElementHandle>(default!);
+        Task<IElementHandle> IPage.AddStyleTagAsync(PageAddStyleTagOptions options)
+            => AddStyleTagAsync(options?.Url, options?.Path, options?.Content);
 
         Task<string> IPage.AriaSnapshotAsync(PageAriaSnapshotOptions options) => Task.FromResult<string>(default!);
 
@@ -2193,10 +2195,7 @@ namespace PlaywrightNative
         Task IPage.CheckAsync(string selector, PageCheckOptions options) => Task.CompletedTask;
 
         Task IPage.ClickAsync(string selector, PageClickOptions options)
-        {
-            PageClickOptions o = options;
-            return ClickAsync(selector, o.Button ?? default, o.ClickCount, o.Delay, o.Position, o.Modifiers, o.Force, o.NoWaitAfter, o.Timeout, o.Trial, default, null, o.Strict);
-        }
+            => ClickAsync(selector, options?.Button ?? default, options?.ClickCount, options?.Delay, options?.Position, options?.Modifiers, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, default, null, options?.Strict);
 
         Task IPage.CloseAsync(PageCloseOptions options)
         {
@@ -2286,10 +2285,7 @@ namespace PlaywrightNative
         }
 
         Task<IResponse> IPage.GotoAsync(string url, PageGotoOptions options)
-        {
-            PageGotoOptions o = options;
-            return GoToAsync(url, o.WaitUntil ?? default, o.Timeout, o.Referer);
-        }
+            => GoToAsync(url, options?.WaitUntil ?? default, options?.Timeout, options?.Referer);
 
         Task IPage.HideHighlightAsync() => Task.CompletedTask;
 
@@ -2323,13 +2319,10 @@ namespace PlaywrightNative
 
         Task IPage.PressAsync(string selector, string key, PagePressOptions options) => Task.CompletedTask;
 
-        Task<IElementHandle> IPage.QuerySelectorAsync(string selector, PageQuerySelectorOptions options) => Task.FromResult<IElementHandle>(default!);
+        Task<IElementHandle> IPage.QuerySelectorAsync(string selector, PageQuerySelectorOptions options) => QuerySelectorAsync(selector);
 
         Task<IResponse> IPage.ReloadAsync(PageReloadOptions options)
-        {
-            PageReloadOptions o = options;
-            return ReloadAsync(o.WaitUntil ?? default, o.Timeout);
-        }
+            => ReloadAsync(options?.WaitUntil ?? default, options?.Timeout);
 
         Task IPage.RemoveLocatorHandlerAsync(ILocator locator) => Task.CompletedTask;
 
@@ -2398,10 +2391,7 @@ namespace PlaywrightNative
         Task IPage.SetCheckedAsync(string selector, bool checkedState, PageSetCheckedOptions options) => Task.CompletedTask;
 
         Task IPage.SetContentAsync(string html, PageSetContentOptions options)
-        {
-            PageSetContentOptions o = options;
-            return SetContentAsync(html, o.Timeout, o.WaitUntil ?? default);
-        }
+            => SetContentAsync(html, options?.Timeout, options?.WaitUntil ?? default);
 
         void IPage.SetDefaultNavigationTimeout(float timeout) { }
 

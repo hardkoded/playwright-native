@@ -8144,10 +8144,7 @@ namespace PlaywrightNative.WebKit
         }
 
         Task<IResponse> IPage.GotoAsync(string url, PageGotoOptions options)
-        {
-            PageGotoOptions o = options;
-            return GoToAsync(url, o.WaitUntil ?? default, o.Timeout, o.Referer);
-        }
+            => GoToAsync(url, options?.WaitUntil ?? default, options?.Timeout, options?.Referer);
 
         Task IPage.HideHighlightAsync() => Task.CompletedTask;
 
@@ -8195,10 +8192,7 @@ namespace PlaywrightNative.WebKit
             => QueryActionAsync(selector, options?.Strict);
 
         Task<IResponse> IPage.ReloadAsync(PageReloadOptions options)
-        {
-            PageReloadOptions o = options;
-            return ReloadAsync(o.WaitUntil ?? default, o.Timeout);
-        }
+            => ReloadAsync(options?.WaitUntil ?? default, options?.Timeout);
 
         Task IPage.RemoveLocatorHandlerAsync(ILocator locator) => Task.CompletedTask;
 
@@ -8282,10 +8276,7 @@ namespace PlaywrightNative.WebKit
                 : UncheckAsync(selector, options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, default, options?.Strict);
 
         Task IPage.SetContentAsync(string html, PageSetContentOptions options)
-        {
-            PageSetContentOptions o = options;
-            return SetContentAsync(html, o.Timeout, o.WaitUntil ?? default);
-        }
+            => SetContentAsync(html, options?.Timeout, options?.WaitUntil ?? default);
 
         void IPage.SetDefaultNavigationTimeout(float timeout)
         {
