@@ -72,7 +72,14 @@ namespace PlaywrightNative.Tests
             string[] hosts = ["https://example.test/playwright"];
             string[] urls = BrowserData.DownloadUrls(SupportedBrowser.Chromium, "mac-arm64", "1219", hosts);
             Assert.That(urls, Has.Length.EqualTo(1));
-            Assert.That(urls[0], Is.EqualTo("https://example.test/playwright/builds/chromium/1219/chromium-mac-arm64.zip"));
+            // Chromium ships as Chrome for Testing: archive path uses ChromiumBrowserVersion
+            // under builds/cft/, ignoring the Playwright revision directory name.
+            Assert.That(
+                urls[0],
+                Is.EqualTo(
+                    "https://example.test/playwright/builds/cft/"
+                    + BrowserData.ChromiumBrowserVersion
+                    + "/mac-arm64/chrome-mac-arm64.zip"));
         }
 
         [PlaywrightTest("browser.spec.ts", "Download urls falls back to cdn mirrors")]
@@ -80,10 +87,14 @@ namespace PlaywrightNative.Tests
         public void DownloadUrlsFallsBackToCdnMirrors()
         {
             string[] urls = BrowserData.DownloadUrls(SupportedBrowser.Chromium, "mac-arm64", "1219", null);
-            Assert.That(urls, Has.Length.EqualTo(2));
+            Assert.That(urls, Has.Length.EqualTo(BrowserData.ChromiumCdnMirrors.Length));
             Assert.That(urls[0], Does.StartWith("https://cdn.playwright.dev/"));
-            Assert.That(urls[1], Does.StartWith("https://playwright.download.prss.microsoft.com/"));
-            Assert.That(urls[0], Does.EndWith("chromium-mac-arm64.zip"));
+            Assert.That(
+                urls[0],
+                Does.EndWith(
+                    "/builds/cft/"
+                    + BrowserData.ChromiumBrowserVersion
+                    + "/mac-arm64/chrome-mac-arm64.zip"));
         }
 
         [PlaywrightTest("browser.spec.ts", "Download urls throws for unsupported platform key")]

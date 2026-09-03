@@ -271,11 +271,16 @@ namespace PlaywrightNative.Tests
             {
                 foreach (string dir in Directory.GetDirectories(cache, "chromium-*").OrderByDescending(d => d, StringComparer.Ordinal))
                 {
-                    string exe = Path.Combine(dir, "chrome-linux", "chrome");
-                    if (File.Exists(exe)
-                        && exe.IndexOf("headless-shell", StringComparison.OrdinalIgnoreCase) < 0)
+                    // Chrome for Testing extracts to chrome-linux64/; keep the
+                    // legacy chrome-linux/ probe for older cache layouts.
+                    foreach (string relative in new[] { "chrome-linux64/chrome", "chrome-linux/chrome" })
                     {
-                        return exe;
+                        string exe = Path.Combine(dir, relative);
+                        if (File.Exists(exe)
+                            && exe.IndexOf("headless-shell", StringComparison.OrdinalIgnoreCase) < 0)
+                        {
+                            return exe;
+                        }
                     }
                 }
             }
