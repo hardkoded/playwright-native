@@ -213,6 +213,10 @@ namespace PlaywrightNative.Helpers
                     proxy = hasLaunch.LaunchProxy;
                 }
 
+                // Always capture wire headers. Skipping HTTP broke HeadersArray casing/order
+                // and mid-body "aborted" classification. Pair with keep-alive (do not force
+                // ConnectionClose): Close+HeaderCaptureStream hung SendAsync. Separate
+                // WebKit hang-ups came from LocaleHandshakeProxy via IHasProxy (also fixed).
                 using HttpClient client = CreateClient(
                     ignoreTls,
                     proxy,
@@ -220,7 +224,7 @@ namespace PlaywrightNative.Helpers
                     initialClientCertificate,
                     uri.Host,
                     tlsCapture,
-                    captureRawHeaders: string.Equals(uri.Scheme, "https", StringComparison.OrdinalIgnoreCase));
+                    captureRawHeaders: true);
 
                 (HttpResponseMessage response, string finalUrl, byte[] body) = await SendWithRetriesAsync(
                     client,
@@ -578,9 +582,8 @@ namespace PlaywrightNative.Helpers
 
                 APIRequestProxyConnect.Apply(handler, proxy, ignoreTls);
 
-                // Capture wire header order/casing. Skip on plain HTTP: the filter has
-                // raced connection teardown on macOS/Linux CI (ResponseEnded → "socket
-                // hang up"). HAR/raw-header consumers fall back to ReadRawHeaders.
+                // Capture wire header order/casing for HeadersArray and abort classification.
+                // Requires keep-alive: forcing ConnectionClose with this filter hung SendAsync.
                 if (tlsCapture != null && captureRawHeaders)
                 {
                     handler.PlaintextStreamFilter = (context, _) =>
@@ -1868,7 +1871,8 @@ namespace PlaywrightNative.Helpers
             {
                 request = new HttpRequestMessage(new HttpMethod(verb), uri);
                 request.Headers.ExpectContinue = false;
-                request.Headers.ConnectionClose = true;
+
+                // Do not set ConnectionClose: combined with HeaderCaptureStream it hung HTTP SendAsync.
                 HttpContent content = null;
                 if (multipart != null)
                 {
@@ -2250,7 +2254,8 @@ namespace PlaywrightNative.Helpers
                 preserveMethod ? new HttpMethod(method) : HttpMethod.Get,
                 next);
             follow.Headers.ExpectContinue = false;
-            follow.Headers.ConnectionClose = true;
+
+            // Do not set ConnectionClose: combined with HeaderCaptureStream it hung HTTP SendAsync.
             if (preserveMethod && multipart != null)
             {
                 HttpContent body = CreateMultipart(RequireFormData(multipart, nameof(multipart)));
