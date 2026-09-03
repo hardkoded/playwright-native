@@ -1,7 +1,8 @@
 # Task Tracker
 
-The Node.js driver is gone. Public launch entry points are
-`Playwright.LaunchChromiumAsync`, `LaunchFirefoxAsync`, and `LaunchWebkitAsync`.
+The Node.js driver is gone. Public launch matches upstream playwright-dotnet:
+`Playwright.CreateAsync()` → `playwright.Chromium.LaunchAsync()` (also Firefox /
+WebKit). Static `Playwright.Chromium` and `LaunchChromiumAsync` helpers remain.
 `Transport/` is browser pipe/WebSocket I/O, not Channel RPC.
 
 This file is a historical wave log plus the completed driver-removal checklist.

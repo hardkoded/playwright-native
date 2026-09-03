@@ -46,12 +46,14 @@ internal sealed class BrowserService : IWorkerService
     private static async Task<IBrowser> CreateBrowserAsync(string browserName, BrowserTypeLaunchOptions launchOptions)
     {
         BrowserTypeLaunchOptions options = launchOptions ?? new BrowserTypeLaunchOptions();
-        return browserName switch
+        using IPlaywright playwright = await PlaywrightNative.Playwright.CreateAsync().ConfigureAwait(false);
+        IBrowserType browserType = browserName switch
         {
-            "firefox" => await PlaywrightNative.Playwright.LaunchFirefoxAsync(options).ConfigureAwait(false),
-            "webkit" => await PlaywrightNative.Playwright.LaunchWebkitAsync(options).ConfigureAwait(false),
-            _ => await PlaywrightNative.Playwright.LaunchChromiumAsync(options).ConfigureAwait(false),
+            "firefox" => playwright.Firefox,
+            "webkit" => playwright.Webkit,
+            _ => playwright.Chromium,
         };
+        return await browserType.LaunchAsync(options).ConfigureAwait(false);
     }
 
     public Task ResetAsync() => Task.CompletedTask;

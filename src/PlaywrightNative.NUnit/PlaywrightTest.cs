@@ -27,8 +27,11 @@ namespace PlaywrightNative.NUnit;
 /// </summary>
 /// <remarks>
 /// Unlike <see cref="Microsoft.Playwright.NUnit.PlaywrightTest"/>, this type does
-/// not call <c>Microsoft.Playwright.Playwright.CreateAsync()</c> — PlaywrightNative
-/// launches browsers through <see cref="PlaywrightNative.Playwright"/> directly.
+/// not store a per-test <see cref="IPlaywright"/> property named <c>Playwright</c>
+/// (that would shadow <see cref="PlaywrightNative.Playwright"/>). Call
+/// <see cref="PlaywrightNative.Playwright.CreateAsync"/> for the official
+/// upstream entry point, or use the static <c>Playwright.Chromium</c> /
+/// <c>Firefox</c> / <c>Webkit</c> browser types.
 /// </remarks>
 public class PlaywrightTest : WorkerAwareTest
 {

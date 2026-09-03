@@ -10,7 +10,8 @@ namespace PlaywrightNative.Demo
         {
             string chromiumPath = Environment.GetEnvironmentVariable("CHROMIUM_PATH")
                 ?? throw new InvalidOperationException("Set CHROMIUM_PATH to the Chromium executable.");
-            var browser = await Playwright.LaunchChromiumAsync(new BrowserTypeLaunchOptions { ExecutablePath = chromiumPath, Headless = false });
+            using var playwright = await Playwright.CreateAsync();
+            var browser = await playwright.Chromium.LaunchAsync(new BrowserTypeLaunchOptions { ExecutablePath = chromiumPath, Headless = false });
             var context = await browser.NewContextAsync();
             var page = await context.NewPageAsync();
             await page.GoToAsync("https://example.com");
