@@ -1231,7 +1231,7 @@ namespace PlaywrightNative.Firefox
             => EvalOnSelector.OnHandleAsync<string>(
                 QuerySelectorAsync(selector),
                 selector,
-                "el => el.value",
+                ElementStateScript.InputValueFunction,
                 null,
                 "page.inputValue");
 

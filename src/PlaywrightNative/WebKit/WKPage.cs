@@ -8229,7 +8229,7 @@ namespace PlaywrightNative.WebKit
             => EvalOnSelector.OnHandleAsync<string>(
                 QueryActionAsync(selector, options?.Strict),
                 selector,
-                "el => el.value",
+                ElementStateScript.InputValueFunction,
                 null,
                 "page.inputValue");
 
