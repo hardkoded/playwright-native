@@ -2489,17 +2489,14 @@ namespace PlaywrightNative.Helpers
 
         private PlaywrightNativeException DisposedException(bool inFlight = false)
         {
+            // Match upstream fetchRequest: closeReason || "Request context disposed."
+            _ = inFlight;
             if (!string.IsNullOrEmpty(_closeReason))
             {
                 return new PlaywrightNativeException(_closeReason);
             }
 
-            if (inFlight)
-            {
-                return new PlaywrightNativeException("Request context disposed.");
-            }
-
-            return new PlaywrightNativeException(DriverMessages.BrowserOrContextClosedExceptionMessage);
+            return new PlaywrightNativeException("Request context disposed.");
         }
 
         private void EnsureNotDisposed()
@@ -2509,12 +2506,7 @@ namespace PlaywrightNative.Helpers
                 return;
             }
 
-            if (!string.IsNullOrEmpty(_closeReason))
-            {
-                throw new PlaywrightNativeException(_closeReason);
-            }
-
-            throw new PlaywrightNativeException(DriverMessages.BrowserOrContextClosedExceptionMessage);
+            throw DisposedException();
         }
 
         private async Task<string> ResolveUserAgentAsync()

@@ -544,7 +544,7 @@ namespace PlaywrightNative.Tests
             {
                 await context.APIRequest.GetAsync(TestConstants.ServerUrl + "/api-hop1", new() { MaxRedirects = 1 }).ConfigureAwait(false);
             });
-            Assert.That(ex.Message, Does.Contain("maxRedirects"));
+            Assert.That(ex.Message, Does.Contain("Max redirect count exceeded"));
         }
 
         [PlaywrightTest("global-fetch.spec.ts", "APIRequest GET uses context ignoreHTTPSErrors")]
@@ -1415,7 +1415,7 @@ namespace PlaywrightNative.Tests
             {
                 await request.GetAsync(TestConstants.ServerUrl + "/api-standalone-hop1").ConfigureAwait(false);
             });
-            Assert.That(ex.Message, Does.Contain("maxRedirects"));
+            Assert.That(ex.Message, Does.Contain("Max redirect count exceeded"));
         }
 
         [PlaywrightTest("global-fetch.spec.ts", "Playwright.APIRequest storageState sends cookies")]
