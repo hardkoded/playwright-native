@@ -134,6 +134,10 @@ jobs:
       env:
         PRODUCT: WEBKIT
       run: |
+        # Raise the soft FD limit. Failed tests dispose+relaunch the worker
+        # browser; without enough headroom, macOS runners hit EMFILE mid-suite
+        # even after pipe/transport disposal fixes.
+        ulimit -n 65536 || true
         # Known-failing tests on WebKit are marked in PlaywrightNative.Nunit's
         # TestExpectations.local.json (browser+platform+mode aware). The JSON
         # currently covers WK feature gaps (ExposeFunction, AddInitScript,

@@ -136,6 +136,24 @@ namespace PlaywrightNative.Transport
 
             _readerCancellationSource.Dispose();
             _writeLock.Dispose();
+
+            // Parent ends of the anonymous pipes must be closed or each failed
+            // browser launch/dispose cycle leaks FDs (WebKit CI hits EMFILE).
+            try
+            {
+                _pipeWrite.Dispose();
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+
+            try
+            {
+                _pipeRead.Dispose();
+            }
+            catch (ObjectDisposedException)
+            {
+            }
         }
 
         private async Task ReadLoopAsync(CancellationToken token)
