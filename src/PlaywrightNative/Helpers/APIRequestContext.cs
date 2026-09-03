@@ -393,6 +393,14 @@ namespace PlaywrightNative.Helpers
             }
 
             APIRequestContext request = _contexts.GetValue(context, key => new APIRequestContext(key));
+            if (request._disposed)
+            {
+                // Upstream returns a usable context.request after the previous
+                // APIRequestContext was disposed; replace the cached instance.
+                _contexts.Remove(context);
+                request = _contexts.GetValue(context, key => new APIRequestContext(key));
+            }
+
             if (context.IsClosed)
             {
                 request.MarkOwnerClosed();

@@ -284,7 +284,7 @@ namespace PlaywrightNative
 
         /// <summary>Clock install with fractional numeric types.</summary>
         public static Task InstallAsync(this IClock clock, double time)
-            => clock.InstallAsync(time.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            => clock.InstallAsync((long)time);
 
         /// <summary>Clock install with fractional numeric types.</summary>
         public static Task InstallAsync(this IClock clock, float time)
@@ -292,7 +292,12 @@ namespace PlaywrightNative
 
         /// <summary>Clock install with integral numeric types.</summary>
         public static Task InstallAsync(this IClock clock, long time)
-            => clock.InstallAsync(time.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            => clock is Clock concreteLong
+                ? concreteLong.InstallAsync(time)
+                : clock.InstallAsync(new ClockInstallOptions
+                {
+                    TimeDate = DateTimeOffset.FromUnixTimeMilliseconds(time).UtcDateTime,
+                });
 
         /// <summary>Clock install with <see cref="DateTime"/>.</summary>
         public static Task InstallAsync(this IClock clock, DateTime time)
