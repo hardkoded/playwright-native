@@ -480,35 +480,88 @@ namespace PlaywrightNative.WebKit
 
         Task<IElementHandle> IFrame.FrameElementAsync() => Task.FromResult<IElementHandle>(default!);
 
-        IFrameLocator IFrame.FrameLocator(string selector) => null!;
+        IFrameLocator IFrame.FrameLocator(string selector) => new FrameLocator(this, selector);
 
         Task<string> IFrame.GetAttributeAsync(string selector, string name, FrameGetAttributeOptions options) => Task.FromResult<string>(default!);
 
-        ILocator IFrame.GetByAltText(string text, FrameGetByAltTextOptions options) => null!;
+        ILocator IFrame.GetByAltText(string text, FrameGetByAltTextOptions options)
+            => Locator.FromScript(this, GetByAllScript.FindAllByAttribute, "alt", text, options?.Exact ?? false);
 
-        ILocator IFrame.GetByAltText(Regex text, FrameGetByAltTextOptions options) => null!;
+        ILocator IFrame.GetByAltText(Regex text, FrameGetByAltTextOptions options)
+            => Locator.FromScript(
+                this,
+                GetByAllScript.FindAllByAttributeRegex,
+                "alt",
+                GetByAllScript.Pattern(text),
+                GetByAllScript.Flags(text));
 
-        ILocator IFrame.GetByLabel(string text, FrameGetByLabelOptions options) => null!;
+        ILocator IFrame.GetByLabel(string text, FrameGetByLabelOptions options)
+            => Locator.FromScript(this, GetByAllScript.FindAllByLabel, text, options?.Exact ?? false);
 
-        ILocator IFrame.GetByLabel(Regex text, FrameGetByLabelOptions options) => null!;
+        ILocator IFrame.GetByLabel(Regex text, FrameGetByLabelOptions options)
+            => Locator.FromScript(
+                this,
+                GetByAllScript.FindAllByLabelRegex,
+                GetByAllScript.Pattern(text),
+                GetByAllScript.Flags(text));
 
-        ILocator IFrame.GetByPlaceholder(string text, FrameGetByPlaceholderOptions options) => null!;
+        ILocator IFrame.GetByPlaceholder(string text, FrameGetByPlaceholderOptions options)
+            => Locator.FromScript(this, GetByAllScript.FindAllByAttribute, "placeholder", text, options?.Exact ?? false);
 
-        ILocator IFrame.GetByPlaceholder(Regex text, FrameGetByPlaceholderOptions options) => null!;
+        ILocator IFrame.GetByPlaceholder(Regex text, FrameGetByPlaceholderOptions options)
+            => Locator.FromScript(
+                this,
+                GetByAllScript.FindAllByAttributeRegex,
+                "placeholder",
+                GetByAllScript.Pattern(text),
+                GetByAllScript.Flags(text));
 
-        ILocator IFrame.GetByRole(AriaRole role, FrameGetByRoleOptions options) => null!;
+        ILocator IFrame.GetByRole(AriaRole role, FrameGetByRoleOptions options)
+            => new Locator(this, RoleSelector.Build(
+                role.ToRoleString(),
+                options?.Name ?? options?.NameString,
+                options?.Exact,
+                options?.Checked,
+                options?.Disabled,
+                options?.Expanded,
+                options?.IncludeHidden,
+                options?.Level,
+                options?.Pressed,
+                options?.Selected,
+                options?.Description ?? options?.DescriptionString,
+                options?.DescriptionRegex,
+                options?.NameRegex));
 
-        ILocator IFrame.GetByTestId(string testId) => null!;
+        ILocator IFrame.GetByTestId(string testId) => new Locator(this, GetBySelectorScript.TestIdSelector(testId));
 
-        ILocator IFrame.GetByTestId(Regex testId) => null!;
+        ILocator IFrame.GetByTestId(Regex testId)
+            => Locator.FromScript(
+                this,
+                GetByAllScript.FindAllByAttributeRegex,
+                GetBySelectorScript.TestIdAttributeName(),
+                GetByAllScript.Pattern(testId),
+                GetByAllScript.Flags(testId));
 
-        ILocator IFrame.GetByText(string text, FrameGetByTextOptions options) => null!;
+        ILocator IFrame.GetByText(string text, FrameGetByTextOptions options)
+            => Locator.FromScript(this, GetByAllScript.FindAllByText, text, options?.Exact ?? false);
 
-        ILocator IFrame.GetByText(Regex text, FrameGetByTextOptions options) => null!;
+        ILocator IFrame.GetByText(Regex text, FrameGetByTextOptions options)
+            => Locator.FromScript(
+                this,
+                GetByAllScript.FindAllByTextRegex,
+                GetByAllScript.Pattern(text),
+                GetByAllScript.Flags(text));
 
-        ILocator IFrame.GetByTitle(string text, FrameGetByTitleOptions options) => null!;
+        ILocator IFrame.GetByTitle(string text, FrameGetByTitleOptions options)
+            => Locator.FromScript(this, GetByAllScript.FindAllByAttribute, "title", text, options?.Exact ?? false);
 
-        ILocator IFrame.GetByTitle(Regex text, FrameGetByTitleOptions options) => null!;
+        ILocator IFrame.GetByTitle(Regex text, FrameGetByTitleOptions options)
+            => Locator.FromScript(
+                this,
+                GetByAllScript.FindAllByAttributeRegex,
+                "title",
+                GetByAllScript.Pattern(text),
+                GetByAllScript.Flags(text));
 
         Task<IResponse> IFrame.GotoAsync(string url, FrameGotoOptions options) => Task.FromResult<IResponse>(default!);
 
@@ -532,7 +585,19 @@ namespace PlaywrightNative.WebKit
 
         Task<bool> IFrame.IsVisibleAsync(string selector, FrameIsVisibleOptions options) => Task.FromResult<bool>(default!);
 
-        ILocator IFrame.Locator(string selector, FrameLocatorOptions options) => null!;
+        ILocator IFrame.Locator(string selector, FrameLocatorOptions options)
+        {
+            ILocator result = new Locator(this, selector);
+            options ??= new FrameLocatorOptions();
+            return SelectorQuery.ApplyOptions(
+                result,
+                options.Has,
+                options.HasText ?? options.HasTextString,
+                options.HasTextRegex,
+                options.HasNot,
+                options.HasNotText ?? options.HasNotTextString,
+                options.HasNotTextRegex);
+        }
 
         Task IFrame.PressAsync(string selector, string key, FramePressOptions options) => Task.CompletedTask;
 

@@ -2246,36 +2246,89 @@ namespace PlaywrightNative
 
         IFrame IPage.FrameByUrl(Func<string, bool> url) => null!;
 
-        IFrameLocator IPage.FrameLocator(string selector) => null!;
+        IFrameLocator IPage.FrameLocator(string selector) => new FrameLocator(MainFrame, selector);
 
         Task<string> IPage.GetAttributeAsync(string selector, string name, PageGetAttributeOptions options)
             => GetAttributeAsync(selector, name, options?.Timeout, options?.Strict);
 
-        ILocator IPage.GetByAltText(string text, PageGetByAltTextOptions options) => null!;
+        ILocator IPage.GetByAltText(string text, PageGetByAltTextOptions options)
+            => Locator.FromScript(MainFrame, GetByAllScript.FindAllByAttribute, "alt", text, options?.Exact ?? false);
 
-        ILocator IPage.GetByAltText(Regex text, PageGetByAltTextOptions options) => null!;
+        ILocator IPage.GetByAltText(Regex text, PageGetByAltTextOptions options)
+            => Locator.FromScript(
+                MainFrame,
+                GetByAllScript.FindAllByAttributeRegex,
+                "alt",
+                GetByAllScript.Pattern(text),
+                GetByAllScript.Flags(text));
 
-        ILocator IPage.GetByLabel(string text, PageGetByLabelOptions options) => null!;
+        ILocator IPage.GetByLabel(string text, PageGetByLabelOptions options)
+            => Locator.FromScript(MainFrame, GetByAllScript.FindAllByLabel, text, options?.Exact ?? false);
 
-        ILocator IPage.GetByLabel(Regex text, PageGetByLabelOptions options) => null!;
+        ILocator IPage.GetByLabel(Regex text, PageGetByLabelOptions options)
+            => Locator.FromScript(
+                MainFrame,
+                GetByAllScript.FindAllByLabelRegex,
+                GetByAllScript.Pattern(text),
+                GetByAllScript.Flags(text));
 
-        ILocator IPage.GetByPlaceholder(string text, PageGetByPlaceholderOptions options) => null!;
+        ILocator IPage.GetByPlaceholder(string text, PageGetByPlaceholderOptions options)
+            => Locator.FromScript(MainFrame, GetByAllScript.FindAllByAttribute, "placeholder", text, options?.Exact ?? false);
 
-        ILocator IPage.GetByPlaceholder(Regex text, PageGetByPlaceholderOptions options) => null!;
+        ILocator IPage.GetByPlaceholder(Regex text, PageGetByPlaceholderOptions options)
+            => Locator.FromScript(
+                MainFrame,
+                GetByAllScript.FindAllByAttributeRegex,
+                "placeholder",
+                GetByAllScript.Pattern(text),
+                GetByAllScript.Flags(text));
 
-        ILocator IPage.GetByRole(AriaRole role, PageGetByRoleOptions options) => null!;
+        ILocator IPage.GetByRole(AriaRole role, PageGetByRoleOptions options)
+            => new Locator(MainFrame, RoleSelector.Build(
+                role.ToRoleString(),
+                options?.Name ?? options?.NameString,
+                options?.Exact,
+                options?.Checked,
+                options?.Disabled,
+                options?.Expanded,
+                options?.IncludeHidden,
+                options?.Level,
+                options?.Pressed,
+                options?.Selected,
+                options?.Description ?? options?.DescriptionString,
+                options?.DescriptionRegex,
+                options?.NameRegex));
 
-        ILocator IPage.GetByTestId(string testId) => null!;
+        ILocator IPage.GetByTestId(string testId) => new Locator(MainFrame, GetBySelectorScript.TestIdSelector(testId));
 
-        ILocator IPage.GetByTestId(Regex testId) => null!;
+        ILocator IPage.GetByTestId(Regex testId)
+            => Locator.FromScript(
+                MainFrame,
+                GetByAllScript.FindAllByAttributeRegex,
+                GetBySelectorScript.TestIdAttributeName(),
+                GetByAllScript.Pattern(testId),
+                GetByAllScript.Flags(testId));
 
-        ILocator IPage.GetByText(string text, PageGetByTextOptions options) => null!;
+        ILocator IPage.GetByText(string text, PageGetByTextOptions options)
+            => Locator.FromScript(MainFrame, GetByAllScript.FindAllByText, text, options?.Exact ?? false);
 
-        ILocator IPage.GetByText(Regex text, PageGetByTextOptions options) => null!;
+        ILocator IPage.GetByText(Regex text, PageGetByTextOptions options)
+            => Locator.FromScript(
+                MainFrame,
+                GetByAllScript.FindAllByTextRegex,
+                GetByAllScript.Pattern(text),
+                GetByAllScript.Flags(text));
 
-        ILocator IPage.GetByTitle(string text, PageGetByTitleOptions options) => null!;
+        ILocator IPage.GetByTitle(string text, PageGetByTitleOptions options)
+            => Locator.FromScript(MainFrame, GetByAllScript.FindAllByAttribute, "title", text, options?.Exact ?? false);
 
-        ILocator IPage.GetByTitle(Regex text, PageGetByTitleOptions options) => null!;
+        ILocator IPage.GetByTitle(Regex text, PageGetByTitleOptions options)
+            => Locator.FromScript(
+                MainFrame,
+                GetByAllScript.FindAllByAttributeRegex,
+                "title",
+                GetByAllScript.Pattern(text),
+                GetByAllScript.Flags(text));
 
         Task<IResponse> IPage.GoBackAsync(PageGoBackOptions options)
         {
@@ -2323,7 +2376,19 @@ namespace PlaywrightNative
         Task<bool> IPage.IsVisibleAsync(string selector, PageIsVisibleOptions options)
             => IsVisibleAsync(selector, options?.Timeout, options?.Strict);
 
-        ILocator IPage.Locator(string selector, PageLocatorOptions options) => null!;
+        ILocator IPage.Locator(string selector, PageLocatorOptions options)
+        {
+            ILocator result = new Locator(MainFrame, selector);
+            options ??= new PageLocatorOptions();
+            return SelectorQuery.ApplyOptions(
+                result,
+                options.Has,
+                options.HasText ?? options.HasTextString,
+                options.HasTextRegex,
+                options.HasNot,
+                options.HasNotText ?? options.HasNotTextString,
+                options.HasNotTextRegex);
+        }
 
         Task IPage.PauseAsync() => Task.CompletedTask;
 
