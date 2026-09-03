@@ -365,15 +365,20 @@ namespace PlaywrightNative
         }
 
 #pragma warning disable SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
-        Task IPageAssertions.ToHaveTitleAsync(string titleOrRegExp, PageAssertionsToHaveTitleOptions options) => Task.CompletedTask;
+        Task IPageAssertions.ToHaveTitleAsync(string titleOrRegExp, PageAssertionsToHaveTitleOptions options)
+            => ToHaveTitleAsync(titleOrRegExp, options?.Timeout);
 
-        Task IPageAssertions.ToHaveTitleAsync(Regex titleOrRegExp, PageAssertionsToHaveTitleOptions options) => Task.CompletedTask;
+        Task IPageAssertions.ToHaveTitleAsync(Regex titleOrRegExp, PageAssertionsToHaveTitleOptions options)
+            => ToHaveTitleAsync(titleOrRegExp, options?.Timeout);
 
-        Task IPageAssertions.ToHaveURLAsync(string urlOrRegExp, PageAssertionsToHaveURLOptions options) => Task.CompletedTask;
+        Task IPageAssertions.ToHaveURLAsync(string urlOrRegExp, PageAssertionsToHaveURLOptions options)
+            => ToHaveURLAsync(urlOrRegExp, options?.Timeout, options?.IgnoreCase);
 
-        Task IPageAssertions.ToHaveURLAsync(Regex urlOrRegExp, PageAssertionsToHaveURLOptions options) => Task.CompletedTask;
+        Task IPageAssertions.ToHaveURLAsync(Regex urlOrRegExp, PageAssertionsToHaveURLOptions options)
+            => ToHaveURLAsync(urlOrRegExp, options?.Timeout, options?.IgnoreCase);
 
-        Task IPageAssertions.ToMatchAriaSnapshotAsync(string expected, PageAssertionsToMatchAriaSnapshotOptions options) => Task.CompletedTask;
+        Task IPageAssertions.ToMatchAriaSnapshotAsync(string expected, PageAssertionsToMatchAriaSnapshotOptions options)
+            => ToMatchAriaSnapshotAsync(expected, timeout: options?.Timeout);
 #pragma warning restore SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
     }
 }

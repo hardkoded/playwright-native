@@ -69,7 +69,11 @@ public class BrowserTest : PlaywrightTest
     [TearDown]
     public async Task BrowserTearDown()
     {
-        foreach (IBrowserContext context in _contexts)
+        // Snapshot first: CloseAsync can fire events that create/track more contexts
+        // and would otherwise throw Collection was modified during enumeration.
+        IBrowserContext[] contexts = _contexts.ToArray();
+        _contexts.Clear();
+        foreach (IBrowserContext context in contexts)
         {
             try
             {
@@ -81,7 +85,6 @@ public class BrowserTest : PlaywrightTest
             }
         }
 
-        _contexts.Clear();
         Browser = null!;
     }
 

@@ -2592,93 +2592,153 @@ namespace PlaywrightNative
         }
 
 #pragma warning disable SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
-        Task ILocatorAssertions.ToBeAttachedAsync(LocatorAssertionsToBeAttachedOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToBeAttachedAsync(LocatorAssertionsToBeAttachedOptions options)
+            => ToBeAttachedAsync(options?.Timeout, options?.Attached);
 
-        Task ILocatorAssertions.ToBeCheckedAsync(LocatorAssertionsToBeCheckedOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToBeCheckedAsync(LocatorAssertionsToBeCheckedOptions options)
+            => ToBeCheckedAsync(options?.Timeout, options?.Checked, options?.Indeterminate);
 
-        Task ILocatorAssertions.ToBeDisabledAsync(LocatorAssertionsToBeDisabledOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToBeDisabledAsync(LocatorAssertionsToBeDisabledOptions options)
+            => ToBeDisabledAsync(options?.Timeout);
 
-        Task ILocatorAssertions.ToBeEditableAsync(LocatorAssertionsToBeEditableOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToBeEditableAsync(LocatorAssertionsToBeEditableOptions options)
+            => ToBeEditableAsync(options?.Timeout, options?.Editable);
 
-        Task ILocatorAssertions.ToBeEmptyAsync(LocatorAssertionsToBeEmptyOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToBeEmptyAsync(LocatorAssertionsToBeEmptyOptions options)
+            => ToBeEmptyAsync(options?.Timeout);
 
-        Task ILocatorAssertions.ToBeEnabledAsync(LocatorAssertionsToBeEnabledOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToBeEnabledAsync(LocatorAssertionsToBeEnabledOptions options)
+            => ToBeEnabledAsync(options?.Timeout, options?.Enabled);
 
-        Task ILocatorAssertions.ToBeFocusedAsync(LocatorAssertionsToBeFocusedOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToBeFocusedAsync(LocatorAssertionsToBeFocusedOptions options)
+            => ToBeFocusedAsync(options?.Timeout);
 
-        Task ILocatorAssertions.ToBeHiddenAsync(LocatorAssertionsToBeHiddenOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToBeHiddenAsync(LocatorAssertionsToBeHiddenOptions options)
+            => ToBeHiddenAsync(options?.Timeout);
 
-        Task ILocatorAssertions.ToBeInViewportAsync(LocatorAssertionsToBeInViewportOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToBeInViewportAsync(LocatorAssertionsToBeInViewportOptions options)
+            => ToBeInViewportAsync(options?.Ratio, options?.Timeout);
 
-        Task ILocatorAssertions.ToBeVisibleAsync(LocatorAssertionsToBeVisibleOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToBeVisibleAsync(LocatorAssertionsToBeVisibleOptions options)
+            => ToBeVisibleAsync(options?.Timeout, options?.Visible);
 
-        Task ILocatorAssertions.ToContainClassAsync(string expected, LocatorAssertionsToContainClassOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToContainClassAsync(string expected, LocatorAssertionsToContainClassOptions options)
+            => ToContainClassAsync(expected, options?.Timeout);
 
-        Task ILocatorAssertions.ToContainClassAsync(IEnumerable<string> expected, LocatorAssertionsToContainClassOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToContainClassAsync(IEnumerable<string> expected, LocatorAssertionsToContainClassOptions options)
+            => ToContainClassAsync(expected, options?.Timeout);
 
-        Task ILocatorAssertions.ToContainTextAsync(string expected, LocatorAssertionsToContainTextOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToContainTextAsync(string expected, LocatorAssertionsToContainTextOptions options)
+            => ToContainTextAsync(expected, options?.Timeout, options?.IgnoreCase, options?.UseInnerText);
 
-        Task ILocatorAssertions.ToContainTextAsync(Regex expected, LocatorAssertionsToContainTextOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToContainTextAsync(Regex expected, LocatorAssertionsToContainTextOptions options)
+            => ToContainTextAsync(expected, options?.Timeout, options?.IgnoreCase, options?.UseInnerText);
 
-        Task ILocatorAssertions.ToContainTextAsync(IEnumerable<string> expected, LocatorAssertionsToContainTextOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToContainTextAsync(IEnumerable<string> expected, LocatorAssertionsToContainTextOptions options)
+            => ToContainTextAsync(expected, options?.Timeout, options?.IgnoreCase, options?.UseInnerText);
 
-        Task ILocatorAssertions.ToContainTextAsync(IEnumerable<Regex> expected, LocatorAssertionsToContainTextOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToContainTextAsync(IEnumerable<Regex> expected, LocatorAssertionsToContainTextOptions options)
+            => ToContainTextAsync(expected, options?.Timeout, options?.IgnoreCase, options?.UseInnerText);
 
-        Task ILocatorAssertions.ToHaveAccessibleDescriptionAsync(string description, LocatorAssertionsToHaveAccessibleDescriptionOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToHaveAccessibleDescriptionAsync(string description, LocatorAssertionsToHaveAccessibleDescriptionOptions options)
+            => ToHaveAccessibleDescriptionAsync(description, timeout: options?.Timeout, ignoreCase: options?.IgnoreCase);
 
-        Task ILocatorAssertions.ToHaveAccessibleDescriptionAsync(Regex description, LocatorAssertionsToHaveAccessibleDescriptionOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToHaveAccessibleDescriptionAsync(Regex description, LocatorAssertionsToHaveAccessibleDescriptionOptions options)
+            => ToHaveAccessibleDescriptionAsync(description, options?.Timeout, options?.IgnoreCase);
 
-        Task ILocatorAssertions.ToHaveAccessibleErrorMessageAsync(string errorMessage, LocatorAssertionsToHaveAccessibleErrorMessageOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToHaveAccessibleErrorMessageAsync(string errorMessage, LocatorAssertionsToHaveAccessibleErrorMessageOptions options)
+            => ToHaveAccessibleErrorMessageAsync(errorMessage, timeout: options?.Timeout, ignoreCase: options?.IgnoreCase);
 
-        Task ILocatorAssertions.ToHaveAccessibleErrorMessageAsync(Regex errorMessage, LocatorAssertionsToHaveAccessibleErrorMessageOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToHaveAccessibleErrorMessageAsync(Regex errorMessage, LocatorAssertionsToHaveAccessibleErrorMessageOptions options)
+            => ToHaveAccessibleErrorMessageAsync(errorMessage, options?.Timeout, options?.IgnoreCase);
 
-        Task ILocatorAssertions.ToHaveAccessibleNameAsync(string name, LocatorAssertionsToHaveAccessibleNameOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToHaveAccessibleNameAsync(string name, LocatorAssertionsToHaveAccessibleNameOptions options)
+            => ToHaveAccessibleNameAsync(name, timeout: options?.Timeout, ignoreCase: options?.IgnoreCase);
 
-        Task ILocatorAssertions.ToHaveAccessibleNameAsync(Regex name, LocatorAssertionsToHaveAccessibleNameOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToHaveAccessibleNameAsync(Regex name, LocatorAssertionsToHaveAccessibleNameOptions options)
+            => ToHaveAccessibleNameAsync(name, options?.Timeout, options?.IgnoreCase);
 
-        Task ILocatorAssertions.ToHaveAttributeAsync(string name, string value, LocatorAssertionsToHaveAttributeOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToHaveAttributeAsync(string name, string value, LocatorAssertionsToHaveAttributeOptions options)
+            => ToHaveAttributeAsync(name, value, options?.Timeout, options?.IgnoreCase);
 
-        Task ILocatorAssertions.ToHaveAttributeAsync(string name, Regex value, LocatorAssertionsToHaveAttributeOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToHaveAttributeAsync(string name, Regex value, LocatorAssertionsToHaveAttributeOptions options)
+            => ToHaveAttributeAsync(name, value, options?.Timeout, options?.IgnoreCase);
 
-        Task ILocatorAssertions.ToHaveClassAsync(string expected, LocatorAssertionsToHaveClassOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToHaveClassAsync(string expected, LocatorAssertionsToHaveClassOptions options)
+            => ToHaveClassAsync(expected, options?.Timeout);
 
-        Task ILocatorAssertions.ToHaveClassAsync(Regex expected, LocatorAssertionsToHaveClassOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToHaveClassAsync(Regex expected, LocatorAssertionsToHaveClassOptions options)
+            => ToHaveClassAsync(expected, options?.Timeout);
 
-        Task ILocatorAssertions.ToHaveClassAsync(IEnumerable<string> expected, LocatorAssertionsToHaveClassOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToHaveClassAsync(IEnumerable<string> expected, LocatorAssertionsToHaveClassOptions options)
+            => ToHaveClassAsync(expected, options?.Timeout);
 
-        Task ILocatorAssertions.ToHaveClassAsync(IEnumerable<Regex> expected, LocatorAssertionsToHaveClassOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToHaveClassAsync(IEnumerable<Regex> expected, LocatorAssertionsToHaveClassOptions options)
+            => ToHaveClassAsync(expected, options?.Timeout);
 
-        Task ILocatorAssertions.ToHaveCountAsync(int count, LocatorAssertionsToHaveCountOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToHaveCountAsync(int count, LocatorAssertionsToHaveCountOptions options)
+            => ToHaveCountAsync(count, options?.Timeout);
 
-        Task ILocatorAssertions.ToHaveCSSAsync(string name, string value, LocatorAssertionsToHaveCSSOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToHaveCSSAsync(string name, string value, LocatorAssertionsToHaveCSSOptions options)
+        {
+            string pseudo = options?.Pseudo switch
+            {
+                PseudoElement.Before => "before",
+                PseudoElement.After => "after",
+                _ => null,
+            };
+            return ToHaveCSSAsync(name, value, options?.Timeout, pseudo);
+        }
 
-        Task ILocatorAssertions.ToHaveCSSAsync(string name, Regex value, LocatorAssertionsToHaveCSSOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToHaveCSSAsync(string name, Regex value, LocatorAssertionsToHaveCSSOptions options)
+        {
+            string pseudo = options?.Pseudo switch
+            {
+                PseudoElement.Before => "before",
+                PseudoElement.After => "after",
+                _ => null,
+            };
+            return ToHaveCSSAsync(name, value, options?.Timeout, pseudo);
+        }
 
-        Task ILocatorAssertions.ToHaveIdAsync(string id, LocatorAssertionsToHaveIdOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToHaveIdAsync(string id, LocatorAssertionsToHaveIdOptions options)
+            => ToHaveIdAsync(id, options?.Timeout);
 
-        Task ILocatorAssertions.ToHaveIdAsync(Regex id, LocatorAssertionsToHaveIdOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToHaveIdAsync(Regex id, LocatorAssertionsToHaveIdOptions options)
+            => ToHaveIdAsync(id, options?.Timeout);
 
-        Task ILocatorAssertions.ToHaveJSPropertyAsync(string name, object value, LocatorAssertionsToHaveJSPropertyOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToHaveJSPropertyAsync(string name, object value, LocatorAssertionsToHaveJSPropertyOptions options)
+            => ToHaveJSPropertyAsync(name, value, options?.Timeout);
 
-        Task ILocatorAssertions.ToHaveRoleAsync(AriaRole role, LocatorAssertionsToHaveRoleOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToHaveRoleAsync(AriaRole role, LocatorAssertionsToHaveRoleOptions options)
+            => ToHaveRoleAsync(role, options?.Timeout);
 
-        Task ILocatorAssertions.ToHaveTextAsync(string expected, LocatorAssertionsToHaveTextOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToHaveTextAsync(string expected, LocatorAssertionsToHaveTextOptions options)
+            => ToHaveTextAsync(expected, timeout: options?.Timeout, ignoreCase: options?.IgnoreCase, useInnerText: options?.UseInnerText);
 
-        Task ILocatorAssertions.ToHaveTextAsync(Regex expected, LocatorAssertionsToHaveTextOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToHaveTextAsync(Regex expected, LocatorAssertionsToHaveTextOptions options)
+            => ToHaveTextAsync(expected, options?.Timeout, options?.IgnoreCase, options?.UseInnerText);
 
-        Task ILocatorAssertions.ToHaveTextAsync(IEnumerable<string> expected, LocatorAssertionsToHaveTextOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToHaveTextAsync(IEnumerable<string> expected, LocatorAssertionsToHaveTextOptions options)
+            => ToHaveTextAsync(expected, options?.Timeout, options?.IgnoreCase, options?.UseInnerText);
 
-        Task ILocatorAssertions.ToHaveTextAsync(IEnumerable<Regex> expected, LocatorAssertionsToHaveTextOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToHaveTextAsync(IEnumerable<Regex> expected, LocatorAssertionsToHaveTextOptions options)
+            => ToHaveTextAsync(expected, options?.Timeout, options?.IgnoreCase, options?.UseInnerText);
 
-        Task ILocatorAssertions.ToHaveValueAsync(string value, LocatorAssertionsToHaveValueOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToHaveValueAsync(string value, LocatorAssertionsToHaveValueOptions options)
+            => ToHaveValueAsync(value, options?.Timeout);
 
-        Task ILocatorAssertions.ToHaveValueAsync(Regex value, LocatorAssertionsToHaveValueOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToHaveValueAsync(Regex value, LocatorAssertionsToHaveValueOptions options)
+            => ToHaveValueAsync(value, options?.Timeout);
 
-        Task ILocatorAssertions.ToHaveValuesAsync(IEnumerable<string> values, LocatorAssertionsToHaveValuesOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToHaveValuesAsync(IEnumerable<string> values, LocatorAssertionsToHaveValuesOptions options)
+            => ToHaveValuesAsync(values, options?.Timeout);
 
-        Task ILocatorAssertions.ToHaveValuesAsync(IEnumerable<Regex> values, LocatorAssertionsToHaveValuesOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToHaveValuesAsync(IEnumerable<Regex> values, LocatorAssertionsToHaveValuesOptions options)
+            => ToHaveValuesAsync(values, options?.Timeout);
 
-        Task ILocatorAssertions.ToMatchAriaSnapshotAsync(string expected, LocatorAssertionsToMatchAriaSnapshotOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToMatchAriaSnapshotAsync(string expected, LocatorAssertionsToMatchAriaSnapshotOptions options)
+            => ToMatchAriaSnapshotAsync(expected, timeout: options?.Timeout);
 #pragma warning restore SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
     }
 }
