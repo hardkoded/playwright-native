@@ -570,16 +570,15 @@ namespace PlaywrightNative.Helpers
 
                 APIRequestProxyConnect.Apply(handler, proxy, ignoreTls);
 
-                handler.PlaintextStreamFilter = (context, _) =>
+                // Capture wire header order/casing for parity with Node's rawHeaders.
+                if (tlsCapture != null)
                 {
-                    Stream stream = context.PlaintextStream;
-                    if (tlsCapture != null)
+                    handler.PlaintextStreamFilter = (context, _) =>
                     {
-                        stream = new HeaderCaptureStream(stream, tlsCapture);
-                    }
-
-                    return ValueTask.FromResult(stream);
-                };
+                        Stream stream = new HeaderCaptureStream(context.PlaintextStream, tlsCapture);
+                        return ValueTask.FromResult(stream);
+                    };
+                }
 
                 HttpClient client = new HttpClient(handler, disposeHandler: true)
                 {
@@ -856,6 +855,27 @@ namespace PlaywrightNative.Helpers
                 }
 
                 current = current.InnerException;
+            }
+
+            return false;
+        }
+
+        private static bool MidBodyFromRawHeaders(TlsCapture tlsCapture)
+        {
+            if (tlsCapture?.RawHeaders == null)
+            {
+                return false;
+            }
+
+            foreach (NameValueEntry header in tlsCapture.RawHeaders)
+            {
+                if (header.Name != null
+                    && header.Name.Equals("Content-Length", StringComparison.OrdinalIgnoreCase)
+                    && long.TryParse(header.Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out long length)
+                    && length > 0)
+                {
+                    return true;
+                }
             }
 
             return false;
@@ -1774,35 +1794,19 @@ namespace PlaywrightNative.Helpers
                         request.Dispose();
                         throw new PlaywrightNativeException("Max redirect count exceeded", ex);
                     }
-                    catch (ResetAfterHeadersException ex)
+                    catch (ResetAfterHeadersException ex) when (ex.MidBody)
                     {
-                        request.Dispose();
-                        if (maxRetries == 0)
-                        {
-                            throw new PlaywrightNativeException(
-                                "apiRequestContext." + MethodLabel(verb) + ": aborted",
-                                ex);
-                        }
-
-                        if (attempt == maxRetries)
-                        {
-                            throw new PlaywrightNativeException(
-                                "APIRequest maxRetries exceeded: " + maxRetries + " " + url,
-                                ex);
-                        }
-
-                        await Task.Delay(backoffMs, token).ConfigureAwait(false);
-                        backoffMs *= 2;
-                    }
-                    catch (Exception ex) when (IsPrematureResponseEnd(ex))
-                    {
+                        // Upstream: response aborted after headers/body started → "aborted", no retry.
                         request.Dispose();
                         throw new PlaywrightNativeException(
                             "apiRequestContext." + MethodLabel(verb) + ": aborted",
                             ex);
                     }
-                    catch (Exception ex) when (IsConnectionReset(ex))
+                    catch (Exception ex) when (ex is ResetAfterHeadersException || IsPrematureResponseEnd(ex) || IsConnectionReset(ex))
                     {
+                        // Upstream retries ECONNRESET-style drops. Premature end before a
+                        // mid-body abort (HttpContext.Abort / socket destroy) maps to
+                        // "socket hang up" on Node.
                         request.Dispose();
                         if (maxRetries == 0)
                         {
@@ -2111,16 +2115,19 @@ namespace PlaywrightNative.Helpers
                     HttpResponseMessage response;
                     try
                     {
+                        // Buffer the full response in one shot. ResponseHeadersRead + a
+                        // later ReadAsByteArrayAsync races HeaderCaptureStream disposal on
+                        // some CI hosts and surfaces as HttpIOException ResponseEnded.
                         response = await client.SendAsync(
                             current,
-                            HttpCompletionOption.ResponseHeadersRead,
+                            HttpCompletionOption.ResponseContentRead,
                             token).ConfigureAwait(false);
                     }
                     catch (Exception ex) when (IsConnectionReset(ex) || IsPrematureResponseEnd(ex))
                     {
                         if (tlsCapture != null && tlsCapture.RawHeaders.Count > 0)
                         {
-                            throw new ResetAfterHeadersException(ex);
+                            throw new ResetAfterHeadersException(ex, MidBodyFromRawHeaders(tlsCapture));
                         }
 
                         throw;
@@ -2187,14 +2194,11 @@ namespace PlaywrightNative.Helpers
 
                     bool preserve = PreservesMethodOnRedirect(response.StatusCode);
                     remaining--;
-                    try
-                    {
-                        await response.Content.CopyToAsync(Stream.Null, token).ConfigureAwait(false);
-                    }
-                    catch (Exception ex) when (ex is IOException || ex is HttpRequestException || ex is ObjectDisposedException)
-                    {
-                    }
 
+                    // Do not drain the redirect body. With Connection: close, servers often
+                    // omit Content-Length on empty 3xx responses; CopyToAsync then waits for
+                    // EOF forever (or until the test timeout). Dispose is enough — we never
+                    // reuse the connection.
                     response.Dispose();
                     owned?.Dispose();
                     currentUrl = next.GetComponents(UriComponents.AbsoluteUri, UriFormat.UriEscaped);
@@ -2491,7 +2495,12 @@ namespace PlaywrightNative.Helpers
             }
             catch (Exception ex) when (IsConnectionReset(ex) || IsPrematureResponseEnd(ex))
             {
-                throw new ResetAfterHeadersException(ex);
+                // Content-Length > 0 means the server started an explicit body (Node
+                // writeHead + destroy → "aborted"). Abort()/destroy before a body maps
+                // to "socket hang up" even when headers were observed.
+                long? contentLength = response.Content?.Headers?.ContentLength;
+                bool midBody = contentLength.GetValueOrDefault() > 0;
+                throw new ResetAfterHeadersException(ex, midBody);
             }
         }
 
@@ -2635,10 +2644,22 @@ namespace PlaywrightNative.Helpers
             {
             }
 
+            internal ResetAfterHeadersException(Exception inner, bool midBody)
+                : base(inner?.Message, inner)
+            {
+                MidBody = midBody;
+            }
+
             internal ResetAfterHeadersException(string message, Exception innerException)
                 : base(message, innerException)
             {
             }
+
+            /// <summary>
+            /// True when the server advertised a non-empty body (Content-Length &gt; 0)
+            /// before the connection dropped — upstream reports this as <c>aborted</c>.
+            /// </summary>
+            internal bool MidBody { get; }
         }
 #pragma warning restore CA1032, CA1064, RCS1194
 
