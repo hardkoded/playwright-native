@@ -8068,13 +8068,28 @@ namespace PlaywrightNative.WebKit
             await EmulateMediaAsync(options.ReducedMotion, options.ForcedColors, options.Contrast).ConfigureAwait(false);
         }
 
-        Task<JsonElement?> IPage.EvalOnSelectorAllAsync(string selector, string expression, object arg) => Task.FromResult<JsonElement?>(default!);
+        async Task<JsonElement?> IPage.EvalOnSelectorAllAsync(string selector, string expression, object arg)
+            => await EvalOnSelector.OnArrayAsync<JsonElement?>(
+                EvaluateHandleAsync(EvalOnSelector.DocumentQuerySelectorAllExpression(selector)),
+                expression,
+                arg).ConfigureAwait(false);
 
-        Task<T> IPage.EvalOnSelectorAllAsync<T>(string selector, string expression, object arg) => Task.FromResult<T>(default!);
+        Task<T> IPage.EvalOnSelectorAllAsync<T>(string selector, string expression, object arg)
+            => EvalOnSelector.OnArrayAsync<T>(
+                EvaluateHandleAsync(EvalOnSelector.DocumentQuerySelectorAllExpression(selector)),
+                expression,
+                arg);
 
-        Task<JsonElement?> IPage.EvalOnSelectorAsync(string selector, string expression, object arg) => Task.FromResult<JsonElement?>(default!);
+        Task<JsonElement?> IPage.EvalOnSelectorAsync(string selector, string expression, object arg)
+            => EvalOnSelector.OnHandleAsync<JsonElement?>(QuerySelectorAsync(selector), selector, expression, arg, "page.$eval");
 
-        Task<T> IPage.EvalOnSelectorAsync<T>(string selector, string expression, object arg, PageEvalOnSelectorOptions options) => Task.FromResult<T>(default!);
+        Task<T> IPage.EvalOnSelectorAsync<T>(string selector, string expression, object arg, PageEvalOnSelectorOptions options)
+            => EvalOnSelector.OnHandleAsync<T>(
+                QueryActionAsync(selector, options?.Strict),
+                selector,
+                expression,
+                arg,
+                "page.$eval");
 
         Task<IAsyncDisposable> IPage.ExposeBindingAsync(string name, Action callback) => Task.FromResult<IAsyncDisposable>(default!);
 
@@ -8210,7 +8225,13 @@ namespace PlaywrightNative.WebKit
         Task<string> IPage.InnerTextAsync(string selector, PageInnerTextOptions options)
             => InnerTextAsync(selector, options?.Timeout, options?.Strict);
 
-        Task<string> IPage.InputValueAsync(string selector, PageInputValueOptions options) => Task.FromResult<string>(default!);
+        Task<string> IPage.InputValueAsync(string selector, PageInputValueOptions options)
+            => EvalOnSelector.OnHandleAsync<string>(
+                QueryActionAsync(selector, options?.Strict),
+                selector,
+                "el => el.value",
+                null,
+                "page.inputValue");
 
         Task<bool> IPage.IsCheckedAsync(string selector, PageIsCheckedOptions options)
             => IsCheckedAsync(selector, options?.Timeout, options?.Strict);

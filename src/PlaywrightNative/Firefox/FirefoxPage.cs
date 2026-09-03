@@ -1070,13 +1070,28 @@ namespace PlaywrightNative.Firefox
 
         Task IPage.EmulateMediaAsync(PageEmulateMediaOptions options) => Task.CompletedTask;
 
-        Task<JsonElement?> IPage.EvalOnSelectorAllAsync(string selector, string expression, object arg) => Task.FromResult<JsonElement?>(default!);
+        async Task<JsonElement?> IPage.EvalOnSelectorAllAsync(string selector, string expression, object arg)
+            => await EvalOnSelector.OnArrayAsync<JsonElement?>(
+                EvaluateHandleAsync(EvalOnSelector.DocumentQuerySelectorAllExpression(selector)),
+                expression,
+                arg).ConfigureAwait(false);
 
-        Task<T> IPage.EvalOnSelectorAllAsync<T>(string selector, string expression, object arg) => Task.FromResult<T>(default!);
+        Task<T> IPage.EvalOnSelectorAllAsync<T>(string selector, string expression, object arg)
+            => EvalOnSelector.OnArrayAsync<T>(
+                EvaluateHandleAsync(EvalOnSelector.DocumentQuerySelectorAllExpression(selector)),
+                expression,
+                arg);
 
-        Task<JsonElement?> IPage.EvalOnSelectorAsync(string selector, string expression, object arg) => Task.FromResult<JsonElement?>(default!);
+        Task<JsonElement?> IPage.EvalOnSelectorAsync(string selector, string expression, object arg)
+            => EvalOnSelector.OnHandleAsync<JsonElement?>(QuerySelectorAsync(selector), selector, expression, arg, "page.$eval");
 
-        Task<T> IPage.EvalOnSelectorAsync<T>(string selector, string expression, object arg, PageEvalOnSelectorOptions options) => Task.FromResult<T>(default!);
+        Task<T> IPage.EvalOnSelectorAsync<T>(string selector, string expression, object arg, PageEvalOnSelectorOptions options)
+            => EvalOnSelector.OnHandleAsync<T>(
+                QuerySelectorAsync(selector),
+                selector,
+                expression,
+                arg,
+                "page.$eval");
 
         Task<IAsyncDisposable> IPage.ExposeBindingAsync(string name, Action callback) => Task.FromResult<IAsyncDisposable>(default!);
 
@@ -1212,7 +1227,13 @@ namespace PlaywrightNative.Firefox
         Task<string> IPage.InnerTextAsync(string selector, PageInnerTextOptions options)
             => InnerTextAsync(selector, options?.Timeout, options?.Strict);
 
-        Task<string> IPage.InputValueAsync(string selector, PageInputValueOptions options) => Task.FromResult<string>(default!);
+        Task<string> IPage.InputValueAsync(string selector, PageInputValueOptions options)
+            => EvalOnSelector.OnHandleAsync<string>(
+                QuerySelectorAsync(selector),
+                selector,
+                "el => el.value",
+                null,
+                "page.inputValue");
 
         Task<bool> IPage.IsCheckedAsync(string selector, PageIsCheckedOptions options)
             => IsCheckedAsync(selector, options?.Timeout, options?.Strict);
@@ -1326,17 +1347,41 @@ namespace PlaywrightNative.Firefox
                 options?.Mask,
                 options?.MaskColor);
 
-        Task<IReadOnlyList<string>> IPage.SelectOptionAsync(string selector, string values, PageSelectOptionOptions options) => Task.FromResult<IReadOnlyList<string>>(default!);
+        async Task<IReadOnlyList<string>> IPage.SelectOptionAsync(string selector, string values, PageSelectOptionOptions options)
+        {
+            IReadOnlyCollection<string> result = await SelectOptionAsync(selector, values, options?.NoWaitAfter, options?.Timeout, options?.Force, options?.Strict).ConfigureAwait(false);
+            return result as IReadOnlyList<string> ?? result.ToList();
+        }
 
-        Task<IReadOnlyList<string>> IPage.SelectOptionAsync(string selector, IElementHandle values, PageSelectOptionOptions options) => Task.FromResult<IReadOnlyList<string>>(default!);
+        async Task<IReadOnlyList<string>> IPage.SelectOptionAsync(string selector, IElementHandle values, PageSelectOptionOptions options)
+        {
+            IReadOnlyCollection<string> result = await SelectOptionAsync(selector, values, options?.NoWaitAfter, options?.Timeout, options?.Strict, options?.Force).ConfigureAwait(false);
+            return result as IReadOnlyList<string> ?? result.ToList();
+        }
 
-        Task<IReadOnlyList<string>> IPage.SelectOptionAsync(string selector, IEnumerable<string> values, PageSelectOptionOptions options) => Task.FromResult<IReadOnlyList<string>>(default!);
+        async Task<IReadOnlyList<string>> IPage.SelectOptionAsync(string selector, IEnumerable<string> values, PageSelectOptionOptions options)
+        {
+            IReadOnlyCollection<string> result = await SelectOptionAsync(selector, values, options?.NoWaitAfter, options?.Timeout, options?.Strict, options?.Force).ConfigureAwait(false);
+            return result as IReadOnlyList<string> ?? result.ToList();
+        }
 
-        Task<IReadOnlyList<string>> IPage.SelectOptionAsync(string selector, SelectOptionValue values, PageSelectOptionOptions options) => Task.FromResult<IReadOnlyList<string>>(default!);
+        async Task<IReadOnlyList<string>> IPage.SelectOptionAsync(string selector, SelectOptionValue values, PageSelectOptionOptions options)
+        {
+            IReadOnlyCollection<string> result = await SelectOptionAsync(selector, values, options?.NoWaitAfter, options?.Timeout, options?.Strict, options?.Force).ConfigureAwait(false);
+            return result as IReadOnlyList<string> ?? result.ToList();
+        }
 
-        Task<IReadOnlyList<string>> IPage.SelectOptionAsync(string selector, IEnumerable<IElementHandle> values, PageSelectOptionOptions options) => Task.FromResult<IReadOnlyList<string>>(default!);
+        async Task<IReadOnlyList<string>> IPage.SelectOptionAsync(string selector, IEnumerable<IElementHandle> values, PageSelectOptionOptions options)
+        {
+            IReadOnlyCollection<string> result = await SelectOptionAsync(selector, values, options?.NoWaitAfter, options?.Timeout, options?.Strict, options?.Force).ConfigureAwait(false);
+            return result as IReadOnlyList<string> ?? result.ToList();
+        }
 
-        Task<IReadOnlyList<string>> IPage.SelectOptionAsync(string selector, IEnumerable<SelectOptionValue> values, PageSelectOptionOptions options) => Task.FromResult<IReadOnlyList<string>>(default!);
+        async Task<IReadOnlyList<string>> IPage.SelectOptionAsync(string selector, IEnumerable<SelectOptionValue> values, PageSelectOptionOptions options)
+        {
+            IReadOnlyCollection<string> result = await SelectOptionAsync(selector, values, options?.NoWaitAfter, options?.Timeout, options?.Force, default, options?.Strict).ConfigureAwait(false);
+            return result as IReadOnlyList<string> ?? result.ToList();
+        }
 
         Task IPage.SetCheckedAsync(string selector, bool checkedState, PageSetCheckedOptions options) => Task.CompletedTask;
 
@@ -1359,7 +1404,7 @@ namespace PlaywrightNative.Firefox
 
         Task IPage.TapAsync(string selector, PageTapOptions options) => Task.CompletedTask;
 
-        Task<string> IPage.TextContentAsync(string selector, PageTextContentOptions options) => Task.FromResult<string>(default!);
+        Task<string> IPage.TextContentAsync(string selector, PageTextContentOptions options) => TextContentAsync(selector, options?.Timeout, options?.Strict);
 
         Task IPage.TypeAsync(string selector, string text, PageTypeOptions options)
             => TypeAsync(selector, text, options?.Delay, options?.NoWaitAfter, options?.Timeout, null, default, options?.Strict);
@@ -1387,7 +1432,7 @@ namespace PlaywrightNative.Firefox
 
         Task<IFileChooser> IPage.WaitForFileChooserAsync(PageWaitForFileChooserOptions options) => Task.FromResult<IFileChooser>(default!);
 
-        Task<IJSHandle> IPage.WaitForFunctionAsync(string expression, object arg, PageWaitForFunctionOptions options) => Task.FromResult<IJSHandle>(default!);
+        Task<IJSHandle> IPage.WaitForFunctionAsync(string expression, object arg, PageWaitForFunctionOptions options) => WaitForFunctionAsync(expression, arg, options?.PollingInterval, options?.Timeout);
 
         Task IPage.WaitForLoadStateAsync(LoadState? state, PageWaitForLoadStateOptions options)
         {
@@ -1395,7 +1440,8 @@ namespace PlaywrightNative.Firefox
             return WaitForLoadStateAsync(state ?? LoadState.Load, o?.Timeout);
         }
 
-        Task<IResponse> IPage.WaitForNavigationAsync(PageWaitForNavigationOptions options) => Task.FromResult<IResponse>(default!);
+        Task<IResponse> IPage.WaitForNavigationAsync(PageWaitForNavigationOptions options)
+            => WaitForNavigationAsync(options?.Url, options?.UrlRegex, options?.UrlFunc, options?.Timeout, options?.WaitUntil ?? default);
 
         Task<IPage> IPage.WaitForPopupAsync(PageWaitForPopupOptions options) => Task.FromResult<IPage>(default!);
 

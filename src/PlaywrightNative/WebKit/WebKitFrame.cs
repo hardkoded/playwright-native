@@ -470,13 +470,23 @@ namespace PlaywrightNative.WebKit
 
         Task IFrame.DragAndDropAsync(string source, string target, FrameDragAndDropOptions options) => Task.CompletedTask;
 
-        Task<JsonElement?> IFrame.EvalOnSelectorAllAsync(string selector, string expression, object arg) => Task.FromResult<JsonElement?>(default!);
+        Task<JsonElement?> IFrame.EvalOnSelectorAllAsync(string selector, string expression, object arg)
+            => EvalOnSelector.OnArrayAsync<JsonElement?>(
+                EvaluateHandleAsync(EvalOnSelector.DocumentQuerySelectorAllExpression(selector)),
+                expression,
+                arg);
 
-        Task<T> IFrame.EvalOnSelectorAllAsync<T>(string selector, string expression, object arg) => Task.FromResult<T>(default!);
+        Task<T> IFrame.EvalOnSelectorAllAsync<T>(string selector, string expression, object arg)
+            => EvalOnSelector.OnArrayAsync<T>(
+                EvaluateHandleAsync(EvalOnSelector.DocumentQuerySelectorAllExpression(selector)),
+                expression,
+                arg);
 
-        Task<JsonElement?> IFrame.EvalOnSelectorAsync(string selector, string expression, object arg) => Task.FromResult<JsonElement?>(default!);
+        Task<JsonElement?> IFrame.EvalOnSelectorAsync(string selector, string expression, object arg)
+            => EvalOnSelector.OnHandleAsync<JsonElement?>(QuerySelectorAsync(selector), selector, expression, arg, "frame.$eval");
 
-        Task<T> IFrame.EvalOnSelectorAsync<T>(string selector, string expression, object arg, FrameEvalOnSelectorOptions options) => Task.FromResult<T>(default!);
+        Task<T> IFrame.EvalOnSelectorAsync<T>(string selector, string expression, object arg, FrameEvalOnSelectorOptions options)
+            => EvalOnSelector.OnHandleAsync<T>(QuerySelectorAsync(selector), selector, expression, arg, "frame.$eval");
 
         Task IFrame.FillAsync(string selector, string value, FrameFillOptions options)
             => FillAsync(selector, value, options?.NoWaitAfter, options?.Timeout, options?.Force, default, options?.Strict);
