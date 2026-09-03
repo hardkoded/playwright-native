@@ -2127,7 +2127,7 @@ namespace PlaywrightNative.WebKit
             return NoopContextDisposable.Instance;
         }
 
-                                                Task IBrowserContext.RouteFromHARAsync(string har, BrowserContextRouteFromHAROptions options) => Task.CompletedTask;
+        Task IBrowserContext.RouteFromHARAsync(string har, BrowserContextRouteFromHAROptions options) => Task.CompletedTask;
 
         Task IBrowserContext.RouteWebSocketAsync(string url, Action<IWebSocketRoute> handler) => Task.CompletedTask;
 
