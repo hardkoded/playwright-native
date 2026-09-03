@@ -2192,7 +2192,8 @@ namespace PlaywrightNative
 
         Task IPage.CancelPickLocatorAsync() => Task.CompletedTask;
 
-        Task IPage.CheckAsync(string selector, PageCheckOptions options) => Task.CompletedTask;
+        Task IPage.CheckAsync(string selector, PageCheckOptions options)
+            => CheckAsync(selector, options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, default, options?.Strict);
 
         Task IPage.ClickAsync(string selector, PageClickOptions options)
             => ClickAsync(selector, options?.Button ?? default, options?.ClickCount, options?.Delay, options?.Position, options?.Modifiers, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, default, null, options?.Strict);
@@ -2204,7 +2205,8 @@ namespace PlaywrightNative
 
         Task<IReadOnlyList<IConsoleMessage>> IPage.ConsoleMessagesAsync(PageConsoleMessagesOptions options) => ConsoleMessagesAsync(options?.Filter ?? default);
 
-        Task IPage.DblClickAsync(string selector, PageDblClickOptions options) => Task.CompletedTask;
+        Task IPage.DblClickAsync(string selector, PageDblClickOptions options)
+            => DblClickAsync(selector, options?.Button ?? default, options?.Delay, options?.Position, options?.Modifiers, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, default, options?.Strict);
 
         Task IPage.DispatchEventAsync(string selector, string type, object eventInit, PageDispatchEventOptions options) => Task.CompletedTask;
 
@@ -2230,9 +2232,11 @@ namespace PlaywrightNative
 
         Task<IAsyncDisposable> IPage.ExposeBindingAsync<T1, T2, T3, T4, TResult>(string name, Func<BindingSource, T1, T2, T3, T4, TResult> callback) => Task.FromResult<IAsyncDisposable>(default!);
 
-        Task IPage.FillAsync(string selector, string value, PageFillOptions options) => Task.CompletedTask;
+        Task IPage.FillAsync(string selector, string value, PageFillOptions options)
+            => FillAsync(selector, value, options?.NoWaitAfter, options?.Timeout, options?.Force, default, options?.Strict);
 
-        Task IPage.FocusAsync(string selector, PageFocusOptions options) => Task.CompletedTask;
+        Task IPage.FocusAsync(string selector, PageFocusOptions options)
+            => FocusAsync(selector, options?.Timeout, default, options?.Strict);
 
         IFrame IPage.Frame(string name) => FrameLookup.ByName(Frames, name);
 
@@ -2244,7 +2248,8 @@ namespace PlaywrightNative
 
         IFrameLocator IPage.FrameLocator(string selector) => null!;
 
-        Task<string> IPage.GetAttributeAsync(string selector, string name, PageGetAttributeOptions options) => Task.FromResult<string>(default!);
+        Task<string> IPage.GetAttributeAsync(string selector, string name, PageGetAttributeOptions options)
+            => GetAttributeAsync(selector, name, options?.Timeout, options?.Strict);
 
         ILocator IPage.GetByAltText(string text, PageGetByAltTextOptions options) => null!;
 
@@ -2289,25 +2294,34 @@ namespace PlaywrightNative
 
         Task IPage.HideHighlightAsync() => Task.CompletedTask;
 
-        Task IPage.HoverAsync(string selector, PageHoverOptions options) => Task.CompletedTask;
+        Task IPage.HoverAsync(string selector, PageHoverOptions options)
+            => HoverAsync(selector, options?.Position, options?.Modifiers, options?.Force, options?.Timeout, options?.Trial, default, options?.Strict);
 
-        Task<string> IPage.InnerHTMLAsync(string selector, PageInnerHTMLOptions options) => Task.FromResult<string>(default!);
+        Task<string> IPage.InnerHTMLAsync(string selector, PageInnerHTMLOptions options)
+            => InnerHTMLAsync(selector, options?.Timeout, options?.Strict);
 
-        Task<string> IPage.InnerTextAsync(string selector, PageInnerTextOptions options) => Task.FromResult<string>(default!);
+        Task<string> IPage.InnerTextAsync(string selector, PageInnerTextOptions options)
+            => InnerTextAsync(selector, options?.Timeout, options?.Strict);
 
         Task<string> IPage.InputValueAsync(string selector, PageInputValueOptions options) => Task.FromResult<string>(default!);
 
-        Task<bool> IPage.IsCheckedAsync(string selector, PageIsCheckedOptions options) => Task.FromResult<bool>(default!);
+        Task<bool> IPage.IsCheckedAsync(string selector, PageIsCheckedOptions options)
+            => IsCheckedAsync(selector, options?.Timeout, options?.Strict);
 
-        Task<bool> IPage.IsDisabledAsync(string selector, PageIsDisabledOptions options) => Task.FromResult<bool>(default!);
+        Task<bool> IPage.IsDisabledAsync(string selector, PageIsDisabledOptions options)
+            => IsDisabledAsync(selector, options?.Timeout, options?.Strict);
 
-        Task<bool> IPage.IsEditableAsync(string selector, PageIsEditableOptions options) => Task.FromResult<bool>(default!);
+        Task<bool> IPage.IsEditableAsync(string selector, PageIsEditableOptions options)
+            => IsEditableAsync(selector, options?.Timeout, options?.Strict);
 
-        Task<bool> IPage.IsEnabledAsync(string selector, PageIsEnabledOptions options) => Task.FromResult<bool>(default!);
+        Task<bool> IPage.IsEnabledAsync(string selector, PageIsEnabledOptions options)
+            => IsEnabledAsync(selector, options?.Timeout, options?.Strict);
 
-        Task<bool> IPage.IsHiddenAsync(string selector, PageIsHiddenOptions options) => Task.FromResult<bool>(default!);
+        Task<bool> IPage.IsHiddenAsync(string selector, PageIsHiddenOptions options)
+            => IsHiddenAsync(selector, options?.Timeout, options?.Strict);
 
-        Task<bool> IPage.IsVisibleAsync(string selector, PageIsVisibleOptions options) => Task.FromResult<bool>(default!);
+        Task<bool> IPage.IsVisibleAsync(string selector, PageIsVisibleOptions options)
+            => IsVisibleAsync(selector, options?.Timeout, options?.Strict);
 
         ILocator IPage.Locator(string selector, PageLocatorOptions options) => null!;
 
@@ -2317,7 +2331,8 @@ namespace PlaywrightNative
 
         Task<ILocator> IPage.PickLocatorAsync() => Task.FromResult<ILocator>(default!);
 
-        Task IPage.PressAsync(string selector, string key, PagePressOptions options) => Task.CompletedTask;
+        Task IPage.PressAsync(string selector, string key, PagePressOptions options)
+            => PressAsync(selector, key, options?.Delay, options?.NoWaitAfter, options?.Timeout, null, default, options?.Strict);
 
         Task<IElementHandle> IPage.QuerySelectorAsync(string selector, PageQuerySelectorOptions options) => QuerySelectorAsync(selector);
 
@@ -2411,9 +2426,11 @@ namespace PlaywrightNative
 
         Task<string> IPage.TextContentAsync(string selector, PageTextContentOptions options) => Task.FromResult<string>(default!);
 
-        Task IPage.TypeAsync(string selector, string text, PageTypeOptions options) => Task.CompletedTask;
+        Task IPage.TypeAsync(string selector, string text, PageTypeOptions options)
+            => TypeAsync(selector, text, options?.Delay, options?.NoWaitAfter, options?.Timeout, null, default, options?.Strict);
 
-        Task IPage.UncheckAsync(string selector, PageUncheckOptions options) => Task.CompletedTask;
+        Task IPage.UncheckAsync(string selector, PageUncheckOptions options)
+            => UncheckAsync(selector, options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, default, options?.Strict);
 
         Task IPage.UnrouteAllAsync(PageUnrouteAllOptions options) => Task.CompletedTask;
 
