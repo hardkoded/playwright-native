@@ -8315,7 +8315,21 @@ namespace PlaywrightNative.WebKit
 
         Task<IWorker> IPage.RunAndWaitForWorkerAsync(Func<Task> action, PageRunAndWaitForWorkerOptions options) => Task.FromResult<IWorker>(default!);
 
-        Task<byte[]> IPage.ScreenshotAsync(PageScreenshotOptions options) => Task.FromResult<byte[]>(default!);
+        Task<byte[]> IPage.ScreenshotAsync(PageScreenshotOptions options)
+            => ScreenshotAsync(
+                options?.Path,
+                options?.Type ?? default,
+                options?.Quality,
+                options?.FullPage,
+                options?.Clip,
+                options?.OmitBackground,
+                options?.Timeout,
+                options?.Scale?.ToString(),
+                options?.Animations?.ToString(),
+                options?.Caret?.ToString(),
+                options?.Style,
+                options?.Mask,
+                options?.MaskColor);
 
         Task<IReadOnlyList<string>> IPage.SelectOptionAsync(string selector, string values, PageSelectOptionOptions options)
             => AsReadOnlyListAsync(SelectOptionAsync(selector, values, options?.NoWaitAfter, options?.Timeout, options?.Force, options?.Strict));
