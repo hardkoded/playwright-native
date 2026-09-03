@@ -775,7 +775,8 @@ namespace PlaywrightNative.WebKit
         Task IElementHandle.HoverAsync(ElementHandleHoverOptions options)
             => HoverAsync(options?.Position, options?.Modifiers, options?.Force, options?.Timeout, options?.Trial);
 
-        Task<string> IElementHandle.InputValueAsync(ElementHandleInputValueOptions options) => Task.FromResult<string>(default!);
+        Task<string> IElementHandle.InputValueAsync(ElementHandleInputValueOptions options)
+            => EvaluateFunctionAsync<string>(ElementStateScript.InputValueFunction);
 
         Task IElementHandle.PressAsync(string key, ElementHandlePressOptions options)
             => PressAsync(key, options?.Delay, options?.NoWaitAfter, options?.Timeout);

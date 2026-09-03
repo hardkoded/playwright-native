@@ -592,7 +592,13 @@ namespace PlaywrightNative.WebKit
         Task<string> IFrame.InnerTextAsync(string selector, FrameInnerTextOptions options)
             => InnerTextAsync(selector, options?.Timeout, options?.Strict);
 
-        Task<string> IFrame.InputValueAsync(string selector, FrameInputValueOptions options) => Task.FromResult<string>(default!);
+        Task<string> IFrame.InputValueAsync(string selector, FrameInputValueOptions options)
+            => EvalOnSelector.OnHandleAsync<string>(
+                QueryActionAsync(selector, options?.Strict),
+                selector,
+                ElementStateScript.InputValueFunction,
+                null,
+                "frame.inputValue");
 
         Task<bool> IFrame.IsCheckedAsync(string selector, FrameIsCheckedOptions options)
             => IsCheckedAsync(selector, options?.Timeout, options?.Strict);
