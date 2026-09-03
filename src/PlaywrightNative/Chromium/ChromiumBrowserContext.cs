@@ -1732,13 +1732,13 @@ namespace PlaywrightNative.Chromium
         }
 
 #pragma warning disable SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
-        Task<IAsyncDisposable> IBrowserContext.AddInitScriptAsync(string script, string scriptPath) => Task.FromResult<IAsyncDisposable>(default!);
+        Task<IAsyncDisposable> IBrowserContext.AddInitScriptAsync(string script, string scriptPath) => AddInitScriptAsync(script, scriptPath);
 
-        Task IBrowserContext.ClearCookiesAsync(BrowserContextClearCookiesOptions options) => Task.CompletedTask;
+        Task IBrowserContext.ClearCookiesAsync(BrowserContextClearCookiesOptions options) => ClearCookiesAsync();
 
-        Task IBrowserContext.CloseAsync(BrowserContextCloseOptions options) => Task.CompletedTask;
+        Task IBrowserContext.CloseAsync(BrowserContextCloseOptions options) => CloseAsync(options?.Reason);
 
-        Task<IReadOnlyList<BrowserContextCookiesResult>> IBrowserContext.CookiesAsync(string urls) => Task.FromResult<IReadOnlyList<BrowserContextCookiesResult>>(default!);
+        Task<IReadOnlyList<BrowserContextCookiesResult>> IBrowserContext.CookiesAsync(string urls) => string.IsNullOrEmpty(urls) ? CookiesAsync() : CookiesAsync(new[] { urls });
 
         Task<IAsyncDisposable> IBrowserContext.ExposeBindingAsync(string name, Action callback) => Task.FromResult<IAsyncDisposable>(default!);
 
@@ -1758,21 +1758,45 @@ namespace PlaywrightNative.Chromium
 
         Task<IAsyncDisposable> IBrowserContext.ExposeFunctionAsync<T1, T2, T3, T4, TResult>(string name, Func<T1, T2, T3, T4, TResult> callback) => Task.FromResult<IAsyncDisposable>(default!);
 
-        Task IBrowserContext.GrantPermissionsAsync(IEnumerable<string> permissions, BrowserContextGrantPermissionsOptions options) => Task.CompletedTask;
+        Task IBrowserContext.GrantPermissionsAsync(IEnumerable<string> permissions, BrowserContextGrantPermissionsOptions options) => GrantPermissionsAsync(permissions, options?.Origin);
 
-        Task<IAsyncDisposable> IBrowserContext.RouteAsync(string url, Action<IRoute> handler, BrowserContextRouteOptions options) => Task.FromResult<IAsyncDisposable>(default!);
+        async Task<IAsyncDisposable> IBrowserContext.RouteAsync(string url, Action<IRoute> handler, BrowserContextRouteOptions options)
+        {
+            await RouteAsync(url, handler, options?.Times).ConfigureAwait(false);
+            return NoopContextDisposable.Instance;
+        }
 
-        Task<IAsyncDisposable> IBrowserContext.RouteAsync(Regex url, Action<IRoute> handler, BrowserContextRouteOptions options) => Task.FromResult<IAsyncDisposable>(default!);
+        async Task<IAsyncDisposable> IBrowserContext.RouteAsync(Regex url, Action<IRoute> handler, BrowserContextRouteOptions options)
+        {
+            await RouteAsync(url, handler, options?.Times).ConfigureAwait(false);
+            return NoopContextDisposable.Instance;
+        }
 
-        Task<IAsyncDisposable> IBrowserContext.RouteAsync(Func<string, bool> url, Action<IRoute> handler, BrowserContextRouteOptions options) => Task.FromResult<IAsyncDisposable>(default!);
+        async Task<IAsyncDisposable> IBrowserContext.RouteAsync(Func<string, bool> url, Action<IRoute> handler, BrowserContextRouteOptions options)
+        {
+            await RouteAsync(url, handler, options?.Times).ConfigureAwait(false);
+            return NoopContextDisposable.Instance;
+        }
 
-        Task<IAsyncDisposable> IBrowserContext.RouteAsync(string url, Func<IRoute, Task> handler, BrowserContextRouteOptions options) => Task.FromResult<IAsyncDisposable>(default!);
+        async Task<IAsyncDisposable> IBrowserContext.RouteAsync(string url, Func<IRoute, Task> handler, BrowserContextRouteOptions options)
+        {
+            await RouteAsync(url, handler, options?.Times).ConfigureAwait(false);
+            return NoopContextDisposable.Instance;
+        }
 
-        Task<IAsyncDisposable> IBrowserContext.RouteAsync(Regex url, Func<IRoute, Task> handler, BrowserContextRouteOptions options) => Task.FromResult<IAsyncDisposable>(default!);
+        async Task<IAsyncDisposable> IBrowserContext.RouteAsync(Regex url, Func<IRoute, Task> handler, BrowserContextRouteOptions options)
+        {
+            await RouteAsync(url, handler, options?.Times).ConfigureAwait(false);
+            return NoopContextDisposable.Instance;
+        }
 
-        Task<IAsyncDisposable> IBrowserContext.RouteAsync(Func<string, bool> url, Func<IRoute, Task> handler, BrowserContextRouteOptions options) => Task.FromResult<IAsyncDisposable>(default!);
+        async Task<IAsyncDisposable> IBrowserContext.RouteAsync(Func<string, bool> url, Func<IRoute, Task> handler, BrowserContextRouteOptions options)
+        {
+            await RouteAsync(url, handler, options?.Times).ConfigureAwait(false);
+            return NoopContextDisposable.Instance;
+        }
 
-        Task IBrowserContext.RouteFromHARAsync(string har, BrowserContextRouteFromHAROptions options) => Task.CompletedTask;
+                                                Task IBrowserContext.RouteFromHARAsync(string har, BrowserContextRouteFromHAROptions options) => Task.CompletedTask;
 
         Task IBrowserContext.RouteWebSocketAsync(string url, Action<IWebSocketRoute> handler) => Task.CompletedTask;
 
@@ -1784,15 +1808,15 @@ namespace PlaywrightNative.Chromium
 
         Task<IPage> IBrowserContext.RunAndWaitForPageAsync(Func<Task> action, BrowserContextRunAndWaitForPageOptions options) => Task.FromResult<IPage>(default!);
 
-        void IBrowserContext.SetDefaultNavigationTimeout(float timeout) { }
+        void IBrowserContext.SetDefaultNavigationTimeout(float timeout) => DefaultNavigationTimeout = timeout;
 
-        void IBrowserContext.SetDefaultTimeout(float timeout) { }
+        void IBrowserContext.SetDefaultTimeout(float timeout) => DefaultTimeout = timeout;
 
-        Task IBrowserContext.SetExtraHTTPHeadersAsync(IEnumerable<KeyValuePair<string, string>> headers) => Task.CompletedTask;
+        Task IBrowserContext.SetExtraHTTPHeadersAsync(IEnumerable<KeyValuePair<string, string>> headers) => SetExtraHttpHeadersAsync(headers);
 
         Task IBrowserContext.SetStorageStateAsync(string storageStatePath) => Task.CompletedTask;
 
-        Task<string> IBrowserContext.StorageStateAsync(BrowserContextStorageStateOptions options) => Task.FromResult<string>(default!);
+        Task<string> IBrowserContext.StorageStateAsync(BrowserContextStorageStateOptions options) => StorageStateAsync(options?.Path, options?.IndexedDB, options?.Credentials);
 
         Task IBrowserContext.UnrouteAllAsync(BrowserContextUnrouteAllOptions options) => Task.CompletedTask;
 
@@ -1811,6 +1835,14 @@ namespace PlaywrightNative.Chromium
         Task<IConsoleMessage> IBrowserContext.WaitForConsoleMessageAsync(BrowserContextWaitForConsoleMessageOptions options) => Task.FromResult<IConsoleMessage>(default!);
 
         Task<IPage> IBrowserContext.WaitForPageAsync(BrowserContextWaitForPageOptions options) => Task.FromResult<IPage>(default!);
+
+        private sealed class NoopContextDisposable : IAsyncDisposable
+        {
+            internal static readonly NoopContextDisposable Instance = new();
+
+            public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+        }
+
 #pragma warning restore SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
     }
 }
