@@ -261,7 +261,13 @@ namespace PlaywrightNative.WebKit
         /// <inheritdoc/>
         IReadOnlyList<ClientCertificate> IHasClientCertificates.ClientCertificates => _clientCertificates;
 
-        Proxy IHasProxy.Proxy => _clientCertificatesProxy != null ? _apiRequestProxy : _proxy;
+        // Locale handshake and client-certificate MITM proxies are browser-only.
+        // APIRequest must see the caller proxy (often null); routing HttpClient through
+        // LocaleHandshakeProxy truncates chunked localhost responses into "socket hang up".
+        Proxy IHasProxy.Proxy =>
+            _clientCertificatesProxy != null || _localeHandshake != null
+                ? _apiRequestProxy
+                : _proxy;
 
         /// <summary>
         /// Proxy passed to <c>Playwright.createContext</c>.

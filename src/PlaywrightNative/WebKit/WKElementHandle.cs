@@ -89,7 +89,7 @@ namespace PlaywrightNative.WebKit
                 return;
             }
 
-            await SetCheckedAsync(true, position, scroll).ConfigureAwait(false);
+            await SetCheckedAsync(true, position, scroll, force).ConfigureAwait(false);
         }
 
         /// <inheritdoc/>
@@ -520,7 +520,7 @@ namespace PlaywrightNative.WebKit
                 return;
             }
 
-            await SetCheckedAsync(false, position, scroll).ConfigureAwait(false);
+            await SetCheckedAsync(false, position, scroll, force).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -598,7 +598,7 @@ namespace PlaywrightNative.WebKit
             return point;
         }
 
-        private async Task SetCheckedAsync(bool check, Position position = null, ActionScroll scroll = default)
+        private async Task SetCheckedAsync(bool check, Position position = null, ActionScroll scroll = default, bool? force = default)
         {
             if (await IsCheckedAsync().ConfigureAwait(false) == check)
             {
@@ -610,11 +610,20 @@ namespace PlaywrightNative.WebKit
                 throw new PlaywrightNativeException("Cannot uncheck radio button");
             }
 
-            // Match Chromium: go through the full click pipeline (scroll, hit-test,
-            // modifiers) instead of a raw Mouse.Click at a bounding-box center. WebKit
-            // CI was failing with "Clicking the checkbox did not change its state."
-            // when the simple center point missed the control.
-            await ClickAsync(position: position, scroll: scroll).ConfigureAwait(false);
+            // Prefer the full click pipeline (scroll, hit-test, modifiers). WebKit's
+            // pointer path still misses some checkbox/label hit targets on CI, so fall
+            // back to the injected DOM click used by ElementStateScript.CheckFunction.
+            // Pass force through so force:true skips hit-testing on hidden inputs.
+            await ClickAsync(position: position, force: force, scroll: scroll).ConfigureAwait(false);
+
+            if (await IsCheckedAsync().ConfigureAwait(false) == check)
+            {
+                return;
+            }
+
+            await EvaluateFunctionAsync<bool>(
+                check ? ElementStateScript.CheckFunction : ElementStateScript.UncheckFunction)
+                .ConfigureAwait(false);
 
             if (await IsCheckedAsync().ConfigureAwait(false) != check)
             {

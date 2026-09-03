@@ -253,7 +253,13 @@ namespace PlaywrightNative.Chromium
         /// <inheritdoc/>
         IReadOnlyList<ClientCertificate> IHasClientCertificates.ClientCertificates => _clientCertificates;
 
-        Proxy IHasProxy.Proxy => _clientCertificatesProxy != null ? _apiRequestProxy : _crCtx.Proxy;
+        // Locale handshake and client-certificate MITM proxies are browser-only.
+        // APIRequest must see the caller proxy (often null); routing HttpClient through
+        // LocaleHandshakeProxy truncates chunked localhost responses into "socket hang up".
+        Proxy IHasProxy.Proxy =>
+            _clientCertificatesProxy != null || _localeHandshake != null
+                ? _apiRequestProxy
+                : _crCtx.Proxy;
 
         /// <summary>
         /// Directory that receives accepted downloads, or <see langword="null"/> before emulation is configured.

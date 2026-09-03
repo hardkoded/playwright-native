@@ -2597,7 +2597,10 @@ namespace PlaywrightNative
             return result as IReadOnlyList<string> ?? result.ToList();
         }
 
-        Task IPage.SetCheckedAsync(string selector, bool checkedState, PageSetCheckedOptions options) => Task.CompletedTask;
+        Task IPage.SetCheckedAsync(string selector, bool checkedState, PageSetCheckedOptions options)
+            => checkedState
+                ? CheckAsync(selector, options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, default, options?.Strict)
+                : UncheckAsync(selector, options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, default, options?.Strict);
 
         Task IPage.SetContentAsync(string html, PageSetContentOptions options)
             => SetContentAsync(html, options?.Timeout, options?.WaitUntil ?? default);

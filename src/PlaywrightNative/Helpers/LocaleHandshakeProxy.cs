@@ -212,6 +212,29 @@ namespace PlaywrightNative.Helpers
             return 0;
         }
 
+        /// <summary>
+        /// <see cref="ReadHttpMessageAsync"/> stops at headers when there is no
+        /// Content-Length (typical chunked Kestrel responses). Remaining body
+        /// bytes must be tunneled.
+        /// </summary>
+        private static bool IsChunkedOrUnsized(string responseText)
+        {
+            if (string.IsNullOrEmpty(responseText))
+            {
+                return false;
+            }
+
+            int headerEnd = responseText.IndexOf("\r\n\r\n", StringComparison.Ordinal);
+            string headers = headerEnd < 0 ? responseText : responseText.Substring(0, headerEnd);
+            if (headers.Contains("Transfer-Encoding:", StringComparison.OrdinalIgnoreCase)
+                && headers.Contains("chunked", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            return !headers.Contains("Content-Length:", StringComparison.OrdinalIgnoreCase);
+        }
+
         private static bool IsConnect(byte[] message)
             => message != null
                 && message.Length >= 8
@@ -699,6 +722,17 @@ namespace PlaywrightNative.Helpers
 
                     await client.Stream.WriteAsync(response, token).ConfigureAwait(false);
                     string responseText = Encoding.ASCII.GetString(response);
+
+                    // ReadHttpMessageAsync only honors Content-Length. Chunked (or
+                    // otherwise unsized) bodies remain on the socket — tunnel them
+                    // instead of closing after headers (Connection: close + chunked
+                    // was surfacing as APIRequest "socket hang up").
+                    if (IsChunkedOrUnsized(responseText))
+                    {
+                        await TunnelAsync(client, serverIo, token).ConfigureAwait(false);
+                        return;
+                    }
+
                     if (responseText.Contains("Connection: close", StringComparison.OrdinalIgnoreCase))
                     {
                         return;
