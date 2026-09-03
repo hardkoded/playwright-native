@@ -666,17 +666,8 @@ namespace PlaywrightNative.WebKit
             GeolocationValidator.Validate(geolocation);
             _geolocation = geolocation;
             await SetGeolocationOverrideAsync(geolocation).ConfigureAwait(false);
-            foreach (WKPage page in WKPages)
-            {
-                try
-                {
-                    await page.SetGeolocationOverrideAsync(geolocation).ConfigureAwait(false);
-                }
-                catch (PlaywrightNativeException)
-                {
-                    // Page-proxy override is optional when Playwright.setGeolocationOverride applied.
-                }
-            }
+
+            // Official WebKit applies geolocation only via Playwright.setGeolocationOverride.
         }
 
         /// <inheritdoc/>
@@ -947,13 +938,6 @@ namespace PlaywrightNative.WebKit
             if (_geolocation != null)
             {
                 await SetGeolocationOverrideAsync(_geolocation).ConfigureAwait(false);
-                try
-                {
-                    await page.SetGeolocationOverrideAsync(_geolocation).ConfigureAwait(false);
-                }
-                catch (PlaywrightNativeException)
-                {
-                }
             }
 
             if (!string.IsNullOrEmpty(_userAgent))
@@ -1549,15 +1533,9 @@ namespace PlaywrightNative.WebKit
                 if (_geolocation != null)
                 {
                     await SetGeolocationOverrideAsync(_geolocation).ConfigureAwait(false);
-                    try
-                    {
-                        await wkPage.SetGeolocationOverrideAsync(_geolocation).ConfigureAwait(false);
-                    }
-                    catch (PlaywrightNativeException)
-                    {
-                        // Page-proxy Emulation.setGeolocationOverride is optional when
-                        // Playwright.setGeolocationOverride already applied the context override.
-                    }
+
+                    // Official WebKit only uses Playwright.setGeolocationOverride on the browser
+                    // session. Page-proxy Emulation.setGeolocationOverride is Chromium-only.
                 }
 
                 if (_ignoreHttpsErrors || _clientCertificatesProxy != null)
@@ -1719,40 +1697,31 @@ namespace PlaywrightNative.WebKit
                 return;
             }
 
-            try
+            // Match upstream WKBrowserContext.setGeolocation: Playwright.setGeolocationOverride
+            // on the browser session with { ...geolocation, timestamp }.
+            float accuracy = geolocation.Accuracy ?? 0f;
+            var payload = new
             {
-                if (string.IsNullOrEmpty(_browserContextId))
+                latitude = geolocation.Latitude,
+                longitude = geolocation.Longitude,
+                accuracy = accuracy,
+                timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            };
+
+            if (string.IsNullOrEmpty(_browserContextId))
+            {
+                await _browser.Session.SendAsync("Playwright.setGeolocationOverride", new
                 {
-                    await _browser.Session.SendAsync("Playwright.setGeolocationOverride", new
-                    {
-                        geolocation = new
-                        {
-                            latitude = geolocation.Latitude,
-                            longitude = geolocation.Longitude,
-                            accuracy = geolocation.Accuracy,
-                            timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-                        },
-                    }).ConfigureAwait(false);
-                }
-                else
-                {
-                    await _browser.Session.SendAsync("Playwright.setGeolocationOverride", new
-                    {
-                        browserContextId = _browserContextId,
-                        geolocation = new
-                        {
-                            latitude = geolocation.Latitude,
-                            longitude = geolocation.Longitude,
-                            accuracy = geolocation.Accuracy,
-                            timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-                        },
-                    }).ConfigureAwait(false);
-                }
+                    geolocation = payload,
+                }).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            else
             {
-                // Older WebKit builds do not expose Playwright.setGeolocationOverride;
-                // page-proxy Emulation.setGeolocationOverride is applied by the caller.
+                await _browser.Session.SendAsync("Playwright.setGeolocationOverride", new
+                {
+                    browserContextId = _browserContextId,
+                    geolocation = payload,
+                }).ConfigureAwait(false);
             }
         }
 

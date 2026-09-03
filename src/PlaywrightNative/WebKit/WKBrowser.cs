@@ -299,6 +299,13 @@ namespace PlaywrightNative.WebKit
                     reducedMotion,
                     forcedColors,
                     contrast);
+
+                // Upstream WKBrowserContext._initialize applies geolocation before any page exists.
+                if (geolocation != null)
+                {
+                    await context.SetGeolocationAsync(geolocation).ConfigureAwait(false);
+                }
+
                 await context.ApplyDownloadBehaviorAsync().ConfigureAwait(false);
                 await context.ApplyLanguagesAsync().ConfigureAwait(false);
                 await context.ApplyWebKitPageShimsAsync().ConfigureAwait(false);
