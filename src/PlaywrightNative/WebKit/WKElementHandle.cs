@@ -610,8 +610,11 @@ namespace PlaywrightNative.WebKit
                 throw new PlaywrightNativeException("Cannot uncheck radio button");
             }
 
-            double[] point = await ClickPointAsync(position, scroll).ConfigureAwait(false);
-            await _page.Mouse.ClickAsync((float)point[0], (float)point[1]).ConfigureAwait(false);
+            // Match Chromium: go through the full click pipeline (scroll, hit-test,
+            // modifiers) instead of a raw Mouse.Click at a bounding-box center. WebKit
+            // CI was failing with "Clicking the checkbox did not change its state."
+            // when the simple center point missed the control.
+            await ClickAsync(position: position, scroll: scroll).ConfigureAwait(false);
 
             if (await IsCheckedAsync().ConfigureAwait(false) != check)
             {
