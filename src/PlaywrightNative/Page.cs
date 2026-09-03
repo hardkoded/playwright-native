@@ -2172,6 +2172,31 @@ namespace PlaywrightNative
             FileChooser?.Invoke(this, new FileChooser(this, element, e.Multiple));
         }
 
+        private async Task<T> RunAndWaitInternalAsync<T>(Func<Task> action, Task<T> waitTask)
+        {
+            if (action == null)
+            {
+                throw new ArgumentNullException(nameof(action));
+            }
+
+            Task actionTask = action();
+            T result = await waitTask.ConfigureAwait(false);
+            await actionTask.ConfigureAwait(false);
+            return result;
+        }
+
+        private Task<IRequest> WaitForRequestFinishedInternalAsync(
+            string urlString,
+            Regex urlRegex,
+            Func<IRequest, bool> predicate,
+            float? timeout)
+            => WaitForEventAsync(
+                PageEvent.RequestFinished,
+                r => predicate != null
+                    ? predicate(r)
+                    : UrlMatcher.Matches(r.Url, urlString, urlRegex, null, NavigationUrl.ContextBase(Context)),
+                timeout);
+
         private Task DispatchEventInternalAsync(string selector, string type, object eventInit, float? timeout, bool? strict)
             => DispatchEventAction.RunAsync(
                 EvaluateDispatchBoolAsync,
@@ -2227,7 +2252,19 @@ namespace PlaywrightNative
         Task IPage.DispatchEventAsync(string selector, string type, object eventInit, PageDispatchEventOptions options)
             => DispatchEventInternalAsync(selector, type, eventInit, options?.Timeout, options?.Strict);
 
-        Task IPage.DragAndDropAsync(string source, string target, PageDragAndDropOptions options) => Task.CompletedTask;
+        Task IPage.DragAndDropAsync(string source, string target, PageDragAndDropOptions options)
+            => DragAndDropAsync(
+                source,
+                target,
+                options?.SourcePosition == null ? null : new Position { X = options.SourcePosition.X, Y = options.SourcePosition.Y },
+                options?.TargetPosition == null ? null : new Position { X = options.TargetPosition.X, Y = options.TargetPosition.Y },
+                options?.Force,
+                options?.NoWaitAfter,
+                options?.Timeout,
+                options?.Trial,
+                options?.Steps,
+                default,
+                options?.Strict);
 
         async Task IPage.EmulateMediaAsync(PageEmulateMediaOptions options)
         {
@@ -2483,19 +2520,26 @@ namespace PlaywrightNative
 
         Task<IPage> IPage.RunAndWaitForPopupAsync(Func<Task> action, PageRunAndWaitForPopupOptions options) => Task.FromResult<IPage>(default!);
 
-        Task<IRequest> IPage.RunAndWaitForRequestAsync(Func<Task> action, string urlOrPredicate, PageRunAndWaitForRequestOptions options) => Task.FromResult<IRequest>(default!);
+        Task<IRequest> IPage.RunAndWaitForRequestAsync(Func<Task> action, string urlOrPredicate, PageRunAndWaitForRequestOptions options)
+            => RunAndWaitInternalAsync(action, WaitForRequestAsync(urlOrPredicate, null, null, options?.Timeout));
 
-        Task<IRequest> IPage.RunAndWaitForRequestAsync(Func<Task> action, Regex urlOrPredicate, PageRunAndWaitForRequestOptions options) => Task.FromResult<IRequest>(default!);
+        Task<IRequest> IPage.RunAndWaitForRequestAsync(Func<Task> action, Regex urlOrPredicate, PageRunAndWaitForRequestOptions options)
+            => RunAndWaitInternalAsync(action, WaitForRequestAsync(null, urlOrPredicate, null, options?.Timeout));
 
-        Task<IRequest> IPage.RunAndWaitForRequestAsync(Func<Task> action, Func<IRequest, bool> urlOrPredicate, PageRunAndWaitForRequestOptions options) => Task.FromResult<IRequest>(default!);
+        Task<IRequest> IPage.RunAndWaitForRequestAsync(Func<Task> action, Func<IRequest, bool> urlOrPredicate, PageRunAndWaitForRequestOptions options)
+            => RunAndWaitInternalAsync(action, WaitForRequestAsync(null, null, urlOrPredicate, options?.Timeout));
 
-        Task<IRequest> IPage.RunAndWaitForRequestFinishedAsync(Func<Task> action, PageRunAndWaitForRequestFinishedOptions options) => Task.FromResult<IRequest>(default!);
+        Task<IRequest> IPage.RunAndWaitForRequestFinishedAsync(Func<Task> action, PageRunAndWaitForRequestFinishedOptions options)
+            => RunAndWaitInternalAsync(action, WaitForRequestFinishedInternalAsync(null, null, options?.Predicate, options?.Timeout));
 
-        Task<IResponse> IPage.RunAndWaitForResponseAsync(Func<Task> action, string urlOrPredicate, PageRunAndWaitForResponseOptions options) => Task.FromResult<IResponse>(default!);
+        Task<IResponse> IPage.RunAndWaitForResponseAsync(Func<Task> action, string urlOrPredicate, PageRunAndWaitForResponseOptions options)
+            => RunAndWaitInternalAsync(action, WaitForResponseAsync(urlOrPredicate, null, null, options?.Timeout));
 
-        Task<IResponse> IPage.RunAndWaitForResponseAsync(Func<Task> action, Regex urlOrPredicate, PageRunAndWaitForResponseOptions options) => Task.FromResult<IResponse>(default!);
+        Task<IResponse> IPage.RunAndWaitForResponseAsync(Func<Task> action, Regex urlOrPredicate, PageRunAndWaitForResponseOptions options)
+            => RunAndWaitInternalAsync(action, WaitForResponseAsync(null, urlOrPredicate, null, options?.Timeout));
 
-        Task<IResponse> IPage.RunAndWaitForResponseAsync(Func<Task> action, Func<IResponse, bool> urlOrPredicate, PageRunAndWaitForResponseOptions options) => Task.FromResult<IResponse>(default!);
+        Task<IResponse> IPage.RunAndWaitForResponseAsync(Func<Task> action, Func<IResponse, bool> urlOrPredicate, PageRunAndWaitForResponseOptions options)
+            => RunAndWaitInternalAsync(action, WaitForResponseAsync(null, null, urlOrPredicate, options?.Timeout));
 
         Task<IWebSocket> IPage.RunAndWaitForWebSocketAsync(Func<Task> action, PageRunAndWaitForWebSocketOptions options) => Task.FromResult<IWebSocket>(default!);
 
@@ -2624,7 +2668,8 @@ namespace PlaywrightNative
         Task<IRequest> IPage.WaitForRequestAsync(Func<IRequest, bool> urlOrPredicate, PageWaitForRequestOptions options)
             => WaitForRequestAsync(null, null, urlOrPredicate, options?.Timeout);
 
-        Task<IRequest> IPage.WaitForRequestFinishedAsync(PageWaitForRequestFinishedOptions options) => Task.FromResult<IRequest>(default!);
+        Task<IRequest> IPage.WaitForRequestFinishedAsync(PageWaitForRequestFinishedOptions options)
+            => WaitForRequestFinishedInternalAsync(null, null, options?.Predicate, options?.Timeout);
 
         Task<IResponse> IPage.WaitForResponseAsync(string urlOrPredicate, PageWaitForResponseOptions options)
             => WaitForResponseAsync(urlOrPredicate, null, null, options?.Timeout);
@@ -2635,7 +2680,12 @@ namespace PlaywrightNative
         Task<IResponse> IPage.WaitForResponseAsync(Func<IResponse, bool> urlOrPredicate, PageWaitForResponseOptions options)
             => WaitForResponseAsync(null, null, urlOrPredicate, options?.Timeout);
 
-        Task<IElementHandle> IPage.WaitForSelectorAsync(string selector, PageWaitForSelectorOptions options) => Task.FromResult<IElementHandle>(default!);
+        Task<IElementHandle> IPage.WaitForSelectorAsync(string selector, PageWaitForSelectorOptions options)
+            => WaitForSelectorAsync(
+                selector,
+                options?.State ?? WaitForSelectorState.Visible,
+                options?.Timeout,
+                options?.Strict);
 
         Task IPage.WaitForURLAsync(string url, PageWaitForURLOptions options) => Task.CompletedTask;
 

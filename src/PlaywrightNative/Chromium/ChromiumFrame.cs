@@ -595,7 +595,19 @@ namespace PlaywrightNative.Chromium
         Task IFrame.DispatchEventAsync(string selector, string type, object eventInit, FrameDispatchEventOptions options)
             => DispatchEventInternalAsync(selector, type, eventInit, options?.Timeout, options?.Strict);
 
-        Task IFrame.DragAndDropAsync(string source, string target, FrameDragAndDropOptions options) => Task.CompletedTask;
+        Task IFrame.DragAndDropAsync(string source, string target, FrameDragAndDropOptions options)
+            => DragAndDropHelper.RunAsync(
+                this,
+                source,
+                target,
+                options?.SourcePosition == null ? null : new Position { X = options.SourcePosition.X, Y = options.SourcePosition.Y },
+                options?.TargetPosition == null ? null : new Position { X = options.TargetPosition.X, Y = options.TargetPosition.Y },
+                options?.Force,
+                options?.Timeout,
+                options?.Trial,
+                options?.Steps,
+                default,
+                options?.Strict);
 
         Task<JsonElement?> IFrame.EvalOnSelectorAllAsync(string selector, string expression, object arg)
             => EvalOnSelector.OnArrayAsync<JsonElement?>(

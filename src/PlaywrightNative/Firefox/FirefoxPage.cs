@@ -1066,7 +1066,19 @@ namespace PlaywrightNative.Firefox
 
         Task IPage.DispatchEventAsync(string selector, string type, object eventInit, PageDispatchEventOptions options) => Task.CompletedTask;
 
-        Task IPage.DragAndDropAsync(string source, string target, PageDragAndDropOptions options) => Task.CompletedTask;
+        Task IPage.DragAndDropAsync(string source, string target, PageDragAndDropOptions options)
+            => DragAndDropAsync(
+                source,
+                target,
+                options?.SourcePosition == null ? null : new Position { X = options.SourcePosition.X, Y = options.SourcePosition.Y },
+                options?.TargetPosition == null ? null : new Position { X = options.TargetPosition.X, Y = options.TargetPosition.Y },
+                options?.Force,
+                options?.NoWaitAfter,
+                options?.Timeout,
+                options?.Trial,
+                options?.Steps,
+                default,
+                options?.Strict);
 
         Task IPage.EmulateMediaAsync(PageEmulateMediaOptions options) => Task.CompletedTask;
 
@@ -1465,7 +1477,12 @@ namespace PlaywrightNative.Firefox
         Task<IResponse> IPage.WaitForResponseAsync(Func<IResponse, bool> urlOrPredicate, PageWaitForResponseOptions options)
             => WaitForResponseAsync(null, null, urlOrPredicate, options?.Timeout);
 
-        Task<IElementHandle> IPage.WaitForSelectorAsync(string selector, PageWaitForSelectorOptions options) => Task.FromResult<IElementHandle>(default!);
+        Task<IElementHandle> IPage.WaitForSelectorAsync(string selector, PageWaitForSelectorOptions options)
+            => WaitForSelectorAsync(
+                selector,
+                options?.State ?? WaitForSelectorState.Visible,
+                options?.Timeout,
+                options?.Strict);
 
         Task IPage.WaitForURLAsync(string url, PageWaitForURLOptions options) => Task.CompletedTask;
 

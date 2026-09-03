@@ -213,7 +213,14 @@ namespace PlaywrightNative.Helpers
                     proxy = hasLaunch.LaunchProxy;
                 }
 
-                using HttpClient client = CreateClient(ignoreTls, proxy, clientCertificates, initialClientCertificate, uri.Host, tlsCapture);
+                using HttpClient client = CreateClient(
+                    ignoreTls,
+                    proxy,
+                    clientCertificates,
+                    initialClientCertificate,
+                    uri.Host,
+                    tlsCapture,
+                    captureRawHeaders: string.Equals(uri.Scheme, "https", StringComparison.OrdinalIgnoreCase));
 
                 (HttpResponseMessage response, string finalUrl, byte[] body) = await SendWithRetriesAsync(
                     client,
@@ -494,7 +501,8 @@ namespace PlaywrightNative.Helpers
             IReadOnlyList<ClientCertificate> clientCertificates,
             X509Certificate2 initialClientCertificate,
             string initialHost,
-            TlsCapture tlsCapture)
+            TlsCapture tlsCapture,
+            bool captureRawHeaders = true)
         {
             SocketsHttpHandler handler = null;
             try
@@ -570,8 +578,10 @@ namespace PlaywrightNative.Helpers
 
                 APIRequestProxyConnect.Apply(handler, proxy, ignoreTls);
 
-                // Capture wire header order/casing for parity with Node's rawHeaders.
-                if (tlsCapture != null)
+                // Capture wire header order/casing. Skip on plain HTTP: the filter has
+                // raced connection teardown on macOS/Linux CI (ResponseEnded → "socket
+                // hang up"). HAR/raw-header consumers fall back to ReadRawHeaders.
+                if (tlsCapture != null && captureRawHeaders)
                 {
                     handler.PlaintextStreamFilter = (context, _) =>
                     {

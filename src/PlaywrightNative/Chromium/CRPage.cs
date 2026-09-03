@@ -3080,7 +3080,7 @@ namespace PlaywrightNative.Chromium
             {
                 latitude = geolocation.Latitude,
                 longitude = geolocation.Longitude,
-                accuracy = geolocation.Accuracy,
+                accuracy = geolocation.Accuracy ?? 0f,
             });
         }
 
