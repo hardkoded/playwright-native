@@ -237,9 +237,14 @@ namespace PlaywrightNative.Helpers
                 }
 
                 await ApplyOriginsAsync(context, state.Origins).ConfigureAwait(false);
-                if (replaceExisting || state.Credentials != null)
+
+                // Only touch WebAuthn when the payload includes a credentials
+                // field (including []). Cookie/localStorage-only restores must
+                // not call Credentials.InstallAsync — that exposes bindings and
+                // can hang under concurrent browser load.
+                if (state.Credentials != null)
                 {
-                    await ApplyCredentialsAsync(context, state.Credentials ?? new List<VirtualCredential>()).ConfigureAwait(false);
+                    await ApplyCredentialsAsync(context, state.Credentials).ConfigureAwait(false);
                 }
             }
             catch (Exception ex) when (ex is PlaywrightNativeException || ex is ArgumentException)
@@ -298,6 +303,7 @@ namespace PlaywrightNative.Helpers
                 }
             }
 
+            int restored = 0;
             foreach (VirtualCredential credential in credentials)
             {
                 if (credential == null || string.IsNullOrEmpty(credential.RpId))
@@ -311,9 +317,13 @@ namespace PlaywrightNative.Helpers
                     credential.UserHandle,
                     credential.PrivateKey,
                     credential.PublicKey).ConfigureAwait(false);
+                restored++;
             }
 
-            await context.Credentials.InstallAsync().ConfigureAwait(false);
+            if (restored > 0)
+            {
+                await context.Credentials.InstallAsync().ConfigureAwait(false);
+            }
         }
 
         private static JsonSerializerOptions CreateJsonOptions(bool writeIndented)
