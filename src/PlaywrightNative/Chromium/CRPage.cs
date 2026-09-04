@@ -1737,6 +1737,7 @@ namespace PlaywrightNative.Chromium
         internal async Task<IReadOnlyList<CRElementHandle>> QuerySelectorAllInFrameAsync(Frame frame, string selector)
         {
             SelectorQuery.EnsureSelector(selector);
+            DomVisibility.ThrowIfUnknownEngine(selector);
             if (FrameSelector.ContainsControl(selector))
             {
                 IReadOnlyList<IElementHandle> matches = await FrameSelector.QueryAllAsync(

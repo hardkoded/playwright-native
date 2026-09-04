@@ -3683,6 +3683,7 @@ namespace PlaywrightNative.WebKit
         internal async Task<IReadOnlyList<IElementHandle>> QuerySelectorAllInFrameAsync(WKFrame frame, string selector)
         {
             SelectorQuery.EnsureSelector(selector);
+            DomVisibility.ThrowIfUnknownEngine(selector);
             if (FrameSelector.ContainsControl(selector))
             {
                 return await FrameSelector.QueryAllAsync(
