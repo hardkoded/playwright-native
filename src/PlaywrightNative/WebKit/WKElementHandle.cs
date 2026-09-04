@@ -461,15 +461,15 @@ namespace PlaywrightNative.WebKit
 
         /// <inheritdoc/>
         public Task SetInputFilesAsync(string files, bool? noWaitAfter = default, float? timeout = default, bool? force = default)
-            => SetInputFilesFromPathsAsync(new[] { files }, timeout);
+            => SetInputFilesFromPathsAsync(new[] { files }, timeout, force);
 
         /// <inheritdoc/>
-        public Task SetInputFilesAsync(IEnumerable<string> files, bool? noWaitAfter = default, float? timeout = default)
-            => SetInputFilesFromPathsAsync(files, timeout);
+        public Task SetInputFilesAsync(IEnumerable<string> files, bool? noWaitAfter = default, float? timeout = default, bool? force = default)
+            => SetInputFilesFromPathsAsync(files, timeout, force);
 
         /// <inheritdoc/>
-        public Task SetInputFilesAsync(FilePayload files, bool? noWaitAfter = default, float? timeout = default)
-            => SetInputFilesFromJsonAsync(FilePayloadHelper.ToJson(files == null ? null : new[] { files }), timeout);
+        public Task SetInputFilesAsync(FilePayload files, bool? noWaitAfter = default, float? timeout = default, bool? force = default)
+            => SetInputFilesFromJsonAsync(FilePayloadHelper.ToJson(files == null ? null : new[] { files }), timeout, force);
 
         /// <inheritdoc/>
         public async Task TapAsync(Position position = default, IEnumerable<KeyboardModifier> modifiers = default, bool? force = default, bool? noWaitAfter = default, float? timeout = default, bool? trial = default, ActionScroll scroll = default)
@@ -689,16 +689,20 @@ namespace PlaywrightNative.WebKit
         private Task<IReadOnlyCollection<string>> SelectOptionFromJsonAsync(string json, float? timeout = default, bool? force = default, ActionScroll scroll = default)
             => SelectOptionAction.RunAsync(this, json, timeout, force, scroll);
 
-        private async Task SetInputFilesFromPathsAsync(IEnumerable<string> files, float? timeout)
+        private async Task SetInputFilesFromPathsAsync(IEnumerable<string> files, float? timeout, bool? force = default)
         {
             ResolvedInputFilePaths resolved = SetInputFilesPathHelper.Resolve(files);
             IElementHandle target = await SetInputFilesPathHelper.FollowLabelControlAsync(this).ConfigureAwait(false);
-            await WaitForElementStateHelper.WaitVisibleUnlessForcedAsync(target, force: null, timeout).ConfigureAwait(false);
-            await target.EvaluateAsync<bool>(ElementStateScript.ScrollIntoViewIfNeededFunction).ConfigureAwait(false);
+            await WaitForElementStateHelper.WaitVisibleUnlessForcedAsync(target, force, timeout).ConfigureAwait(false);
+            if (force != true)
+            {
+                await target.EvaluateAsync<bool>(ElementStateScript.ScrollIntoViewIfNeededFunction).ConfigureAwait(false);
+            }
+
             await SetInputFilesPathHelper.ValidateAgainstInputAsync(target, resolved).ConfigureAwait(false);
             if (resolved.IsDirectory)
             {
-                await SetInputFilesFromJsonAsync(FilePayloadHelper.ToJson(resolved.Payloads), timeout).ConfigureAwait(false);
+                await SetInputFilesFromJsonAsync(FilePayloadHelper.ToJson(resolved.Payloads), timeout, force).ConfigureAwait(false);
                 return;
             }
 
@@ -853,13 +857,19 @@ namespace PlaywrightNative.WebKit
             => SetInputFilesAsync(files, options?.NoWaitAfter, options?.Timeout, (options as LegacyElementHandleSetInputFilesOptions)?.Force);
 
         Task IElementHandle.SetInputFilesAsync(IEnumerable<string> files, ElementHandleSetInputFilesOptions options)
-            => SetInputFilesAsync(files, options?.NoWaitAfter, options?.Timeout);
+            => SetInputFilesFromPathsAsync(files, options?.Timeout, (options as LegacyElementHandleSetInputFilesOptions)?.Force);
 
         Task IElementHandle.SetInputFilesAsync(FilePayload files, ElementHandleSetInputFilesOptions options)
-            => SetInputFilesAsync(files, options?.NoWaitAfter, options?.Timeout);
+            => SetInputFilesFromJsonAsync(
+                FilePayloadHelper.ToJson(files == null ? null : new[] { files }),
+                options?.Timeout,
+                (options as LegacyElementHandleSetInputFilesOptions)?.Force);
 
         Task IElementHandle.SetInputFilesAsync(IEnumerable<FilePayload> files, ElementHandleSetInputFilesOptions options)
-            => SetInputFilesAsync(files, options?.NoWaitAfter, options?.Timeout);
+            => SetInputFilesFromJsonAsync(
+                FilePayloadHelper.ToJson(files),
+                options?.Timeout,
+                (options as LegacyElementHandleSetInputFilesOptions)?.Force);
 
         Task IElementHandle.TapAsync(ElementHandleTapOptions options)
             => TapAsync(options?.Position, options?.Modifiers, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial);
@@ -875,9 +885,17 @@ namespace PlaywrightNative.WebKit
         Task IElementHandle.UncheckAsync(ElementHandleUncheckOptions options)
             => UncheckAsync(options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial);
 
-        Task IElementHandle.WaitForElementStateAsync(ElementState state, ElementHandleWaitForElementStateOptions options) => Task.CompletedTask;
+        Task IElementHandle.WaitForElementStateAsync(ElementState state, ElementHandleWaitForElementStateOptions options)
+            => ElementHandleWaitHelper.WaitForElementStateAsync(this, state, options);
 
-        Task<IElementHandle> IElementHandle.WaitForSelectorAsync(string selector, ElementHandleWaitForSelectorOptions options) => Task.FromResult<IElementHandle>(default!);
+        Task<IElementHandle> IElementHandle.WaitForSelectorAsync(string selector, ElementHandleWaitForSelectorOptions options)
+            => ElementHandleWaitHelper.WaitForSelectorAsync(
+                this,
+                selector,
+                options,
+                QuerySelectorAsync,
+                QuerySelectorAllAsync,
+                _page.Context is IHasStrictSelectors strict && strict.StrictSelectors);
 #pragma warning restore SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
     }
 }

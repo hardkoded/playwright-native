@@ -680,9 +680,17 @@ namespace PlaywrightNative.Chromium
         Task IElementHandle.UncheckAsync(ElementHandleUncheckOptions options)
             => UncheckAsync(options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial);
 
-        Task IElementHandle.WaitForElementStateAsync(ElementState state, ElementHandleWaitForElementStateOptions options) => Task.CompletedTask;
+        Task IElementHandle.WaitForElementStateAsync(ElementState state, ElementHandleWaitForElementStateOptions options)
+            => ElementHandleWaitHelper.WaitForElementStateAsync(this, state, options);
 
-        Task<IElementHandle> IElementHandle.WaitForSelectorAsync(string selector, ElementHandleWaitForSelectorOptions options) => Task.FromResult<IElementHandle>(default!);
+        Task<IElementHandle> IElementHandle.WaitForSelectorAsync(string selector, ElementHandleWaitForSelectorOptions options)
+            => ElementHandleWaitHelper.WaitForSelectorAsync(
+                this,
+                selector,
+                options,
+                QuerySelectorAsync,
+                QuerySelectorAllAsync,
+                _crElement.Page.PublicPage?.Context is IHasStrictSelectors strict && strict.StrictSelectors);
 #pragma warning restore SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
     }
 }
