@@ -144,6 +144,7 @@ namespace PlaywrightNative.Helpers
             result.DeviceScaleFactor = options.DeviceScaleFactor;
             result.IsMobile = options.IsMobile;
             result.HasTouch = options.HasTouch;
+
             // Official options use nullable enums; unset must map to Null, not
             // default(T) (ForcedColors.Active / ReducedMotion.Reduce).
             result.ColorScheme = options.ColorScheme ?? ColorScheme.Null;
