@@ -2490,17 +2490,23 @@ namespace PlaywrightNative
 
         Task IPage.RemoveLocatorHandlerAsync(ILocator locator) => Task.CompletedTask;
 
-        Task<IAsyncDisposable> IPage.RouteAsync(string url, Action<IRoute> handler, PageRouteOptions options) => Task.FromResult<IAsyncDisposable>(default!);
+        Task<IAsyncDisposable> IPage.RouteAsync(string url, Action<IRoute> handler, PageRouteOptions options)
+            => RegisterRouteAsync(() => RouteAsync(url, handler, options?.Times));
 
-        Task<IAsyncDisposable> IPage.RouteAsync(Regex url, Action<IRoute> handler, PageRouteOptions options) => Task.FromResult<IAsyncDisposable>(default!);
+        Task<IAsyncDisposable> IPage.RouteAsync(Regex url, Action<IRoute> handler, PageRouteOptions options)
+            => RegisterRouteAsync(() => RouteAsync(url, handler, options?.Times));
 
-        Task<IAsyncDisposable> IPage.RouteAsync(Func<string, bool> url, Action<IRoute> handler, PageRouteOptions options) => Task.FromResult<IAsyncDisposable>(default!);
+        Task<IAsyncDisposable> IPage.RouteAsync(Func<string, bool> url, Action<IRoute> handler, PageRouteOptions options)
+            => RegisterRouteAsync(() => RouteAsync(url, handler, options?.Times));
 
-        Task<IAsyncDisposable> IPage.RouteAsync(string url, Func<IRoute, Task> handler, PageRouteOptions options) => Task.FromResult<IAsyncDisposable>(default!);
+        Task<IAsyncDisposable> IPage.RouteAsync(string url, Func<IRoute, Task> handler, PageRouteOptions options)
+            => RegisterRouteAsync(() => RouteAsync(url, handler, options?.Times));
 
-        Task<IAsyncDisposable> IPage.RouteAsync(Regex url, Func<IRoute, Task> handler, PageRouteOptions options) => Task.FromResult<IAsyncDisposable>(default!);
+        Task<IAsyncDisposable> IPage.RouteAsync(Regex url, Func<IRoute, Task> handler, PageRouteOptions options)
+            => RegisterRouteAsync(() => RouteAsync(url, handler, options?.Times));
 
-        Task<IAsyncDisposable> IPage.RouteAsync(Func<string, bool> url, Func<IRoute, Task> handler, PageRouteOptions options) => Task.FromResult<IAsyncDisposable>(default!);
+        Task<IAsyncDisposable> IPage.RouteAsync(Func<string, bool> url, Func<IRoute, Task> handler, PageRouteOptions options)
+            => RegisterRouteAsync(() => RouteAsync(url, handler, options?.Times));
 
         Task IPage.RouteFromHARAsync(string har, PageRouteFromHAROptions options) => Task.CompletedTask;
 
@@ -2699,6 +2705,19 @@ namespace PlaywrightNative
         Task<IWebSocket> IPage.WaitForWebSocketAsync(PageWaitForWebSocketOptions options) => Task.FromResult<IWebSocket>(default!);
 
         Task<IWorker> IPage.WaitForWorkerAsync(PageWaitForWorkerOptions options) => Task.FromResult<IWorker>(default!);
+
+        private static async Task<IAsyncDisposable> RegisterRouteAsync(Func<Task> register)
+        {
+            await register().ConfigureAwait(false);
+            return NoopAsyncDisposable.Instance;
+        }
+
+        private sealed class NoopAsyncDisposable : IAsyncDisposable
+        {
+            internal static readonly NoopAsyncDisposable Instance = new();
+
+            public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+        }
 #pragma warning restore SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
     }
 }
