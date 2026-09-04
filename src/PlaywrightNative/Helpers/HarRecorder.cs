@@ -1533,16 +1533,23 @@ namespace PlaywrightNative.Helpers
 
             internal async Task FlushAsync()
             {
-                Detach();
-
                 PendingEntry[] snapshot;
                 lock (_gate)
                 {
                     snapshot = _entries.ToArray();
                 }
 
+                // Capture bodies before Detach so page evaluate / protocol
+                // fallbacks still work (macOS WebKit CI was losing content.text).
                 foreach (PendingEntry pending in snapshot)
                 {
+                    if (pending.BodyTask == null
+                        && pending.Response != null
+                        && !_omitContent)
+                    {
+                        pending.BodyTask = CaptureBodyAsync(pending, pending.Response);
+                    }
+
                     if (pending.BodyTask == null || pending.BodyTask.IsCompleted)
                     {
                         continue;
@@ -1552,7 +1559,7 @@ namespace PlaywrightNative.Helpers
                     // (WebKit gzip / HTTP2). Unfinished chunked bodies stay at
                     // 250ms so context.CloseAsync cannot hang.
                     TimeSpan wait = pending.Response != null && string.IsNullOrEmpty(pending.FailureText)
-                        ? TimeSpan.FromSeconds(2)
+                        ? TimeSpan.FromSeconds(5)
                         : TimeSpan.FromMilliseconds(250);
                     try
                     {
@@ -1565,6 +1572,8 @@ namespace PlaywrightNative.Helpers
                     {
                     }
                 }
+
+                Detach();
 
                 JsonArray pages = _slimMode
                     ? new JsonArray()
@@ -1697,10 +1706,54 @@ namespace PlaywrightNative.Helpers
 
                 if (pending != null && !_omitContent)
                 {
-                    // Fetch at flush so WebKit getResponseBody runs after
-                    // navigation has settled (early fetches return empty).
-                    pending.BodyTask = Task.CompletedTask;
+                    // Start body capture while the page/network are still live.
+                    // WebKit often returns empty if getResponseBody runs too
+                    // early, so CaptureBodyAsync settles briefly then retries.
+                    pending.BodyTask = CaptureBodyAsync(pending, response);
                 }
+            }
+
+            private async Task CaptureBodyAsync(PendingEntry pending, IResponse response)
+            {
+                if (pending == null || response == null)
+                {
+                    return;
+                }
+
+                try
+                {
+                    await Task.Delay(50).ConfigureAwait(false);
+                    byte[] body = await ReadBodyWithTimeoutAsync(response, TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+                    if (body != null && body.Length > 0)
+                    {
+                        pending.Body = body;
+                        return;
+                    }
+
+                    // One more attempt after the response has had time to buffer.
+                    await Task.Delay(100).ConfigureAwait(false);
+                    body = await ReadBodyWithTimeoutAsync(response, TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+                    if (body != null && body.Length > 0)
+                    {
+                        pending.Body = body;
+                    }
+                }
+                catch (TimeoutException)
+                {
+                }
+                catch (PlaywrightNativeException)
+                {
+                }
+            }
+
+            private async Task<byte[]> ReadBodyWithTimeoutAsync(IResponse response, TimeSpan timeout)
+            {
+                if (response is PlaywrightNative.WebKit.WKResponse wkResponse)
+                {
+                    return await wkResponse.PrefetchBodyAsync().WaitAsync(timeout).ConfigureAwait(false);
+                }
+
+                return await response.GetBodyAsync().WaitAsync(timeout).ConfigureAwait(false);
             }
 
             private void OnRequestFailed(object sender, IRequest request)
@@ -2083,7 +2136,11 @@ namespace PlaywrightNative.Helpers
                         {
                             try
                             {
-                                body = await response.GetBodyAsync().WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+                                body = await response.GetBodyAsync().WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+                                if (body != null && body.Length > 0)
+                                {
+                                    pending.Body = body;
+                                }
                             }
                             catch (TimeoutException)
                             {

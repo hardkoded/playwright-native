@@ -106,7 +106,7 @@ jobs:
         chmod +x ./.github/workflows/no-puppeteer.sh
         ./.github/workflows/no-puppeteer.sh
     - name: Build
-      run: dotnet build ./src/PlaywrightNative.sln
+      run: dotnet build ./src/PlaywrightNative.sln -c Release
     - name: Disable AppArmor (Linux)
       if: matrix.os == 'ubuntu-latest'
       run: echo 0 | sudo tee /proc/sys/kernel/apparmor_restrict_unprivileged_userns || true
@@ -115,20 +115,22 @@ jobs:
       env:
         PRODUCT: CHROMIUM
       run: |
-        dotnet test ./src/PlaywrightNative.Tests/PlaywrightNative.Tests.csproj --no-build -f net10.0 -s src/PlaywrightNative.Tests/test.runsettings
+        dotnet test ./src/PlaywrightNative.Tests/PlaywrightNative.Tests.csproj --no-build -c Release -f net10.0 -s src/PlaywrightNative.Tests/test.runsettings
     - name: Test (Chromium, Linux headful)
       if: ${{ matrix.browser == 'chromium' && matrix.os == 'ubuntu-latest' && matrix.mode == 'headful' }}
       env:
         PRODUCT: CHROMIUM
+        HEADLESS: "false"
       run: |
         xvfb-run --auto-servernum --server-args="-screen 0 1280x960x24" -- \
-          dotnet test ./src/PlaywrightNative.Tests/PlaywrightNative.Tests.csproj --no-build -f net10.0 -s src/PlaywrightNative.Tests/test.runsettings
+          dotnet test ./src/PlaywrightNative.Tests/PlaywrightNative.Tests.csproj --no-build -c Release -f net10.0 -s src/PlaywrightNative.Tests/test.runsettings
     - name: Test (Chromium, Windows)
       if: ${{ matrix.browser == 'chromium' && matrix.os == 'windows-latest' }}
       env:
         PRODUCT: CHROMIUM
+        HEADLESS: ${{ matrix.mode == 'headless' && 'true' || 'false' }}
       run: |
-        dotnet test ./src/PlaywrightNative.Tests/PlaywrightNative.Tests.csproj --no-build -f net10.0 -s src/PlaywrightNative.Tests/test.runsettings
+        dotnet test ./src/PlaywrightNative.Tests/PlaywrightNative.Tests.csproj --no-build -c Release -f net10.0 -s src/PlaywrightNative.Tests/test.runsettings
     - name: Test (WebKit)
       if: matrix.browser == 'webkit'
       env:
@@ -144,4 +146,4 @@ jobs:
         # AddScriptTag/AddStyleTag, EmulateMedia, PDF, screenshots, SetContent,
         # SetViewportSize) and the macOS-14 inner-target hang. Retire entries
         # as the underlying work lands.
-        dotnet test ./src/PlaywrightNative.Tests/PlaywrightNative.Tests.csproj --no-build -f net10.0 -s src/PlaywrightNative.Tests/test.runsettings
+        dotnet test ./src/PlaywrightNative.Tests/PlaywrightNative.Tests.csproj --no-build -c Release -f net10.0 -s src/PlaywrightNative.Tests/test.runsettings

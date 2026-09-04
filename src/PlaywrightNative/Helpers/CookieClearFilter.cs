@@ -18,6 +18,7 @@ using System;
 using System.Collections.Generic;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -27,6 +28,54 @@ namespace PlaywrightNative.Helpers
     /// </summary>
     internal static class CookieClearFilter
     {
+        /// <summary>
+        /// Clears cookies using official <see cref="BrowserContextClearCookiesOptions"/> filters.
+        /// When every filter is omitted, invokes <paramref name="clearAll"/>.
+        /// </summary>
+        /// <param name="context">The browser context.</param>
+        /// <param name="options">Optional name/domain/path filters.</param>
+        /// <param name="clearAll">Callback that clears the entire cookie store.</param>
+        /// <returns>A task that completes when matching cookies have been removed.</returns>
+        internal static Task ClearAsync(
+            IBrowserContext context,
+            BrowserContextClearCookiesOptions options,
+            Func<Task> clearAll)
+        {
+            if (context == null)
+            {
+                throw new ArgumentNullException(nameof(context));
+            }
+
+            if (clearAll == null)
+            {
+                throw new ArgumentNullException(nameof(clearAll));
+            }
+
+            if (options == null)
+            {
+                return clearAll();
+            }
+
+            string name = FirstNonEmpty(options.Name, options.NameString);
+            string domain = FirstNonEmpty(options.Domain, options.DomainString);
+            string path = FirstNonEmpty(options.Path, options.PathString);
+            Regex nameRegex = options.NameRegex;
+            Regex domainRegex = options.DomainRegex;
+            Regex pathRegex = options.PathRegex;
+
+            if (string.IsNullOrEmpty(name)
+                && string.IsNullOrEmpty(domain)
+                && string.IsNullOrEmpty(path)
+                && nameRegex == null
+                && domainRegex == null
+                && pathRegex == null)
+            {
+                return clearAll();
+            }
+
+            return ClearAsync(context, name, domain, path, nameRegex, domainRegex, pathRegex);
+        }
+
         /// <summary>
         /// Deletes cookies that match any supplied filter. When every filter is
         /// omitted, clears the entire store.
@@ -100,6 +149,16 @@ namespace PlaywrightNative.Helpers
             {
                 await context.AddCookiesAsync(toExpire).ConfigureAwait(false);
             }
+        }
+
+        private static string FirstNonEmpty(string left, string right)
+        {
+            if (!string.IsNullOrEmpty(left))
+            {
+                return left;
+            }
+
+            return string.IsNullOrEmpty(right) ? null : right;
         }
 
         private static bool Matches(

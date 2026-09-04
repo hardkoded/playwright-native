@@ -1740,7 +1740,7 @@ namespace PlaywrightNative.Chromium
 #pragma warning disable SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
         Task<IAsyncDisposable> IBrowserContext.AddInitScriptAsync(string script, string scriptPath) => AddInitScriptAsync(script, scriptPath);
 
-        Task IBrowserContext.ClearCookiesAsync(BrowserContextClearCookiesOptions options) => ClearCookiesAsync();
+        Task IBrowserContext.ClearCookiesAsync(BrowserContextClearCookiesOptions options) => CookieClearFilter.ClearAsync(this, options, ClearCookiesAsync);
 
         Task IBrowserContext.CloseAsync(BrowserContextCloseOptions options) => CloseAsync(options?.Reason);
 

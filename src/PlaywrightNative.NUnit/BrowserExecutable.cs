@@ -170,7 +170,11 @@ public static class BrowserExecutable
             Assert.Ignore($"{label} executable not available (download skipped or failed).");
         }
 
-        return new BrowserTypeLaunchOptions { ExecutablePath = path };
+        bool headless = !string.Equals(
+            Environment.GetEnvironmentVariable("HEADLESS"),
+            "false",
+            StringComparison.OrdinalIgnoreCase);
+        return new BrowserTypeLaunchOptions { ExecutablePath = path, Headless = headless };
     }
 
     /// <summary>
