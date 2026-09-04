@@ -98,7 +98,7 @@ namespace PlaywrightNative.Helpers
             if (handle == null)
             {
                 string prefix = string.IsNullOrEmpty(apiName) ? string.Empty : apiName + ": ";
-                throw new PlaywrightNativeException(prefix + "Failed to find element matching selector \"" + selector + "\"");
+                throw new PlaywrightNativeException(prefix + "No node found for selector: " + selector);
             }
 
             try
