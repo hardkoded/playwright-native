@@ -1452,7 +1452,8 @@ namespace PlaywrightNative.Firefox
         Task<IResponse> IPage.WaitForNavigationAsync(PageWaitForNavigationOptions options)
             => WaitForNavigationAsync(options?.Url, options?.UrlRegex, options?.UrlFunc, options?.Timeout, options?.WaitUntil ?? default);
 
-        Task<IPage> IPage.WaitForPopupAsync(PageWaitForPopupOptions options) => Task.FromResult<IPage>(default!);
+        Task<IPage> IPage.WaitForPopupAsync(PageWaitForPopupOptions options)
+            => WaitForEventAsync(PageEvent.Popup, options?.Predicate, options?.Timeout);
 
         Task<IRequest> IPage.WaitForRequestAsync(string urlOrPredicate, PageWaitForRequestOptions options)
             => WaitForRequestAsync(urlOrPredicate, null, null, options?.Timeout);

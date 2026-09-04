@@ -8363,7 +8363,10 @@ namespace PlaywrightNative.WebKit
 
         Task<IResponse> IPage.RunAndWaitForNavigationAsync(Func<Task> action, PageRunAndWaitForNavigationOptions options) => Task.FromResult<IResponse>(default!);
 
-        Task<IPage> IPage.RunAndWaitForPopupAsync(Func<Task> action, PageRunAndWaitForPopupOptions options) => Task.FromResult<IPage>(default!);
+        Task<IPage> IPage.RunAndWaitForPopupAsync(Func<Task> action, PageRunAndWaitForPopupOptions options)
+            => RunAndWaitInternalAsync(
+                action,
+                WaitForEventAsync(PageEvent.Popup, options?.Predicate, options?.Timeout));
 
         Task<IRequest> IPage.RunAndWaitForRequestAsync(Func<Task> action, string urlOrPredicate, PageRunAndWaitForRequestOptions options)
             => RunAndWaitInternalAsync(action, WaitForRequestAsync(urlOrPredicate, null, null, options?.Timeout));
@@ -8510,7 +8513,8 @@ namespace PlaywrightNative.WebKit
         Task<IResponse> IPage.WaitForNavigationAsync(PageWaitForNavigationOptions options)
             => WaitForNavigationAsync(options?.Url, null, null, options?.Timeout, options?.WaitUntil ?? default);
 
-        Task<IPage> IPage.WaitForPopupAsync(PageWaitForPopupOptions options) => Task.FromResult<IPage>(default!);
+        Task<IPage> IPage.WaitForPopupAsync(PageWaitForPopupOptions options)
+            => WaitForEventAsync(PageEvent.Popup, options?.Predicate, options?.Timeout);
 
         Task<IRequest> IPage.WaitForRequestAsync(string urlOrPredicate, PageWaitForRequestOptions options)
             => WaitForRequestAsync(urlOrPredicate, null, null, options?.Timeout);
