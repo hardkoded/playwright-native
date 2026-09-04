@@ -190,17 +190,25 @@ namespace PlaywrightNative.Helpers
                 return;
             }
 
+            // Match official dragTo: bring the source into view, press, then bring the
+            // target into view before releasing. Scrolling both first can push the
+            // source out of a nested scroller so mousedown never hits it.
             if (scroll != ActionScroll.None)
             {
                 await ScrollIfNeededAsync(sourceHandle).ConfigureAwait(false);
-                await ScrollIfNeededAsync(targetHandle).ConfigureAwait(false);
             }
 
             (float sx, float sy) = await PointAsync(sourceHandle, sourcePosition).ConfigureAwait(false);
-            (float tx, float ty) = await PointAsync(targetHandle, targetPosition).ConfigureAwait(false);
             int moveSteps = steps ?? 1;
             await page.Mouse.MoveAsync(sx, sy).ConfigureAwait(false);
             await page.Mouse.DownAsync().ConfigureAwait(false);
+
+            if (scroll != ActionScroll.None)
+            {
+                await ScrollIfNeededAsync(targetHandle).ConfigureAwait(false);
+            }
+
+            (float tx, float ty) = await PointAsync(targetHandle, targetPosition).ConfigureAwait(false);
             await page.Mouse.MoveAsync(tx, ty, steps: moveSteps).ConfigureAwait(false);
             await page.Mouse.UpAsync().ConfigureAwait(false);
         }

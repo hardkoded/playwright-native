@@ -493,7 +493,7 @@ namespace PlaywrightNative.WebKit
                 options?.Timeout,
                 options?.Trial,
                 options?.Steps,
-                default,
+                ActionScrollBridge.FromScrollOption(options?.Scroll),
                 options?.Strict);
 
         Task<JsonElement?> IFrame.EvalOnSelectorAllAsync(string selector, string expression, object arg)

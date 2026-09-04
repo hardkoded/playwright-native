@@ -2263,7 +2263,7 @@ namespace PlaywrightNative
                 options?.Timeout,
                 options?.Trial,
                 options?.Steps,
-                default,
+                ActionScrollBridge.FromScrollOption(options?.Scroll),
                 options?.Strict);
 
         async Task IPage.EmulateMediaAsync(PageEmulateMediaOptions options)
