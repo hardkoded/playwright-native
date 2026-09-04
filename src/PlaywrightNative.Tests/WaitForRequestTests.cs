@@ -43,11 +43,18 @@ namespace PlaywrightNative.Tests
             await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
 
-            Task<IRequest> waitTask = page.WaitForRequestAsync("data:text/html*");
-            await page.GoToAsync("data:text/html,wait-for-request-marker").ConfigureAwait(false);
+            await page.GoToAsync(TestConstants.EmptyPage).ConfigureAwait(false);
+            string url = TestConstants.ServerUrl + "/digits/2.png";
+            Task<IRequest> waitTask = page.WaitForRequestAsync(url);
+            await page.EvaluateAsync(
+                @"() => {
+                    void fetch('/digits/1.png');
+                    void fetch('/digits/2.png');
+                    void fetch('/digits/3.png');
+                }").ConfigureAwait(false);
             IRequest request = await waitTask.ConfigureAwait(false);
             Assert.That(request, Is.Not.Null);
-            Assert.That(request.Url, Does.StartWith("data:text/html"));
+            Assert.That(request.Url, Is.EqualTo(url));
             Assert.That(request.Method, Is.EqualTo("GET"));
         }
 
@@ -60,11 +67,11 @@ namespace PlaywrightNative.Tests
             await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
 
-            await page.GoToAsync("data:text/html,wave342-requests").ConfigureAwait(false);
+            await page.GoToAsync(TestConstants.EmptyPage).ConfigureAwait(false);
 
             IReadOnlyList<IRequest> requests = await page.RequestsAsync().ConfigureAwait(false);
             Assert.That(requests, Is.Not.Null);
-            Assert.That(requests.Select(item => item.Url), Has.Some.StartWith("data:text/html"));
+            Assert.That(requests.Select(item => item.Url), Has.Some.EqualTo(TestConstants.EmptyPage));
         }
 
         [PlaywrightTest("page-wait-for-request.spec.ts", "RunAndWaitForRequestAsync waits for GoTo")]
@@ -77,10 +84,11 @@ namespace PlaywrightNative.Tests
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
 
             IRequest request = await page.RunAndWaitForRequestAsync(
-                () => page.GoToAsync("data:text/html,run-wait-request")).ConfigureAwait(false);
+                () => page.GoToAsync(TestConstants.EmptyPage),
+                TestConstants.EmptyPage).ConfigureAwait(false);
 
             Assert.That(request, Is.Not.Null);
-            Assert.That(request.Url, Does.StartWith("data:text/html"));
+            Assert.That(request.Url, Is.EqualTo(TestConstants.EmptyPage));
         }
 
         [PlaywrightTest("page-wait-for-request.spec.ts", "RunAndWaitForRequestFinishedAsync waits for GoTo")]
@@ -93,10 +101,10 @@ namespace PlaywrightNative.Tests
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
 
             IRequest request = await page.RunAndWaitForRequestFinishedAsync(
-                () => page.GoToAsync("data:text/html,run-wait-finished")).ConfigureAwait(false);
+                () => page.GoToAsync(TestConstants.EmptyPage)).ConfigureAwait(false);
 
             Assert.That(request, Is.Not.Null);
-            Assert.That(request.Url, Does.StartWith("data:text/html"));
+            Assert.That(request.Url, Is.EqualTo(TestConstants.EmptyPage));
         }
 
         [PlaywrightTest("page-wait-for-request.spec.ts", "should work with predicate")]
@@ -108,10 +116,17 @@ namespace PlaywrightNative.Tests
             await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
 
-            Task<IRequest> waitTask = page.WaitForRequestAsync(r => r.Url.Contains("wait-for-req-pred", StringComparison.Ordinal));
-            await page.GoToAsync("data:text/html,wait-for-req-pred").ConfigureAwait(false);
+            await page.GoToAsync(TestConstants.EmptyPage).ConfigureAwait(false);
+            string url = TestConstants.ServerUrl + "/digits/2.png";
+            Task<IRequest> waitTask = page.WaitForRequestAsync(r => r.Url == url);
+            await page.EvaluateAsync(
+                @"() => {
+                    void fetch('/digits/1.png');
+                    void fetch('/digits/2.png');
+                    void fetch('/digits/3.png');
+                }").ConfigureAwait(false);
             IRequest request = await waitTask.ConfigureAwait(false);
-            Assert.That(request.Url, Does.Contain("wait-for-req-pred"));
+            Assert.That(request.Url, Is.EqualTo(url));
         }
 
         [PlaywrightTest("page-wait-for-response.spec.ts", "should work")]
@@ -123,11 +138,18 @@ namespace PlaywrightNative.Tests
             await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
 
-            Task<IResponse> waitTask = page.WaitForResponseAsync(new Regex("wait-for-resp"));
-            await page.GoToAsync("data:text/html,wait-for-resp").ConfigureAwait(false);
+            await page.GoToAsync(TestConstants.EmptyPage).ConfigureAwait(false);
+            string url = TestConstants.ServerUrl + "/digits/2.png";
+            Task<IResponse> waitTask = page.WaitForResponseAsync(url);
+            await page.EvaluateAsync(
+                @"() => {
+                    void fetch('/digits/1.png');
+                    void fetch('/digits/2.png');
+                    void fetch('/digits/3.png');
+                }").ConfigureAwait(false);
             IResponse response = await waitTask.ConfigureAwait(false);
             Assert.That(response, Is.Not.Null);
-            Assert.That(response.Url, Does.Contain("wait-for-resp"));
+            Assert.That(response.Url, Is.EqualTo(url));
             Assert.That(response.Ok, Is.True);
         }
 
@@ -141,10 +163,11 @@ namespace PlaywrightNative.Tests
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
 
             IResponse response = await page.RunAndWaitForResponseAsync(
-                () => page.GoToAsync("data:text/html,run-wait-response")).ConfigureAwait(false);
+                () => page.GoToAsync(TestConstants.EmptyPage),
+                TestConstants.EmptyPage).ConfigureAwait(false);
 
             Assert.That(response, Is.Not.Null);
-            Assert.That(response.Url, Does.Contain("run-wait-response"));
+            Assert.That(response.Url, Is.EqualTo(TestConstants.EmptyPage));
             Assert.That(response.Ok, Is.True);
         }
 
@@ -187,11 +210,11 @@ namespace PlaywrightNative.Tests
             await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
 
-            Task<IRequest> waitTask = page.WaitForRequestFinishedAsync("data:text/html*");
-            await page.GoToAsync("data:text/html,wait-for-req-finished").ConfigureAwait(false);
+            Task<IRequest> waitTask = page.WaitForRequestFinishedAsync(TestConstants.EmptyPage);
+            await page.GoToAsync(TestConstants.EmptyPage).ConfigureAwait(false);
             IRequest request = await waitTask.ConfigureAwait(false);
             Assert.That(request, Is.Not.Null);
-            Assert.That(request.Url, Does.StartWith("data:text/html"));
+            Assert.That(request.Url, Is.EqualTo(TestConstants.EmptyPage));
             Assert.That(request.Method, Is.EqualTo("GET"));
         }
 
@@ -204,10 +227,10 @@ namespace PlaywrightNative.Tests
             await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
 
-            Task<IRequest> waitTask = page.WaitForRequestFinishedAsync(new Regex("wait-for-req-fin-re"));
-            await page.GoToAsync("data:text/html,wait-for-req-fin-re").ConfigureAwait(false);
+            Task<IRequest> waitTask = page.WaitForRequestFinishedAsync(new Regex(@"empty\.html"));
+            await page.GoToAsync(TestConstants.EmptyPage).ConfigureAwait(false);
             IRequest request = await waitTask.ConfigureAwait(false);
-            Assert.That(request.Url, Does.Contain("wait-for-req-fin-re"));
+            Assert.That(request.Url, Does.Contain("empty.html"));
         }
 
         [PlaywrightTest("page-event-request.spec.ts", "should work with predicate")]
@@ -220,10 +243,10 @@ namespace PlaywrightNative.Tests
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
 
             Task<IRequest> waitTask = page.WaitForRequestFinishedAsync(
-                r => r.Url.Contains("wait-for-req-fin-pred", StringComparison.Ordinal));
-            await page.GoToAsync("data:text/html,wait-for-req-fin-pred").ConfigureAwait(false);
+                r => r.Url.Contains("empty.html", StringComparison.Ordinal));
+            await page.GoToAsync(TestConstants.EmptyPage).ConfigureAwait(false);
             IRequest request = await waitTask.ConfigureAwait(false);
-            Assert.That(request.Url, Does.Contain("wait-for-req-fin-pred"));
+            Assert.That(request.Url, Does.Contain("empty.html"));
         }
 
         [PlaywrightTest("page-event-request.spec.ts", "should timeout")]

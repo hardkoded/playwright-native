@@ -336,13 +336,34 @@ namespace PlaywrightNative.Chromium
         }
 
 #pragma warning disable SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
-        Task<IAsyncDisposable> ITracing.GroupAsync(string name, TracingGroupOptions options) => Task.FromResult<IAsyncDisposable>(default!);
+        async Task<IAsyncDisposable> ITracing.GroupAsync(string name, TracingGroupOptions options)
+        {
+            await GroupAsync(name).ConfigureAwait(false);
+            return new GroupScope(this);
+        }
 
-        Task ITracing.StartChunkAsync(TracingStartChunkOptions options) => Task.CompletedTask;
+        Task ITracing.StartChunkAsync(TracingStartChunkOptions options)
+            => StartChunkAsync(options?.Name, options?.Title);
 
-        Task<IAsyncDisposable> ITracing.StartHarAsync(string path, TracingStartHarOptions options) => Task.FromResult<IAsyncDisposable>(default!);
+        Task<IAsyncDisposable> ITracing.StartHarAsync(string path, TracingStartHarOptions options)
+            => StartHarAsync(
+                path,
+                options?.Content ?? default,
+                options?.Mode ?? default,
+                options?.UrlFilter ?? options?.UrlFilterString,
+                options?.UrlFilterRegex);
 
-        Task ITracing.StopChunkAsync(TracingStopChunkOptions options) => Task.CompletedTask;
+        Task ITracing.StopChunkAsync(TracingStopChunkOptions options)
+            => StopChunkAsync(options?.Path);
+
+        private sealed class GroupScope : IAsyncDisposable
+        {
+            private readonly CRTracing _owner;
+
+            internal GroupScope(CRTracing owner) => _owner = owner;
+
+            public ValueTask DisposeAsync() => new ValueTask(_owner.GroupEndAsync());
+        }
 #pragma warning restore SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
     }
 }

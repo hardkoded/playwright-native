@@ -465,8 +465,11 @@ namespace PlaywrightNative.Helpers
                 return Microsoft.Playwright.SameSiteAttribute.None;
             }
 
-            // Official Chromium: sameSite ?? 'Lax'. WebKit reports the engine value.
-            return webKit ? default : Microsoft.Playwright.SameSiteAttribute.Lax;
+            // Official Chromium: sameSite ?? 'Lax'. WebKit macOS/Linux also default to
+            // Lax when the engine omits the field; Windows WebKit reports None.
+            return webKit && OperatingSystem.IsWindows()
+                ? Microsoft.Playwright.SameSiteAttribute.None
+                : Microsoft.Playwright.SameSiteAttribute.Lax;
         }
     }
 }
