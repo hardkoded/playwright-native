@@ -263,14 +263,23 @@ namespace PlaywrightNative.Chromium
             }
 
             browser._adoptingExistingTargets = false;
-            if (!persistent && processManager != null && headless)
+            if (!persistent && processManager != null)
             {
-                // Official launch() uses --no-startup-window. Websocket launch
-                // still needs leftover about:blank to start; close those pages
-                // so Target.setDiscoverTargets sees none. Headed Chrome must keep
-                // at least one window or Target.createTarget fails with
-                // "Failed to open a new tab".
-                await browser.CloseAutomaticLaunchPagesAsync().ConfigureAwait(false);
+                if (headless)
+                {
+                    // Official launch() uses --no-startup-window. Websocket launch
+                    // still needs leftover about:blank to start; close those pages
+                    // so Target.setDiscoverTargets sees none.
+                    await browser.CloseAutomaticLaunchPagesAsync().ConfigureAwait(false);
+                }
+                else
+                {
+                    // Headed Chrome must keep at least one window or
+                    // Target.createTarget fails with "Failed to open a new tab".
+                    // Still hide leftover launch contexts from browser.Contexts()
+                    // so launch() matches official "no contexts until newContext".
+                    browser.OmitAutomaticLaunchContextsFromPublicList();
+                }
             }
 
             return browser;
@@ -304,19 +313,30 @@ namespace PlaywrightNative.Chromium
                 }
             }
 
+            OmitAutomaticLaunchContextsFromPublicList();
+        }
+
+        /// <summary>
+        /// Drops leftover websocket-launch contexts from <see cref="Contexts"/> while
+        /// keeping any open pages attached (needed for headed <c>createTarget</c>).
+        /// </summary>
+        internal void OmitAutomaticLaunchContextsFromPublicList()
+        {
             // Official launch() has no contexts until newContext(). Leftover
-            // about:blank adopted Chrome's default profile; drop the empty
-            // tracking entry (it cannot Target.disposeBrowserContext).
+            // about:blank adopted Chrome's default profile; drop it from the
+            // public Contexts() list. Keep the CRBrowserContext in _contexts
+            // while a headed about:blank page is still attached (createTarget
+            // needs that window); only discard empty tracking entries.
             lock (_contextOrderLock)
             {
                 List<string> leftover = new List<string>(_contextOrder);
                 foreach (string id in leftover)
                 {
+                    _contextOrder.Remove(id);
                     if (_contexts.TryGetValue(id, out CRBrowserContext context)
                         && context.Pages.Count == 0)
                     {
                         _contexts.TryRemove(id, out _);
-                        _contextOrder.Remove(id);
                     }
                 }
             }
@@ -496,9 +516,18 @@ namespace PlaywrightNative.Chromium
             CRBrowserContext created = new CRBrowserContext(this, browserContextId);
             if (_contexts.TryAdd(browserContextId, created))
             {
-                lock (_contextOrderLock)
+                // Launch (non-persistent) must not publish auto-adopted chrome
+                // profile contexts into browser.Contexts() — only
+                // Target.createBrowserContext (NewContextAsync) does. Headed
+                // websocket launch keeps about:blank attached for createTarget
+                // but still matches official "no contexts until newContext".
+                bool publish = _processManager == null || _defaultContext != null;
+                if (publish)
                 {
-                    _contextOrder.Add(browserContextId);
+                    lock (_contextOrderLock)
+                    {
+                        _contextOrder.Add(browserContextId);
+                    }
                 }
 
                 return created;

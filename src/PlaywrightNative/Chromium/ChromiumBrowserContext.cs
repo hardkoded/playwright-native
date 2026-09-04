@@ -217,7 +217,8 @@ namespace PlaywrightNative.Chromium
         }
 
         /// <inheritdoc/>
-        IReadOnlyDictionary<string, string> IHasExtraHttpHeaders.ExtraHttpHeaders => _extraHttpHeaders;
+        IReadOnlyDictionary<string, string> IHasExtraHttpHeaders.ExtraHttpHeaders
+            => BuildExtraHeaders() ?? _extraHttpHeaders;
 
         IReadOnlyCollection<string> IHasStorageStateInternals.VisitedOrigins
         {

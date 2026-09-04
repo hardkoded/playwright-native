@@ -2187,13 +2187,21 @@ namespace PlaywrightNative.Helpers
                 throw new PlaywrightNativeException(NotAttachedMessage);
             }
 
-            if (result == "notvisible")
+            if (result == "notvisible" || result == "notinviewport")
             {
-                throw new PlaywrightNativeException(NotVisibleMessage);
-            }
+                // visibility:hidden still has a layout box; force clicks use it.
+                // Some engines report empty client rects for hidden controls.
+                ElementHandleBoundingBoxResult box = await handle.BoundingBoxAsync().ConfigureAwait(false);
+                if (box != null && box.Width > 0 && box.Height > 0)
+                {
+                    return;
+                }
 
-            if (result == "notinviewport")
-            {
+                if (result == "notvisible")
+                {
+                    throw new PlaywrightNativeException(NotVisibleMessage);
+                }
+
                 throw new PlaywrightNativeException(OutsideViewportMessage + "\nelement is outside of the viewport");
             }
         }
