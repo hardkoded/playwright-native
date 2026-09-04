@@ -21,6 +21,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using Microsoft.Playwright;
+using PlaywrightNative.Compat;
 using PlaywrightNative.Helpers;
 
 namespace PlaywrightNative.WebKit
@@ -459,7 +460,7 @@ namespace PlaywrightNative.WebKit
             => SetInputFilesFromJsonAsync(FilePayloadHelper.ToJson(files), timeout, force, scroll);
 
         /// <inheritdoc/>
-        public Task SetInputFilesAsync(string files, bool? noWaitAfter = default, float? timeout = default)
+        public Task SetInputFilesAsync(string files, bool? noWaitAfter = default, float? timeout = default, bool? force = default)
             => SetInputFilesFromPathsAsync(new[] { files }, timeout);
 
         /// <inheritdoc/>
@@ -773,11 +774,17 @@ namespace PlaywrightNative.WebKit
         Task IElementHandle.DispatchEventAsync(string type, object eventInit)
             => ElementDispatchEventAction.RunAsync(this, type, eventInit, default);
 
-        Task<T> IElementHandle.EvalOnSelectorAllAsync<T>(string selector, string expression, object arg) => Task.FromResult<T>(default!);
+        Task<T> IElementHandle.EvalOnSelectorAllAsync<T>(string selector, string expression, object arg)
+            => EvalOnSelector.OnArrayAsync<T>(
+                EvaluateHandleAsync(EvalOnSelector.ElementQuerySelectorAllExpression(selector)),
+                expression,
+                arg);
 
-        Task<JsonElement?> IElementHandle.EvalOnSelectorAsync(string selector, string expression, object arg) => Task.FromResult<JsonElement?>(default!);
+        Task<JsonElement?> IElementHandle.EvalOnSelectorAsync(string selector, string expression, object arg)
+            => EvalOnSelector.OnHandleAsync<JsonElement?>(QuerySelectorAsync(selector), selector, expression, arg, "elementHandle.$eval");
 
-        Task<T> IElementHandle.EvalOnSelectorAsync<T>(string selector, string expression, object arg) => Task.FromResult<T>(default!);
+        Task<T> IElementHandle.EvalOnSelectorAsync<T>(string selector, string expression, object arg)
+            => EvalOnSelector.OnHandleAsync<T>(QuerySelectorAsync(selector), selector, expression, arg, "elementHandle.$eval");
 
         Task IElementHandle.FillAsync(string value, ElementHandleFillOptions options)
             => FillAsync(value, options?.NoWaitAfter, options?.Timeout, options?.Force);
@@ -785,11 +792,19 @@ namespace PlaywrightNative.WebKit
         Task IElementHandle.HoverAsync(ElementHandleHoverOptions options)
             => HoverAsync(options?.Position, options?.Modifiers, options?.Force, options?.Timeout, options?.Trial);
 
-        Task<string> IElementHandle.InputValueAsync(ElementHandleInputValueOptions options)
-            => EvaluateFunctionAsync<string>(ElementStateScript.InputValueFunction);
+        async Task<string> IElementHandle.InputValueAsync(ElementHandleInputValueOptions options)
+        {
+            await WaitForElementStateHelper.WaitAsync(this, ElementState.Visible, options?.Timeout).ConfigureAwait(false);
+            return await EvaluateFunctionAsync<string>(ElementStateScript.InputValueFunction).ConfigureAwait(false);
+        }
 
         Task IElementHandle.PressAsync(string key, ElementHandlePressOptions options)
-            => PressAsync(key, options?.Delay, options?.NoWaitAfter, options?.Timeout);
+            => PressAsync(
+                key,
+                options?.Delay,
+                options?.NoWaitAfter,
+                options?.Timeout,
+                force: (options as LegacyElementHandlePressOptions)?.Force);
 
         Task<byte[]> IElementHandle.ScreenshotAsync(ElementHandleScreenshotOptions options)
             => ScreenshotAsync(
@@ -835,7 +850,7 @@ namespace PlaywrightNative.WebKit
                 : UncheckAsync(options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial);
 
         Task IElementHandle.SetInputFilesAsync(string files, ElementHandleSetInputFilesOptions options)
-            => SetInputFilesAsync(files, options?.NoWaitAfter, options?.Timeout);
+            => SetInputFilesAsync(files, options?.NoWaitAfter, options?.Timeout, (options as LegacyElementHandleSetInputFilesOptions)?.Force);
 
         Task IElementHandle.SetInputFilesAsync(IEnumerable<string> files, ElementHandleSetInputFilesOptions options)
             => SetInputFilesAsync(files, options?.NoWaitAfter, options?.Timeout);
@@ -850,7 +865,12 @@ namespace PlaywrightNative.WebKit
             => TapAsync(options?.Position, options?.Modifiers, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial);
 
         Task IElementHandle.TypeAsync(string text, ElementHandleTypeOptions options)
-            => TypeAsync(text, options?.Delay, options?.NoWaitAfter, options?.Timeout);
+            => TypeAsync(
+                text,
+                options?.Delay,
+                options?.NoWaitAfter,
+                options?.Timeout,
+                force: (options as LegacyElementHandleTypeOptions)?.Force);
 
         Task IElementHandle.UncheckAsync(ElementHandleUncheckOptions options)
             => UncheckAsync(options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial);

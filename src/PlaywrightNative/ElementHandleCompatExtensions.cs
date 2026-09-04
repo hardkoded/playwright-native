@@ -17,9 +17,12 @@
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
+
 using Microsoft.Playwright;
+using PlaywrightNative.Chromium;
 using PlaywrightNative.Compat;
 using PlaywrightNative.Helpers;
+using PlaywrightNative.WebKit;
 using static PlaywrightNative.Helpers.CompatCollections;
 
 namespace PlaywrightNative
@@ -124,7 +127,12 @@ namespace PlaywrightNative
             this IElementHandle handle,
             float? timeout = default,
             ActionScroll scroll = default)
-            => handle.FocusAsync();
+            => handle switch
+            {
+                ChromiumElementHandle chromium => chromium.FocusAsync(timeout, scroll),
+                WKElementHandle webkit => webkit.FocusAsync(timeout, scroll),
+                _ => handle.FocusAsync(),
+            };
 
         /// <summary>Legacy expanded-parameter hover.</summary>
         public static Task HoverAsync(
@@ -273,10 +281,11 @@ namespace PlaywrightNative
             float? timeout = default,
             bool? force = default,
             ActionScroll scroll = default)
-            => handle.SetInputFilesAsync(files, new ElementHandleSetInputFilesOptions
+            => handle.SetInputFilesAsync(files, new LegacyElementHandleSetInputFilesOptions
             {
                 NoWaitAfter = noWaitAfter,
                 Timeout = timeout,
+                Force = force,
             });
 
         /// <summary>Legacy expanded-parameter set input files.</summary>

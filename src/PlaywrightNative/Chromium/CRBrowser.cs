@@ -189,6 +189,10 @@ namespace PlaywrightNative.Chromium
         /// Official <c>connectOverCDP({ noDefaults })</c>. Skip default
         /// overrides on targets that already exist when connecting.
         /// </param>
+        /// <param name="headless">
+        /// When <see langword="false"/>, keep the automatic launch page so headed
+        /// Chromium retains a window; when <see langword="true"/>, close it.
+        /// </param>
         /// <returns>A fully initialized <see cref="CRBrowser"/> instance.</returns>
         internal static async Task<CRBrowser> ConnectAsync(
             CRConnection connection,
@@ -196,7 +200,8 @@ namespace PlaywrightNative.Chromium
             BrowserProcessManager processManager = null,
             ILoggerFactory loggerFactory = null,
             bool persistent = false,
-            bool noDefaults = false)
+            bool noDefaults = false,
+            bool headless = true)
         {
             // Retrieve browser version information.
             JsonElement? versionResponse = await connection.RootSession
@@ -258,11 +263,13 @@ namespace PlaywrightNative.Chromium
             }
 
             browser._adoptingExistingTargets = false;
-            if (!persistent && processManager != null)
+            if (!persistent && processManager != null && headless)
             {
                 // Official launch() uses --no-startup-window. Websocket launch
                 // still needs leftover about:blank to start; close those pages
-                // so Target.setDiscoverTargets sees none.
+                // so Target.setDiscoverTargets sees none. Headed Chrome must keep
+                // at least one window or Target.createTarget fails with
+                // "Failed to open a new tab".
                 await browser.CloseAutomaticLaunchPagesAsync().ConfigureAwait(false);
             }
 

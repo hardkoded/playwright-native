@@ -17,9 +17,12 @@
 using System;
 using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
+
 using Microsoft.Playwright;
+using PlaywrightNative.Chromium;
 using PlaywrightNative.Compat;
 using PlaywrightNative.Helpers;
+using PlaywrightNative.WebKit;
 
 namespace PlaywrightNative
 {
@@ -125,7 +128,12 @@ namespace PlaywrightNative
         {
             if (options?.Force != null)
             {
-                return handle.PressAsync(key, options.Delay, options.NoWaitAfter, options.Timeout, force: options.Force);
+                return handle switch
+                {
+                    ChromiumElementHandle chromium => chromium.PressAsync(key, options.Delay, options.NoWaitAfter, options.Timeout, options.Force),
+                    WKElementHandle webkit => webkit.PressAsync(key, options.Delay, options.NoWaitAfter, options.Timeout, options.Force),
+                    _ => handle.PressAsync(key, (ElementHandlePressOptions)options),
+                };
             }
 
             return handle.PressAsync(key, options);
@@ -137,7 +145,12 @@ namespace PlaywrightNative
         {
             if (options?.Force != null)
             {
-                return handle.TypeAsync(text, options.Delay, options.NoWaitAfter, options.Timeout, force: options.Force);
+                return handle switch
+                {
+                    ChromiumElementHandle chromium => chromium.TypeAsync(text, options.Delay, options.NoWaitAfter, options.Timeout, options.Force),
+                    WKElementHandle webkit => webkit.TypeAsync(text, options.Delay, options.NoWaitAfter, options.Timeout, options.Force),
+                    _ => handle.TypeAsync(text, (ElementHandleTypeOptions)options),
+                };
             }
 
             return handle.TypeAsync(text, options);
@@ -152,7 +165,12 @@ namespace PlaywrightNative
         {
             if (options?.Force != null)
             {
-                return handle.SetInputFilesAsync(files, options.NoWaitAfter, options.Timeout);
+                return handle switch
+                {
+                    ChromiumElementHandle chromium => chromium.SetInputFilesAsync(files, options.NoWaitAfter, options.Timeout, options.Force),
+                    WKElementHandle webkit => webkit.SetInputFilesAsync(files, options.NoWaitAfter, options.Timeout, options.Force),
+                    _ => handle.SetInputFilesAsync(files, (ElementHandleSetInputFilesOptions)options),
+                };
             }
 
             return handle.SetInputFilesAsync(files, options);

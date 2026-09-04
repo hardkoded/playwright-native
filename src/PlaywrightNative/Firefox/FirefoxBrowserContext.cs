@@ -560,7 +560,17 @@ namespace PlaywrightNative.Firefox
 
         Task IBrowserContext.SetExtraHTTPHeadersAsync(IEnumerable<KeyValuePair<string, string>> headers) => SetExtraHttpHeadersAsync(headers);
 
-        Task IBrowserContext.SetStorageStateAsync(string storageStatePath) => Task.CompletedTask;
+        Task IBrowserContext.SetStorageStateAsync(string storageStatePath)
+        {
+            string value = storageStatePath;
+            bool inlineJson = !string.IsNullOrEmpty(value)
+                && value.TrimStart().StartsWith('{');
+            return StorageStateHelper.ApplyAsync(
+                this,
+                inlineJson ? value : null,
+                inlineJson ? null : value,
+                replaceExisting: true);
+        }
 
         Task<string> IBrowserContext.StorageStateAsync(BrowserContextStorageStateOptions options) => StorageStateAsync(options?.Path, options?.IndexedDB, options?.Credentials);
 

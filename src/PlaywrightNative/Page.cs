@@ -963,7 +963,7 @@ namespace PlaywrightNative
             => _crPage.Session.SendAsync("Page.bringToFront");
 
         /// <inheritdoc/>
-        public Task<IReadOnlyList<IConsoleMessage>> ConsoleMessagesAsync(ConsoleMessagesFilter filter = default)
+        public Task<IReadOnlyList<IConsoleMessage>> ConsoleMessagesAsync(ConsoleMessagesFilter filter = ConsoleMessagesFilter.SinceNavigation)
             => Task.FromResult(_consoleLog.Snapshot(filter));
 
         /// <inheritdoc/>
@@ -2243,7 +2243,8 @@ namespace PlaywrightNative
             return CloseAsync(options?.RunBeforeUnload, options?.Reason);
         }
 
-        Task<IReadOnlyList<IConsoleMessage>> IPage.ConsoleMessagesAsync(PageConsoleMessagesOptions options) => ConsoleMessagesAsync(options?.Filter ?? default);
+        Task<IReadOnlyList<IConsoleMessage>> IPage.ConsoleMessagesAsync(PageConsoleMessagesOptions options)
+            => ConsoleMessagesAsync(options?.Filter ?? ConsoleMessagesFilter.SinceNavigation);
 
         Task IPage.DblClickAsync(string selector, PageDblClickOptions options)
             => DblClickAsync(selector, options?.Button ?? default, options?.Delay, options?.Position, options?.Modifiers, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, default, options?.Strict);

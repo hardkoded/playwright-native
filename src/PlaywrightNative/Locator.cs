@@ -3225,11 +3225,14 @@ namespace PlaywrightNative
         Task<IElementHandle> ILocator.ElementHandleAsync(LocatorElementHandleOptions options)
             => ElementHandleAsync(options?.Timeout);
 
-        Task<JsonElement?> ILocator.EvaluateAsync(string expression, object arg, LocatorEvaluateOptions options) => Task.FromResult<JsonElement?>(default!);
+        Task<JsonElement?> ILocator.EvaluateAsync(string expression, object arg, LocatorEvaluateOptions options)
+            => EvaluateAsync<JsonElement?>(expression, arg, options?.Timeout);
 
-        Task<T> ILocator.EvaluateAsync<T>(string expression, object arg, LocatorEvaluateOptions options) => Task.FromResult<T>(default!);
+        Task<T> ILocator.EvaluateAsync<T>(string expression, object arg, LocatorEvaluateOptions options)
+            => EvaluateAsync<T>(expression, arg, options?.Timeout);
 
-        Task<IJSHandle> ILocator.EvaluateHandleAsync(string expression, object arg, LocatorEvaluateHandleOptions options) => Task.FromResult<IJSHandle>(default!);
+        Task<IJSHandle> ILocator.EvaluateHandleAsync(string expression, object arg, LocatorEvaluateHandleOptions options)
+            => EvaluateHandleAsync(expression, arg, options?.Timeout);
 
         Task ILocator.FillAsync(string value, LocatorFillOptions options)
             => FillAsync(value, options?.NoWaitAfter, options?.Timeout, options?.Force);

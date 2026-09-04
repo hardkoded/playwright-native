@@ -302,7 +302,7 @@ namespace PlaywrightNative.Chromium
                 transport = await WebSocketTransport.ConnectAsync(endpoint, timeout: timeout).ConfigureAwait(false);
                 connection = new CRConnection(transport, loggerFactory);
 
-                CRBrowser browser = await CRBrowser.ConnectAsync(connection, transport, processManager, loggerFactory, persistent).ConfigureAwait(false);
+                CRBrowser browser = await CRBrowser.ConnectAsync(connection, transport, processManager, loggerFactory, persistent, headless: headless).ConfigureAwait(false);
 
                 // Ownership of processManager, connection, and transport has been
                 // transferred to the CRBrowser instance. Null out locals so the
