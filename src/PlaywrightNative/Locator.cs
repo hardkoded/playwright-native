@@ -3173,7 +3173,11 @@ namespace PlaywrightNative
 
         Task ILocator.BlurAsync(LocatorBlurOptions options) => BlurAsync(options?.Timeout);
 
-        Task<LocatorBoundingBoxResult> ILocator.BoundingBoxAsync(LocatorBoundingBoxOptions options) => Task.FromResult<LocatorBoundingBoxResult>(default!);
+        async Task<LocatorBoundingBoxResult> ILocator.BoundingBoxAsync(LocatorBoundingBoxOptions options)
+        {
+            ElementHandleBoundingBoxResult box = await BoundingBoxAsync(options?.Timeout).ConfigureAwait(false);
+            return box.AsLocatorBoundingBox();
+        }
 
         Task ILocator.CheckAsync(LocatorCheckOptions options)
             => CheckAsync(options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial);
