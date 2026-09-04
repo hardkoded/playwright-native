@@ -872,7 +872,7 @@ namespace PlaywrightNative
 
             // Empty expected value asserts attribute presence (boolean / name-only
             // parity with upstream toHaveAttribute(name) / toHaveAttribute(name, options)).
-            if (value == string.Empty)
+            if (value is { Length: 0 })
             {
                 return ExpectBoolAsync(
                     () => UniqueStateAsync(async handle =>
