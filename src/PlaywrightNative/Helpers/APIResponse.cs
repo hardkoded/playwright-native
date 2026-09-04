@@ -96,10 +96,10 @@ namespace PlaywrightNative.Helpers
             {
                 if (_headersArray != null)
                 {
-                    return _headersArray.Select(e => new Header { Name = e.Name, Value = e.Value }).ToList();
+                    return EquatableHeader.FromEntries(_headersArray);
                 }
 
-                List<Header> entries = new List<Header>();
+                List<NameValueEntry> entries = new List<NameValueEntry>();
                 foreach (KeyValuePair<string, string> header in Headers)
                 {
                     if (string.Equals(header.Key, "set-cookie", StringComparison.OrdinalIgnoreCase)
@@ -108,16 +108,16 @@ namespace PlaywrightNative.Helpers
                     {
                         foreach (string part in header.Value.Split('\n'))
                         {
-                            entries.Add(new Header { Name = header.Key, Value = part });
+                            entries.Add(new NameValueEntry(header.Key, part));
                         }
                     }
                     else
                     {
-                        entries.Add(new Header { Name = header.Key, Value = header.Value });
+                        entries.Add(new NameValueEntry(header.Key, header.Value));
                     }
                 }
 
-                return entries;
+                return EquatableHeader.FromEntries(entries);
             }
         }
 

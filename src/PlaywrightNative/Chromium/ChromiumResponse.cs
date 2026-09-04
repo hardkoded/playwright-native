@@ -106,9 +106,7 @@ namespace PlaywrightNative.Chromium
         public async Task<IReadOnlyList<Header>> HeadersArrayAsync()
         {
             await _crResponse.WaitForExtraHeadersAsync().ConfigureAwait(false);
-            return HeaderMap.Array(_crResponse.HeaderPairs)
-                .Select(e => new Header { Name = e.Name, Value = e.Value })
-                .ToList();
+            return EquatableHeader.FromEntries(HeaderMap.Array(_crResponse.HeaderPairs));
         }
 
         /// <inheritdoc/>

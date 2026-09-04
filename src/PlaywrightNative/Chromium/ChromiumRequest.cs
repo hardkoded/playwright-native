@@ -240,7 +240,7 @@ namespace PlaywrightNative.Chromium
                 raw = await _crRequest.WaitForRawHeadersAsync().ConfigureAwait(false);
             }
 
-            return raw.Select(e => new Header { Name = e.Name, Value = e.Value }).ToList();
+            return EquatableHeader.FromEntries(raw);
         }
 
         private IRequest WrapRedirect(CRRequest request)

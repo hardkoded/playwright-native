@@ -638,7 +638,7 @@ namespace PlaywrightNative.Chromium
         Task IFrame.FocusAsync(string selector, FrameFocusOptions options)
             => FocusAsync(selector, options?.Timeout, default, options?.Strict);
 
-        Task<IElementHandle> IFrame.FrameElementAsync() => Task.FromResult<IElementHandle>(default!);
+        Task<IElementHandle> IFrame.FrameElementAsync() => FrameElementHelper.ResolveAsync(this);
 
         IFrameLocator IFrame.FrameLocator(string selector) => new FrameLocator(this, selector);
 

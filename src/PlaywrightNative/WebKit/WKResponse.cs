@@ -186,9 +186,7 @@ namespace PlaywrightNative.WebKit
         public async Task<IReadOnlyList<Header>> HeadersArrayAsync()
         {
             await WaitForExtraHeadersAsync().ConfigureAwait(false);
-            return HeaderMap.Array(Headers)
-                .Select(e => new Header { Name = e.Name, Value = e.Value })
-                .ToList();
+            return EquatableHeader.FromEntries(HeaderMap.Array(Headers));
         }
 
         /// <inheritdoc/>
