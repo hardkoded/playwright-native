@@ -622,6 +622,14 @@ namespace PlaywrightNative.WebKit
                 return;
             }
 
+            // force:true already issued a layout-center pointer click (Chromium Check
+            // stops there too). Injected el.click() synthesizes clientX/Y at 0,0 and
+            // would overwrite document-level force hit listeners for visibility:hidden.
+            if (force == true)
+            {
+                throw new PlaywrightNativeException("Clicking the checkbox did not change its state.");
+            }
+
             await EvaluateFunctionAsync<bool>(
                 check ? ElementStateScript.CheckFunction : ElementStateScript.UncheckFunction)
                 .ConfigureAwait(false);
