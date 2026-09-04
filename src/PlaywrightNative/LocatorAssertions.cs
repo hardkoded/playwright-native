@@ -869,6 +869,24 @@ namespace PlaywrightNative
 
             string lastActual = string.Empty;
             bool lastMissing = true;
+
+            // Empty expected value asserts attribute presence (boolean / name-only
+            // parity with upstream toHaveAttribute(name) / toHaveAttribute(name, options)).
+            if (value == string.Empty)
+            {
+                return ExpectBoolAsync(
+                    () => UniqueStateAsync(async handle =>
+                    {
+                        string actual = await handle.GetAttributeAsync(name).ConfigureAwait(false);
+                        lastMissing = actual == null;
+                        lastActual = actual ?? string.Empty;
+                        return actual != null;
+                    }),
+                    timeout,
+                    "toHaveAttribute",
+                    _ => FormatAttributeStringExtra(value, lastActual, lastMissing));
+            }
+
             return ExpectBoolAsync(
                 () => UniqueStateAsync(async handle =>
                 {
