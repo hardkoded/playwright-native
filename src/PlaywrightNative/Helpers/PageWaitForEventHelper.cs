@@ -203,12 +203,25 @@ namespace PlaywrightNative.Helpers
                         matches,
                         timeout);
                 case "PageError":
-                    return WaitTypedAsync<T, string>(
-                        page,
-                        h => page.PageError += h,
-                        h => page.PageError -= h,
-                        matches,
-                        timeout);
+                    // IPage.PageError is EventHandler<string> (Microsoft API), while
+                    // PageEvent.PageError is typed as PageErrorEventArgs for callers.
+                    if (typeof(T) == typeof(string))
+                    {
+                        return WaitTypedAsync<T, string>(
+                            page,
+                            h => page.PageError += h,
+                            h => page.PageError -= h,
+                            matches,
+                            timeout);
+                    }
+
+                    if (typeof(T) != typeof(PageErrorEventArgs))
+                    {
+                        throw new ArgumentException(
+                            $"Page event payload type is String, not {typeof(T).Name}.");
+                    }
+
+                    return WaitPageErrorAsArgsAsync(page, matches, timeout);
                 case "Load":
                     return WaitTypedAsync<T, IPage>(
                         page,
@@ -248,6 +261,27 @@ namespace PlaywrightNative.Helpers
                 default:
                     throw new ArgumentException($"Unknown page event '{name}'.");
             }
+        }
+
+        private static async Task<T> WaitPageErrorAsArgsAsync<T>(
+            IPage page,
+            Func<T, bool> matches,
+            float? timeout)
+        {
+            string message = await WaitForEventHelper.WaitAsync<string>(
+                h => page.PageError += h,
+                h => page.PageError -= h,
+                raw =>
+                {
+                    PageErrorEventArgs args = PageErrorText.Parse(raw);
+                    return matches == null || matches((T)(object)args);
+                },
+                timeout,
+                "page.waitForEvent",
+                waitForEventName: "PageError",
+                abortOnPageClose: page,
+                abortOnPageCrash: true).ConfigureAwait(false);
+            return (T)(object)PageErrorText.Parse(message);
         }
 
         private static async Task<T> WaitTypedAsync<T, TEvent>(

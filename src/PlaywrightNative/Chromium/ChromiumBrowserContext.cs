@@ -1746,23 +1746,112 @@ namespace PlaywrightNative.Chromium
 
         Task<IReadOnlyList<BrowserContextCookiesResult>> IBrowserContext.CookiesAsync(string urls) => string.IsNullOrEmpty(urls) ? CookiesAsync() : CookiesAsync(new[] { urls });
 
-        Task<IAsyncDisposable> IBrowserContext.ExposeBindingAsync(string name, Action callback) => Task.FromResult<IAsyncDisposable>(default!);
+        Task<IAsyncDisposable> IBrowserContext.ExposeBindingAsync(string name, Action callback) => ExposeBindingAsync(name, callback);
 
-        Task<IAsyncDisposable> IBrowserContext.ExposeBindingAsync(string name, Action<BindingSource> callback) => Task.FromResult<IAsyncDisposable>(default!);
+        Task<IAsyncDisposable> IBrowserContext.ExposeBindingAsync(string name, Action<BindingSource> callback)
+        {
+            if (callback == null)
+            {
+                throw new ArgumentNullException(nameof(callback));
+            }
 
-        Task<IAsyncDisposable> IBrowserContext.ExposeBindingAsync<T>(string name, Action<BindingSource, T> callback) => Task.FromResult<IAsyncDisposable>(default!);
+            return RegisterExposedAsync(
+                name,
+                page => InstallOnAsync(
+                    page,
+                    name,
+                    PageExposeBinder.WrapBinding<object>(this, page, source =>
+                    {
+                        callback(source);
+                        return null;
+                    })));
+        }
 
-        Task<IAsyncDisposable> IBrowserContext.ExposeBindingAsync<TResult>(string name, Func<BindingSource, TResult> callback) => Task.FromResult<IAsyncDisposable>(default!);
+        Task<IAsyncDisposable> IBrowserContext.ExposeBindingAsync<T>(string name, Action<BindingSource, T> callback)
+        {
+            if (callback == null)
+            {
+                throw new ArgumentNullException(nameof(callback));
+            }
 
-        Task<IAsyncDisposable> IBrowserContext.ExposeBindingAsync<T, TResult>(string name, Func<BindingSource, T, TResult> callback) => Task.FromResult<IAsyncDisposable>(default!);
+            return RegisterExposedAsync(
+                name,
+                page => InstallOnAsync(
+                    page,
+                    name,
+                    PageExposeBinder.WrapBinding<T, object>(this, page, (source, arg) =>
+                    {
+                        callback(source, arg);
+                        return null;
+                    })));
+        }
 
-        Task<IAsyncDisposable> IBrowserContext.ExposeBindingAsync<T1, T2, T3, TResult>(string name, Func<BindingSource, T1, T2, T3, TResult> callback) => Task.FromResult<IAsyncDisposable>(default!);
+        Task<IAsyncDisposable> IBrowserContext.ExposeBindingAsync<TResult>(string name, Func<BindingSource, TResult> callback)
+        {
+            if (callback == null)
+            {
+                throw new ArgumentNullException(nameof(callback));
+            }
 
-        Task<IAsyncDisposable> IBrowserContext.ExposeBindingAsync<T1, T2, T3, T4, TResult>(string name, Func<BindingSource, T1, T2, T3, T4, TResult> callback) => Task.FromResult<IAsyncDisposable>(default!);
+            return RegisterExposedAsync(name, page => InstallOnAsync(page, name, PageExposeBinder.WrapBinding(this, page, callback)));
+        }
 
-        Task<IAsyncDisposable> IBrowserContext.ExposeFunctionAsync<T1, T2, T3, TResult>(string name, Func<T1, T2, T3, TResult> callback) => Task.FromResult<IAsyncDisposable>(default!);
+        Task<IAsyncDisposable> IBrowserContext.ExposeBindingAsync<T, TResult>(string name, Func<BindingSource, T, TResult> callback)
+        {
+            if (callback == null)
+            {
+                throw new ArgumentNullException(nameof(callback));
+            }
 
-        Task<IAsyncDisposable> IBrowserContext.ExposeFunctionAsync<T1, T2, T3, T4, TResult>(string name, Func<T1, T2, T3, T4, TResult> callback) => Task.FromResult<IAsyncDisposable>(default!);
+            if (typeof(T) == typeof(IJSHandle))
+            {
+                return ExposeBindingAsync(
+                    name,
+                    (BindingSource source, IJSHandle handle) => (object)callback(source, (T)(object)handle));
+            }
+
+            return RegisterExposedAsync(name, page => InstallOnAsync(page, name, PageExposeBinder.WrapBinding(this, page, callback)));
+        }
+
+        Task<IAsyncDisposable> IBrowserContext.ExposeBindingAsync<T1, T2, T3, TResult>(string name, Func<BindingSource, T1, T2, T3, TResult> callback)
+        {
+            if (callback == null)
+            {
+                throw new ArgumentNullException(nameof(callback));
+            }
+
+            return RegisterExposedAsync(name, page => InstallOnAsync(page, name, PageExposeBinder.WrapBinding(this, page, callback)));
+        }
+
+        Task<IAsyncDisposable> IBrowserContext.ExposeBindingAsync<T1, T2, T3, T4, TResult>(string name, Func<BindingSource, T1, T2, T3, T4, TResult> callback)
+        {
+            if (callback == null)
+            {
+                throw new ArgumentNullException(nameof(callback));
+            }
+
+            return RegisterExposedAsync(name, page => InstallOnAsync(page, name, PageExposeBinder.WrapBinding(this, page, callback)));
+        }
+
+        Task<IAsyncDisposable> IBrowserContext.ExposeFunctionAsync<T1, T2, T3, TResult>(string name, Func<T1, T2, T3, TResult> callback)
+        {
+            if (callback == null)
+            {
+                throw new ArgumentNullException(nameof(callback));
+            }
+
+            return RegisterExposedAsync(name, page => InstallOnAsync(page, name, PageExposeBinder.Wrap(callback)));
+        }
+
+        Task<IAsyncDisposable> IBrowserContext.ExposeFunctionAsync<T1, T2, T3, T4, TResult>(string name, Func<T1, T2, T3, T4, TResult> callback)
+        {
+            if (callback == null)
+            {
+                throw new ArgumentNullException(nameof(callback));
+            }
+
+            return RegisterExposedAsync(name, page => InstallOnAsync(page, name, PageExposeBinder.Wrap(callback)));
+        }
 
         Task IBrowserContext.GrantPermissionsAsync(IEnumerable<string> permissions, BrowserContextGrantPermissionsOptions options) => GrantPermissionsAsync(permissions, options?.Origin);
 

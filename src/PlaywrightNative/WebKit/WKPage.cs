@@ -1215,13 +1215,12 @@ namespace PlaywrightNative.WebKit
 
         /// <inheritdoc/>
         public Task<string> InnerTextAsync(string selector, float? timeout = null, bool? strict = default)
-            => AtomicSelectorRead.WaitStringAsync(
-                expression => EvaluateAsync<JsonElement?>(expression),
+            => ElementQuery.WaitQueryAsync(
+                sel => QueryActionAsync(sel, strict),
                 selector,
-                "el.innerText",
+                h => h.InnerTextAsync(),
                 timeout,
-                "page.innerText",
-                strict ?? (Context is IHasStrictSelectors s && s.StrictSelectors));
+                "page.innerText");
 
         /// <inheritdoc/>
         public Task<bool> IsCheckedAsync(string selector, float? timeout = null, bool? strict = default)
