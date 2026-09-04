@@ -1214,16 +1214,10 @@ namespace PlaywrightNative.Firefox
                 GetByAllScript.Flags(text));
 
         Task<IResponse> IPage.GoBackAsync(PageGoBackOptions options)
-        {
-            PageGoBackOptions o = options;
-            return GoBackAsync(o.WaitUntil ?? default, o.Timeout);
-        }
+            => GoBackAsync(options?.WaitUntil ?? default, options?.Timeout);
 
         Task<IResponse> IPage.GoForwardAsync(PageGoForwardOptions options)
-        {
-            PageGoForwardOptions o = options;
-            return GoForwardAsync(o.WaitUntil ?? default, o.Timeout);
-        }
+            => GoForwardAsync(options?.WaitUntil ?? default, options?.Timeout);
 
         Task<IResponse> IPage.GotoAsync(string url, PageGotoOptions options)
             => GoToAsync(url, options?.WaitUntil ?? default, options?.Timeout, options?.Referer);

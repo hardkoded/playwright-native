@@ -104,8 +104,8 @@ namespace PlaywrightNative.Helpers
                 {
                     // Chromium Storage.setCookies drops cookies that omit sameSite.
                     // Official cookies() then reports sameSite ?? 'Lax' (None on
-                    // Windows WebKit), which is defaultSameSiteCookieValue.
-                    item["sameSite"] = webKit && OperatingSystem.IsWindows()
+                    // Windows/macOS WebKit), which is defaultSameSiteCookieValue.
+                    item["sameSite"] = webKit && !OperatingSystem.IsLinux()
                         ? nameof(Microsoft.Playwright.SameSiteAttribute.None)
                         : nameof(Microsoft.Playwright.SameSiteAttribute.Lax);
                 }

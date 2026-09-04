@@ -179,7 +179,7 @@ namespace PlaywrightNative
         /// How HAR response bodies are stored. <see cref="HarContentPolicy.Attach"/>
         /// writes them beside the HAR file.
         /// </summary>
-        public HarContentPolicy RecordHarContent { get; set; }
+        public HarContentPolicy RecordHarContent { get; set; } = (HarContentPolicy)(-1);
 
         /// <summary>
         /// Optional regular expression. When set, only matching request URLs

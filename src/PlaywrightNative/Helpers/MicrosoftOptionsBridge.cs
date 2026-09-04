@@ -164,7 +164,7 @@ namespace PlaywrightNative.Helpers
             result.ClientCertificates = options.ClientCertificates;
             result.RecordHarPath = options.RecordHarPath;
             result.RecordHarMode = options.RecordHarMode ?? default;
-            result.RecordHarContent = options.RecordHarContent ?? default;
+            result.RecordHarContent = options.RecordHarContent ?? EnumCompat.UndefinedHarContentPolicy;
             result.RecordHarOmitContent = options.RecordHarOmitContent;
             result.RecordHarUrl = options.RecordHarUrlFilterString ?? options.RecordHarUrlFilter;
             result.RecordHarUrlRegex = options.RecordHarUrlFilterRegex;
@@ -211,7 +211,7 @@ namespace PlaywrightNative.Helpers
                 ClientCertificates = options.ClientCertificates,
                 RecordHarPath = options.RecordHarPath,
                 RecordHarMode = options.RecordHarMode ?? default,
-                RecordHarContent = options.RecordHarContent ?? default,
+                RecordHarContent = options.RecordHarContent ?? EnumCompat.UndefinedHarContentPolicy,
                 RecordHarOmitContent = options.RecordHarOmitContent,
                 RecordHarUrl = options.RecordHarUrlFilterString ?? options.RecordHarUrlFilter,
                 RecordHarUrlRegex = options.RecordHarUrlFilterRegex,
