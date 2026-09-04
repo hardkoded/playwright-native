@@ -29,6 +29,17 @@ namespace PlaywrightNative.Helpers
     internal static class ChromeTraceEvents
     {
         /// <summary>
+        /// Returns whether <paramref name="path"/> should receive Chrome-trace JSON
+        /// (Direct tests) rather than an official Playwright zip.
+        /// </summary>
+        /// <param name="path">Destination path from stop / stopChunk.</param>
+        /// <returns><see langword="true"/> when the path ends with <c>.json</c>.</returns>
+        internal static bool IsJsonTracePath(string path)
+            => !string.IsNullOrEmpty(path)
+                && path.EndsWith(".json", StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// Builds a duration-begin event
         /// Builds a duration-begin event whose <c>name</c> is the group title.
         /// </summary>
         /// <param name="name">Group name shown in the trace.</param>

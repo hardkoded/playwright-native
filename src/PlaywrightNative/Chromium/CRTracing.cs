@@ -53,15 +53,23 @@ namespace PlaywrightNative.Chromium
         {
             OfficialTraceSession session = OfficialSession();
             session.Start(options, chunk: false);
+
+            // Keep an in-memory chrome-events buffer for Direct StopAsync(.json) paths
+            // (groups / non-empty traceEvents). Official zip remains for .zip stops.
+            lock (_gate)
+            {
+                _recording = true;
+                _events.Clear();
+                _openGroups.Clear();
+                _events.Add(ChromeTraceEvents.GroupBegin("__tracing__"));
+                _events.Add(ChromeTraceEvents.GroupEnd("__tracing__"));
+            }
+
             return Task.CompletedTask;
         }
 
         Task ITracing.StartAsync(Microsoft.Playwright.TracingStartOptions options)
-        {
-            OfficialTraceSession session = OfficialSession();
-            session.Start(MicrosoftOptionsBridge.ToTracingStartOptions(options), chunk: false);
-            return Task.CompletedTask;
-        }
+            => StartAsync(MicrosoftOptionsBridge.ToTracingStartOptions(options));
 
         /// <inheritdoc/>
         public async Task StartAsync(string categories = null)
@@ -94,6 +102,15 @@ namespace PlaywrightNative.Chromium
             if (official != null && official.IsRecording)
             {
                 official.Start(new TracingStartOptions { Name = name, Title = title }, chunk: true);
+                lock (_gate)
+                {
+                    _events.Clear();
+                    _openGroups.Clear();
+                    _recording = true;
+                    _events.Add(ChromeTraceEvents.GroupBegin("__tracing__"));
+                    _events.Add(ChromeTraceEvents.GroupEnd("__tracing__"));
+                }
+
                 return Task.CompletedTask;
             }
 
@@ -119,16 +136,15 @@ namespace PlaywrightNative.Chromium
         /// <inheritdoc/>
         public Task GroupAsync(string name)
         {
+            if (string.IsNullOrEmpty(name))
+            {
+                throw new ArgumentException("name must be non-empty", nameof(name));
+            }
+
             OfficialTraceSession official = OfficialSessionOrNull();
             if (official != null && official.IsRecording)
             {
                 official.Group(name);
-                return Task.CompletedTask;
-            }
-
-            if (string.IsNullOrEmpty(name))
-            {
-                throw new ArgumentException("name must be non-empty", nameof(name));
             }
 
             lock (_gate)
@@ -152,17 +168,11 @@ namespace PlaywrightNative.Chromium
             if (official != null && official.IsRecording)
             {
                 official.GroupEnd();
-                return Task.CompletedTask;
             }
 
             lock (_gate)
             {
-                if (!_recording)
-                {
-                    return Task.CompletedTask;
-                }
-
-                if (_openGroups.Count == 0)
+                if (!_recording || _openGroups.Count == 0)
                 {
                     return Task.CompletedTask;
                 }
@@ -180,7 +190,30 @@ namespace PlaywrightNative.Chromium
             OfficialTraceSession official = OfficialSessionOrNull();
             if (official != null && official.IsRecording)
             {
+                if (ChromeTraceEvents.IsJsonTracePath(path))
+                {
+                    await official.StopAsync(null, keepRecording: true).ConfigureAwait(false);
+                    List<JsonElement> chunkSnapshot;
+                    lock (_gate)
+                    {
+                        chunkSnapshot = new List<JsonElement>(_events);
+                        _events.Clear();
+                        _openGroups.Clear();
+                        _recording = true;
+                        _events.Add(ChromeTraceEvents.GroupBegin("__tracing__"));
+                        _events.Add(ChromeTraceEvents.GroupEnd("__tracing__"));
+                    }
+
+                    await WriteTraceSnapshotAsync(path, chunkSnapshot).ConfigureAwait(false);
+                    return;
+                }
+
                 await official.StopAsync(path, keepRecording: true).ConfigureAwait(false);
+                lock (_gate)
+                {
+                    _events.Clear();
+                }
+
                 return;
             }
 
@@ -205,7 +238,7 @@ namespace PlaywrightNative.Chromium
         }
 
         /// <inheritdoc/>
-        public Task StopAsync(TracingStopOptions options = default)
+        public async Task StopAsync(TracingStopOptions options = default)
         {
             OfficialTraceSession session = OfficialSessionOrNull();
             if (session == null)
@@ -215,10 +248,40 @@ namespace PlaywrightNative.Chromium
                     throw new PlaywrightNativeException("Must start tracing before stopping");
                 }
 
-                return Task.CompletedTask;
+                return;
             }
 
-            return session.StopAsync(options?.Path, keepRecording: false);
+            string path = options?.Path;
+            if (ChromeTraceEvents.IsJsonTracePath(path))
+            {
+                await session.StopAsync(null, keepRecording: false).ConfigureAwait(false);
+                List<JsonElement> snapshot;
+                lock (_gate)
+                {
+                    snapshot = new List<JsonElement>(_events);
+                    _events.Clear();
+                    _openGroups.Clear();
+                    _recording = false;
+                }
+
+                await WriteTraceSnapshotAsync(path, snapshot).ConfigureAwait(false);
+                return;
+            }
+
+            if (_recording)
+            {
+                // CDP may be active when StartAsync(categories) was used directly.
+                await DiscardCdpTracingAsync().ConfigureAwait(false);
+            }
+
+            lock (_gate)
+            {
+                _events.Clear();
+                _openGroups.Clear();
+                _recording = false;
+            }
+
+            await session.StopAsync(path, keepRecording: false).ConfigureAwait(false);
         }
 
         /// <inheritdoc/>
@@ -280,6 +343,36 @@ namespace PlaywrightNative.Chromium
         private OfficialTraceSession OfficialSessionOrNull()
         {
             return _context is IHasOfficialTrace host ? host.OfficialTrace : null;
+        }
+
+        private async Task DiscardCdpTracingAsync()
+        {
+            TaskCompletionSource<bool> complete;
+            lock (_gate)
+            {
+                if (!_recording)
+                {
+                    return;
+                }
+
+                complete = _complete;
+            }
+
+            try
+            {
+                await _session.SendAsync("Tracing.end").ConfigureAwait(false);
+                await complete.Task.ConfigureAwait(false);
+            }
+            finally
+            {
+                _session.MessageReceived -= OnMessage;
+                lock (_gate)
+                {
+                    _recording = false;
+                    _events.Clear();
+                    _openGroups.Clear();
+                }
+            }
         }
 
         private async Task WriteTraceSnapshotAsync(string path, List<JsonElement> snapshot)
