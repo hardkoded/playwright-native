@@ -858,7 +858,10 @@ namespace PlaywrightNative.Chromium
             _reducedMotion = reducedMotion;
             _forcedColors = forcedColors;
             _contrast = contrast;
-            _hasTouch = hasTouch == true;
+
+            // Official isMobile also enables touch (meta viewport + touch events).
+            _isMobile = isMobile == true;
+            _hasTouch = hasTouch == true || _isMobile;
             _bypassCsp = bypassCSP == true;
             _geolocation = geolocation;
             _crCtx.Geolocation = geolocation;
@@ -866,7 +869,6 @@ namespace PlaywrightNative.Chromium
             _ignoreHttpsErrors = ignoreHTTPSErrors == true;
             _javaScriptDisabled = javaScriptEnabled == false;
             _deviceScaleFactor = deviceScaleFactor;
-            _isMobile = isMobile == true;
             _httpCredentials = HttpBasicAuth.Snapshot(httpCredentials);
             _crCtx.HttpCredentials = _httpCredentials;
             _screenSize = screenSize;
@@ -986,7 +988,7 @@ namespace PlaywrightNative.Chromium
 
             await crPage.CrPage.SetTouchEmulationEnabledAsync(
                 _hasTouch,
-                _hasTouch || _isMobile ? "mobile" : "desktop").ConfigureAwait(false);
+                _hasTouch ? "mobile" : "desktop").ConfigureAwait(false);
 
             if (_bypassCsp)
             {
@@ -1508,7 +1510,7 @@ namespace PlaywrightNative.Chromium
 
                 await crPage.CrPage.SetTouchEmulationEnabledAsync(
                     _hasTouch,
-                    _hasTouch || _isMobile ? "mobile" : "desktop").ConfigureAwait(false);
+                    _hasTouch ? "mobile" : "desktop").ConfigureAwait(false);
 
                 if (!_isMobile)
                 {

@@ -1153,14 +1153,16 @@ namespace PlaywrightNative.WebKit
             _reducedMotion = reducedMotion;
             _forcedColors = forcedColors;
             _contrast = contrast;
-            _hasTouch = hasTouch == true;
+
+            // Official isMobile also enables touch (meta viewport + touch events).
+            _isMobile = isMobile == true;
+            _hasTouch = hasTouch == true || _isMobile;
             _bypassCsp = bypassCSP == true;
             _geolocation = geolocation;
             _grantedPermissions.SeedAllOrigins(permissions);
             _ignoreHttpsErrors = ignoreHTTPSErrors == true;
             _javaScriptDisabled = javaScriptEnabled == false;
             _deviceScaleFactor = deviceScaleFactor;
-            _isMobile = isMobile == true;
             _httpCredentials = HttpBasicAuth.Snapshot(httpCredentials);
             _screenSize = screenSize;
             _acceptDownloads = acceptDownloads != false;
