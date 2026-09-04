@@ -53,10 +53,10 @@ namespace PlaywrightNative.Chromium
         private string _locale;
         private string _timezoneId;
         private bool _offline;
-        private ColorScheme _colorScheme;
-        private ReducedMotion _reducedMotion;
-        private ForcedColors _forcedColors;
-        private Contrast _contrast;
+        private ColorScheme _colorScheme = ColorScheme.Null;
+        private ReducedMotion _reducedMotion = ReducedMotion.Null;
+        private ForcedColors _forcedColors = ForcedColors.Null;
+        private Contrast _contrast = Contrast.Null;
         private bool _hasTouch;
         private bool _bypassCsp;
         private Geolocation _geolocation;
@@ -832,7 +832,7 @@ namespace PlaywrightNative.Chromium
             string locale = null,
             string timezoneId = null,
             bool? offline = null,
-            ColorScheme colorScheme = default,
+            ColorScheme colorScheme = ColorScheme.Null,
             bool? hasTouch = null,
             bool? bypassCSP = null,
             Geolocation geolocation = null,
@@ -844,9 +844,9 @@ namespace PlaywrightNative.Chromium
             HttpCredentials httpCredentials = null,
             ScreenSize screenSize = null,
             bool? acceptDownloads = null,
-            ReducedMotion reducedMotion = default,
-            ForcedColors forcedColors = default,
-            Contrast contrast = default)
+            ReducedMotion reducedMotion = ReducedMotion.Null,
+            ForcedColors forcedColors = ForcedColors.Null,
+            Contrast contrast = Contrast.Null)
         {
             GeolocationValidator.Validate(geolocation);
             _viewport = ViewportSizeHelper.Resolve(viewport);

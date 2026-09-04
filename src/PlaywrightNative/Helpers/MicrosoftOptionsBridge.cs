@@ -144,10 +144,12 @@ namespace PlaywrightNative.Helpers
             result.DeviceScaleFactor = options.DeviceScaleFactor;
             result.IsMobile = options.IsMobile;
             result.HasTouch = options.HasTouch;
-            result.ColorScheme = options.ColorScheme ?? default;
-            result.ReducedMotion = options.ReducedMotion ?? default;
-            result.ForcedColors = options.ForcedColors ?? default;
-            result.Contrast = options.Contrast ?? default;
+            // Official options use nullable enums; unset must map to Null, not
+            // default(T) (ForcedColors.Active / ReducedMotion.Reduce).
+            result.ColorScheme = options.ColorScheme ?? ColorScheme.Null;
+            result.ReducedMotion = options.ReducedMotion ?? ReducedMotion.Null;
+            result.ForcedColors = options.ForcedColors ?? ForcedColors.Null;
+            result.Contrast = options.Contrast ?? Contrast.Null;
             result.AcceptDownloads = options.AcceptDownloads ?? true;
             result.BypassCSP = options.BypassCSP ?? false;
             result.IgnoreHTTPSErrors = options.IgnoreHTTPSErrors ?? false;
@@ -191,10 +193,10 @@ namespace PlaywrightNative.Helpers
                 DeviceScaleFactor = options.DeviceScaleFactor,
                 IsMobile = options.IsMobile,
                 HasTouch = options.HasTouch,
-                ColorScheme = options.ColorScheme ?? default,
-                ReducedMotion = options.ReducedMotion ?? default,
-                ForcedColors = options.ForcedColors ?? default,
-                Contrast = options.Contrast ?? default,
+                ColorScheme = options.ColorScheme ?? ColorScheme.Null,
+                ReducedMotion = options.ReducedMotion ?? ReducedMotion.Null,
+                ForcedColors = options.ForcedColors ?? ForcedColors.Null,
+                Contrast = options.Contrast ?? Contrast.Null,
                 AcceptDownloads = options.AcceptDownloads ?? true,
                 BypassCSP = options.BypassCSP ?? false,
                 IgnoreHTTPSErrors = options.IgnoreHTTPSErrors ?? false,
@@ -292,10 +294,10 @@ namespace PlaywrightNative.Helpers
                 DeviceScaleFactor = options.DeviceScaleFactor,
                 IsMobile = options.IsMobile,
                 HasTouch = options.HasTouch,
-                ColorScheme = options.ColorScheme,
-                ReducedMotion = options.ReducedMotion,
-                ForcedColors = options.ForcedColors,
-                Contrast = options.Contrast,
+                ColorScheme = options.ColorScheme == ColorScheme.Null ? null : options.ColorScheme,
+                ReducedMotion = options.ReducedMotion == ReducedMotion.Null ? null : options.ReducedMotion,
+                ForcedColors = options.ForcedColors == ForcedColors.Null ? null : options.ForcedColors,
+                Contrast = options.Contrast == Contrast.Null ? null : options.Contrast,
                 AcceptDownloads = options.AcceptDownloads,
                 BypassCSP = options.BypassCSP,
                 IgnoreHTTPSErrors = options.IgnoreHTTPSErrors,

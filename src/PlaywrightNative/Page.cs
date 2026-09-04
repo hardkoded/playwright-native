@@ -2622,7 +2622,17 @@ namespace PlaywrightNative
 
         Task IPage.SetInputFilesAsync(string selector, IEnumerable<FilePayload> files, PageSetInputFilesOptions options) => Task.CompletedTask;
 
-        Task IPage.TapAsync(string selector, PageTapOptions options) => Task.CompletedTask;
+        Task IPage.TapAsync(string selector, PageTapOptions options)
+            => TapAsync(
+                selector,
+                options?.Position,
+                options?.Modifiers,
+                options?.NoWaitAfter,
+                options?.Force,
+                options?.Timeout,
+                options?.Trial,
+                ActionScrollBridge.FromScrollOption(options?.Scroll),
+                options?.Strict);
 
         Task<string> IPage.TextContentAsync(string selector, PageTextContentOptions options) => TextContentAsync(selector, options?.Timeout, options?.Strict);
 
