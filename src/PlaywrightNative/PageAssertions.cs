@@ -354,10 +354,14 @@ namespace PlaywrightNative
                     {
                         try
                         {
-                            ariaSnapshot = await _page.AriaSnapshotAsync(timeout: 1000).ConfigureAwait(false);
+                            AccessibilitySnapshotResult snapshot = await _page
+                                .SnapshotAccessibilityAsync(interestingOnly: false)
+                                .ConfigureAwait(false);
+                            ariaSnapshot = AriaSnapshotYaml.Format(snapshot) ?? string.Empty;
                         }
                         catch (Exception ex) when (ex is PlaywrightNativeException || ex is TimeoutException)
                         {
+                            ariaSnapshot = string.Empty;
                         }
                     }
 

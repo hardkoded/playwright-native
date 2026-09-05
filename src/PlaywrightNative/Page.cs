@@ -1019,12 +1019,13 @@ namespace PlaywrightNative
 
         /// <inheritdoc/>
         public Task<string> InnerTextAsync(string selector, float? timeout = default, bool? strict = default)
-            => ElementQuery.WaitQueryAsync(
-                sel => QueryActionAsync(sel, strict),
+            => AtomicSelectorRead.WaitStringAsync(
+                expression => EvaluateAsync<JsonElement?>(expression),
                 selector,
-                h => h.InnerTextAsync(),
+                ElementStateScript.InnerTextValueExpression,
                 timeout,
-                "page.innerText");
+                "page.innerText",
+                strict ?? (_context is IHasStrictSelectors s && s.StrictSelectors));
 
         /// <inheritdoc/>
         public Task<bool> IsCheckedAsync(string selector, float? timeout = default, bool? strict = default)
@@ -2228,7 +2229,8 @@ namespace PlaywrightNative
         Task<IElementHandle> IPage.AddStyleTagAsync(PageAddStyleTagOptions options)
             => AddStyleTagAsync(options?.Url, options?.Path, options?.Content);
 
-        Task<string> IPage.AriaSnapshotAsync(PageAriaSnapshotOptions options) => Task.FromResult<string>(default!);
+        Task<string> IPage.AriaSnapshotAsync(PageAriaSnapshotOptions options)
+            => PageAriaSnapshot.CaptureAsync(this, options);
 
         Task IPage.CancelPickLocatorAsync() => Task.CompletedTask;
 

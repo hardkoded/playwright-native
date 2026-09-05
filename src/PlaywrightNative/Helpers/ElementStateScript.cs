@@ -1042,6 +1042,18 @@ namespace PlaywrightNative.Helpers
 }";
 
         /// <summary>
+        /// Expression using an in-scope <c>el</c> for atomic selector reads.
+        /// Throws when the node is not an <c>HTMLElement</c>.
+        /// </summary>
+        internal const string InnerTextValueExpression = @"(() => {
+    const view = el && el.ownerDocument && el.ownerDocument.defaultView;
+    if (!view || !(el instanceof view.HTMLElement)) {
+        throw new Error('Node is not an HTMLElement');
+    }
+    return el.innerText;
+})()";
+
+        /// <summary>
         /// JavaScript function <c>(el, spec) => boolean</c> that compares
         /// <c>el[spec.name]</c> to <c>spec.expected</c> via JSON.
         /// </summary>

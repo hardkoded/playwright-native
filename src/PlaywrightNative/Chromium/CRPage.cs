@@ -1227,6 +1227,7 @@ namespace PlaywrightNative.Chromium
                 // Official Playwright writes from the utility world so parser-inserted
                 // scripts (including exposeFunction calls) do not nest inside this evaluate.
                 CRSession frameSession = SessionForFrame(frame);
+                CRExecutionContext writeContext = null;
                 JsonElement? isolated = null;
                 try
                 {
@@ -1248,32 +1249,29 @@ namespace PlaywrightNative.Chromium
                     && isolated.Value.TryGetProperty("executionContextId", out JsonElement isolatedId)
                     && isolatedId.TryGetInt32(out int isolatedContextId))
                 {
-                    CRExecutionContext utility = new CRExecutionContext(frameSession, isolatedContextId);
-                    await utility.EvaluateFunctionAsync<bool>(writeHtml, html).WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+                    writeContext = new CRExecutionContext(frameSession, isolatedContextId);
+                    await writeContext.EvaluateFunctionAsync<bool>(writeHtml, html).WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
                 }
                 else
                 {
                     await EvaluateFunctionInFrameAsync<bool>(frame, writeHtml, html).WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
                 }
 
-                if (frame.LifecycleEvents.Contains(targetLifecycleEvent))
-                {
-                    return;
-                }
-
+                // document.open() destroys the utility world used for the write.
+                writeContext = null;
                 try
                 {
-                    string ready = await EvaluateFunctionInFrameAsync<string>(frame, "() => document.readyState")
-                        .WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
-                    if (string.Equals(ready, "interactive", StringComparison.Ordinal)
-                        || string.Equals(ready, "complete", StringComparison.Ordinal))
+                    JsonElement? after = await frameSession.SendAsync("Page.createIsolatedWorld", new
                     {
-                        frame.OnLifecycleEvent("DOMContentLoaded");
-                    }
-
-                    if (string.Equals(ready, "complete", StringComparison.Ordinal))
+                        frameId = frame.FrameId,
+                        worldName = _utilityWorldName + ":setContent",
+                        grantUniveralAccess = true,
+                    }).WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+                    if (after.HasValue
+                        && after.Value.TryGetProperty("executionContextId", out JsonElement afterId)
+                        && afterId.TryGetInt32(out int afterContextId))
                     {
-                        frame.OnLifecycleEvent("load");
+                        writeContext = new CRExecutionContext(frameSession, afterContextId);
                     }
                 }
                 catch (TimeoutException)
@@ -1281,6 +1279,103 @@ namespace PlaywrightNative.Chromium
                 }
                 catch (PlaywrightNativeException)
                 {
+                }
+
+                if (frame.LifecycleEvents.Contains(targetLifecycleEvent))
+                {
+                    return;
+                }
+
+                // Prefer the utility world used for document.write — the main-world
+                // context is often destroyed mid-parse, which previously caused
+                // SetContent to wait the full timeout for a load event.
+                for (int attempt = 0; attempt < 20; attempt++)
+                {
+                    if (frame.LifecycleEvents.Contains(targetLifecycleEvent))
+                    {
+                        return;
+                    }
+
+                    try
+                    {
+                        string ready;
+                        if (writeContext != null)
+                        {
+                            ready = await writeContext.EvaluateFunctionAsync<string>("() => document.readyState")
+                                .WaitAsync(TimeSpan.FromMilliseconds(250)).ConfigureAwait(false);
+                        }
+                        else
+                        {
+                            ready = await EvaluateFunctionInFrameAsync<string>(frame, "() => document.readyState")
+                                .WaitAsync(TimeSpan.FromMilliseconds(250)).ConfigureAwait(false);
+                        }
+
+                        if (string.Equals(ready, "interactive", StringComparison.Ordinal)
+                            || string.Equals(ready, "complete", StringComparison.Ordinal))
+                        {
+                            frame.OnLifecycleEvent("DOMContentLoaded");
+                        }
+
+                        if (string.Equals(ready, "complete", StringComparison.Ordinal))
+                        {
+                            frame.OnLifecycleEvent("load");
+                        }
+
+                        if (frame.LifecycleEvents.Contains(targetLifecycleEvent))
+                        {
+                            return;
+                        }
+                    }
+                    catch (TimeoutException)
+                    {
+                    }
+                    catch (PlaywrightNativeException)
+                    {
+                    }
+
+                    await Task.Delay(25).ConfigureAwait(false);
+                }
+
+                if (frame.LifecycleEvents.Contains(targetLifecycleEvent))
+                {
+                    return;
+                }
+
+                // Static document.write HTML is complete once the write evaluate
+                // returns. Prefer synthesizing the common lifecycle targets over
+                // hanging until the navigation timeout when CDP load events are
+                // lost after the utility-world context swap.
+                if (!string.Equals(targetLifecycleEvent, "networkidle", StringComparison.Ordinal))
+                {
+                    frame.OnLifecycleEvent("DOMContentLoaded");
+                    frame.OnLifecycleEvent("load");
+                }
+
+                // document.open destroys the main-world context. Wait until a new
+                // one exists so callers do not hang on the first post-SetContent
+                // evaluate / query. CDP may also raise OnNavigated during this
+                // window and ClearLifecycleEvents, wiping the synthetic load.
+                try
+                {
+                    await WaitForFrameExecutionContextAsync(frame, timeout: 5_000).ConfigureAwait(false);
+                }
+                catch (TimeoutException)
+                {
+                }
+
+                if (!string.Equals(targetLifecycleEvent, "networkidle", StringComparison.Ordinal))
+                {
+                    if (!frame.LifecycleEvents.Contains("DOMContentLoaded"))
+                    {
+                        frame.OnLifecycleEvent("DOMContentLoaded");
+                    }
+
+                    if (!frame.LifecycleEvents.Contains("load"))
+                    {
+                        frame.OnLifecycleEvent("load");
+                    }
+
+                    return;
                 }
 
                 if (frame.LifecycleEvents.Contains(targetLifecycleEvent))

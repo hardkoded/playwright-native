@@ -1044,7 +1044,8 @@ namespace PlaywrightNative.Firefox
         Task<IElementHandle> IPage.AddStyleTagAsync(PageAddStyleTagOptions options)
             => AddStyleTagAsync(options?.Url, options?.Path, options?.Content);
 
-        Task<string> IPage.AriaSnapshotAsync(PageAriaSnapshotOptions options) => Task.FromResult<string>(default!);
+        Task<string> IPage.AriaSnapshotAsync(PageAriaSnapshotOptions options)
+            => PageAriaSnapshot.CaptureAsync(this, options);
 
         Task IPage.CancelPickLocatorAsync() => Task.CompletedTask;
 

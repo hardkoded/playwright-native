@@ -1278,7 +1278,7 @@ namespace PlaywrightNative
         /// <inheritdoc/>
         public async Task<string> AriaSnapshotAsync(
             float? timeout = default,
-            AriaSnapshotMode mode = default,
+            AriaSnapshotMode mode = AriaSnapshotMode.Default,
             int? depth = default,
             bool? boxes = default)
         {
@@ -1303,7 +1303,7 @@ namespace PlaywrightNative
         /// <inheritdoc/>
         public async Task<string> AriaSnapshotJsonAsync(
             float? timeout = default,
-            AriaSnapshotMode mode = default,
+            AriaSnapshotMode mode = AriaSnapshotMode.Default,
             int? depth = default,
             bool? boxes = default)
         {
@@ -3169,7 +3169,12 @@ namespace PlaywrightNative
         }
 
 #pragma warning disable SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
-        Task<string> ILocator.AriaSnapshotAsync(LocatorAriaSnapshotOptions options) => Task.FromResult<string>(default!);
+        Task<string> ILocator.AriaSnapshotAsync(LocatorAriaSnapshotOptions options)
+            => AriaSnapshotAsync(
+                options?.Timeout,
+                options?.Mode ?? AriaSnapshotMode.Default,
+                options?.Depth,
+                options?.Boxes);
 
         Task ILocator.BlurAsync(LocatorBlurOptions options) => BlurAsync(options?.Timeout);
 

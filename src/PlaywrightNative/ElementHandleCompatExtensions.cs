@@ -470,7 +470,7 @@ namespace PlaywrightNative
             });
 
         /// <summary>Legacy element aria snapshot YAML.</summary>
-        public static Task<string> AriaSnapshotAsync(this IElementHandle handle, AriaSnapshotMode mode = default, int? depth = default, bool? boxes = default)
+        public static Task<string> AriaSnapshotAsync(this IElementHandle handle, AriaSnapshotMode mode = AriaSnapshotMode.Default, int? depth = default, bool? boxes = default)
         {
             bool renderBoxes = boxes ?? false;
             if (mode == AriaSnapshotMode.Ai)
@@ -482,7 +482,7 @@ namespace PlaywrightNative
         }
 
         /// <summary>Legacy element aria snapshot JSON.</summary>
-        public static Task<string> AriaSnapshotJsonAsync(this IElementHandle handle, AriaSnapshotMode mode = default, int? depth = default, bool? boxes = default)
+        public static Task<string> AriaSnapshotJsonAsync(this IElementHandle handle, AriaSnapshotMode mode = AriaSnapshotMode.Default, int? depth = default, bool? boxes = default)
         {
             bool renderBoxes = boxes ?? false;
             if (mode == AriaSnapshotMode.Ai)

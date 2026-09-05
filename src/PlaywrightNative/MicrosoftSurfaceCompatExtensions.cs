@@ -170,7 +170,7 @@ namespace PlaywrightNative
         public static async Task<string> AriaSnapshotJsonAsync(
             this IPage page,
             float? timeout = default,
-            AriaSnapshotMode mode = default,
+            AriaSnapshotMode mode = AriaSnapshotMode.Default,
             int? depth = default,
             bool? boxes = default)
         {
@@ -184,7 +184,7 @@ namespace PlaywrightNative
         public static Task<string> AriaSnapshotJsonAsync(
             this ILocator locator,
             float? timeout = default,
-            AriaSnapshotMode mode = default,
+            AriaSnapshotMode mode = AriaSnapshotMode.Default,
             int? depth = default,
             bool? boxes = default)
         {

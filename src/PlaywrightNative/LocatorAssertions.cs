@@ -106,7 +106,16 @@ namespace PlaywrightNative
                 IReadOnlyList<IElementHandle> all;
                 try
                 {
-                    all = await ElementHandlesOrEmptyAsync().ConfigureAwait(false);
+                    int remainingMs = timeoutMs == Timeout.Infinite
+                        ? 5_000
+                        : Math.Max(50, timeoutMs - (int)sw.ElapsedMilliseconds);
+                    all = await ElementHandlesOrEmptyAsync()
+                        .WaitAsync(TimeSpan.FromMilliseconds(remainingMs))
+                        .ConfigureAwait(false);
+                }
+                catch (TimeoutException)
+                {
+                    all = Array.Empty<IElementHandle>();
                 }
                 catch (PlaywrightNativeException ex) when (IsSelectorSyntaxError(ex))
                 {
@@ -1632,7 +1641,7 @@ namespace PlaywrightNative
             {
                 if (kind == ExpectSnapshotKind.Page)
                 {
-                    return await _locator.Page.AriaSnapshotAsync(timeout: 1000).ConfigureAwait(false);
+                    return await CapturePageExpectAriaSnapshotAsync().ConfigureAwait(false);
                 }
 
                 IReadOnlyList<IElementHandle> all = await ElementHandlesOrEmptyAsync().ConfigureAwait(false);
@@ -1650,7 +1659,7 @@ namespace PlaywrightNative
 
                 if (!visible)
                 {
-                    return await _locator.Page.AriaSnapshotAsync(timeout: 1000).ConfigureAwait(false);
+                    return await CapturePageExpectAriaSnapshotAsync().ConfigureAwait(false);
                 }
 
                 int? depth = kind == ExpectSnapshotKind.Containment ? (int?)null : 1;
@@ -1686,12 +1695,32 @@ namespace PlaywrightNative
             {
                 try
                 {
-                    return await _locator.Page.AriaSnapshotAsync(timeout: 1000).ConfigureAwait(false);
+                    return await CapturePageExpectAriaSnapshotAsync().ConfigureAwait(false);
                 }
                 catch (Exception fallback) when (fallback is PlaywrightNativeException || fallback is TimeoutException)
                 {
-                    return null;
+                    // Prefer empty over null so matcherResult.ariaSnapshot stays populated.
+                    return string.Empty;
                 }
+            }
+        }
+
+        private async Task<string> CapturePageExpectAriaSnapshotAsync()
+        {
+            // Use CDP accessibility rather than locator('body').ariaSnapshot():
+            // after SetContent the main-world context can be briefly unavailable and
+            // the locator wait would burn the full default timeout.
+            try
+            {
+                AccessibilitySnapshotResult snapshot = await _locator.Page
+                    .SnapshotAccessibilityAsync(interestingOnly: false)
+                    .WaitAsync(TimeSpan.FromSeconds(2))
+                    .ConfigureAwait(false);
+                return AriaSnapshotYaml.Format(snapshot) ?? string.Empty;
+            }
+            catch (TimeoutException)
+            {
+                return string.Empty;
             }
         }
 

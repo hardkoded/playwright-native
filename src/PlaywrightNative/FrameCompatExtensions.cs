@@ -568,7 +568,7 @@ namespace PlaywrightNative
             => EvaluateCallbacks.EvaluateTargetAsync<T>(frame, expression, arg, exposeFunctions: true);
 
         /// <summary>Legacy aria snapshot YAML.</summary>
-        public static Task<string> AriaSnapshotAsync(this IFrame frame, AriaSnapshotMode mode = default, int? depth = default, bool? boxes = default)
+        public static Task<string> AriaSnapshotAsync(this IFrame frame, AriaSnapshotMode mode = AriaSnapshotMode.Default, int? depth = default, bool? boxes = default)
             => frame.Locator("body").AriaSnapshotAsync(new LocatorAriaSnapshotOptions());
 
         /// <summary>Legacy aria snapshot scoped to a ref selector.</summary>
