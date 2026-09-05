@@ -1630,6 +1630,40 @@ namespace PlaywrightNative.Helpers
                     }
                 }
 
+                // WebKit often fills WKResponse via loadingFinished prefetch after
+                // CaptureBodyAsync already timed out on an early empty read.
+                if (!_omitContent)
+                {
+                    foreach (PendingEntry pending in snapshot)
+                    {
+                        if (pending.Body != null && pending.Body.Length > 0)
+                        {
+                            continue;
+                        }
+
+                        if (pending.Response == null)
+                        {
+                            continue;
+                        }
+
+                        try
+                        {
+                            byte[] late = await ReadBodyWithTimeoutAsync(pending.Response, TimeSpan.FromSeconds(3))
+                                .ConfigureAwait(false);
+                            if (late != null && late.Length > 0)
+                            {
+                                pending.Body = late;
+                            }
+                        }
+                        catch (TimeoutException)
+                        {
+                        }
+                        catch (PlaywrightNativeException)
+                        {
+                        }
+                    }
+                }
+
                 // Refresh page HTML while the context is still live so navigation
                 // entries can embed/attach content when getResponseBody raced away.
                 if (!_omitContent && !_slimMode)
@@ -1825,6 +1859,16 @@ namespace PlaywrightNative.Helpers
                     // One more attempt after the response has had time to buffer.
                     await Task.Delay(50).ConfigureAwait(false);
                     body = await ReadBodyWithTimeoutAsync(response, TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+                    if (body != null && body.Length > 0)
+                    {
+                        pending.Body = body;
+                        return;
+                    }
+
+                    // loadingFinished prefetch may still be in flight; give it a
+                    // beat before falling back to the live page document.
+                    await Task.Delay(100).ConfigureAwait(false);
+                    body = await ReadBodyWithTimeoutAsync(response, TimeSpan.FromSeconds(3)).ConfigureAwait(false);
                     if (body != null && body.Length > 0)
                     {
                         pending.Body = body;
