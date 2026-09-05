@@ -398,18 +398,17 @@ namespace PlaywrightNative.WebKit
 
         private async Task<IJSHandle> EvaluatePreparedHandleAsync(string handleFn, object[] handleArgs)
         {
-            await EvaluateHandleArg.StashRemoteHandlesAsync(handleArgs).ConfigureAwait(false);
+            object[] args = EvaluateHandleArg.AsCallFunctionArguments(handleArgs);
             return await _page
-                .EvaluateFunctionHandleInFrameAsync(_wkFrame, handleFn, EvaluateHandleArg.TreeArgument(handleArgs))
+                .EvaluateFunctionHandleInFrameAsync(_wkFrame, handleFn, args)
                 .ConfigureAwait(false);
         }
 
-        private async Task<T> EvaluatePreparedAsync<T>(string handleFn, object[] handleArgs)
+        private Task<T> EvaluatePreparedAsync<T>(string handleFn, object[] handleArgs)
         {
-            await EvaluateHandleArg.StashRemoteHandlesAsync(handleArgs).ConfigureAwait(false);
-            return await _page
-                .EvaluateSerializedInFrameAsync<T>(_wkFrame, EvaluateHandleArg.PreparedExpression(handleFn, handleArgs))
-                .ConfigureAwait(false);
+            object[] args = EvaluateHandleArg.AsCallFunctionArguments(handleArgs);
+            string serializedFn = EvaluateHandleArg.WithSerializedHandleResult(handleFn);
+            return _page.EvaluateFunctionSerializedInFrameAsync<T>(_wkFrame, serializedFn, args);
         }
 
         private Task<T> EvaluateInOwnFrameAsync<T>(string expression, object arg)

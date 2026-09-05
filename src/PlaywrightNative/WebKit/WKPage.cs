@@ -800,9 +800,9 @@ namespace PlaywrightNative.WebKit
                 WKExecutionContext context = RequireExecutionContext();
                 if (EvaluateHandleArg.TryPrepareHandleCall(expression, arg, out string handleFn, out object[] handleArgs))
                 {
-                    await EvaluateHandleArg.StashRemoteHandlesAsync(handleArgs).ConfigureAwait(false);
+                    object[] args = EvaluateHandleArg.AsCallFunctionArguments(handleArgs);
                     JsonElement? bound = await context
-                        .EvaluateFunctionHandleAsync(handleFn, EvaluateHandleArg.TreeArgument(handleArgs))
+                        .EvaluateFunctionHandleAsync(handleFn, args)
                         .ConfigureAwait(false);
                     return WrapRemoteObject(context, bound);
                 }
@@ -3528,6 +3528,34 @@ namespace PlaywrightNative.WebKit
         }
 
         /// <summary>
+        /// Evaluates a function with live handle arguments in <paramref name="frame"/>
+        /// and structured-clone parses the result (adopts ElementHandles).
+        /// </summary>
+        /// <typeparam name="T">The result type.</typeparam>
+        /// <param name="frame">The target frame.</param>
+        /// <param name="functionDeclaration">A function declaration.</param>
+        /// <param name="args">Arguments, including live JS handles.</param>
+        /// <returns>The deserialized result.</returns>
+        internal async Task<T> EvaluateFunctionSerializedInFrameAsync<T>(
+            WKFrame frame,
+            string functionDeclaration,
+            params object[] args)
+        {
+            try
+            {
+                WKExecutionContext context = await WaitForFrameContextAsync(frame).ConfigureAwait(false);
+                JsonElement? wrapped = await context
+                    .EvaluateFunctionRemoteAsync(functionDeclaration, args)
+                    .ConfigureAwait(false);
+                return EvaluateSerialization.ParseRemote<T>(wrapped);
+            }
+            catch (PlaywrightNativeException ex)
+            {
+                throw EvaluateSerialization.RewriteException(ex, frameEvaluate: true);
+            }
+        }
+
+        /// <summary>
         /// Evaluates a JavaScript function in <paramref name="frame"/>'s world with arguments.
         /// </summary>
         /// <typeparam name="T">The target type for the result.</typeparam>
@@ -5403,9 +5431,21 @@ namespace PlaywrightNative.WebKit
 
         private async Task<T> EvaluatePreparedAsync<T>(string handleFn, object[] handleArgs)
         {
-            await EvaluateHandleArg.StashRemoteHandlesAsync(handleArgs).ConfigureAwait(false);
-            return await EvaluateSerializedAsync<T>(
-                EvaluateHandleArg.PreparedExpression(handleFn, handleArgs)).ConfigureAwait(false);
+            // Pass live handles through callFunctionOn so WKExecutionContext can
+            // adopt ElementHandles (and reject cross-context JSHandles), matching Chromium.
+            object[] args = EvaluateHandleArg.AsCallFunctionArguments(handleArgs);
+            string serializedFn = EvaluateHandleArg.WithSerializedHandleResult(handleFn);
+            try
+            {
+                await Task.Yield();
+                WKExecutionContext context = await WaitForMainExecutionContextAsync().ConfigureAwait(false);
+                JsonElement? wrapped = await context.EvaluateFunctionRemoteAsync(serializedFn, args).ConfigureAwait(false);
+                return EvaluateSerialization.ParseRemote<T>(wrapped);
+            }
+            catch (PlaywrightNativeException ex)
+            {
+                throw EvaluateSerialization.RewriteException(ex);
+            }
         }
 
         private async Task<T> EvaluateSerializedAsync<T>(string expression)

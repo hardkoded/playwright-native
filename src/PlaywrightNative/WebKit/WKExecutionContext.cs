@@ -113,24 +113,19 @@ namespace PlaywrightNative.WebKit
         /// <returns>The deserialized result of the function call.</returns>
         internal async Task<T> EvaluateFunctionAsync<T>(string functionDeclaration, params object[] args)
         {
-            if (args != null
-                && args.Length == 1
-                && args[0] is WKJSHandle onlyHandle
-                && onlyHandle.AsElement() != null
-                && onlyHandle.ExecutionContext != null
-                && onlyHandle.ExecutionContext.ContextId != ContextId)
-            {
-                bool sameOrigin = await onlyHandle.EvaluateFunctionAsync<bool>(
-                    "el => { try { return !!el.ownerDocument.defaultView.top.document; } catch (e) { return false; } }")
-                    .ConfigureAwait(false);
-                if (!sameOrigin)
-                {
-                    throw new PlaywrightNativeException(EvaluateWithArg.UnableToAdoptMessage);
-                }
+            JsonElement? remote = await EvaluateFunctionRemoteAsync(functionDeclaration, args).ConfigureAwait(false);
+            return remote == null ? default : DeserializeValue<T>(remote.Value);
+        }
 
-                return await onlyHandle.EvaluateFunctionAsync<T>(functionDeclaration).ConfigureAwait(false);
-            }
-
+        /// <summary>
+        /// Same as <see cref="EvaluateFunctionAsync{T}"/> but returns the raw WIP
+        /// <c>RemoteObject</c> (<c>returnByValue: true</c>) for structured-clone parsing.
+        /// </summary>
+        /// <param name="functionDeclaration">A JavaScript function declaration.</param>
+        /// <param name="args">Arguments to pass to the function.</param>
+        /// <returns>The remote result object, or <see langword="null"/>.</returns>
+        internal async Task<JsonElement?> EvaluateFunctionRemoteAsync(string functionDeclaration, params object[] args)
+        {
             object[] prepared = await PrepareCallArgumentsAsync(args).ConfigureAwait(false);
             object payload = _contextId.HasValue
                 ? (object)new
@@ -169,7 +164,7 @@ namespace PlaywrightNative.WebKit
 
             if (response == null)
             {
-                return default;
+                return null;
             }
 
             JsonElement responseElement = response.Value;
@@ -189,10 +184,10 @@ namespace PlaywrightNative.WebKit
 
             if (!responseElement.TryGetProperty("result", out JsonElement result))
             {
-                return default;
+                return null;
             }
 
-            return DeserializeValue<T>(result);
+            return result;
         }
 
         /// <summary>
@@ -788,42 +783,32 @@ namespace PlaywrightNative.WebKit
                 throw new PlaywrightNativeException(DispatchEventScript.DifferentContextMessage);
             }
 
+            if (!_contextId.HasValue)
+            {
+                throw new PlaywrightNativeException(EvaluateWithArg.UnableToAdoptMessage);
+            }
+
             try
             {
-                string token = "pw" + Guid.NewGuid().ToString("N");
-                await handle.EvaluateFunctionAsync<bool>(
-                    "(el, t) => { el.setAttribute('data-pw-adopt', t); return true; }",
-                    token).ConfigureAwait(false);
+                // Official wkPage.adoptElementHandle: DOM.resolveNode into the target world.
+                JsonElement? resolved = await _session.SendAsync("DOM.resolveNode", new
+                {
+                    objectId = handle.ObjectId,
+                    executionContextId = _contextId.Value,
+                }).ConfigureAwait(false);
 
-                string findScript =
-                    @"(function(){
-                        const token = " + JsonSerializer.Serialize(token) + @";
-                        const match = (doc) => {
-                            try { return doc.querySelector('[data-pw-adopt="" + token + ""]'); }
-                            catch (e) { return null; }
-                        };
-                        let found = match(document);
-                        if (found) {
-                            found.removeAttribute('data-pw-adopt');
-                            return found;
-                        }
-                        const iframes = document.querySelectorAll('iframe');
-                        for (let i = 0; i < iframes.length; i++) {
-                            try {
-                                const doc = iframes[i].contentDocument;
-                                if (!doc) continue;
-                                found = match(doc);
-                                if (found) {
-                                    found.removeAttribute('data-pw-adopt');
-                                    return found;
-                                }
-                            } catch (e) {}
-                        }
-                        return null;
-                    })()";
+                if (resolved == null
+                    || !resolved.Value.TryGetProperty("object", out JsonElement remote)
+                    || (remote.TryGetProperty("subtype", out JsonElement subtype)
+                        && subtype.ValueKind == JsonValueKind.String
+                        && string.Equals(subtype.GetString(), "null", StringComparison.Ordinal))
+                    || !remote.TryGetProperty("objectId", out JsonElement adoptedId)
+                    || adoptedId.ValueKind != JsonValueKind.String)
+                {
+                    throw new PlaywrightNativeException(EvaluateWithArg.UnableToAdoptMessage);
+                }
 
-                JsonElement? found = await EvaluateHandleAsync(findScript).ConfigureAwait(false);
-                string adopted = found == null ? null : RemoteObject.GetObjectId(found.Value);
+                string adopted = adoptedId.GetString();
                 if (string.IsNullOrEmpty(adopted))
                 {
                     throw new PlaywrightNativeException(EvaluateWithArg.UnableToAdoptMessage);
