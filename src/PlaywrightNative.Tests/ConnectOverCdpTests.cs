@@ -40,24 +40,34 @@ namespace PlaywrightNative.Tests
             {
                 if (File.Exists(portFile))
                 {
-                    // Chromium keeps DevToolsActivePort open; share so Windows can read.
-                    string[] lines;
-                    using (FileStream stream = new FileStream(
-                        portFile,
-                        FileMode.Open,
-                        FileAccess.Read,
-                        FileShare.ReadWrite | FileShare.Delete))
-                    using (StreamReader reader = new StreamReader(stream))
+                    // Chromium keeps DevToolsActivePort open with a write lock on
+                    // Windows; share + retry across rewrite races.
+                    try
                     {
-                        string text = await reader.ReadToEndAsync().ConfigureAwait(false);
-                        lines = text.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None);
-                    }
+                        string[] lines;
+                        using (FileStream stream = new FileStream(
+                            portFile,
+                            FileMode.Open,
+                            FileAccess.Read,
+                            FileShare.ReadWrite | FileShare.Delete))
+                        using (StreamReader reader = new StreamReader(stream))
+                        {
+                            string text = await reader.ReadToEndAsync().ConfigureAwait(false);
+                            lines = text.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None);
+                        }
 
-                    if (lines.Length > 0
-                        && int.TryParse(lines[0], out int port)
-                        && port > 0)
+                        if (lines.Length > 0
+                            && int.TryParse(lines[0], out int port)
+                            && port > 0)
+                        {
+                            return "http://127.0.0.1:" + port;
+                        }
+                    }
+                    catch (IOException)
                     {
-                        return "http://127.0.0.1:" + port;
+                    }
+                    catch (UnauthorizedAccessException)
+                    {
                     }
                 }
 

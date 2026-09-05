@@ -8380,7 +8380,10 @@ namespace PlaywrightNative.WebKit
                 action,
                 WaitForEventAsync(PageEvent.Console, options?.Predicate, options?.Timeout));
 
-        Task<IDownload> IPage.RunAndWaitForDownloadAsync(Func<Task> action, PageRunAndWaitForDownloadOptions options) => Task.FromResult<IDownload>(default!);
+        Task<IDownload> IPage.RunAndWaitForDownloadAsync(Func<Task> action, PageRunAndWaitForDownloadOptions options)
+            => RunAndWaitInternalAsync(
+                action,
+                WaitForEventAsync(PageEvent.Download, options?.Predicate, options?.Timeout));
 
         Task<IFileChooser> IPage.RunAndWaitForFileChooserAsync(Func<Task> action, PageRunAndWaitForFileChooserOptions options) => Task.FromResult<IFileChooser>(default!);
 

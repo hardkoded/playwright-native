@@ -90,6 +90,12 @@ namespace PlaywrightNative
             bool lastIsVisible = false;
             bool wantVisible = visible != false;
 
+            // Upstream frames._expect performs a noAbort one-shot before retries so
+            // timeout: 1 still succeeds when the locator already matches — and so
+            // .not.toBeVisible() succeeds immediately when nothing matches
+            // (missing elements are not visible).
+            bool oneShotPending = true;
+
             while (true)
             {
                 if (ExpectAbort.TryMidAbort(signal, out string abortReason))
@@ -109,11 +115,11 @@ namespace PlaywrightNative
                 bool queryTimedOut = false;
                 try
                 {
-                    // Cap each probe so a hung ElementHandles during navigation
+                    // Cap retry probes so a hung ElementHandles during navigation
                     // cannot burn the entire expect timeout in one WaitAsync.
-                    int remainingMs = timeoutMs == Timeout.Infinite
-                        ? 5_000
-                        : Math.Max(50, Math.Min(5_000, timeoutMs - (int)sw.ElapsedMilliseconds));
+                    // The first probe is a one-shot (up to 5s) and is never aborted
+                    // by the expect timeout budget.
+                    int remainingMs = ExpectElementHandlesBudgetMs(timeoutMs, sw, ref oneShotPending);
                     all = await ElementHandlesOrEmptyAsync(remainingMs).ConfigureAwait(false);
                 }
                 catch (TimeoutException)
@@ -197,6 +203,10 @@ namespace PlaywrightNative
             string preview = null;
             int resolved = 0;
 
+            // One-shot first probe: missing elements are hidden, so toBeHidden()
+            // with timeout: 1 must succeed immediately when nothing matches.
+            bool oneShotPending = true;
+
             while (true)
             {
                 await LocatorHandlers.RunAsync(_locator.Page, timeoutMs, sw).ConfigureAwait(false);
@@ -204,9 +214,7 @@ namespace PlaywrightNative
                 bool queryTimedOut = false;
                 try
                 {
-                    int remainingMs = timeoutMs == Timeout.Infinite
-                        ? 5_000
-                        : Math.Max(50, Math.Min(5_000, timeoutMs - (int)sw.ElapsedMilliseconds));
+                    int remainingMs = ExpectElementHandlesBudgetMs(timeoutMs, sw, ref oneShotPending);
                     all = await ElementHandlesOrEmptyAsync(remainingMs).ConfigureAwait(false);
                 }
                 catch (TimeoutException)
@@ -301,6 +309,10 @@ namespace PlaywrightNative
             string preview = null;
             int resolved = 0;
 
+            // One-shot first probe: missing elements are detached, so
+            // .not.toBeAttached() with timeout: 1 must succeed immediately.
+            bool oneShotPending = true;
+
             while (true)
             {
                 await LocatorHandlers.RunAsync(_locator.Page, timeoutMs, sw).ConfigureAwait(false);
@@ -308,9 +320,7 @@ namespace PlaywrightNative
                 bool queryTimedOut = false;
                 try
                 {
-                    int remainingMs = timeoutMs == Timeout.Infinite
-                        ? 5_000
-                        : Math.Max(50, Math.Min(5_000, timeoutMs - (int)sw.ElapsedMilliseconds));
+                    int remainingMs = ExpectElementHandlesBudgetMs(timeoutMs, sw, ref oneShotPending);
                     all = await ElementHandlesOrEmptyAsync(remainingMs).ConfigureAwait(false);
                 }
                 catch (TimeoutException)
@@ -1738,6 +1748,25 @@ namespace PlaywrightNative
             }
 
             return log.ToString();
+        }
+
+        private static int ExpectElementHandlesBudgetMs(int timeoutMs, Stopwatch sw, ref bool oneShotPending)
+        {
+            // Mirror upstream frames._expect: the first probe always finishes
+            // (noAbort / nullProgress) so timeout: 1 still observes the current DOM.
+            // Later polls stay bounded by the remaining expect budget.
+            if (oneShotPending)
+            {
+                oneShotPending = false;
+                return 5_000;
+            }
+
+            if (timeoutMs == Timeout.Infinite)
+            {
+                return 5_000;
+            }
+
+            return Math.Max(50, Math.Min(5_000, timeoutMs - (int)sw.ElapsedMilliseconds));
         }
 
         private string ApiName(string method)

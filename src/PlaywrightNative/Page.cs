@@ -2587,7 +2587,10 @@ namespace PlaywrightNative
                 action,
                 WaitForEventAsync(PageEvent.Console, options?.Predicate, options?.Timeout));
 
-        Task<IDownload> IPage.RunAndWaitForDownloadAsync(Func<Task> action, PageRunAndWaitForDownloadOptions options) => Task.FromResult<IDownload>(default!);
+        Task<IDownload> IPage.RunAndWaitForDownloadAsync(Func<Task> action, PageRunAndWaitForDownloadOptions options)
+            => RunAndWaitInternalAsync(
+                action,
+                WaitForEventAsync(PageEvent.Download, options?.Predicate, options?.Timeout));
 
         Task<IFileChooser> IPage.RunAndWaitForFileChooserAsync(Func<Task> action, PageRunAndWaitForFileChooserOptions options)
             => RunAndWaitInternalAsync(
@@ -2745,7 +2748,8 @@ namespace PlaywrightNative
         Task<IConsoleMessage> IPage.WaitForConsoleMessageAsync(PageWaitForConsoleMessageOptions options)
             => WaitForEventAsync(PageEvent.Console, options?.Predicate, options?.Timeout);
 
-        Task<IDownload> IPage.WaitForDownloadAsync(PageWaitForDownloadOptions options) => Task.FromResult<IDownload>(default!);
+        Task<IDownload> IPage.WaitForDownloadAsync(PageWaitForDownloadOptions options)
+            => WaitForEventAsync(PageEvent.Download, options?.Predicate, options?.Timeout);
 
         Task<IFileChooser> IPage.WaitForFileChooserAsync(PageWaitForFileChooserOptions options)
             => FileChooserWaitHelper.WaitAsync(this, options?.Predicate, options?.Timeout);
