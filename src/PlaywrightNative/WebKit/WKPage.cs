@@ -578,8 +578,13 @@ namespace PlaywrightNative.WebKit
                     _closing = true;
                 }
 
+                // DidClose sets _closed before raising Close / completing _closedTcs.
+                // Under load, Playwright.closePage can ACK while DidClose is still in
+                // cleanup — returning on _closed alone races past the Close event.
+                // Wait for _closedTcs (completed after Close) once close has begun.
                 if (_closed)
                 {
+                    await _closedTcs.Task.ConfigureAwait(false);
                     return;
                 }
 
@@ -618,12 +623,13 @@ namespace PlaywrightNative.WebKit
                         DidClose();
                     }
 
+                    await _closedTcs.Task.ConfigureAwait(false);
                     return;
                 }
 
                 await Task.WhenAny(closePage, _closedTcs.Task).ConfigureAwait(false);
                 _ = closePage.Exception;
-                if (_closed)
+                if (_closedTcs.Task.IsCompleted)
                 {
                     return;
                 }
@@ -640,10 +646,7 @@ namespace PlaywrightNative.WebKit
                     _ = targetClose.Exception;
                 }
 
-                if (!_closed)
-                {
-                    await _closedTcs.Task.ConfigureAwait(false);
-                }
+                await _closedTcs.Task.ConfigureAwait(false);
             }).ConfigureAwait(false);
         }
 
@@ -4472,8 +4475,9 @@ namespace PlaywrightNative.WebKit
 
             _reportAsNewNavigationTcs.TrySetResult(true);
 
-            // Raise Close before unblocking CloseAsync waiters. Completing
-            // _closedTcs first races the waiter past the event subscription.
+            // Close must precede _closedTcs. CloseAsync may observe _closed mid-DidClose
+            // (set above) once Playwright.closePage ACKs; it waits on _closedTcs so the
+            // Close event is visible before CloseAsync returns.
             Close?.Invoke(this, this);
             _closedTcs.TrySetResult(true);
         }
