@@ -409,15 +409,6 @@ namespace PlaywrightNative.Chromium
                 }
             }
 
-            // Official: context "page" must fire before the opener can call a
-            // context exposeFunction on the new window (popup.spec). Report while
-            // still paused so the event precedes Runtime.bindingCalled after resume.
-            if (Opener != null && owner?.PublicContext != null && PublicPage != null)
-            {
-                await EnsureBlankPopupUrlAsync().ConfigureAwait(false);
-                owner.PublicContext.ReportPopupAsNew(PublicPage);
-            }
-
             await _client.SendAsync("Runtime.runIfWaitingForDebugger").ConfigureAwait(false);
             _debuggerResumed = true;
 
@@ -453,8 +444,9 @@ namespace PlaywrightNative.Chromium
                 _firstNonInitialNavigationTcs.TrySetResult(true);
             }
 
-            // Replay bindings after navigation sync. Page event already fired
-            // before resume so exposeFunction ordering stays page|binding.
+            // Report popup Page events only after the main-frame URL has synced
+            // so WaitForEvent(Page) observers see the navigated URL, not "".
+            // Binding dispatch may already have reported (page|binding order).
             if (Opener != null && owner?.PublicContext != null && PublicPage != null)
             {
                 owner.PublicContext.ReportPopupAsNew(PublicPage);
@@ -4684,6 +4676,8 @@ namespace PlaywrightNative.Chromium
                     return true;
                 }
 
+                // Official popup.spec: context "page" precedes exposeFunction callback.
+                ReportPopupBeforeBinding();
                 Task<object> invoked = handler(args);
                 _ = Task.Run(() => DeliverInvokedBindingAsync(invoked, executionContextId, seq));
                 return true;
@@ -4693,6 +4687,32 @@ namespace PlaywrightNative.Chromium
                 _ = Task.Run(() => DeliverBindingErrorAsync(executionContextId, seq, ex));
                 return true;
             }
+        }
+
+        private void ReportPopupBeforeBinding()
+        {
+            if (Opener == null || PublicPage == null)
+            {
+                return;
+            }
+
+            ChromiumBrowserContext context = PublicPage.Context as ChromiumBrowserContext
+                ?? _browser.DefaultContext?.PublicContext
+                ?? FindOwningPublicContext();
+            context?.ReportPopupAsNew(PublicPage);
+        }
+
+        private ChromiumBrowserContext FindOwningPublicContext()
+        {
+            foreach (CRBrowserContext context in _browser.Contexts)
+            {
+                if (context.Pages.Contains(this) && context.PublicContext != null)
+                {
+                    return context.PublicContext;
+                }
+            }
+
+            return null;
         }
 
         private async Task DeliverInvokedBindingAsync(Task<object> invoked, int executionContextId, long seq)
@@ -4734,6 +4754,7 @@ namespace PlaywrightNative.Chromium
                         return;
                     }
 
+                    ReportPopupBeforeBinding();
                     CRExecutionContext context = new CRExecutionContext(_client, executionContextId);
                     JsonElement? handleValue = await context.EvaluateHandleAsync(PageBindingScript.TakeHandleExpression(seq)).ConfigureAwait(false);
                     CRJSHandle jsHandle = WrapJSHandle(context, handleValue);
@@ -4759,6 +4780,7 @@ namespace PlaywrightNative.Chromium
                     return;
                 }
 
+                ReportPopupBeforeBinding();
                 object result = await handler(args).ConfigureAwait(false);
                 await DeliverBindingResultAsync(executionContextId, seq, result).ConfigureAwait(false);
             }
@@ -4973,21 +4995,6 @@ namespace PlaywrightNative.Chromium
             lock (_windowOpenFeatures)
             {
                 _windowOpenFeatures.Enqueue(features.ToArray());
-            }
-        }
-
-        private async Task EnsureBlankPopupUrlAsync()
-        {
-            await SyncMainFrameFromTreeAsync().ConfigureAwait(false);
-            if (_frameManager.MainFrame == null)
-            {
-                return;
-            }
-
-            if (PopupOpenedHelper.IsInitialEmptyDocumentUrl(_frameManager.MainFrame.Url)
-                || string.IsNullOrEmpty(_frameManager.MainFrame.Url))
-            {
-                _frameManager.MainFrame.Url = "about:blank";
             }
         }
 
