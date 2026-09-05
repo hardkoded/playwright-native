@@ -2436,7 +2436,7 @@ namespace PlaywrightNative
                             method,
                             pass: _negate,
                             timeoutMs,
-                            await CaptureTextAriaSnapshotAsync(single, sawElement).ConfigureAwait(false));
+                            ariaSnapshot: null);
                     }
 
                     throw new PlaywrightNativeException(header + "\n" + ex.Message, ex);
@@ -2458,36 +2458,68 @@ namespace PlaywrightNative
                         "\n\nCall log:\n");
                 }
 
-                string[] received = new string[all.Count];
-                bool readFailed = false;
-                for (int i = 0; i < all.Count; i++)
+                string[] received;
+                bool readFailed;
+                try
                 {
-                    try
-                    {
-                        received[i] = await ReadTextAsync(all[i], useInnerText).ConfigureAwait(false);
-                    }
-                    catch (PlaywrightNativeException)
-                    {
-                        readFailed = true;
-                        break;
-                    }
-                }
-
-                if (!readFailed && all.Count > 0)
-                {
-                    lastReceived = received;
-                    sawElement = true;
-                    if (all.Count == 1)
+                    received = new string[all.Count];
+                    readFailed = false;
+                    for (int i = 0; i < all.Count; i++)
                     {
                         try
                         {
-                            lastPreview = await all[0].EvaluateAsync<string>(ElementPreviewFunction)
-                                .ConfigureAwait(false);
+                            received[i] = await ReadTextAsync(all[i], useInnerText).ConfigureAwait(false);
                         }
                         catch (PlaywrightNativeException)
                         {
+                            readFailed = true;
+                            break;
                         }
                     }
+
+                    if (!readFailed && all.Count > 0)
+                    {
+                        lastReceived = received;
+                        sawElement = true;
+                        if (all.Count == 1)
+                        {
+                            try
+                            {
+                                lastPreview = await all[0].EvaluateAsync<string>(ElementPreviewFunction)
+                                    .ConfigureAwait(false);
+                            }
+                            catch (PlaywrightNativeException)
+                            {
+                            }
+                        }
+                    }
+                }
+                catch (Exception ex) when (ClosedTarget.IsClosed(ex))
+                {
+                    if (sawElement)
+                    {
+                        throw CreateTextExpectException(
+                            FormatTextExpectFailure(
+                                header,
+                                expectLog,
+                                method,
+                                needles,
+                                lastReceived,
+                                sawElement,
+                                single,
+                                exact,
+                                ignoreCase,
+                                timeoutMs,
+                                lastPreview),
+                            needles,
+                            lastReceived,
+                            method,
+                            pass: _negate,
+                            timeoutMs,
+                            ariaSnapshot: null);
+                    }
+
+                    throw new PlaywrightNativeException(header + "\n" + ex.Message, ex);
                 }
 
                 bool matched;
@@ -2774,6 +2806,10 @@ namespace PlaywrightNative
                     .ConfigureAwait(false);
             }
             catch (TimeoutException)
+            {
+                throw;
+            }
+            catch (Exception ex) when (ClosedTarget.IsClosed(ex))
             {
                 throw;
             }

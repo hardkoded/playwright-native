@@ -3302,7 +3302,9 @@ namespace PlaywrightNative
                 options?.Force,
                 options?.NoWaitAfter,
                 options?.Timeout,
-                options?.Trial);
+                options?.Trial,
+                default,
+                options?.Steps);
 
         Task ILocator.DispatchEventAsync(string type, object eventInit, LocatorDispatchEventOptions options)
             => DispatchEventAsync(type, eventInit, options?.Timeout);

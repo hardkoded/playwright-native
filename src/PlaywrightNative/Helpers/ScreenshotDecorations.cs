@@ -20,6 +20,7 @@ using System.Collections.Generic;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using PlaywrightNative.WebKit;
 
 namespace PlaywrightNative.Helpers
 {
@@ -305,6 +306,12 @@ namespace PlaywrightNative.Helpers
 
         private static async Task EvaluateInFramesAsync(IPage page, string expression)
         {
+            if (page is WKPage webkit)
+            {
+                await EvaluateInWebKitUtilityAsync(webkit, expression).ConfigureAwait(false);
+                return;
+            }
+
             IReadOnlyCollection<IFrame> frames = page.Frames;
             if (frames == null || frames.Count == 0)
             {
@@ -332,6 +339,49 @@ namespace PlaywrightNative.Helpers
                 try
                 {
                     await frame.EvaluateAsync(expression).ConfigureAwait(false);
+                }
+                catch (PlaywrightNativeException)
+                {
+                }
+                catch (TimeoutException)
+                {
+                }
+            }
+        }
+
+        private static async Task EvaluateInWebKitUtilityAsync(WKPage page, string expression)
+        {
+            IReadOnlyCollection<IFrame> frames = page.Frames;
+            List<WebKitFrame> targets = new List<WebKitFrame>();
+            if (frames != null)
+            {
+                foreach (IFrame frame in frames)
+                {
+                    if (frame is WebKitFrame webkitFrame && !webkitFrame.IsDetached)
+                    {
+                        targets.Add(webkitFrame);
+                    }
+                }
+            }
+
+            if (targets.Count == 0 && page.MainFrame is WebKitFrame main)
+            {
+                targets.Add(main);
+            }
+
+            foreach (WebKitFrame frame in targets)
+            {
+                try
+                {
+                    WKExecutionContext utility = await page.GetUtilityWorldAsync(frame.GetWKFrame()).ConfigureAwait(false);
+                    if (utility != null)
+                    {
+                        await utility.EvaluateAsync(expression).ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        await frame.EvaluateAsync(expression).ConfigureAwait(false);
+                    }
                 }
                 catch (PlaywrightNativeException)
                 {
