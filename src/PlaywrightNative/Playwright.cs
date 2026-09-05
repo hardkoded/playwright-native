@@ -484,42 +484,15 @@ namespace PlaywrightNative
                 && !ClientCertificateHelper.HasAny(persistent.ClientCertificates))
             {
                 await ApplyPersistentDownloadBehaviorAsync(context).ConfigureAwait(false);
-                if (context is PlaywrightNative.Chromium.ChromiumBrowserContext chromiumWorkers)
-                {
-                    await chromiumWorkers.AdoptExistingServiceWorkersAsync().ConfigureAwait(false);
-                }
-
                 VideoRecorder.Start(context, persistent.RecordVideoDir, persistent.RecordVideoSize, persistent.ViewportSize);
                 return;
             }
 
             if (context is PlaywrightNative.Chromium.ChromiumBrowserContext chromium)
             {
-                chromium.ConfigureEmulation(
-                    persistent.ViewportSize,
-                    userAgent: persistent.UserAgent,
-                    extraHeaders: persistent.ExtraHTTPHeaders,
-                    locale: persistent.Locale,
-                    timezoneId: persistent.TimezoneId,
-                    offline: persistent.Offline,
-                    colorScheme: persistent.ColorScheme,
-                    reducedMotion: persistent.ReducedMotion,
-                    forcedColors: persistent.ForcedColors,
-                    hasTouch: persistent.HasTouch,
-                    geolocation: persistent.Geolocation,
-                    permissions: persistent.Permissions,
-                    bypassCSP: persistent.BypassCSP,
-                    ignoreHTTPSErrors: persistent.IgnoreHTTPSErrors,
-                    javaScriptEnabled: persistent.JavaScriptEnabled,
-                    deviceScaleFactor: persistent.DeviceScaleFactor,
-                    isMobile: persistent.IsMobile,
-                    screenSize: persistent.ScreenSize,
-                    acceptDownloads: persistent.AcceptDownloads,
-                    httpCredentials: persistent.HttpCredentials,
-                    contrast: persistent.Contrast);
+                // ConfigureEmulation + AdoptExisting already ran above.
                 await chromium.ApplyDownloadBehaviorAsync().ConfigureAwait(false);
                 await ApplyPersistentChromeToExistingPagesAsync(chromium).ConfigureAwait(false);
-                await chromium.AdoptExistingServiceWorkersAsync().ConfigureAwait(false);
                 VideoRecorder.Start(context, persistent.RecordVideoDir, persistent.RecordVideoSize, persistent.ViewportSize);
                 return;
             }
