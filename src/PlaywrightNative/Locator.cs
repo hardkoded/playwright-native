@@ -1394,12 +1394,52 @@ namespace PlaywrightNative
                 throw new PlaywrightNativeException("Locators must belong to the same frame.");
             }
 
-            if (_scope != null)
+            if (_scope == null)
             {
-                return AppendInContentFrame(inner);
+                return (Locator)Inside(inner);
             }
 
-            return (Locator)Inside(inner);
+            Locator AppendInContentFrame(Locator node)
+            {
+                if (node._combine != CombineKind.None)
+                {
+                    Locator left = AppendInContentFrame(node._left);
+                    Locator right = node._right == null ? null : AppendInContentFrame(node._right);
+                    return new Locator(
+                        left,
+                        right,
+                        node._hasText,
+                        node._combine,
+                        node._sliceIndex,
+                        node._sliceLast,
+                        node._description,
+                        node._hasTextRegex,
+                        node._visible);
+                }
+
+                Locator scope = _scope;
+                List<Step> next = CopySteps();
+                if (node._scope != null)
+                {
+                    Locator nestedHost = AppendInContentFrame(node._scope);
+                    List<Step> nestedSteps = new List<Step>(node._steps.Count);
+                    for (int i = 0; i < node._steps.Count; i++)
+                    {
+                        nestedSteps.Add(node._steps[i]);
+                    }
+
+                    return new Locator(_frame, nestedSteps, nestedHost, node._description, _anyFrame);
+                }
+
+                for (int i = 0; i < node._steps.Count; i++)
+                {
+                    next.Add(node._steps[i]);
+                }
+
+                return new Locator(_frame, next, scope, node._description, _anyFrame);
+            }
+
+            return AppendInContentFrame(inner);
         }
 
         internal Locator EnterThenLocator(Locator inner)
@@ -1429,46 +1469,6 @@ namespace PlaywrightNative
             }
 
             return new Locator(_frame, inner._steps, scope, inner._description);
-        }
-
-        private Locator AppendInContentFrame(Locator inner)
-        {
-            if (inner._combine != CombineKind.None)
-            {
-                Locator left = AppendInContentFrame(inner._left);
-                Locator right = inner._right == null ? null : AppendInContentFrame(inner._right);
-                return new Locator(
-                    left,
-                    right,
-                    inner._hasText,
-                    inner._combine,
-                    inner._sliceIndex,
-                    inner._sliceLast,
-                    inner._description,
-                    inner._hasTextRegex,
-                    inner._visible);
-            }
-
-            Locator scope = _scope;
-            List<Step> next = CopySteps();
-            if (inner._scope != null)
-            {
-                Locator nestedHost = AppendInContentFrame(inner._scope);
-                List<Step> nestedSteps = new List<Step>(inner._steps.Count);
-                for (int i = 0; i < inner._steps.Count; i++)
-                {
-                    nestedSteps.Add(inner._steps[i]);
-                }
-
-                return new Locator(_frame, nestedSteps, nestedHost, inner._description, _anyFrame);
-            }
-
-            for (int i = 0; i < inner._steps.Count; i++)
-            {
-                next.Add(inner._steps[i]);
-            }
-
-            return new Locator(_frame, next, scope, inner._description, _anyFrame);
         }
 
         private static async Task<IReadOnlyList<IElementHandle>> QueryStepAsync(IFrame frame, IElementHandle parent, Step step, bool ariaDescendants = true)
