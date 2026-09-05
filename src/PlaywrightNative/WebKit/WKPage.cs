@@ -4142,15 +4142,30 @@ namespace PlaywrightNative.WebKit
         }
 
         /// <summary>
-        /// Adds a <c>&lt;script&gt;</c> tag to the page by URL or inline content. For URL
-        /// scripts, waits for the <c>load</c> event to fire; inline scripts execute
-        /// synchronously via <c>script.text</c>.
+        /// Adds a <c>&lt;script&gt;</c> tag to the main frame by URL or inline content.
         /// </summary>
         /// <param name="url">External script URL. Mutually exclusive with <paramref name="content"/>.</param>
         /// <param name="content">Inline script body. Mutually exclusive with <paramref name="url"/>.</param>
         /// <param name="type">Optional <c>type</c> attribute (e.g. <c>module</c>).</param>
         /// <returns>A task that completes once the script has loaded/executed.</returns>
-        internal async Task<IElementHandle> AddScriptTagAsync(string url = null, string content = null, string type = null)
+        internal Task<IElementHandle> AddScriptTagAsync(string url = null, string content = null, string type = null)
+            => AddScriptTagInFrameAsync(_frameManager.MainFrame, url, content, type);
+
+        /// <summary>
+        /// Injects a script tag into <paramref name="frame"/> (not always the main frame).
+        /// For URL scripts, waits for the <c>load</c> event; inline scripts execute via
+        /// <c>script.text</c>.
+        /// </summary>
+        /// <param name="frame">Target frame.</param>
+        /// <param name="url">External script URL. Mutually exclusive with <paramref name="content"/>.</param>
+        /// <param name="content">Inline script body. Mutually exclusive with <paramref name="url"/>.</param>
+        /// <param name="type">Optional <c>type</c> attribute (e.g. <c>module</c>).</param>
+        /// <returns>A handle to the injected <c>script</c> element.</returns>
+        internal async Task<IElementHandle> AddScriptTagInFrameAsync(
+            WKFrame frame,
+            string url = null,
+            string content = null,
+            string type = null)
         {
             if (string.IsNullOrEmpty(url) && string.IsNullOrEmpty(content))
             {
@@ -4192,10 +4207,11 @@ namespace PlaywrightNative.WebKit
                             document.head.appendChild(script);
                             return true;
                         }})()";
-                        await EvaluateExpressionAsync(inject).ConfigureAwait(false);
-                        await WaitForSentinelAsync(sentinel, "Failed to load script at " + url).ConfigureAwait(false);
-                        IElementHandle handle = await EvaluateElementHandleAsync($"window[{elementLiteral}]").ConfigureAwait(false);
-                        await EvaluateExpressionAsync(
+                        await EvaluateInFrameAsync<object>(frame, inject).ConfigureAwait(false);
+                        await WaitForSentinelInFrameAsync(frame, sentinel, "Failed to load script at " + url).ConfigureAwait(false);
+                        IElementHandle handle = await EvaluateElementHandleInFrameAsync(frame, $"window[{elementLiteral}]").ConfigureAwait(false);
+                        await EvaluateInFrameAsync<object>(
+                            frame,
                             $"(() => {{ delete window[{sentinelLiteral}]; delete window[{elementLiteral}]; }})()").ConfigureAwait(false);
                         return handle;
                     }
@@ -4212,10 +4228,10 @@ namespace PlaywrightNative.WebKit
                             throw error;
                         return script;
                     }})()";
-                    IElementHandle contentHandle = await EvaluateElementHandleAsync(expression).ConfigureAwait(false);
+                    IElementHandle contentHandle = await EvaluateElementHandleInFrameAsync(frame, expression).ConfigureAwait(false);
 
                     // Official extra round-trip so async CSP console errors can win the race.
-                    await EvaluateExpressionAsync("true").ConfigureAwait(false);
+                    await EvaluateInFrameAsync<object>(frame, "true").ConfigureAwait(false);
                     return contentHandle;
                 }).ConfigureAwait(false);
         }
@@ -5308,7 +5324,17 @@ namespace PlaywrightNative.WebKit
             return WrapRemoteObject(context, handleValue) as IElementHandle;
         }
 
-        private async Task WaitForSentinelAsync(string sentinel, string errorMessage)
+        private async Task<IElementHandle> EvaluateElementHandleInFrameAsync(WKFrame frame, string expression)
+        {
+            WKExecutionContext context = await WaitForFrameContextAsync(frame).ConfigureAwait(false);
+            JsonElement? handleValue = await context.EvaluateHandleAsync(expression).ConfigureAwait(false);
+            return WrapRemoteObject(context, handleValue) as IElementHandle;
+        }
+
+        private Task WaitForSentinelAsync(string sentinel, string errorMessage)
+            => WaitForSentinelInFrameAsync(_frameManager.MainFrame, sentinel, errorMessage);
+
+        private async Task WaitForSentinelInFrameAsync(WKFrame frame, string sentinel, string errorMessage)
         {
             string sentinelLiteral = JsonSerializer.Serialize(sentinel);
             string expression = $"window[{sentinelLiteral}]";
@@ -5317,7 +5343,7 @@ namespace PlaywrightNative.WebKit
             using System.Threading.CancellationTokenSource cts = new((int)_defaultNavigationTimeout);
             while (true)
             {
-                int state = await EvaluateExpressionAsync<int>(expression).ConfigureAwait(false);
+                int state = await EvaluateInFrameAsync<int>(frame, expression).ConfigureAwait(false);
                 if (state == 1)
                 {
                     return;
@@ -8160,15 +8186,56 @@ namespace PlaywrightNative.WebKit
                 arg,
                 "page.$eval");
 
-        Task<IAsyncDisposable> IPage.ExposeBindingAsync(string name, Action callback) => Task.FromResult<IAsyncDisposable>(default!);
+        Task<IAsyncDisposable> IPage.ExposeBindingAsync(string name, Action callback)
+            => ExposeFunctionAsync(name, callback);
 
-        Task<IAsyncDisposable> IPage.ExposeBindingAsync(string name, Action<BindingSource> callback) => Task.FromResult<IAsyncDisposable>(default!);
+        Task<IAsyncDisposable> IPage.ExposeBindingAsync(string name, Action<BindingSource> callback)
+        {
+            if (callback == null)
+            {
+                throw new ArgumentNullException(nameof(callback));
+            }
 
-        Task<IAsyncDisposable> IPage.ExposeBindingAsync<T>(string name, Action<BindingSource, T> callback) => Task.FromResult<IAsyncDisposable>(default!);
+            return InstallExposedAsync(name, PageExposeBinder.WrapBinding<object>(Context, this, source =>
+            {
+                callback(source);
+                return null;
+            }));
+        }
 
-        Task<IAsyncDisposable> IPage.ExposeBindingAsync<T1, T2, T3, TResult>(string name, Func<BindingSource, T1, T2, T3, TResult> callback) => Task.FromResult<IAsyncDisposable>(default!);
+        Task<IAsyncDisposable> IPage.ExposeBindingAsync<T>(string name, Action<BindingSource, T> callback)
+        {
+            if (callback == null)
+            {
+                throw new ArgumentNullException(nameof(callback));
+            }
 
-        Task<IAsyncDisposable> IPage.ExposeBindingAsync<T1, T2, T3, T4, TResult>(string name, Func<BindingSource, T1, T2, T3, T4, TResult> callback) => Task.FromResult<IAsyncDisposable>(default!);
+            return InstallExposedAsync(name, PageExposeBinder.WrapBinding<T, object>(Context, this, (source, arg) =>
+            {
+                callback(source, arg);
+                return null;
+            }));
+        }
+
+        Task<IAsyncDisposable> IPage.ExposeBindingAsync<T1, T2, T3, TResult>(string name, Func<BindingSource, T1, T2, T3, TResult> callback)
+        {
+            if (callback == null)
+            {
+                throw new ArgumentNullException(nameof(callback));
+            }
+
+            return InstallExposedAsync(name, PageExposeBinder.WrapBinding(Context, this, callback));
+        }
+
+        Task<IAsyncDisposable> IPage.ExposeBindingAsync<T1, T2, T3, T4, TResult>(string name, Func<BindingSource, T1, T2, T3, T4, TResult> callback)
+        {
+            if (callback == null)
+            {
+                throw new ArgumentNullException(nameof(callback));
+            }
+
+            return InstallExposedAsync(name, PageExposeBinder.WrapBinding(Context, this, callback));
+        }
 
         Task IPage.FillAsync(string selector, string value, PageFillOptions options)
             => FillAsync(selector, value, options?.NoWaitAfter, options?.Timeout, options?.Force, default, options?.Strict);
