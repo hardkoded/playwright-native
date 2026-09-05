@@ -1936,17 +1936,23 @@ namespace PlaywrightNative.Chromium
         Task IBrowserContext.UnrouteAllAsync(BrowserContextUnrouteAllOptions options)
             => UnrouteAllAsync(UnrouteBehaviorBridge.FromOfficial(options?.Behavior));
 
-        Task IBrowserContext.UnrouteAsync(string url, Action<IRoute> handler) => Task.CompletedTask;
+        Task IBrowserContext.UnrouteAsync(string url, Action<IRoute> handler)
+            => UnrouteAsync(url, handler);
 
-        Task IBrowserContext.UnrouteAsync(Regex url, Action<IRoute> handler) => Task.CompletedTask;
+        Task IBrowserContext.UnrouteAsync(Regex url, Action<IRoute> handler)
+            => UnrouteAsync(url, handler);
 
-        Task IBrowserContext.UnrouteAsync(Func<string, bool> url, Action<IRoute> handler) => Task.CompletedTask;
+        Task IBrowserContext.UnrouteAsync(Func<string, bool> url, Action<IRoute> handler)
+            => UnrouteAsync(url, handler);
 
-        Task IBrowserContext.UnrouteAsync(string url, Func<IRoute, Task> handler) => Task.CompletedTask;
+        Task IBrowserContext.UnrouteAsync(string url, Func<IRoute, Task> handler)
+            => UnrouteAsync(url, handler);
 
-        Task IBrowserContext.UnrouteAsync(Regex url, Func<IRoute, Task> handler) => Task.CompletedTask;
+        Task IBrowserContext.UnrouteAsync(Regex url, Func<IRoute, Task> handler)
+            => UnrouteAsync(url, handler);
 
-        Task IBrowserContext.UnrouteAsync(Func<string, bool> url, Func<IRoute, Task> handler) => Task.CompletedTask;
+        Task IBrowserContext.UnrouteAsync(Func<string, bool> url, Func<IRoute, Task> handler)
+            => UnrouteAsync(url, handler);
 
         Task<IConsoleMessage> IBrowserContext.WaitForConsoleMessageAsync(BrowserContextWaitForConsoleMessageOptions options)
             => WaitForEventAsync(BrowserContextEvent.Console, options?.Predicate, options?.Timeout);

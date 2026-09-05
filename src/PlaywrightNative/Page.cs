@@ -2702,7 +2702,8 @@ namespace PlaywrightNative
 
         void IPage.SetDefaultTimeout(float timeout) { }
 
-        Task IPage.SetExtraHTTPHeadersAsync(IEnumerable<KeyValuePair<string, string>> headers) => Task.CompletedTask;
+        Task IPage.SetExtraHTTPHeadersAsync(IEnumerable<KeyValuePair<string, string>> headers)
+            => SetExtraHttpHeadersAsync(headers);
 
         Task IPage.SetInputFilesAsync(string selector, string files, PageSetInputFilesOptions options) => Task.CompletedTask;
 
@@ -2735,17 +2736,23 @@ namespace PlaywrightNative
         Task IPage.UnrouteAllAsync(PageUnrouteAllOptions options)
             => UnrouteAllAsync(UnrouteBehaviorBridge.FromOfficial(options?.Behavior));
 
-        Task IPage.UnrouteAsync(string url, Action<IRoute> handler) => Task.CompletedTask;
+        Task IPage.UnrouteAsync(string url, Action<IRoute> handler)
+            => UnrouteAsync(url, handler);
 
-        Task IPage.UnrouteAsync(Regex url, Action<IRoute> handler) => Task.CompletedTask;
+        Task IPage.UnrouteAsync(Regex url, Action<IRoute> handler)
+            => UnrouteAsync(url, handler);
 
-        Task IPage.UnrouteAsync(Func<string, bool> url, Action<IRoute> handler) => Task.CompletedTask;
+        Task IPage.UnrouteAsync(Func<string, bool> url, Action<IRoute> handler)
+            => UnrouteAsync(url, handler);
 
-        Task IPage.UnrouteAsync(string url, Func<IRoute, Task> handler) => Task.CompletedTask;
+        Task IPage.UnrouteAsync(string url, Func<IRoute, Task> handler)
+            => UnrouteAsync(url, handler);
 
-        Task IPage.UnrouteAsync(Regex url, Func<IRoute, Task> handler) => Task.CompletedTask;
+        Task IPage.UnrouteAsync(Regex url, Func<IRoute, Task> handler)
+            => UnrouteAsync(url, handler);
 
-        Task IPage.UnrouteAsync(Func<string, bool> url, Func<IRoute, Task> handler) => Task.CompletedTask;
+        Task IPage.UnrouteAsync(Func<string, bool> url, Func<IRoute, Task> handler)
+            => UnrouteAsync(url, handler);
 
         Task<IConsoleMessage> IPage.WaitForConsoleMessageAsync(PageWaitForConsoleMessageOptions options)
             => WaitForEventAsync(PageEvent.Console, options?.Predicate, options?.Timeout);
