@@ -140,14 +140,17 @@ namespace PlaywrightNative.Chromium
                 jsonParams = JsonSerializer.SerializeToElement(parameters);
             }
 
-            int id = _connection.RawSend(SessionId, method, jsonParams);
-
+            // Register the callback before sending. A reply that arrives between
+            // RawSend and TryAdd was previously dropped, leaving SendAsync hung
+            // forever (flaky NewPage / setDeviceMetricsOverride stalls).
+            int id = _connection.NextMessageId();
             PendingCallback pending = new PendingCallback
             {
                 Method = method,
                 Completion = new TaskCompletionSource<JsonElement?>(TaskCreationOptions.RunContinuationsAsynchronously),
             };
             _callbacks.TryAdd(id, pending);
+            _connection.RawSend(id, SessionId, method, jsonParams);
 
             return pending.Completion.Task;
         }

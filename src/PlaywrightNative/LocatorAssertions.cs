@@ -541,18 +541,22 @@ namespace PlaywrightNative
 
             async Task WaitAsync()
             {
-                Dictionary<string, object> spec = new Dictionary<string, object>(StringComparer.Ordinal)
+                // Only send defined options - mirrors upstream expectedValue.
+                Dictionary<string, object> spec = new Dictionary<string, object>(StringComparer.Ordinal);
+                if (@checked.HasValue)
                 {
-                    ["checked"] = @checked,
-                    ["indeterminate"] = indeterminate,
-                };
-                string expected = indeterminate == true
+                    spec["checked"] = @checked.Value;
+                }
+
+                if (indeterminate.HasValue)
+                {
+                    spec["indeterminate"] = indeterminate.Value;
+                }
+
+                string matcherExpected = indeterminate == true
                     ? "indeterminate"
                     : @checked == false ? "unchecked" : "checked";
-                if (_negate)
-                {
-                    expected = "not " + expected;
-                }
+                string expected = _negate ? "not " + matcherExpected : matcherExpected;
 
                 string call = "toBeChecked()";
                 if (indeterminate == true)
@@ -573,6 +577,34 @@ namespace PlaywrightNative
                 string preview = null;
                 string received = null;
                 bool sawElement = false;
+                bool lastMatched = false;
+
+                async Task ReadCheckedStateAsync(IElementHandle handle)
+                {
+                    sawElement = true;
+                    try
+                    {
+                        preview = await handle.EvaluateAsync<string>(ElementStateScript.PreviewNodeFunction)
+                            .ConfigureAwait(false);
+                    }
+                    catch (PlaywrightNativeException)
+                    {
+                        preview = "element";
+                    }
+
+                    try
+                    {
+                        received = await handle.EvaluateAsync<string>(ElementStateScript.CheckedReceivedFunction)
+                            .ConfigureAwait(false);
+                        lastMatched = await handle
+                            .EvaluateAsync<bool>(ElementStateScript.MatchesCheckedStateFunction, spec)
+                            .ConfigureAwait(false);
+                    }
+                    catch (PlaywrightNativeException)
+                    {
+                        lastMatched = false;
+                    }
+                }
 
                 while (true)
                 {
@@ -608,29 +640,8 @@ namespace PlaywrightNative
                     bool matched = false;
                     if (all.Count == 1)
                     {
-                        sawElement = true;
-                        try
-                        {
-                            preview = await all[0].EvaluateAsync<string>(ElementStateScript.PreviewNodeFunction)
-                                .ConfigureAwait(false);
-                        }
-                        catch (PlaywrightNativeException)
-                        {
-                            preview = "element";
-                        }
-
-                        try
-                        {
-                            received = await all[0].EvaluateAsync<string>(ElementStateScript.CheckedReceivedFunction)
-                                .ConfigureAwait(false);
-                            matched = await all[0]
-                                .EvaluateAsync<bool>(ElementStateScript.MatchesCheckedStateFunction, spec)
-                                .ConfigureAwait(false);
-                        }
-                        catch (PlaywrightNativeException)
-                        {
-                            matched = false;
-                        }
+                        await ReadCheckedStateAsync(all[0]).ConfigureAwait(false);
+                        matched = lastMatched;
                     }
 
                     // Missing elements fail both toBeChecked and not.toBeChecked.
@@ -642,6 +653,40 @@ namespace PlaywrightNative
 
                     if (timeoutMs != Timeout.Infinite && sw.ElapsedMilliseconds >= timeoutMs)
                     {
+                        // Upstream runs a no-abort one-shot so timeout: 1 still
+                        // reports received/actual when the node is already there.
+                        // A tight per-poll ElementHandles budget can miss that on
+                        // a loaded machine - resolve once more for error details.
+                        if (!sawElement)
+                        {
+                            try
+                            {
+                                IReadOnlyList<IElementHandle> lastChance =
+                                    await ElementHandlesOrEmptyAsync(5_000).ConfigureAwait(false);
+                                if (lastChance.Count == 1)
+                                {
+                                    await ReadCheckedStateAsync(lastChance[0]).ConfigureAwait(false);
+                                }
+                            }
+                            catch (TimeoutException)
+                            {
+                            }
+                            catch (PlaywrightNativeException)
+                            {
+                            }
+                        }
+
+                        // Upstream toBeTruthy: when pass (failed not.*), Received
+                        // is printed from `expected`; actual is received.value
+                        // (same checked-state label). Fall back to matcherExpected
+                        // so .not.toBeChecked({ checked: false }) still exposes
+                        // Actual = "unchecked" when the positive matcher matched.
+                        string receivedLabel = received;
+                        if (_negate && lastMatched && string.IsNullOrEmpty(receivedLabel))
+                        {
+                            receivedLabel = matcherExpected;
+                        }
+
                         StringBuilder log = new StringBuilder();
                         log.Append(header);
                         log.Append("\n\nLocator:");
@@ -649,10 +694,10 @@ namespace PlaywrightNative
                         log.Append(_locator);
                         log.Append("\nExpected: ");
                         log.Append(expected);
-                        if (sawElement && !string.IsNullOrEmpty(received))
+                        if (sawElement && !string.IsNullOrEmpty(receivedLabel))
                         {
                             log.Append("\nReceived: ");
-                            log.Append(received);
+                            log.Append(_negate && lastMatched ? matcherExpected : receivedLabel);
                         }
 
                         log.Append("\nTimeout:");
@@ -681,26 +726,16 @@ namespace PlaywrightNative
                             log.Append("  locator resolved to ");
                             log.Append(preview);
                             log.Append("\n  unexpected value \"");
-                            log.Append(received);
+                            log.Append(_negate && lastMatched ? matcherExpected : receivedLabel);
                             log.Append("\"\n");
-                        }
-
-                        string matcherExpected = "checked";
-                        if (indeterminate == true)
-                        {
-                            matcherExpected = "indeterminate";
-                        }
-                        else if (@checked == false)
-                        {
-                            matcherExpected = "unchecked";
                         }
 
                         throw CreateExpectException(
                             log.ToString(),
-                            sawElement ? received : null,
+                            sawElement ? receivedLabel : null,
                             matcherExpected,
                             "toBeChecked",
-                            pass: _negate && sawElement && matched,
+                            pass: _negate && sawElement && lastMatched,
                             timeoutMs,
                             await CaptureExpectAriaSnapshotAsync(ExpectSnapshotKind.Property).ConfigureAwait(false));
                     }
