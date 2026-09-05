@@ -54,6 +54,12 @@ namespace PlaywrightNative.Helpers
   };
   const roots = collectRoots(document, []);
   const restore = [];
+  const active = document.activeElement;
+  let refocus = null;
+  if (active && active.matches && active.matches('input,textarea,[contenteditable]')) {
+    refocus = active;
+    active.blur();
+  }
   for (const root of roots) {
     root.querySelectorAll('input,textarea,[contenteditable]').forEach(element => {
       restore.push({
@@ -67,6 +73,9 @@ namespace PlaywrightNative.Helpers
   window.__pwRestoreCaret = () => {
     for (const item of restore)
       item.element.style.setProperty('caret-color', item.value, item.priority);
+    if (refocus && typeof refocus.focus === 'function') {
+      try { refocus.focus(); } catch (e) {}
+    }
     delete window.__pwRestoreCaret;
   };
 })()";
