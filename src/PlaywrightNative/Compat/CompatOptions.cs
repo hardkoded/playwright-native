@@ -156,14 +156,9 @@ namespace PlaywrightNative.Compat
         public object Arg { get; set; }
     }
 
-    /// <summary>Legacy persistent-context launch options with regex HAR URL filter alias.</summary>
+    /// <summary>Legacy persistent-context launch options.</summary>
     public class LegacyBrowserTypeLaunchPersistentContextOptions : Microsoft.Playwright.BrowserTypeLaunchPersistentContextOptions
     {
-        /// <summary>Legacy HAR URL glob filter (PlaywrightNative-only).</summary>
-        public new string RecordHarUrlFilter { get; set; }
-
-        /// <summary>Legacy HAR URL regex filter (PlaywrightNative-only).</summary>
-        public new System.Text.RegularExpressions.Regex RecordHarUrlFilterRegex { get; set; }
     }
 
     /// <summary>Legacy locator click options with abort signal and mouse steps.</summary>

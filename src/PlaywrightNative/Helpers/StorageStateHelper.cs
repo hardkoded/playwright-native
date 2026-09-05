@@ -337,6 +337,7 @@ namespace PlaywrightNative.Helpers
             };
             options.Converters.Add(new JsonStringEnumConverter());
             options.Converters.Add(new LoneSurrogateStringConverter());
+            options.Converters.Add(new StorageStateCookieJsonConverter());
             return options;
         }
 
@@ -439,7 +440,7 @@ namespace PlaywrightNative.Helpers
                                 continue;
                             }
                         }
-                        catch (PlaywrightNativeException)
+                        catch (Exception ex) when (ex is PlaywrightNativeException || ex is TimeoutException)
                         {
                             continue;
                         }
@@ -461,7 +462,7 @@ namespace PlaywrightNative.Helpers
 
                         originsToSave.Remove(origin);
                     }
-                    catch (PlaywrightNativeException)
+                    catch (Exception ex) when (ex is PlaywrightNativeException || ex is TimeoutException)
                     {
                     }
                 }

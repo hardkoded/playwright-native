@@ -130,8 +130,9 @@ namespace PlaywrightNative.Helpers
 
                 // Official clearCookies expires matching cookies in place
                 // (expires: 0) so cookieStore.change does not see a wipe of
-                // the cookies that should remain.
-                toExpire.Add(new Cookie
+                // the cookies that should remain. Preserve partitionKey and
+                // _crHasCrossSiteAncestor so CDP overwrites the same CHIPS row.
+                Cookie expired = new Cookie
                 {
                     Name = cookie.Name,
                     Value = string.Empty,
@@ -142,7 +143,11 @@ namespace PlaywrightNative.Helpers
                     Secure = cookie.Secure,
                     SameSite = cookie.SameSite,
                     PartitionKey = string.IsNullOrEmpty(cookie.PartitionKey) ? null : cookie.PartitionKey,
-                });
+                };
+                CookieExtras.SetHasCrossSiteAncestor(
+                    expired,
+                    BrowserContextCookiesResultExtras.GetHasCrossSiteAncestor(cookie));
+                toExpire.Add(expired);
             }
 
             if (toExpire.Count > 0)

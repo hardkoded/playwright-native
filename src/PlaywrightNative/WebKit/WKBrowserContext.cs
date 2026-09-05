@@ -2194,7 +2194,8 @@ namespace PlaywrightNative.WebKit
             return NoopContextDisposable.Instance;
         }
 
-        Task IBrowserContext.RouteFromHARAsync(string har, BrowserContextRouteFromHAROptions options) => Task.CompletedTask;
+        Task IBrowserContext.RouteFromHARAsync(string har, BrowserContextRouteFromHAROptions options)
+            => HarPlayback.InstallAsync(this, har, options);
 
         Task IBrowserContext.RouteWebSocketAsync(string url, Action<IWebSocketRoute> handler) => Task.CompletedTask;
 
@@ -2232,7 +2233,8 @@ namespace PlaywrightNative.WebKit
 
         Task<string> IBrowserContext.StorageStateAsync(BrowserContextStorageStateOptions options) => StorageStateAsync(options?.Path, options?.IndexedDB, options?.Credentials);
 
-        Task IBrowserContext.UnrouteAllAsync(BrowserContextUnrouteAllOptions options) => Task.CompletedTask;
+        Task IBrowserContext.UnrouteAllAsync(BrowserContextUnrouteAllOptions options)
+            => UnrouteAllAsync(UnrouteBehaviorBridge.FromOfficial(options?.Behavior));
 
         Task IBrowserContext.UnrouteAsync(string url, Action<IRoute> handler) => Task.CompletedTask;
 

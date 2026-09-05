@@ -532,7 +532,9 @@ namespace PlaywrightNative.Tests
                         Name = "doggo",
                         Value = "woofs",
                         SameSite = SameSiteAttribute.None,
-                        Expires = 253402300800,
+                        // float32 cannot represent Max+1 (253402300800) distinctly from Max;
+                        // use the next representable float above (float)Max so overflow still throws.
+                        Expires = 253402316800f,
                     },
                 }).ConfigureAwait(false);
             }
@@ -666,7 +668,7 @@ namespace PlaywrightNative.Tests
             Assert.That(cookies[0].Value, Is.EqualTo("value1"));
             Assert.That(cookies[0].Domain, Is.EqualTo(Hostname));
             Assert.That(cookies[0].Path, Is.EqualTo("/"));
-            Assert.That(cookies[0].Expires, Is.TypeOf<double>());
+            Assert.That(cookies[0].Expires, Is.TypeOf<float>());
             Assert.That(cookies[0].HttpOnly, Is.False);
             Assert.That(cookies[0].Secure, Is.False);
             Assert.That(cookies[0].SameSite, Is.EqualTo(DefaultSameSiteCookieValue()));

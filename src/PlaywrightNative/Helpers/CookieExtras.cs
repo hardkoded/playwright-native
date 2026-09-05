@@ -14,7 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-using System.Collections.Concurrent;
+using System.Runtime.CompilerServices;
 
 namespace PlaywrightNative.Helpers
 {
@@ -23,15 +23,20 @@ namespace PlaywrightNative.Helpers
     /// </summary>
     internal static class CookieExtras
     {
-        private static readonly ConcurrentDictionary<int, bool?> HasCrossSiteAncestorByHash = new();
+        private static readonly ConditionalWeakTable<Cookie, StrongBox<bool?>> HasCrossSiteAncestorByCookie = new();
 
         /// <summary>Gets <c>_crHasCrossSiteAncestor</c> when set.</summary>
+        /// <param name="cookie">The cookie instance.</param>
+        /// <returns>The stored flag, or <see langword="null"/> when unset.</returns>
         internal static bool? GetHasCrossSiteAncestor(Cookie cookie)
-            => cookie != null && HasCrossSiteAncestorByHash.TryGetValue(cookie.GetHashCode(), out bool? value)
-                ? value
+            => cookie != null
+                && HasCrossSiteAncestorByCookie.TryGetValue(cookie, out StrongBox<bool?> box)
+                ? box.Value
                 : null;
 
         /// <summary>Sets <c>_crHasCrossSiteAncestor</c>.</summary>
+        /// <param name="cookie">The cookie instance.</param>
+        /// <param name="value">The Chromium partition ancestor flag.</param>
         internal static void SetHasCrossSiteAncestor(Cookie cookie, bool? value)
         {
             if (cookie == null)
@@ -39,7 +44,8 @@ namespace PlaywrightNative.Helpers
                 return;
             }
 
-            HasCrossSiteAncestorByHash[cookie.GetHashCode()] = value;
+            StrongBox<bool?> box = HasCrossSiteAncestorByCookie.GetOrCreateValue(cookie);
+            box.Value = value;
         }
     }
 }

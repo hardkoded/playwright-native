@@ -1298,7 +1298,8 @@ namespace PlaywrightNative.Helpers
             if (cookie.Expires.HasValue
                 && cookie.Expires.Value >= 0
                 && (cookie.Expires.Value <= 1
-                    || (cookie.Expires.Value * 1000) < DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()))
+                    || cookie.Expires.Value <= DateTimeOffset.UtcNow.ToUnixTimeSeconds()
+                    || ((double)cookie.Expires.Value * 1000d) < DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()))
             {
                 return false;
             }
@@ -1496,8 +1497,16 @@ namespace PlaywrightNative.Helpers
                 return false;
             }
 
-            return cookie.Expires.Value <= 1
-                || (cookie.Expires.Value * 1000) < DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            if (cookie.Expires.Value <= 1)
+            {
+                return true;
+            }
+
+            // Prefer whole-second compare: float32*1000 loses precision near epoch seconds
+            // and can keep a just-expired cookie alive for up to ~ULP seconds.
+            long nowSec = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            return cookie.Expires.Value <= nowSec
+                || ((double)cookie.Expires.Value * 1000d) < DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         }
 
         private static bool IsLocalHostname(string hostname)
@@ -1669,19 +1678,34 @@ namespace PlaywrightNative.Helpers
                 else if (string.Equals(key, "Max-Age", StringComparison.OrdinalIgnoreCase)
                     && double.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out double maxAge))
                 {
-                    double expiresAt = DateTimeOffset.UtcNow.ToUnixTimeSeconds() + maxAge;
-                    cookie.Expires = (float?)(expiresAt <= 0 ? 1 : expiresAt);
+                    // RFC 6265 §5.2.2 / official parseRawCookie: max-age <= 0 => earliest time.
+                    if (maxAge <= 0)
+                    {
+                        cookie.Expires = 0;
+                    }
+                    else
+                    {
+                        double expiresAt = DateTimeOffset.UtcNow.ToUnixTimeSeconds() + maxAge;
+                        cookie.Expires = (float)Math.Min(expiresAt, ContextCookies.MaxCookieExpiresDateInSeconds);
+                    }
                 }
                 else if (string.Equals(key, "Expires", StringComparison.OrdinalIgnoreCase))
                 {
                     if (TryParseCookieDate(value, out DateTimeOffset expires))
                     {
                         long seconds = expires.ToUnixTimeSeconds();
-                        cookie.Expires = seconds <= 0 ? 1 : seconds;
+                        long nowSec = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+
+                        // float32 ULP near current unix time is ~64–128s, so a "now"
+                        // timestamp can round into the future and keep the cookie alive.
+                        // Collapse already-due expires to 0 (official earliest time).
+                        cookie.Expires = seconds <= nowSec
+                            ? 0
+                            : (float)Math.Min(seconds, ContextCookies.MaxCookieExpiresDateInSeconds);
                     }
                     else
                     {
-                        cookie.Expires = 1;
+                        cookie.Expires = 0;
                     }
                 }
             }
@@ -1928,7 +1952,10 @@ namespace PlaywrightNative.Helpers
                 return headers;
             }
 
-            foreach (KeyValuePair<string, IEnumerable<string>> header in request.Headers)
+            // Use NonValidated: enumerating typed Headers parses Accept-Encoding and
+            // reformats the wire value to "gzip, deflate, br" (spaces). Official
+            // fetch sends "gzip,deflate,br" without spaces.
+            foreach (KeyValuePair<string, HeaderStringValues> header in request.Headers.NonValidated)
             {
                 foreach (string value in header.Value)
                 {
@@ -1938,7 +1965,7 @@ namespace PlaywrightNative.Helpers
 
             if (request.Content != null)
             {
-                foreach (KeyValuePair<string, IEnumerable<string>> header in request.Content.Headers)
+                foreach (KeyValuePair<string, HeaderStringValues> header in request.Content.Headers.NonValidated)
                 {
                     foreach (string value in header.Value)
                     {

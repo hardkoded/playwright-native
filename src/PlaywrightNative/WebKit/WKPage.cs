@@ -8367,7 +8367,8 @@ namespace PlaywrightNative.WebKit
         Task<IAsyncDisposable> IPage.RouteAsync(Func<string, bool> url, Func<IRoute, Task> handler, PageRouteOptions options)
             => RegisterRouteAsync(() => RouteAsync(url, handler, options?.Times));
 
-        Task IPage.RouteFromHARAsync(string har, PageRouteFromHAROptions options) => Task.CompletedTask;
+        Task IPage.RouteFromHARAsync(string har, PageRouteFromHAROptions options)
+            => HarPlayback.InstallAsync(this, har, options);
 
         Task IPage.RouteWebSocketAsync(string url, Action<IWebSocketRoute> handler) => Task.CompletedTask;
 
@@ -8507,7 +8508,7 @@ namespace PlaywrightNative.WebKit
             => UncheckAsync(selector, options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, default, options?.Strict);
 
         Task IPage.UnrouteAllAsync(PageUnrouteAllOptions options)
-            => UnrouteAllAsync();
+            => UnrouteAllAsync(UnrouteBehaviorBridge.FromOfficial(options?.Behavior));
 
         Task IPage.UnrouteAsync(string url, Action<IRoute> handler)
             => UnrouteAsync(url, handler);
