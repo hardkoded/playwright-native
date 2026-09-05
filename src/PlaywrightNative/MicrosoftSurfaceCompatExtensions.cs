@@ -344,7 +344,7 @@ namespace PlaywrightNative
         public static Task<IAsyncDisposable> ShowActionsAsync(
             this IScreencast screencast,
             float? duration = default,
-            AnnotatePosition position = default,
+            AnnotatePosition position = EnumCompat.UndefinedAnnotatePosition,
             int fontSize = default,
             ScreencastCursor cursor = EnumCompat.UndefinedScreencastCursor)
         {

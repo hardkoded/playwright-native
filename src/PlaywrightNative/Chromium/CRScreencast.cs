@@ -154,7 +154,7 @@ namespace PlaywrightNative.Chromium
             => ScreencastOverlay.ShowChapterAsync(_page, title, description, duration);
 
         /// <inheritdoc/>
-        public Task<IAsyncDisposable> ShowActionsAsync(float? duration = default, AnnotatePosition position = default, int fontSize = default, ScreencastCursor cursor = EnumCompat.UndefinedScreencastCursor)
+        public Task<IAsyncDisposable> ShowActionsAsync(float? duration = default, AnnotatePosition position = EnumCompat.UndefinedAnnotatePosition, int fontSize = default, ScreencastCursor cursor = EnumCompat.UndefinedScreencastCursor)
         {
             ScreencastActions.Show(_page, duration, position, fontSize, cursor);
             return Task.FromResult<IAsyncDisposable>(new HideOnDispose(this));
@@ -335,7 +335,7 @@ namespace PlaywrightNative.Chromium
         Task<IAsyncDisposable> IScreencast.ShowActionsAsync(ScreencastShowActionsOptions options)
             => ShowActionsAsync(
                 options?.Duration,
-                options?.Position ?? default,
+                options?.Position ?? EnumCompat.UndefinedAnnotatePosition,
                 options?.FontSize ?? 0,
                 options?.Cursor ?? EnumCompat.UndefinedScreencastCursor);
 

@@ -409,6 +409,15 @@ namespace PlaywrightNative.Chromium
                 }
             }
 
+            // Official: context "page" must fire before the opener can call a
+            // context exposeFunction on the new window (popup.spec). Report while
+            // still paused so the event precedes Runtime.bindingCalled after resume.
+            if (Opener != null && owner?.PublicContext != null && PublicPage != null)
+            {
+                await EnsureBlankPopupUrlAsync().ConfigureAwait(false);
+                owner.PublicContext.ReportPopupAsNew(PublicPage);
+            }
+
             await _client.SendAsync("Runtime.runIfWaitingForDebugger").ConfigureAwait(false);
             _debuggerResumed = true;
 
@@ -444,8 +453,8 @@ namespace PlaywrightNative.Chromium
                 _firstNonInitialNavigationTcs.TrySetResult(true);
             }
 
-            // Report popup Page events only after the main-frame URL has synced
-            // so WaitForEvent(Page) observers see the navigated URL, not "".
+            // Replay bindings after navigation sync. Page event already fired
+            // before resume so exposeFunction ordering stays page|binding.
             if (Opener != null && owner?.PublicContext != null && PublicPage != null)
             {
                 owner.PublicContext.ReportPopupAsNew(PublicPage);
@@ -4964,6 +4973,21 @@ namespace PlaywrightNative.Chromium
             lock (_windowOpenFeatures)
             {
                 _windowOpenFeatures.Enqueue(features.ToArray());
+            }
+        }
+
+        private async Task EnsureBlankPopupUrlAsync()
+        {
+            await SyncMainFrameFromTreeAsync().ConfigureAwait(false);
+            if (_frameManager.MainFrame == null)
+            {
+                return;
+            }
+
+            if (PopupOpenedHelper.IsInitialEmptyDocumentUrl(_frameManager.MainFrame.Url)
+                || string.IsNullOrEmpty(_frameManager.MainFrame.Url))
+            {
+                _frameManager.MainFrame.Url = "about:blank";
             }
         }
 
