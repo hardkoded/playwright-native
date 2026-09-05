@@ -1438,7 +1438,24 @@ namespace PlaywrightNative.Chromium
         /// <param name="type">Optional <c>type</c> attribute (e.g. <c>module</c>).</param>
         /// <param name="path">Local file injected as content with a <c>sourceURL</c> suffix.</param>
         /// <returns>A handle to the injected <c>script</c> element.</returns>
-        internal async Task<CRElementHandle> AddScriptTagAsync(string url = null, string content = null, string type = null, string path = null)
+        internal Task<CRElementHandle> AddScriptTagAsync(string url = null, string content = null, string type = null, string path = null)
+            => AddScriptTagInFrameAsync(MainFrame, url, content, type, path);
+
+        /// <summary>
+        /// Injects a script tag into <paramref name="frame"/> (not always the main frame).
+        /// </summary>
+        /// <param name="frame">Target frame.</param>
+        /// <param name="url">External script URL.</param>
+        /// <param name="content">Inline script content.</param>
+        /// <param name="type">Optional script type.</param>
+        /// <param name="path">Local file path.</param>
+        /// <returns>A handle to the injected script element.</returns>
+        internal async Task<CRElementHandle> AddScriptTagInFrameAsync(
+            Frame frame,
+            string url = null,
+            string content = null,
+            string type = null,
+            string path = null)
         {
             if (string.IsNullOrEmpty(path) && !string.IsNullOrEmpty(url) && !string.IsNullOrEmpty(content))
             {
@@ -1453,19 +1470,21 @@ namespace PlaywrightNative.Chromium
                 {
                     if (!string.IsNullOrEmpty(resolved.Url))
                     {
-                        return await QueryFunctionAsync(
+                        return await QueryFunctionInFrameAsync(
+                            frame,
                             AddScriptTagHelper.AddScriptUrlFunction,
                             resolved.Url,
                             resolved.Type).ConfigureAwait(false);
                     }
 
-                    CRElementHandle handle = await QueryFunctionAsync(
+                    CRElementHandle handle = await QueryFunctionInFrameAsync(
+                        frame,
                         AddScriptTagHelper.AddScriptContentFunction,
                         resolved.Content,
                         resolved.Type).ConfigureAwait(false);
 
                     // Official extra round-trip so async CSP console errors can win the race.
-                    await EvaluateAsync("true").ConfigureAwait(false);
+                    await EvaluateHandleInFrameAsync(frame, "true").ConfigureAwait(false);
                     return handle;
                 }).ConfigureAwait(false);
         }
@@ -2210,6 +2229,20 @@ namespace PlaywrightNative.Chromium
         }
 
         /// <summary>
+        /// Like <see cref="QueryFunctionAsync"/> but evaluates in <paramref name="frame"/>.
+        /// </summary>
+        /// <param name="frame">The frame whose execution context is used.</param>
+        /// <param name="functionDeclaration">A function declaration returning an Element or null.</param>
+        /// <param name="args">Arguments passed to the function.</param>
+        /// <returns>The matched element, or <see langword="null"/>.</returns>
+        internal async Task<CRElementHandle> QueryFunctionInFrameAsync(Frame frame, string functionDeclaration, params object[] args)
+        {
+            CRExecutionContext context = await WaitForFrameExecutionContextAsync(frame).ConfigureAwait(false);
+            JsonElement? handleValue = await context.EvaluateFunctionHandleAsync(functionDeclaration, args).ConfigureAwait(false);
+            return WrapElementHandle(context, handleValue);
+        }
+
+        /// <summary>
         /// Evaluates <paramref name="expression"/> and returns a JS handle to the result.
         /// </summary>
         /// <param name="expression">A JavaScript expression or function IIFE.</param>
@@ -2302,6 +2335,12 @@ namespace PlaywrightNative.Chromium
             int timeout = 30_000,
             string referrer = null)
         {
+            static bool IsBlankNavigationUrl(string candidate)
+                => string.IsNullOrEmpty(candidate)
+                    || string.Equals(candidate, "about:blank", StringComparison.OrdinalIgnoreCase)
+                    || candidate.StartsWith("about:blank?", StringComparison.OrdinalIgnoreCase)
+                    || candidate.StartsWith("about:blank#", StringComparison.OrdinalIgnoreCase);
+
             url = NavigationTimeout.CompleteUserUrl(url);
             ThrowIfWebUiWouldCrashIsolatedContext();
             referrer = NavigationTimeout.ReferrerFromExtraHeaders(referrer, _networkManager.ExtraHttpHeaders);
@@ -2311,34 +2350,37 @@ namespace PlaywrightNative.Chromium
             string apiName = frame.ParentFrame == null ? "page.goto" : "frame.goto";
             int waitMs = timeout <= 0 ? System.Threading.Timeout.Infinite : timeout;
 
-            // Race Page.navigate with the navigation timeout. A hanging server
-            // can keep the CDP command outstanding; official progress.race
-            // aborts the whole goto, not just the lifecycle wait.
-            Task<GotoResult> navigateTask = NavigateFrameAsync(frame, url, referrer);
-            if (waitMs != System.Threading.Timeout.Infinite)
+            // Already on about:blank (including empty Frame.Url) navigating to about:blank:
+            // Chromium may not emit a new load. Resolve without another navigate race.
+            if (IsBlankNavigationUrl(url)
+                && IsBlankNavigationUrl(frame.Url)
+                && frame.LifecycleEvents.Contains(targetLifecycleEvent))
             {
-                using System.Threading.CancellationTokenSource navigateCts = new(waitMs);
-                try
-                {
-                    await navigateTask.WaitAsync(navigateCts.Token).ConfigureAwait(false);
-                }
-                catch (OperationCanceledException)
-                {
-                    throw NavigationTimeout.Exceeded(apiName, url, NavigationTimeout.WaitUntilName(waitUntil), timeout);
-                }
+                frame.Url = NavigationTimeout.PreserveUserInfo(url, frame.Url);
+                return;
             }
 
-            GotoResult result = await navigateTask.ConfigureAwait(false);
-            string expectedDocumentId = result.NewDocumentId;
-
             TaskCompletionSource<bool> lifecycleTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            string expectedDocumentId = null;
+            bool navigationSettled = false;
+            bool sawTargetLifecycle = false;
 
             void OnLifecycle(string name)
             {
+                if (name != targetLifecycleEvent)
+                {
+                    return;
+                }
+
+                if (!navigationSettled)
+                {
+                    // Lifecycle can fire while Page.navigate is still awaiting.
+                    sawTargetLifecycle = true;
+                    return;
+                }
+
                 // Accept only lifecycle events that belong to the navigation we issued.
-                // Stale events from prior documents have a different DocumentId.
-                if (name == targetLifecycleEvent &&
-                    (expectedDocumentId == null || frame.DocumentId == expectedDocumentId))
+                if (expectedDocumentId == null || frame.DocumentId == expectedDocumentId)
                 {
                     lifecycleTcs.TrySetResult(true);
                 }
@@ -2354,7 +2396,7 @@ namespace PlaywrightNative.Chromium
 
             void OnNavigated(Frame navigated, string documentId)
             {
-                if (!ReferenceEquals(navigated, frame))
+                if (!ReferenceEquals(navigated, frame) || !navigationSettled)
                 {
                     return;
                 }
@@ -2387,10 +2429,33 @@ namespace PlaywrightNative.Chromium
                     new TargetClosedException(DriverMessages.BrowserOrContextClosedExceptionMessage));
             }
 
+            // Subscribe before Page.navigate so about:blank -> about:blank cannot
+            // lose load between navigate returning and the wait starting.
             frame.LifecycleChanged += OnLifecycle;
             _frameManager.FrameDetached += OnDetached;
             _frameManager.FrameNavigated += OnNavigated;
             Closed += OnClosed;
+
+            // Race Page.navigate with the navigation timeout. A hanging server
+            // can keep the CDP command outstanding; official progress.race
+            // aborts the whole goto, not just the lifecycle wait.
+            Task<GotoResult> navigateTask = NavigateFrameAsync(frame, url, referrer);
+            if (waitMs != System.Threading.Timeout.Infinite)
+            {
+                using System.Threading.CancellationTokenSource navigateCts = new(waitMs);
+                try
+                {
+                    await navigateTask.WaitAsync(navigateCts.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    throw NavigationTimeout.Exceeded(apiName, url, NavigationTimeout.WaitUntilName(waitUntil), timeout);
+                }
+            }
+
+            GotoResult result = await navigateTask.ConfigureAwait(false);
+            expectedDocumentId = result.NewDocumentId;
+            navigationSettled = true;
 
             try
             {
@@ -2399,18 +2464,30 @@ namespace PlaywrightNative.Chromium
                     throw new PlaywrightNativeException("frame was detached");
                 }
 
-                // Fast-path: lifecycle may have already fired before we subscribed
-                // (very fast navigation or events processed by the receive loop before
-                // this continuation was scheduled). Subscribe first, then check, to
-                // prevent a window where the event fires between check and subscribe.
-                if ((expectedDocumentId == null || frame.DocumentId == expectedDocumentId) &&
-                    frame.LifecycleEvents.Contains(targetLifecycleEvent) &&
+                // Fast-path: lifecycle may have fired during navigate (sawTargetLifecycle)
+                // or already be present in LifecycleEvents after subscribe.
+                bool lifecycleReady =
+                    (sawTargetLifecycle || frame.LifecycleEvents.Contains(targetLifecycleEvent)) &&
+                    (expectedDocumentId == null || frame.DocumentId == expectedDocumentId) &&
                     (string.IsNullOrEmpty(expectedDocumentId)
                         ? string.Equals(
                             NavigationTimeout.WithoutUserInfo(frame.Url),
                             NavigationTimeout.WithoutUserInfo(url),
                             StringComparison.Ordinal)
-                        : true))
+                        : true);
+
+                // Same-document navigations (including about:blank -> about:blank with a
+                // null loaderId) resolve once navigate returns.
+                if (lifecycleReady || string.IsNullOrEmpty(expectedDocumentId))
+                {
+                    frame.Url = NavigationTimeout.PreserveUserInfo(url, frame.Url);
+                    return;
+                }
+
+                // Chromium often omits a second load when navigating about:blank to
+                // about:blank even though Page.navigate returns a new loaderId.
+                // Frame.Url may still be "" while the public page URL is about:blank.
+                if (IsBlankNavigationUrl(url) && IsBlankNavigationUrl(frame.Url))
                 {
                     frame.Url = NavigationTimeout.PreserveUserInfo(url, frame.Url);
                     return;

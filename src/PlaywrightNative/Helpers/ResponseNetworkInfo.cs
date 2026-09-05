@@ -57,14 +57,18 @@ namespace PlaywrightNative.Helpers
                 return null;
             }
 
-            return new ResponseSecurityDetailsResult
+            long validFrom = (long)Math.Round(GetDouble(details, "validFrom"));
+            long validTo = (long)Math.Round(GetDouble(details, "validTo"));
+            ResponseSecurityDetailsResult result = new ResponseSecurityDetailsResult
             {
                 Protocol = GetString(details, "protocol"),
                 SubjectName = GetString(details, "subjectName"),
                 Issuer = GetString(details, "issuer"),
-                ValidFrom = (float)GetDouble(details, "validFrom"),
-                ValidTo = (float)GetDouble(details, "validTo"),
+                ValidFrom = validFrom,
+                ValidTo = validTo,
             };
+            SecurityDetailsUnix.Attach(result, validFrom, validTo);
+            return result;
         }
 
         /// <summary>
@@ -213,13 +217,21 @@ namespace PlaywrightNative.Helpers
                 protocol = "TLS 1.3";
             }
 
-            return new ResponseSecurityDetailsResult
+            long validFrom = hasCertificate ? (long)Math.Round(GetDouble(certificate, "validFrom")) : 0;
+            long validTo = hasCertificate ? (long)Math.Round(GetDouble(certificate, "validUntil")) : 0;
+            ResponseSecurityDetailsResult result = new ResponseSecurityDetailsResult
             {
                 Protocol = protocol,
                 SubjectName = subject,
-                ValidFrom = hasCertificate ? (float)GetDouble(certificate, "validFrom") : 0,
-                ValidTo = hasCertificate ? (float)GetDouble(certificate, "validUntil") : 0,
+                ValidFrom = validFrom,
+                ValidTo = validTo,
             };
+            if (hasCertificate)
+            {
+                SecurityDetailsUnix.Attach(result, validFrom, validTo);
+            }
+
+            return result;
         }
 
         /// <summary>

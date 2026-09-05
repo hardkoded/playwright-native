@@ -40,6 +40,7 @@ namespace PlaywrightNative.Chromium
         private readonly object _gate = new();
         private TaskCompletionSource<bool> _complete;
         private bool _recording;
+        private bool _cdpTracingActive;
 
         internal CRTracing(CRSession session, IBrowserContext context)
         {
@@ -82,6 +83,7 @@ namespace PlaywrightNative.Chromium
                 }
 
                 _recording = true;
+                _cdpTracingActive = true;
                 _events.Clear();
                 _openGroups.Clear();
                 _complete = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -268,9 +270,9 @@ namespace PlaywrightNative.Chromium
                 return;
             }
 
-            if (_recording)
+            if (_cdpTracingActive)
             {
-                // CDP may be active when StartAsync(categories) was used directly.
+                // Only end CDP Tracing when StartAsync(categories) actually started it.
                 await DiscardCdpTracingAsync().ConfigureAwait(false);
             }
 
@@ -350,8 +352,9 @@ namespace PlaywrightNative.Chromium
             TaskCompletionSource<bool> complete;
             lock (_gate)
             {
-                if (!_recording)
+                if (!_cdpTracingActive || _complete == null)
                 {
+                    _cdpTracingActive = false;
                     return;
                 }
 
@@ -369,6 +372,7 @@ namespace PlaywrightNative.Chromium
                 lock (_gate)
                 {
                     _recording = false;
+                    _cdpTracingActive = false;
                     _events.Clear();
                     _openGroups.Clear();
                 }

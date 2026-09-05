@@ -88,6 +88,7 @@ namespace PlaywrightNative.Helpers
             switch (name)
             {
                 case "Console":
+                    // Upstream waitForEvent('console') waits only for future events.
                     return ActionTrace.RunAsync(
                         page.Context,
                         "Wait for event \"console\"",
@@ -98,12 +99,7 @@ namespace PlaywrightNative.Helpers
                             h => page.Console += h,
                             h => page.Console -= h,
                             matches,
-                            timeout,
-                            existingAfterSubscribe: async () =>
-                            {
-                                IReadOnlyList<IConsoleMessage> items = await page.ConsoleMessagesAsync().ConfigureAwait(false);
-                                return (IReadOnlyList<T>)items;
-                            }));
+                            timeout));
                 case "Dialog":
                     return WaitTypedAsync<T, IDialog>(
                         page,

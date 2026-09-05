@@ -545,11 +545,14 @@ namespace PlaywrightNative.Firefox
         Task IBrowserContext.RouteFromHARAsync(string har, BrowserContextRouteFromHAROptions options)
             => HarPlayback.InstallAsync(this, har, options);
 
-        Task IBrowserContext.RouteWebSocketAsync(string url, Action<IWebSocketRoute> handler) => Task.CompletedTask;
+        Task IBrowserContext.RouteWebSocketAsync(string url, Action<IWebSocketRoute> handler)
+            => WebSocketRouter.InstallAsync(this, url, handler);
 
-        Task IBrowserContext.RouteWebSocketAsync(Regex url, Action<IWebSocketRoute> handler) => Task.CompletedTask;
+        Task IBrowserContext.RouteWebSocketAsync(Regex url, Action<IWebSocketRoute> handler)
+            => WebSocketRouter.InstallAsync(this, url, handler);
 
-        Task IBrowserContext.RouteWebSocketAsync(Func<string, bool> url, Action<IWebSocketRoute> handler) => Task.CompletedTask;
+        Task IBrowserContext.RouteWebSocketAsync(Func<string, bool> url, Action<IWebSocketRoute> handler)
+            => WebSocketRouter.InstallAsync(this, url, handler);
 
         Task<IConsoleMessage> IBrowserContext.RunAndWaitForConsoleMessageAsync(Func<Task> action, BrowserContextRunAndWaitForConsoleMessageOptions options)
             => RunAndWaitInternalAsync(

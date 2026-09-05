@@ -308,7 +308,7 @@ namespace PlaywrightNative.Tests
             Task<IRequest> innerSwTask = context.WaitForRequestAsync(
                 r => r.Url.EndsWith("/inner.txt", StringComparison.Ordinal) && r.ServiceWorker() != null);
             Task<IRequest> innerPageTask = context.WaitForRequestAsync(
-                r => r.Url.EndsWith("/inner.txt", StringComparison.Ordinal) && r.ServiceWorker == null);
+                r => r.Url.EndsWith("/inner.txt", StringComparison.Ordinal) && r.ServiceWorker() == null);
             await page.EvaluateAsync("() => fetch('/inner.txt')").ConfigureAwait(false);
             IRequest innerSw = await innerSwTask.ConfigureAwait(false);
             IRequest innerPage = await innerPageTask.ConfigureAwait(false);

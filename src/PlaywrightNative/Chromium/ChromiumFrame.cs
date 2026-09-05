@@ -577,14 +577,21 @@ namespace PlaywrightNative.Chromium
                 strict ?? (_page.Context is IHasStrictSelectors s && s.StrictSelectors));
 
 #pragma warning disable SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
-        Task<IElementHandle> IFrame.AddScriptTagAsync(FrameAddScriptTagOptions options)
-            => _page.AddScriptTagAsync(new PageAddScriptTagOptions
+        async Task<IElementHandle> IFrame.AddScriptTagAsync(FrameAddScriptTagOptions options)
+        {
+            if (_page is not Page instance)
             {
-                Url = options?.Url,
-                Path = options?.Path,
-                Content = options?.Content,
-                Type = options?.Type,
-            });
+                throw new PlaywrightNativeException("AddScriptTagAsync requires a PlaywrightNative page.");
+            }
+
+            CRElementHandle handle = await instance.CrPage.AddScriptTagInFrameAsync(
+                _crFrame,
+                url: options?.Url,
+                content: options?.Content,
+                type: options?.Type,
+                path: options?.Path).ConfigureAwait(false);
+            return handle == null ? null : new ChromiumElementHandle(handle);
+        }
 
         Task<IElementHandle> IFrame.AddStyleTagAsync(FrameAddStyleTagOptions options)
             => _page.AddStyleTagAsync(new PageAddStyleTagOptions

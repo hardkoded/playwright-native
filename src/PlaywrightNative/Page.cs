@@ -2577,11 +2577,14 @@ namespace PlaywrightNative
         Task IPage.RouteFromHARAsync(string har, PageRouteFromHAROptions options)
             => HarPlayback.InstallAsync(this, har, options);
 
-        Task IPage.RouteWebSocketAsync(string url, Action<IWebSocketRoute> handler) => Task.CompletedTask;
+        Task IPage.RouteWebSocketAsync(string url, Action<IWebSocketRoute> handler)
+            => WebSocketRouter.InstallAsync(this, url, handler);
 
-        Task IPage.RouteWebSocketAsync(Regex url, Action<IWebSocketRoute> handler) => Task.CompletedTask;
+        Task IPage.RouteWebSocketAsync(Regex url, Action<IWebSocketRoute> handler)
+            => WebSocketRouter.InstallAsync(this, url, handler);
 
-        Task IPage.RouteWebSocketAsync(Func<string, bool> url, Action<IWebSocketRoute> handler) => Task.CompletedTask;
+        Task IPage.RouteWebSocketAsync(Func<string, bool> url, Action<IWebSocketRoute> handler)
+            => WebSocketRouter.InstallAsync(this, url, handler);
 
         Task<IConsoleMessage> IPage.RunAndWaitForConsoleMessageAsync(Func<Task> action, PageRunAndWaitForConsoleMessageOptions options)
             => RunAndWaitInternalAsync(

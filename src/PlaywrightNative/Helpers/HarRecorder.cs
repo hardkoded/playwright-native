@@ -1146,14 +1146,29 @@ namespace PlaywrightNative.Helpers
                 node["issuer"] = details.Issuer;
             }
 
-            if (details.ValidFrom.GetValueOrDefault() > 0)
+            if (SecurityDetailsUnix.TryGet(details, out long validFromUnix, out long validToUnix))
             {
-                node["validFrom"] = (long)Math.Round((double)details.ValidFrom.Value);
-            }
+                if (validFromUnix > 0)
+                {
+                    node["validFrom"] = validFromUnix;
+                }
 
-            if (details.ValidTo.GetValueOrDefault() > 0)
+                if (validToUnix > 0)
+                {
+                    node["validTo"] = validToUnix;
+                }
+            }
+            else
             {
-                node["validTo"] = (long)Math.Round((double)details.ValidTo.Value);
+                if (details.ValidFrom.GetValueOrDefault() > 0)
+                {
+                    node["validFrom"] = (long)Math.Round((double)details.ValidFrom.Value);
+                }
+
+                if (details.ValidTo.GetValueOrDefault() > 0)
+                {
+                    node["validTo"] = (long)Math.Round((double)details.ValidTo.Value);
+                }
             }
 
             return node;

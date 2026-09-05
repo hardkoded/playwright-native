@@ -187,7 +187,15 @@ namespace PlaywrightNative.Chromium
             }
 
             IReadOnlyList<NameValueEntry> raw = await _crRequest.WaitForRawHeadersAsync().ConfigureAwait(false);
-            await _crRequest.WaitForResponseAsync().ConfigureAwait(false);
+
+            // Service-worker and other requests may finish without responseReceived.
+            // Don't hang AllHeadersAsync waiting for a response that will never arrive.
+            Task responseTask = _crRequest.WaitForResponseAsync();
+            if (!responseTask.IsCompleted)
+            {
+                await Task.WhenAny(responseTask, _crRequest.WaitUntilFinishedAsync()).ConfigureAwait(false);
+            }
+
             Dictionary<string, string> map = RawNetworkHeaders.AllJoined(raw);
             foreach (KeyValuePair<string, string> header in _crRequest.Headers)
             {

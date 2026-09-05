@@ -632,14 +632,18 @@ namespace PlaywrightNative.Helpers
 
                 DateTimeOffset notBefore = new DateTimeOffset(DateTime.SpecifyKind(cert.NotBefore.ToUniversalTime(), DateTimeKind.Utc));
                 DateTimeOffset notAfter = new DateTimeOffset(DateTime.SpecifyKind(cert.NotAfter.ToUniversalTime(), DateTimeKind.Utc));
-                return new ResponseSecurityDetailsResult
+                long validFrom = notBefore.ToUnixTimeSeconds();
+                long validTo = notAfter.ToUnixTimeSeconds();
+                ResponseSecurityDetailsResult details = new ResponseSecurityDetailsResult
                 {
                     Protocol = "TLSv1.3",
                     SubjectName = subject,
                     Issuer = issuer,
-                    ValidFrom = notBefore.ToUnixTimeSeconds(),
-                    ValidTo = notAfter.ToUnixTimeSeconds(),
+                    ValidFrom = validFrom,
+                    ValidTo = validTo,
                 };
+                SecurityDetailsUnix.Attach(details, validFrom, validTo);
+                return details;
             }
             finally
             {
