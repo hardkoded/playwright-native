@@ -1182,7 +1182,8 @@ namespace PlaywrightNative.Chromium
         /// <summary>
         /// Official persistent launch: extension service workers attach during
         /// <c>Target.setAutoAttach</c> before this instance exists. Instrument
-        /// those workers once the context is ready (network + user-agent).
+        /// those workers once the context is ready (network + user-agent), then
+        /// resume so they were never running without Network.enable.
         /// </summary>
         internal async Task AdoptExistingServiceWorkersAsync()
         {

@@ -94,7 +94,11 @@ namespace PlaywrightNative.Chromium
             }
             catch (PlaywrightNativeException)
             {
-                Dispose();
+                // Allow AdoptExisting / a later Prepare to retry StartAsync.
+                // Do not Dispose() here: that permanently sets _disposed and
+                // leaves a dead entry in ChromiumBrowserContext's map.
+                _session.MessageReceived -= OnMessage;
+                _started = false;
             }
         }
 

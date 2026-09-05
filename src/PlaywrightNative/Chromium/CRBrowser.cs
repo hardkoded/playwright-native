@@ -927,11 +927,13 @@ namespace PlaywrightNative.Chromium
                 return;
             }
 
-            context?.AddServiceWorker(targetId, worker);
-            _ = InitializeServiceWorkerAsync(worker, context);
+            // Defer context.AddServiceWorker (and the public ServiceWorker event)
+            // until Network is armed when PublicContext exists — otherwise
+            // FirstServiceWorkerAsync + evaluate can race ahead of Network.enable.
+            _ = InitializeServiceWorkerAsync(worker, context, targetId);
         }
 
-        private async Task InitializeServiceWorkerAsync(CRWorker worker, CRBrowserContext context)
+        private async Task InitializeServiceWorkerAsync(CRWorker worker, CRBrowserContext context, string targetId)
         {
             try
             {
@@ -939,15 +941,26 @@ namespace PlaywrightNative.Chromium
                 {
                     // Official CRServiceWorker applies UA/network before
                     // Runtime.runIfWaitingForDebugger. Persistent extension
-                    // workers attach during setAutoAttach before the instance
-                    // exists — keep them paused until AdoptExisting. For
-                    // connectOverCDP, still resume so page.goto(sw.html) can
-                    // finish while the default-context instance is created.
-                    await worker.InitializeAsync().ConfigureAwait(false);
+                    // workers attach during setAutoAttach before the public
+                    // context exists — keep them paused until
+                    // AdoptExistingServiceWorkersAsync instruments Network.
+                    // connectOverCDP (_processManager == null) still resumes so
+                    // page.goto(sw.html) can finish while the default-context
+                    // instance is created.
+                    context?.AddServiceWorker(targetId, worker);
+                    if (_processManager == null)
+                    {
+                        await worker.InitializeAsync().ConfigureAwait(false);
+                    }
+
                     return;
                 }
 
+                // Arm Network listeners + Network.enable before resume and before
+                // the public ServiceWorker event so SW fetch() is observed as
+                // context Request/Response (extensions.spec.ts).
                 await context.PublicContext.PrepareServiceWorkerNetworkAsync(worker).ConfigureAwait(false);
+                context.AddServiceWorker(targetId, worker);
                 await worker.InitializeAsync().ConfigureAwait(false);
             }
             catch (Exception ex)
