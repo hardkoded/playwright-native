@@ -485,6 +485,32 @@ namespace PlaywrightNative.WebKit
         }
 
         /// <summary>
+        /// Returns an object id usable in this context, adopting ElementHandles
+        /// from another same-origin world and rejecting foreign JSHandles.
+        /// </summary>
+        /// <param name="handle">A WebKit JS or element handle.</param>
+        /// <returns>An object id owned by this execution context.</returns>
+        internal async Task<string> ResolveHandleObjectIdAsync(WKJSHandle handle)
+        {
+            if (handle == null || string.IsNullOrEmpty(handle.ObjectId))
+            {
+                throw new PlaywrightNativeException(EvaluateWithArg.UnableToAdoptMessage);
+            }
+
+            if (handle.ExecutionContext != null && handle.ExecutionContext.ContextId == ContextId)
+            {
+                return handle.ObjectId;
+            }
+
+            if (handle.AsElement() == null)
+            {
+                throw new PlaywrightNativeException(DispatchEventScript.DifferentContextMessage);
+            }
+
+            return await AdoptElementObjectIdAsync(handle.ObjectId).ConfigureAwait(false);
+        }
+
+        /// <summary>
         /// Adopts a DOM node object id into this execution context via
         /// <c>DOM.resolveNode</c> (official <c>wkPage.adoptElementHandle</c>).
         /// </summary>

@@ -800,12 +800,18 @@ namespace PlaywrightNative.WebKit
             => ActionTrace.EvaluateHandleUserAsync(Context, async () =>
             {
                 WKExecutionContext context = RequireExecutionContext();
-                if (arg is IJSHandle)
+                if (arg is WKJSHandle handleArg)
                 {
+                    string objectId = await context.ResolveHandleObjectIdAsync(handleArg).ConfigureAwait(false);
                     JsonElement? direct = await context
-                        .EvaluateFunctionHandleAsync(EvaluateWithArg.AsFunction(expression), arg)
+                        .EvaluateHandleOnHandleAsync(objectId, EvaluateWithArg.AsFunction(expression))
                         .ConfigureAwait(false);
                     return WrapRemoteObject(context, direct);
+                }
+
+                if (arg is IJSHandle)
+                {
+                    throw new PlaywrightNativeException(DispatchEventScript.DifferentContextMessage);
                 }
 
                 if (EvaluateHandleArg.TryPrepareHandleCall(expression, arg, out string handleFn, out object[] handleArgs))
@@ -3554,6 +3560,15 @@ namespace PlaywrightNative.WebKit
             try
             {
                 WKExecutionContext context = await WaitForFrameContextAsync(frame).ConfigureAwait(false);
+                if (args != null && args.Length == 1 && args[0] is WKJSHandle handle)
+                {
+                    string objectId = await context.ResolveHandleObjectIdAsync(handle).ConfigureAwait(false);
+                    JsonElement tagged = await context
+                        .EvaluateFunctionOnHandleAsync<JsonElement>(objectId, functionDeclaration)
+                        .ConfigureAwait(false);
+                    return JsonValueHelper.Parse<T>(tagged);
+                }
+
                 JsonElement? wrapped = await context
                     .EvaluateFunctionRemoteAsync(functionDeclaration, args)
                     .ConfigureAwait(false);
@@ -3652,6 +3667,15 @@ namespace PlaywrightNative.WebKit
             params object[] args)
         {
             WKExecutionContext context = await WaitForFrameContextAsync(frame).ConfigureAwait(false);
+            if (args != null && args.Length == 1 && args[0] is WKJSHandle handle)
+            {
+                string objectId = await context.ResolveHandleObjectIdAsync(handle).ConfigureAwait(false);
+                JsonElement? adopted = await context
+                    .EvaluateHandleOnHandleAsync(objectId, functionDeclaration)
+                    .ConfigureAwait(false);
+                return WrapRemoteObject(context, adopted);
+            }
+
             JsonElement? handleValue = await context.EvaluateFunctionHandleAsync(functionDeclaration, args)
                 .ConfigureAwait(false);
             return WrapRemoteObject(context, handleValue);
@@ -5560,12 +5584,27 @@ namespace PlaywrightNative.WebKit
             {
                 await Task.Yield();
                 WKExecutionContext context = await WaitForMainExecutionContextAsync().ConfigureAwait(false);
-                string serializedFn = EvaluateHandleArg.WithSerializedHandleResult(
-                    "function () { return (" + expression + ").apply(null, arguments); }");
-                JsonElement? wrapped = await context
-                    .EvaluateFunctionRemoteAsync(serializedFn, arg)
+
+                // WebKit accepts objectId arguments only on the objectId-bound form of
+                // Runtime.callFunctionOn (not executionContextId). Adopt into this world
+                // then evaluate with the handle as `this`/first argument.
+                if (arg is not WKJSHandle handle)
+                {
+                    throw new PlaywrightNativeException(DispatchEventScript.DifferentContextMessage);
+                }
+
+                string objectId = await context.ResolveHandleObjectIdAsync(handle).ConfigureAwait(false);
+                string wrapped =
+                    "function () {" +
+                    "  const s = (" + EvaluateSerialization.SerializeJs + ");" +
+                    "  const v = (" + expression + ").apply(null, arguments);" +
+                    "  if (v && typeof v.then === 'function') return v.then(s);" +
+                    "  return s(v);" +
+                    "}";
+                JsonElement tagged = await context
+                    .EvaluateFunctionOnHandleAsync<JsonElement>(objectId, wrapped)
                     .ConfigureAwait(false);
-                return EvaluateSerialization.ParseRemote<T>(wrapped);
+                return JsonValueHelper.Parse<T>(tagged);
             }
             catch (PlaywrightNativeException ex)
             {
