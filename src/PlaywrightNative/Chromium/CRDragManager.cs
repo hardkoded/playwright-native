@@ -115,8 +115,8 @@ namespace PlaywrightNative.Chromium
         internal async Task InterceptDragCausedByMoveAsync(
             double x,
             double y,
-            MouseButton button,
-            IReadOnlyCollection<KeyboardModifier> modifiers,
+            Input.MouseButton button,
+            IReadOnlyCollection<Input.KeyboardModifier> modifiers,
             Func<Task> moveCallback)
         {
             _lastX = x;
@@ -135,7 +135,7 @@ namespace PlaywrightNative.Chromium
                 return;
             }
 
-            if (button != MouseButton.Left)
+            if (button != Input.MouseButton.Left)
             {
                 await moveCallback().ConfigureAwait(false);
                 return;
@@ -206,7 +206,7 @@ namespace PlaywrightNative.Chromium
         /// <param name="y">Drop y.</param>
         /// <param name="modifiers">Keyboard modifiers.</param>
         /// <returns>A task that completes when drop is dispatched.</returns>
-        internal async Task DropAsync(double x, double y, IReadOnlyCollection<KeyboardModifier> modifiers)
+        internal async Task DropAsync(double x, double y, IReadOnlyCollection<Input.KeyboardModifier> modifiers)
         {
             if (!_dragState.HasValue)
             {
