@@ -320,7 +320,7 @@ namespace PlaywrightNative
         }
 
         /// <inheritdoc/>
-        public string Url => _crPage.MainFrame.Url;
+        public string Url => PopupOpenedHelper.PublicDocumentUrl(_crPage.MainFrame.Url);
 
         /// <inheritdoc/>
         public PageViewportSizeResult ViewportSize => _viewportSize;

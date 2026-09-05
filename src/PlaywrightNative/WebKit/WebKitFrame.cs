@@ -66,7 +66,7 @@ namespace PlaywrightNative.WebKit
             => _wkFrame.ParentFrame == null ? null : _page.GetOrCreateFrame(_wkFrame.ParentFrame);
 
         /// <inheritdoc/>
-        public string Url => _wkFrame.Url;
+        public string Url => PopupOpenedHelper.PublicDocumentUrl(_wkFrame.Url);
 
         /// <inheritdoc/>
         public Task CheckAsync(string selector, Position position = default, bool? force = default, bool? noWaitAfter = default, float? timeout = default, bool? trial = default, ActionScroll scroll = default, bool? strict = default)
