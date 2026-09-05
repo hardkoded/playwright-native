@@ -112,8 +112,11 @@ namespace PlaywrightNative.Chromium
 
             // Create the input simulators. The keyboard is shared with mouse/touch so
             // that chorded inputs (e.g. Shift+Click) pick up currently-pressed modifiers.
-            _keyboard = new Input.Keyboard(new CRRawKeyboard(_client));
-            _mouse = new Input.Mouse(new CRRawMouse(_client), _keyboard);
+            // DragManager mirrors upstream crDragDrop: intercept HTML5 drag so custom
+            // DataTransfer types are preserved without chromium/x-drag-id.
+            CRDragManager dragManager = new CRDragManager(this);
+            _keyboard = new Input.Keyboard(new CRRawKeyboard(_client, dragManager));
+            _mouse = new Input.Mouse(new CRRawMouse(_client, dragManager), _keyboard);
             _touchscreen = new Input.Touchscreen(new CRRawTouchscreen(_client), _keyboard);
 
             // Subscribe to CDP events from the page session.

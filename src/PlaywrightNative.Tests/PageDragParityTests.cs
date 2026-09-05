@@ -39,8 +39,6 @@ namespace PlaywrightNative.Tests
     /// fixtures; the body is page.route + drag and is ported.
     /// Upstream <c>it.fixme(true, implement dragging with iframes)</c> is honored at
     /// runtime for <c>should drag into an iframe</c> and <c>should drag out of an iframe</c>.
-    /// <c>should cancel on escape</c> is ignored: official Chromium interceptor
-    /// cancels the in-flight drag; native CDP mouse drag does not.
     /// </summary>
     [TestFixture]
     public class PageDragParityTests : PageTestEx
@@ -475,9 +473,6 @@ function drop_handler(ev) {
                 Assert.Ignore("Upstream fixme: only Chromium omits dragover on the first mousemove.");
             }
 
-            // Official Chromium drag interceptor omits dragover on the first
-            // target move. Native Chromium 91+ (this port) emits dragover.
-
             await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
             await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
             IPage page = await NewPageAsync(context).ConfigureAwait(false);
@@ -490,7 +485,7 @@ function drop_handler(ev) {
             await page.Mouse.MoveAsync(tx, ty).ConfigureAwait(false);
             Assert.That(
                 await events.JsonValueAsync<string[]>().ConfigureAwait(false),
-                Is.EqualTo(Html5DragSequence(includeDragover: true, includeDrop: false, includeDragend: false, includeMouseUp: false)));
+                Is.EqualTo(Html5DragSequence(includeDragover: false, includeDrop: false, includeDragend: false, includeMouseUp: false)));
         }
 
         [PlaywrightTest("page-drag.spec.ts", "should work inside iframe")]
@@ -531,8 +526,6 @@ function drop_handler(ev) {
         [Timeout(30_000)]
         public async Task ShouldCancelOnEscape()
         {
-            Assert.Ignore("Official Chromium drag interceptor cancels on Escape; native CDP mouse drag does not.");
-
             await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
             await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
             IPage page = await NewPageAsync(context).ConfigureAwait(false);
