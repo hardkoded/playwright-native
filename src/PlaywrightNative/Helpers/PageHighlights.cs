@@ -116,7 +116,14 @@ namespace PlaywrightNative.Helpers
             {
                 try
                 {
-                    await copy[i].Locator.HighlightAsync(style: copy[i].Style).ConfigureAwait(false);
+                    if (copy[i].Locator is Locator sharp)
+                    {
+                        await sharp.HighlightInternalAsync(timeout: default, copy[i].Style).ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        await copy[i].Locator.HighlightAsync(style: copy[i].Style).ConfigureAwait(false);
+                    }
                 }
                 catch (PlaywrightNativeException)
                 {

@@ -3424,9 +3424,13 @@ namespace PlaywrightNative
 
         ILocator ILocator.GetByTitle(Regex text, LocatorGetByTitleOptions options) => GetByTitle(text);
 
-        Task ILocator.HideHighlightAsync() => Task.CompletedTask;
+        Task ILocator.HideHighlightAsync() => HideHighlightAsync();
 
-        Task<IAsyncDisposable> ILocator.HighlightAsync(LocatorHighlightOptions options) => Task.FromResult<IAsyncDisposable>(default!);
+        async Task<IAsyncDisposable> ILocator.HighlightAsync(LocatorHighlightOptions options)
+        {
+            await HighlightInternalAsync(timeout: default, options?.Style).ConfigureAwait(false);
+            return new HighlightLease(this);
+        }
 
         Task ILocator.HoverAsync(LocatorHoverOptions options)
             => HoverAsync(options?.Position, options?.Modifiers, options?.Force, options?.Timeout, options?.Trial);
@@ -3572,5 +3576,26 @@ namespace PlaywrightNative
 
         Task ILocator.WaitForFunctionAsync(string expression, object arg, LocatorWaitForFunctionOptions options) => Task.CompletedTask;
 #pragma warning restore SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
+
+        private sealed class HighlightLease : IAsyncDisposable
+        {
+            private readonly Locator _locator;
+            private int _disposed;
+
+            internal HighlightLease(Locator locator)
+            {
+                _locator = locator;
+            }
+
+            public async ValueTask DisposeAsync()
+            {
+                if (Interlocked.Exchange(ref _disposed, 1) != 0)
+                {
+                    return;
+                }
+
+                await _locator.HideHighlightAsync().ConfigureAwait(false);
+            }
+        }
     }
 }

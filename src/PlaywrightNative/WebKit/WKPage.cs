@@ -8530,7 +8530,11 @@ namespace PlaywrightNative.WebKit
         Task<IResponse> IPage.GotoAsync(string url, PageGotoOptions options)
             => GoToAsync(url, options?.WaitUntil ?? default, options?.Timeout, options?.Referer);
 
-        Task IPage.HideHighlightAsync() => Task.CompletedTask;
+        async Task IPage.HideHighlightAsync()
+        {
+            PageHighlights.Clear(this);
+            await EvaluateAsync(ElementStateScript.HideAllHighlightsFunction).ConfigureAwait(false);
+        }
 
         Task IPage.HoverAsync(string selector, PageHoverOptions options)
             => HoverAsync(selector, options?.Position, options?.Modifiers, options?.Force, options?.Timeout, options?.Trial, default, options?.Strict);
