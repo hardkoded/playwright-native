@@ -1940,22 +1940,47 @@ namespace PlaywrightNative
                 ? "expect(locator).not." + method + "(expected) failed"
                 : "expect(locator)." + method + "(expected) failed";
             string expectLog = _negate ? "not " + method : method;
+            Task<bool> probe = null;
 
             while (true)
             {
                 await LocatorHandlers.RunAsync(_locator.Page, timeoutMs, sw).ConfigureAwait(false);
-                bool ok;
-                try
+                probe ??= predicateAsync();
+                Task finished = await Task.WhenAny(probe, Task.Delay(50)).ConfigureAwait(false);
+                if (!ReferenceEquals(finished, probe))
                 {
-                    ok = await predicateAsync().ConfigureAwait(false);
-                }
-                catch (TimeoutException)
-                {
-                    // Per-poll ElementHandles budget exhausted; retry until expect timeout.
-                    ok = false;
+                    if (timeoutMs != Timeout.Infinite && sw.ElapsedMilliseconds >= timeoutMs)
+                    {
+                        probe = null;
+
+                        // Fall through to the expect-timeout failure below without
+                        // treating the abandoned probe as a successful negation.
+                    }
+                    else
+                    {
+                        continue;
+                    }
                 }
 
-                if (_negate ? !ok : ok)
+                bool ok = false;
+                bool probeCompleted = probe != null;
+                if (probeCompleted)
+                {
+                    try
+                    {
+                        ok = await probe.ConfigureAwait(false);
+                    }
+                    catch (TimeoutException)
+                    {
+                        ok = false;
+                    }
+                    finally
+                    {
+                        probe = null;
+                    }
+                }
+
+                if (probeCompleted && (_negate ? !ok : ok))
                 {
                     return;
                 }
@@ -2691,13 +2716,18 @@ namespace PlaywrightNative
 
         private async Task<IReadOnlyList<IElementHandle>> ElementHandlesOrEmptyAsync(int? queryTimeoutMs = null)
         {
-            int waitMs = queryTimeoutMs ?? 5_000;
             try
             {
-                // Bound every probe so a hung CDP query cannot stall an expect
-                // poll (or the whole CI session) forever.
-                return await _locator.ElementHandlesAsync()
-                    .WaitAsync(TimeSpan.FromMilliseconds(Math.Max(50, waitMs)))
+                Task<IReadOnlyList<IElementHandle>> query = _locator.ElementHandlesAsync();
+                if (!queryTimeoutMs.HasValue)
+                {
+                    // Single-shot helpers (UniqueStateAsync): still bound so a hung
+                    // CDP query cannot stall ExpectBoolAsync forever.
+                    return await query.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+                }
+
+                return await query
+                    .WaitAsync(TimeSpan.FromMilliseconds(Math.Max(50, queryTimeoutMs.Value)))
                     .ConfigureAwait(false);
             }
             catch (TimeoutException)
