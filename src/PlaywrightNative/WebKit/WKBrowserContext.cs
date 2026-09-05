@@ -1085,6 +1085,16 @@ namespace PlaywrightNative.WebKit
         }
 
         /// <summary>
+        /// Listen port of the locale-handshake or client-certificate proxy
+        /// attached to this context, when present. WebKit reports this as
+        /// <c>metrics.remoteAddress</c> for proxied destinations.
+        /// </summary>
+        internal int? InternalProxyPort
+            => _localeHandshake != null
+                ? _localeHandshake.Port
+                : _clientCertificatesProxy?.Port;
+
+        /// <summary>
         /// Stamps merged extra HTTP headers onto later WebSocket handshakes
         /// for WebKit 2276, which ignores <c>Network.setExtraHTTPHeaders</c>
         /// on upgrades.
