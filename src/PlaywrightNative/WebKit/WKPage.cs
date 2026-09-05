@@ -350,7 +350,7 @@ namespace PlaywrightNative.WebKit
         }
 
         /// <inheritdoc/>
-        public string Url => string.IsNullOrEmpty(_mainFrameUrl) ? "about:blank" : _mainFrameUrl;
+        public string Url => PopupOpenedHelper.PublicDocumentUrl(_mainFrameUrl);
 
         /// <inheritdoc/>
         public PageViewportSizeResult ViewportSize => _viewportSize;

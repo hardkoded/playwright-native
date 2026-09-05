@@ -238,13 +238,16 @@ namespace PlaywrightNative.Helpers
 
                 await ApplyOriginsAsync(context, state.Origins).ConfigureAwait(false);
 
-                // Only touch WebAuthn when the payload includes a credentials
-                // field (including []). Cookie/localStorage-only restores must
-                // not call Credentials.InstallAsync — that exposes bindings and
-                // can hang under concurrent browser load.
-                if (state.Credentials != null)
+                // Official setStorageState (replaceExisting) always clears
+                // credentials when the field is missing or empty. Initial
+                // NewContext restores only touch WebAuthn when the payload
+                // includes a credentials field (including []) — cookie /
+                // localStorage-only restores must not call InstallAsync.
+                if (replaceExisting || state.Credentials != null)
                 {
-                    await ApplyCredentialsAsync(context, state.Credentials).ConfigureAwait(false);
+                    await ApplyCredentialsAsync(
+                        context,
+                        state.Credentials ?? Array.Empty<VirtualCredential>()).ConfigureAwait(false);
                 }
             }
             catch (Exception ex) when (ex is PlaywrightNativeException || ex is ArgumentException)

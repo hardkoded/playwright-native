@@ -67,11 +67,15 @@ namespace PlaywrightNative.Helpers
         Task<IAPIRequestContext> IAPIRequest.NewContextAsync(APIRequestNewContextOptions options)
         {
             options ??= new APIRequestNewContextOptions();
-            HttpCredentials[] credentials = null;
-            if (options.HttpCredentials != null)
-            {
-                credentials = new[] { options.HttpCredentials };
-            }
+
+            // Legacy options accept HttpCredentials[]; the official base property
+            // is a single credential and stays null when an array of length != 1
+            // is assigned. Prefer ResolveHttpCredentials for the full list.
+            IEnumerable<HttpCredentials> credentials = options is PlaywrightNative.Compat.LegacyAPIRequestNewContextOptions legacy
+                ? legacy.ResolveHttpCredentials()
+                : options.HttpCredentials != null
+                    ? new[] { options.HttpCredentials }
+                    : null;
 
             return NewContextAsync(
                 ignoreHTTPSErrors: options.IgnoreHTTPSErrors ?? false,
