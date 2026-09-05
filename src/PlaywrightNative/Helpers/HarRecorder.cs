@@ -1711,7 +1711,8 @@ namespace PlaywrightNative.Helpers
                         }
 
                         byte[] fromPage = PageText(pending.Request)
-                            ?? await BodyFromPageAsync(pending.Request).ConfigureAwait(false);
+                            ?? await BodyFromPageAsync(pending.Request).ConfigureAwait(false)
+                            ?? await BodyFromTrackedPagesAsync(pending.Request).ConfigureAwait(false);
                         if (fromPage != null && fromPage.Length > 0)
                         {
                             pending.Body = fromPage;
@@ -1901,7 +1902,8 @@ namespace PlaywrightNative.Helpers
                     if (pending.Request != null && pending.Request.IsNavigationRequest)
                     {
                         byte[] fromPage = PageText(pending.Request)
-                            ?? await BodyFromPageAsync(pending.Request).ConfigureAwait(false);
+                            ?? await BodyFromPageAsync(pending.Request).ConfigureAwait(false)
+                            ?? await BodyFromTrackedPagesAsync(pending.Request).ConfigureAwait(false);
                         if (fromPage != null && fromPage.Length > 0)
                         {
                             pending.Body = fromPage;
@@ -2343,7 +2345,9 @@ namespace PlaywrightNative.Helpers
                         && request.IsNavigationRequest
                         && (body == null || body.Length < 1000))
                     {
-                        byte[] fromPage = PageText(request) ?? await BodyFromPageAsync(request).ConfigureAwait(false);
+                        byte[] fromPage = PageText(request)
+                            ?? await BodyFromPageAsync(request).ConfigureAwait(false)
+                            ?? await BodyFromTrackedPagesAsync(request).ConfigureAwait(false);
                         if (fromPage != null && fromPage.Length > (body == null ? 0 : body.Length))
                         {
                             body = fromPage;
@@ -2687,6 +2691,11 @@ namespace PlaywrightNative.Helpers
                 IPage page = PageOf(request);
                 if (page == null)
                 {
+                    page = FindTrackedPage(request);
+                }
+
+                if (page == null)
+                {
                     return null;
                 }
 
@@ -2696,6 +2705,102 @@ namespace PlaywrightNative.Helpers
                         && !string.IsNullOrEmpty(record.Text))
                     {
                         return Encoding.UTF8.GetBytes(record.Text);
+                    }
+
+                    // Persistent contexts may navigate a page whose request lost its
+                    // frame binding; use any tracked page whose captured text matches.
+                    if (request != null && !string.IsNullOrEmpty(request.Url))
+                    {
+                        foreach (KeyValuePair<IPage, PageRecord> entry in _pages)
+                        {
+                            if (!string.IsNullOrEmpty(entry.Value.Text)
+                                && PathsMatch(entry.Key.Url ?? string.Empty, request.Url))
+                            {
+                                return Encoding.UTF8.GetBytes(entry.Value.Text);
+                            }
+                        }
+                    }
+                }
+
+                return null;
+            }
+
+            private IPage FindTrackedPage(IRequest request)
+            {
+                if (request == null || string.IsNullOrEmpty(request.Url))
+                {
+                    return null;
+                }
+
+                lock (_gate)
+                {
+                    foreach (KeyValuePair<IPage, PageRecord> entry in _pages)
+                    {
+                        if (PathsMatch(entry.Key.Url ?? string.Empty, request.Url))
+                        {
+                            return entry.Key;
+                        }
+                    }
+
+                    // Last resort: single tracked page in this HAR session.
+                    if (_pages.Count == 1)
+                    {
+                        foreach (IPage only in _pages.Keys)
+                        {
+                            return only;
+                        }
+                    }
+                }
+
+                return null;
+            }
+
+            private async Task<byte[]> BodyFromTrackedPagesAsync(IRequest request)
+            {
+                List<IPage> candidates = new List<IPage>();
+                IPage matched = FindTrackedPage(request);
+                if (matched != null)
+                {
+                    candidates.Add(matched);
+                }
+
+                lock (_gate)
+                {
+                    foreach (IPage page in _pages.Keys)
+                    {
+                        if (page != null && !candidates.Contains(page))
+                        {
+                            candidates.Add(page);
+                        }
+                    }
+                }
+
+                foreach (IPage page in candidates)
+                {
+                    try
+                    {
+                        string url = page.Url ?? string.Empty;
+                        if (url.StartsWith("about:", StringComparison.OrdinalIgnoreCase)
+                            && request != null
+                            && !string.IsNullOrEmpty(request.Url)
+                            && !request.Url.StartsWith("about:", StringComparison.OrdinalIgnoreCase))
+                        {
+                            continue;
+                        }
+
+                        string text = await page.EvaluateAsync<string>(
+                            @"(() => {
+                                if (document.body)
+                                    return document.body.innerHTML;
+                                return document.documentElement ? document.documentElement.outerHTML : '';
+                            })()").ConfigureAwait(false);
+                        if (!string.IsNullOrEmpty(text))
+                        {
+                            return Encoding.UTF8.GetBytes(text);
+                        }
+                    }
+                    catch (PlaywrightNativeException)
+                    {
                     }
                 }
 
