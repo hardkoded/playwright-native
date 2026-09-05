@@ -81,7 +81,7 @@ namespace PlaywrightNative.Chromium
         }
 
         /// <inheritdoc/>
-        public string Url => PopupOpenedHelper.PublicDocumentUrl(_crFrame.Url);
+        public string Url => _crFrame.Url;
 
         /// <summary>
         /// Gets the wrapped Chromium frame.
