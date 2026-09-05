@@ -961,7 +961,12 @@ namespace PlaywrightNative.WebKit
                 && metrics.TryGetProperty("remoteAddress", out JsonElement remote)
                 && remote.ValueKind == JsonValueKind.String)
             {
-                wkResponse.ServerAddr = ResponseNetworkInfo.ParseRemoteAddress(remote.GetString())
+                ResponseServerAddrResult parsed = ResponseNetworkInfo.ParseRemoteAddress(remote.GetString())
+                    ?? wkResponse.ServerAddr;
+                wkResponse.ServerAddr = ResponseNetworkInfo.PreferDestinationOverInternalProxy(
+                    parsed,
+                    target.Url,
+                    _page.WKContext?.InternalProxyPort)
                     ?? wkResponse.ServerAddr;
             }
 

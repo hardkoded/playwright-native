@@ -151,6 +151,49 @@ namespace PlaywrightNative.Helpers
         }
 
         /// <summary>
+        /// When traffic is routed through an internal loopback proxy
+        /// (<see cref="LocaleHandshakeProxy"/> / client-certificate MITM),
+        /// WebKit <c>metrics.remoteAddress</c> reports the proxy listen port.
+        /// Prefer the destination host/port from <paramref name="requestUrl"/>.
+        /// </summary>
+        /// <param name="addr">Address parsed from the browser, or <see langword="null"/>.</param>
+        /// <param name="requestUrl">The request URL.</param>
+        /// <param name="internalProxyPort">Listen port of the internal proxy, if any.</param>
+        /// <returns>The destination address when the report matched the proxy; otherwise <paramref name="addr"/>.</returns>
+        internal static ResponseServerAddrResult PreferDestinationOverInternalProxy(
+            ResponseServerAddrResult addr,
+            string requestUrl,
+            int? internalProxyPort)
+        {
+            if (addr == null
+                || !internalProxyPort.HasValue
+                || addr.Port != internalProxyPort.Value
+                || string.IsNullOrEmpty(requestUrl)
+                || !Uri.TryCreate(requestUrl, UriKind.Absolute, out Uri uri))
+            {
+                return addr;
+            }
+
+            string host = uri.IdnHost;
+            if (string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(host, "127.0.0.1", StringComparison.Ordinal)
+                || string.Equals(host, "::1", StringComparison.Ordinal))
+            {
+                return new ResponseServerAddrResult
+                {
+                    IpAddress = string.Equals(host, "::1", StringComparison.Ordinal) ? "[::1]" : "127.0.0.1",
+                    Port = uri.Port,
+                };
+            }
+
+            return new ResponseServerAddrResult
+            {
+                IpAddress = addr.IpAddress,
+                Port = uri.Port > 0 ? uri.Port : addr.Port,
+            };
+        }
+
+        /// <summary>
         /// Reads <c>metrics.protocol</c> from a WebKit <c>Network.loadingFinished</c> payload.
         /// </summary>
         /// <param name="finished">The loading-finished event payload.</param>

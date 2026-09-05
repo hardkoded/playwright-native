@@ -280,6 +280,16 @@ namespace PlaywrightNative.WebKit
         }
 
         /// <summary>
+        /// Listen port of the locale-handshake or client-certificate proxy
+        /// attached to this context, when present. WebKit reports this as
+        /// <c>metrics.remoteAddress</c> for proxied destinations.
+        /// </summary>
+        internal int? InternalProxyPort
+            => _localeHandshake != null
+                ? _localeHandshake.Port
+                : _clientCertificatesProxy?.Port;
+
+        /// <summary>
         /// Gets the owning WebKit browser instance.
         /// </summary>
         internal WKBrowser WKBrowser => _browser;
