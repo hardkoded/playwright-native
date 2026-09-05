@@ -246,7 +246,27 @@ namespace PlaywrightNative.WebKit
         /// </summary>
         /// <returns>A task that resolves to the response body as a byte array.</returns>
         internal Task<byte[]> PrefetchBodyAsync()
-            => GetBodyBytesAsync();
+            => PrefetchBodyAsync(forceRetry: false);
+
+        /// <summary>
+        /// Fetches the response body, optionally discarding a prior empty result so
+        /// HAR flush can retry after <c>loadingFinished</c> under load.
+        /// </summary>
+        /// <param name="forceRetry">When <see langword="true"/>, retry after an empty read.</param>
+        /// <returns>A task that resolves to the response body as a byte array.</returns>
+        internal Task<byte[]> PrefetchBodyAsync(bool forceRetry)
+        {
+            if (forceRetry && (_body == null || _body.Length == 0))
+            {
+                Task<byte[]> current = _bodyTask;
+                if (current == null || current.IsCompleted)
+                {
+                    _bodyTask = null;
+                }
+            }
+
+            return GetBodyBytesAsync();
+        }
 
         internal Task<byte[]> GetBodyBytesAsync()
         {
@@ -261,6 +281,8 @@ namespace PlaywrightNative.WebKit
                 return current;
             }
 
+            // A prior empty completion must not block later retries after the
+            // inspector buffer is populated by loadingFinished.
             Task<byte[]> next = LoadBodyAsync();
             _bodyTask = next;
             return next;
@@ -289,7 +311,7 @@ namespace PlaywrightNative.WebKit
 
             // Prefer an immediate read: Ubuntu WebKit clears the inspector
             // buffer quickly after loadingFinished (especially under CI load).
-            for (int attempt = 0; attempt < 20; attempt++)
+            for (int attempt = 0; attempt < 30; attempt++)
             {
                 try
                 {
@@ -305,7 +327,7 @@ namespace PlaywrightNative.WebKit
                 {
                 }
 
-                await Task.Delay(attempt == 0 ? 25 : 50).ConfigureAwait(false);
+                await Task.Delay(attempt < 5 ? 20 : 40).ConfigureAwait(false);
             }
 
             return Array.Empty<byte>();

@@ -1099,13 +1099,16 @@ namespace PlaywrightNative.Helpers
                     && !string.IsNullOrEmpty(requestUrl)
                     && PathsMatch(pageUrl, requestUrl);
 
-                // WebKit can briefly report a stale page.Url while the navigation
-                // request is already committed. Prefer the live document text and
-                // only reject when paths clearly disagree and the document is empty.
+                // Prefer innerText so JSON / plain navigations still yield a body when
+                // WebKit's Network.getResponseBody raced away; fall back to HTML.
                 string text = await page.EvaluateAsync<string>(
                     @"(() => {
-                        if (document.body)
-                            return document.body.innerHTML;
+                        if (document.body) {
+                            var text = document.body.innerText || document.body.textContent || '';
+                            if (text && text.length > 0)
+                                return text;
+                            return document.body.innerHTML || '';
+                        }
                         return document.documentElement ? document.documentElement.outerHTML : '';
                     })()").ConfigureAwait(false);
                 if (string.IsNullOrEmpty(text))
@@ -1898,15 +1901,28 @@ namespace PlaywrightNative.Helpers
                     }
 
                     // WebKit Linux CI often loses Network.getResponseBody under
-                    // load; fall back to the live page document while it is open.
+                    // load; poll the live page / protocol briefly while open.
                     if (pending.Request != null && pending.Request.IsNavigationRequest)
                     {
-                        byte[] fromPage = PageText(pending.Request)
-                            ?? await BodyFromPageAsync(pending.Request).ConfigureAwait(false)
-                            ?? await BodyFromTrackedPagesAsync(pending.Request).ConfigureAwait(false);
-                        if (fromPage != null && fromPage.Length > 0)
+                        for (int attempt = 0; attempt < 12; attempt++)
                         {
-                            pending.Body = fromPage;
+                            byte[] fromPage = PageText(pending.Request)
+                                ?? await BodyFromPageAsync(pending.Request).ConfigureAwait(false)
+                                ?? await BodyFromTrackedPagesAsync(pending.Request).ConfigureAwait(false);
+                            if (fromPage != null && fromPage.Length > 0)
+                            {
+                                pending.Body = fromPage;
+                                return;
+                            }
+
+                            body = await ReadBodyWithTimeoutAsync(response, TimeSpan.FromSeconds(1)).ConfigureAwait(false);
+                            if (body != null && body.Length > 0)
+                            {
+                                pending.Body = body;
+                                return;
+                            }
+
+                            await Task.Delay(50).ConfigureAwait(false);
                         }
                     }
                 }
@@ -1922,7 +1938,7 @@ namespace PlaywrightNative.Helpers
             {
                 if (response is PlaywrightNative.WebKit.WKResponse wkResponse)
                 {
-                    return await wkResponse.PrefetchBodyAsync().WaitAsync(timeout).ConfigureAwait(false);
+                    return await wkResponse.PrefetchBodyAsync(forceRetry: true).WaitAsync(timeout).ConfigureAwait(false);
                 }
 
                 return await response.GetBodyAsync().WaitAsync(timeout).ConfigureAwait(false);
@@ -2757,6 +2773,7 @@ namespace PlaywrightNative.Helpers
 
             private async Task<byte[]> BodyFromTrackedPagesAsync(IRequest request)
             {
+                bool restrictToHtml = false;
                 IResponse existing = request?.ExistingResponse;
                 if (existing != null)
                 {
@@ -2764,9 +2781,12 @@ namespace PlaywrightNative.Helpers
                     {
                         string contentType = await existing.HeaderValueAsync("content-type").ConfigureAwait(false);
                         if (!string.IsNullOrEmpty(contentType)
-                            && contentType.IndexOf("html", StringComparison.OrdinalIgnoreCase) < 0)
+                            && contentType.IndexOf("html", StringComparison.OrdinalIgnoreCase) < 0
+                            && contentType.IndexOf("json", StringComparison.OrdinalIgnoreCase) < 0
+                            && contentType.IndexOf("text/", StringComparison.OrdinalIgnoreCase) < 0)
                         {
-                            return null;
+                            // Binary / opaque responses must not scrape an unrelated page.
+                            restrictToHtml = true;
                         }
                     }
                     catch (PlaywrightNativeException)
@@ -2797,6 +2817,10 @@ namespace PlaywrightNative.Helpers
                     try
                     {
                         string url = page.Url ?? string.Empty;
+                        bool urlMatches = request != null
+                            && !string.IsNullOrEmpty(request.Url)
+                            && PathsMatch(url, request.Url);
+
                         if (url.StartsWith("about:", StringComparison.OrdinalIgnoreCase)
                             && request != null
                             && !string.IsNullOrEmpty(request.Url)
@@ -2805,10 +2829,36 @@ namespace PlaywrightNative.Helpers
                             continue;
                         }
 
+                        // Only scrape a non-matching page for HTML navigations.
+                        if (!urlMatches && restrictToHtml)
+                        {
+                            continue;
+                        }
+
+                        if (!urlMatches && existing != null)
+                        {
+                            try
+                            {
+                                string contentType = await existing.HeaderValueAsync("content-type").ConfigureAwait(false);
+                                if (!string.IsNullOrEmpty(contentType)
+                                    && contentType.IndexOf("html", StringComparison.OrdinalIgnoreCase) < 0)
+                                {
+                                    continue;
+                                }
+                            }
+                            catch (PlaywrightNativeException)
+                            {
+                            }
+                        }
+
                         string text = await page.EvaluateAsync<string>(
                             @"(() => {
-                                if (document.body)
-                                    return document.body.innerHTML;
+                                if (document.body) {
+                                    var text = document.body.innerText || document.body.textContent || '';
+                                    if (text && text.length > 0)
+                                        return text;
+                                    return document.body.innerHTML || '';
+                                }
                                 return document.documentElement ? document.documentElement.outerHTML : '';
                             })()").ConfigureAwait(false);
                         if (!string.IsNullOrEmpty(text))

@@ -756,6 +756,11 @@ namespace PlaywrightNative.WebKit
             }
 
             _closeReason = reason;
+
+            // Flush HAR before stamping close reasons onto pages/sessions so
+            // page-body fallbacks and getResponseBody can still run under load.
+            Exception harError = await FlushHarQuietlyAsync().ConfigureAwait(false);
+
             lock (_pages)
             {
                 foreach (WKPage page in _pages)
@@ -764,7 +769,6 @@ namespace PlaywrightNative.WebKit
                 }
             }
 
-            Exception harError = await FlushHarQuietlyAsync().ConfigureAwait(false);
             await VideoRecorder.FlushAsync(this).ConfigureAwait(false);
             _localeHandshake?.Dispose();
             _localeHandshake = null;
