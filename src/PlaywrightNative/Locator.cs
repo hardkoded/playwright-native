@@ -1051,18 +1051,12 @@ namespace PlaywrightNative
         }
 
         /// <inheritdoc/>
-        public async Task HighlightAsync(float? timeout = default, string style = default)
-        {
-            IElementHandle handle = await WaitForHandleAsync(timeout, "locator.highlight").ConfigureAwait(false);
-            string tooltip = ToString();
-            string payload = "{\"tooltip\":" + JsonSerializer.Serialize(tooltip) + ",\"style\":" + JsonSerializer.Serialize(style ?? string.Empty) + ",\"id\":" + JsonSerializer.Serialize(tooltip) + "}";
-            await handle.EvaluateAsync<bool>(ElementStateScript.HighlightFunction, payload).ConfigureAwait(false);
-            PageHighlights.Remember(Page, this, style, tooltip);
-        }
+        public Task HighlightAsync(float? timeout = default, string style = default)
+            => HighlightInternalAsync(timeout, style);
 
         /// <inheritdoc/>
         public Task HighlightAsync(IReadOnlyDictionary<string, string> style, float? timeout = default)
-            => HighlightAsync(timeout, HighlightStyle.ToCss(style));
+            => HighlightInternalAsync(timeout, HighlightStyle.ToCss(style));
 
         /// <inheritdoc/>
         public async Task HideHighlightAsync(float? timeout = default)
@@ -1330,6 +1324,20 @@ namespace PlaywrightNative
 
         internal static Locator InAnyFrame(IFrame frame, string selector)
             => new Locator(frame, new[] { CreateStep(selector) }, anyFrame: true);
+
+        /// <summary>
+        /// Non-extension entry point for highlight. Compat extensions must call this —
+        /// calling <see cref="HighlightAsync(float?, string)"/> from an <see cref="ILocator"/>
+        /// extension re-resolves to the extension and overflows the stack.
+        /// </summary>
+        internal async Task HighlightInternalAsync(float? timeout, string style)
+        {
+            IElementHandle handle = await WaitForHandleAsync(timeout, "locator.highlight").ConfigureAwait(false);
+            string tooltip = ToString();
+            string payload = "{\"tooltip\":" + JsonSerializer.Serialize(tooltip) + ",\"style\":" + JsonSerializer.Serialize(style ?? string.Empty) + ",\"id\":" + JsonSerializer.Serialize(tooltip) + "}";
+            await handle.EvaluateAsync<bool>(ElementStateScript.HighlightFunction, payload).ConfigureAwait(false);
+            PageHighlights.Remember(Page, this, style, tooltip);
+        }
 
         internal Locator WithAnyFrame()
         {
