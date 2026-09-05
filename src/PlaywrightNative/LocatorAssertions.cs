@@ -87,6 +87,7 @@ namespace PlaywrightNative
             Stopwatch sw = Stopwatch.StartNew();
             int resolved = 0;
             string preview = null;
+            bool lastIsVisible = false;
             bool wantVisible = visible != false;
 
             while (true)
@@ -105,6 +106,7 @@ namespace PlaywrightNative
 
                 await LocatorHandlers.RunAsync(_locator.Page, timeout).ConfigureAwait(false);
                 IReadOnlyList<IElementHandle> all;
+                bool queryTimedOut = false;
                 try
                 {
                     int remainingMs = timeoutMs == Timeout.Infinite
@@ -116,6 +118,10 @@ namespace PlaywrightNative
                 }
                 catch (TimeoutException)
                 {
+                    // Exhausted the per-poll budget. Do not treat this as a missing
+                    // element — .not.toBeVisible() would otherwise pass incorrectly when
+                    // the locator was visible on prior polls or the query was merely slow.
+                    queryTimedOut = true;
                     all = Array.Empty<IElementHandle>();
                 }
                 catch (PlaywrightNativeException ex) when (IsSelectorSyntaxError(ex))
@@ -150,25 +156,31 @@ namespace PlaywrightNative
                     {
                         isVisible = false;
                     }
+
+                    lastIsVisible = isVisible;
+                }
+                else if (!queryTimedOut)
+                {
+                    lastIsVisible = false;
                 }
 
                 bool ok = wantVisible ? isVisible : !isVisible;
-                if (_negate ? !ok : ok)
+                if (!queryTimedOut && (_negate ? !ok : ok))
                 {
                     return;
                 }
 
                 if (timeoutMs != Timeout.Infinite && sw.ElapsedMilliseconds >= timeoutMs)
                 {
-                    ExpectSnapshotKind snapshotKind = resolved == 0 || !isVisible
+                    ExpectSnapshotKind snapshotKind = resolved == 0 || !lastIsVisible
                         ? ExpectSnapshotKind.Page
                         : ExpectSnapshotKind.Property;
                     throw CreateExpectException(
-                        FormatVisibleExpectFailure(timeoutMs, resolved, isVisible, preview),
-                        resolved > 0 ? (isVisible ? "visible" : "hidden") : null,
+                        FormatVisibleExpectFailure(timeoutMs, resolved, lastIsVisible, preview),
+                        resolved > 0 ? (lastIsVisible ? "visible" : "hidden") : null,
                         "visible",
                         "toBeVisible",
-                        pass: _negate && isVisible,
+                        pass: _negate && lastIsVisible,
                         timeoutMs,
                         await CaptureExpectAriaSnapshotAsync(snapshotKind).ConfigureAwait(false));
                 }
@@ -701,9 +713,13 @@ namespace PlaywrightNative
                 throw new ArgumentNullException(nameof(expected));
             }
 
+            // Single-string toHaveText: whitespace-normalized substring match by
+            // default (exact: null/false). Pass exact: true for full equality.
+            // Matches ExpectTextTests wait-for-"world" in "hello world" and the
+            // PlaywrightNative exact parameter (official .NET options have no Exact).
             return ExpectTextCoreAsync(
                 new[] { new ExpectTextNeedle(expected) },
-                exact: exact != false,
+                exact: exact == true,
                 requireLength: true,
                 single: true,
                 timeout,
@@ -1645,7 +1661,18 @@ namespace PlaywrightNative
                     return await CapturePageExpectAriaSnapshotAsync().ConfigureAwait(false);
                 }
 
-                IReadOnlyList<IElementHandle> all = await ElementHandlesOrEmptyAsync().ConfigureAwait(false);
+                IReadOnlyList<IElementHandle> all;
+                try
+                {
+                    all = await ElementHandlesOrEmptyAsync()
+                        .WaitAsync(TimeSpan.FromSeconds(2))
+                        .ConfigureAwait(false);
+                }
+                catch (TimeoutException)
+                {
+                    return await CapturePageExpectAriaSnapshotAsync().ConfigureAwait(false);
+                }
+
                 bool visible = false;
                 if (all.Count == 1)
                 {
@@ -1666,6 +1693,7 @@ namespace PlaywrightNative
                 int? depth = kind == ExpectSnapshotKind.Containment ? (int?)null : 1;
                 AccessibilitySnapshotResult snapshot = await _locator.Page
                     .SnapshotAccessibilityAsync(interestingOnly: false, root: all[0])
+                    .WaitAsync(TimeSpan.FromSeconds(2))
                     .ConfigureAwait(false);
                 string yaml = AriaSnapshotYaml.Format(
                     snapshot,
@@ -2105,7 +2133,12 @@ namespace PlaywrightNative
                 try
                 {
                     await LocatorHandlers.RunAsync(_locator.Page, timeout).ConfigureAwait(false);
-                    all = await ElementHandlesOrEmptyAsync().ConfigureAwait(false);
+                    int remainingMs = timeoutMs == Timeout.Infinite
+                        ? 5_000
+                        : Math.Max(50, timeoutMs - (int)sw.ElapsedMilliseconds);
+                    all = await ElementHandlesOrEmptyAsync()
+                        .WaitAsync(TimeSpan.FromMilliseconds(remainingMs))
+                        .ConfigureAwait(false);
                 }
                 catch (TimeoutException ex) when (
                     ex.Message != null
@@ -2164,6 +2197,11 @@ namespace PlaywrightNative
                         pass: _negate,
                         timeoutMs,
                         await CaptureTextAriaSnapshotAsync(single, sawElement: true).ConfigureAwait(false));
+                }
+                catch (TimeoutException)
+                {
+                    // Per-poll query budget exhausted; keep last received and retry or fail below.
+                    all = Array.Empty<IElementHandle>();
                 }
                 catch (Exception ex) when (ClosedTarget.IsClosed(ex))
                 {
