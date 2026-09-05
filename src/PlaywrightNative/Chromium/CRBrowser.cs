@@ -952,6 +952,12 @@ namespace PlaywrightNative.Chromium
                     {
                         await worker.InitializeAsync().ConfigureAwait(false);
                     }
+                    else
+                    {
+                        // Keep waitForDebugger pause, but enable Runtime so the
+                        // target stays healthy until AdoptExisting resumes it.
+                        await worker.EnableRuntimeAsync().ConfigureAwait(false);
+                    }
 
                     return;
                 }
