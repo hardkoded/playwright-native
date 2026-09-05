@@ -310,7 +310,7 @@ namespace PlaywrightNative.Helpers
 
                 if (page != null)
                 {
-                    await LocatorHandlers.RunAsync(page, timeout).ConfigureAwait(false);
+                    await LocatorHandlers.RunAsync(page, timeoutMs, sw).ConfigureAwait(false);
                 }
 
                 IElementHandle handle = await ResolveRootAsync(page, locator, root).ConfigureAwait(false);
@@ -478,7 +478,7 @@ namespace PlaywrightNative.Helpers
 
                 if (page != null)
                 {
-                    await LocatorHandlers.RunAsync(page, timeout).ConfigureAwait(false);
+                    await LocatorHandlers.RunAsync(page, timeoutMs, sw).ConfigureAwait(false);
                 }
 
                 IElementHandle handle = await ResolveRootAsync(page, locator, root).ConfigureAwait(false);

@@ -104,14 +104,16 @@ namespace PlaywrightNative
                         ariaSnapshot: null);
                 }
 
-                await LocatorHandlers.RunAsync(_locator.Page, timeout).ConfigureAwait(false);
+                await LocatorHandlers.RunAsync(_locator.Page, timeoutMs, sw).ConfigureAwait(false);
                 IReadOnlyList<IElementHandle> all;
                 bool queryTimedOut = false;
                 try
                 {
+                    // Cap each probe so a hung ElementHandles during navigation
+                    // cannot burn the entire expect timeout in one WaitAsync.
                     int remainingMs = timeoutMs == Timeout.Infinite
                         ? 5_000
-                        : Math.Max(50, timeoutMs - (int)sw.ElapsedMilliseconds);
+                        : Math.Max(50, Math.Min(5_000, timeoutMs - (int)sw.ElapsedMilliseconds));
                     all = await ElementHandlesOrEmptyAsync()
                         .WaitAsync(TimeSpan.FromMilliseconds(remainingMs))
                         .ConfigureAwait(false);
@@ -199,7 +201,7 @@ namespace PlaywrightNative
 
             while (true)
             {
-                await LocatorHandlers.RunAsync(_locator.Page, timeout).ConfigureAwait(false);
+                await LocatorHandlers.RunAsync(_locator.Page, timeoutMs, sw).ConfigureAwait(false);
                 IReadOnlyList<IElementHandle> all = await ElementHandlesOrEmptyAsync().ConfigureAwait(false);
                 if (all.Count > 1)
                 {
@@ -285,7 +287,7 @@ namespace PlaywrightNative
 
             while (true)
             {
-                await LocatorHandlers.RunAsync(_locator.Page, timeout).ConfigureAwait(false);
+                await LocatorHandlers.RunAsync(_locator.Page, timeoutMs, sw).ConfigureAwait(false);
                 IReadOnlyList<IElementHandle> all = await ElementHandlesOrEmptyAsync().ConfigureAwait(false);
                 if (all.Count > 1)
                 {
@@ -382,7 +384,7 @@ namespace PlaywrightNative
 
             while (true)
             {
-                await LocatorHandlers.RunAsync(_locator.Page, timeout).ConfigureAwait(false);
+                await LocatorHandlers.RunAsync(_locator.Page, timeoutMs, sw).ConfigureAwait(false);
                 IReadOnlyList<IElementHandle> all = await ElementHandlesOrEmptyAsync().ConfigureAwait(false);
                 if (all.Count > 1)
                 {
@@ -503,7 +505,7 @@ namespace PlaywrightNative
 
                 while (true)
                 {
-                    await LocatorHandlers.RunAsync(_locator.Page, timeout).ConfigureAwait(false);
+                    await LocatorHandlers.RunAsync(_locator.Page, timeoutMs, sw).ConfigureAwait(false);
                     IReadOnlyList<IElementHandle> all = await ElementHandlesOrEmptyAsync().ConfigureAwait(false);
                     if (all.Count > 1)
                     {
@@ -654,7 +656,7 @@ namespace PlaywrightNative
                         ariaSnapshot: null);
                 }
 
-                await LocatorHandlers.RunAsync(_locator.Page, timeout).ConfigureAwait(false);
+                await LocatorHandlers.RunAsync(_locator.Page, timeoutMs, sw).ConfigureAwait(false);
                 last = await _locator.CountAsync().ConfigureAwait(false);
                 bool match = last == count;
                 if (_negate ? !match : match)
@@ -1849,7 +1851,7 @@ namespace PlaywrightNative
 
             while (true)
             {
-                await LocatorHandlers.RunAsync(_locator.Page, timeout).ConfigureAwait(false);
+                await LocatorHandlers.RunAsync(_locator.Page, timeoutMs, sw).ConfigureAwait(false);
                 bool ok = await predicateAsync().ConfigureAwait(false);
                 if (_negate ? !ok : ok)
                 {
@@ -1937,7 +1939,7 @@ namespace PlaywrightNative
 
             while (true)
             {
-                await LocatorHandlers.RunAsync(_locator.Page, timeout).ConfigureAwait(false);
+                await LocatorHandlers.RunAsync(_locator.Page, timeoutMs, sw).ConfigureAwait(false);
                 IReadOnlyList<IElementHandle> all = await ElementHandlesOrEmptyAsync().ConfigureAwait(false);
                 if (all.Count > 1)
                 {
@@ -2003,7 +2005,7 @@ namespace PlaywrightNative
 
             while (true)
             {
-                await LocatorHandlers.RunAsync(_locator.Page, timeout).ConfigureAwait(false);
+                await LocatorHandlers.RunAsync(_locator.Page, timeoutMs, sw).ConfigureAwait(false);
                 IReadOnlyList<IElementHandle> all = await ElementHandlesOrEmptyAsync().ConfigureAwait(false);
                 if (all.Count > 1)
                 {
@@ -2130,10 +2132,13 @@ namespace PlaywrightNative
                 IReadOnlyList<IElementHandle> all;
                 try
                 {
-                    await LocatorHandlers.RunAsync(_locator.Page, timeout).ConfigureAwait(false);
+                    await LocatorHandlers.RunAsync(_locator.Page, timeoutMs, sw).ConfigureAwait(false);
+
+                    // Cap each probe so a hung ElementHandles during navigation
+                    // cannot burn the entire expect timeout in one WaitAsync.
                     int remainingMs = timeoutMs == Timeout.Infinite
                         ? 5_000
-                        : Math.Max(50, timeoutMs - (int)sw.ElapsedMilliseconds);
+                        : Math.Max(50, Math.Min(5_000, timeoutMs - (int)sw.ElapsedMilliseconds));
                     all = await ElementHandlesOrEmptyAsync()
                         .WaitAsync(TimeSpan.FromMilliseconds(remainingMs))
                         .ConfigureAwait(false);

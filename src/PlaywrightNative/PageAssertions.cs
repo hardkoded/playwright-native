@@ -313,7 +313,7 @@ namespace PlaywrightNative
                         ariaSnapshot: null);
                 }
 
-                await LocatorHandlers.RunAsync(_page, timeout).ConfigureAwait(false);
+                await LocatorHandlers.RunAsync(_page, timeoutMs, sw).ConfigureAwait(false);
                 bool ok = await predicateAsync().ConfigureAwait(false);
                 if (_negate ? !ok : ok)
                 {

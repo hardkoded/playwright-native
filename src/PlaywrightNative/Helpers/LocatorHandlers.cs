@@ -135,6 +135,27 @@ namespace PlaywrightNative.Helpers
             => RunAsync(page, timeout: null);
 
         /// <summary>
+        /// Runs visible overlay handlers before an action, using the remaining
+        /// budget from <paramref name="timeoutMs"/> and <paramref name="sw"/>.
+        /// </summary>
+        /// <param name="page">The page performing the action.</param>
+        /// <param name="timeoutMs">Resolved timeout in milliseconds, or <see cref="Timeout.Infinite"/>.</param>
+        /// <param name="sw">Stopwatch started when the action/expect began.</param>
+        /// <returns>A task that completes when handlers have run.</returns>
+        internal static Task RunAsync(IPage page, int timeoutMs, Stopwatch sw)
+        {
+            if (sw == null)
+            {
+                throw new ArgumentNullException(nameof(sw));
+            }
+
+            float? remaining = timeoutMs == Timeout.Infinite
+                ? (float?)0
+                : Math.Max(1, timeoutMs - (int)sw.ElapsedMilliseconds);
+            return RunAsync(page, remaining);
+        }
+
+        /// <summary>
         /// Runs visible overlay handlers before an action, using
         /// <paramref name="timeout"/> when waiting for the overlay to hide.
         /// </summary>
@@ -159,6 +180,8 @@ namespace PlaywrightNative.Helpers
             registry.Running = true;
             try
             {
+                int timeoutMs = TimeoutSettings.TimeoutMs(timeout);
+                Stopwatch sw = Stopwatch.StartNew();
                 List<Entry> snapshot = new List<Entry>(registry.Entries);
                 foreach (Entry entry in snapshot)
                 {
@@ -173,7 +196,13 @@ namespace PlaywrightNative.Helpers
                         continue;
                     }
 
-                    if (!await IsAnyVisibleAsync(entry.Locator).ConfigureAwait(false))
+                    int queryMs = RemainingQueryMs(timeoutMs, sw);
+
+                    // Unbounded ElementHandles during navigation can hang the
+                    // whole expect/action loop; treat a timed-out probe as not
+                    // visible so we skip the handler instead of blocking forever.
+                    if (!await IsAnyVisibleAsync(entry.Locator, queryMs, assumeVisibleOnTimeout: false)
+                        .ConfigureAwait(false))
                     {
                         continue;
                     }
@@ -191,7 +220,10 @@ namespace PlaywrightNative.Helpers
 
                     if (!entry.NoWaitAfter)
                     {
-                        await WaitHiddenAsync(entry.Locator, timeout).ConfigureAwait(false);
+                        float? remaining = timeoutMs == Timeout.Infinite
+                            ? (float?)0
+                            : Math.Max(1, timeoutMs - (int)sw.ElapsedMilliseconds);
+                        await WaitHiddenAsync(entry.Locator, remaining).ConfigureAwait(false);
                     }
                 }
             }
@@ -201,12 +233,31 @@ namespace PlaywrightNative.Helpers
             }
         }
 
-        private static async Task<bool> IsAnyVisibleAsync(ILocator locator)
+        private static int RemainingQueryMs(int timeoutMs, Stopwatch sw)
+        {
+            if (timeoutMs == Timeout.Infinite)
+            {
+                return 5_000;
+            }
+
+            return Math.Max(50, Math.Min(5_000, timeoutMs - (int)sw.ElapsedMilliseconds));
+        }
+
+        private static async Task<bool> IsAnyVisibleAsync(
+            ILocator locator,
+            int queryTimeoutMs,
+            bool assumeVisibleOnTimeout)
         {
             IReadOnlyList<IElementHandle> handles;
             try
             {
-                handles = await locator.ElementHandlesAsync().ConfigureAwait(false);
+                handles = await locator.ElementHandlesAsync()
+                    .WaitAsync(TimeSpan.FromMilliseconds(Math.Max(50, queryTimeoutMs)))
+                    .ConfigureAwait(false);
+            }
+            catch (TimeoutException)
+            {
+                return assumeVisibleOnTimeout;
             }
             catch (PlaywrightNativeException ex) when (ClosedTarget.IsClosed(ex))
             {
@@ -221,7 +272,17 @@ namespace PlaywrightNative.Helpers
             {
                 try
                 {
-                    if (await handle.IsVisibleAsync().ConfigureAwait(false))
+                    bool visible = await handle.IsVisibleAsync()
+                        .WaitAsync(TimeSpan.FromMilliseconds(Math.Max(50, Math.Min(2_000, queryTimeoutMs))))
+                        .ConfigureAwait(false);
+                    if (visible)
+                    {
+                        return true;
+                    }
+                }
+                catch (TimeoutException)
+                {
+                    if (assumeVisibleOnTimeout)
                     {
                         return true;
                     }
@@ -242,12 +303,24 @@ namespace PlaywrightNative.Helpers
         {
             int timeoutMs = TimeoutSettings.TimeoutMs(timeout);
             Stopwatch sw = Stopwatch.StartNew();
-            while (await IsAnyVisibleAsync(locator).ConfigureAwait(false))
+            while (true)
             {
+                // Check the wall clock before each probe so a hung visibility
+                // query cannot prevent the handler hide timeout from firing.
                 if (timeoutMs != Timeout.Infinite && sw.ElapsedMilliseconds >= timeoutMs)
                 {
                     throw new TimeoutException(
                         "locator handler has finished, waiting for " + locator + " to be hidden");
+                }
+
+                int queryMs = RemainingQueryMs(timeoutMs, sw);
+                bool visible = await IsAnyVisibleAsync(
+                    locator,
+                    queryMs,
+                    assumeVisibleOnTimeout: true).ConfigureAwait(false);
+                if (!visible)
+                {
+                    return;
                 }
 
                 await Task.Delay(50).ConfigureAwait(false);
