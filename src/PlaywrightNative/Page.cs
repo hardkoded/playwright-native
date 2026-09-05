@@ -696,9 +696,9 @@ namespace PlaywrightNative
             {
                 if (EvaluateHandleArg.TryPrepareHandleCall(expression, arg, out string handleFn, out object[] handleArgs))
                 {
-                    await EvaluateHandleArg.StashRemoteHandlesAsync(handleArgs).ConfigureAwait(false);
+                    object[] args = EvaluateHandleArg.AsCallFunctionArguments(handleArgs);
                     CRJSHandle bound = await _crPage
-                        .EvaluateFunctionHandleInternalAsync(handleFn, EvaluateHandleArg.TreeArgument(handleArgs))
+                        .EvaluateFunctionHandleInternalAsync(handleFn, args)
                         .ConfigureAwait(false);
                     return WrapJSHandle(bound);
                 }
@@ -2004,9 +2004,21 @@ namespace PlaywrightNative
 
         private async Task<T> EvaluatePreparedAsync<T>(string handleFn, object[] handleArgs)
         {
-            await EvaluateHandleArg.StashRemoteHandlesAsync(handleArgs).ConfigureAwait(false);
-            return await EvaluateSerializedAsync<T>(
-                EvaluateHandleArg.PreparedExpression(handleFn, handleArgs)).ConfigureAwait(false);
+            // Pass live handles through callFunctionOn so CRExecutionContext can
+            // adopt ElementHandles (and reject cross-context JSHandles).
+            object[] args = EvaluateHandleArg.AsCallFunctionArguments(handleArgs);
+            string serializedFn = EvaluateHandleArg.WithSerializedHandleResult(handleFn);
+            try
+            {
+                await Task.Yield();
+                CRExecutionContext context = await _crPage.WaitForExecutionContextAsync().ConfigureAwait(false);
+                JsonElement? wrapped = await context.EvaluateFunctionAsync(serializedFn, args).ConfigureAwait(false);
+                return EvaluateSerialization.ParseRemote<T>(wrapped);
+            }
+            catch (PlaywrightNativeException ex)
+            {
+                throw EvaluateSerialization.RewriteException(ex);
+            }
         }
 
         private async Task<T> EvaluateSerializedAsync<T>(string expression)

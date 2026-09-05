@@ -1361,6 +1361,47 @@ namespace PlaywrightNative
         internal Locator EnterThenScript(string script, params object[] args)
             => new Locator(_frame, new[] { CreateScriptStep(script, args) }, this);
 
+        /// <summary>
+        /// Element-relative <c>locator.locator(selector)</c>. When already inside a
+        /// <c>contentFrame()</c> (<c>_scope</c> set), appends a step in that
+        /// document instead of nesting another frame entry.
+        /// </summary>
+        /// <param name="selector">Child selector.</param>
+        /// <returns>The chained locator.</returns>
+        internal Locator ChainLocator(string selector)
+        {
+            if (_scope != null)
+            {
+                List<Step> next = CopySteps();
+                next.Add(CreateStep(selector));
+                return new Locator(_frame, next, _scope, _description, _anyFrame);
+            }
+
+            return (Locator)Inside(new Locator(_frame, selector));
+        }
+
+        /// <summary>
+        /// Element-relative <c>locator.locator(other)</c>. Frame-entered locators
+        /// rebase <paramref name="inner"/> into the same content document.
+        /// </summary>
+        /// <param name="inner">Inner locator from the same page/frame.</param>
+        /// <returns>The chained locator.</returns>
+        internal Locator ChainLocator(Locator inner)
+        {
+            ArgumentNullException.ThrowIfNull(inner);
+            if (!ReferenceEquals(inner._frame, _frame))
+            {
+                throw new PlaywrightNativeException("Locators must belong to the same frame.");
+            }
+
+            if (_scope != null)
+            {
+                return AppendInContentFrame(inner);
+            }
+
+            return (Locator)Inside(inner);
+        }
+
         internal Locator EnterThenLocator(Locator inner)
         {
             ArgumentNullException.ThrowIfNull(inner);
@@ -1388,6 +1429,46 @@ namespace PlaywrightNative
             }
 
             return new Locator(_frame, inner._steps, scope, inner._description);
+        }
+
+        private Locator AppendInContentFrame(Locator inner)
+        {
+            if (inner._combine != CombineKind.None)
+            {
+                Locator left = AppendInContentFrame(inner._left);
+                Locator right = inner._right == null ? null : AppendInContentFrame(inner._right);
+                return new Locator(
+                    left,
+                    right,
+                    inner._hasText,
+                    inner._combine,
+                    inner._sliceIndex,
+                    inner._sliceLast,
+                    inner._description,
+                    inner._hasTextRegex,
+                    inner._visible);
+            }
+
+            Locator scope = _scope;
+            List<Step> next = CopySteps();
+            if (inner._scope != null)
+            {
+                Locator nestedHost = AppendInContentFrame(inner._scope);
+                List<Step> nestedSteps = new List<Step>(inner._steps.Count);
+                for (int i = 0; i < inner._steps.Count; i++)
+                {
+                    nestedSteps.Add(inner._steps[i]);
+                }
+
+                return new Locator(_frame, nestedSteps, nestedHost, inner._description, _anyFrame);
+            }
+
+            for (int i = 0; i < inner._steps.Count; i++)
+            {
+                next.Add(inner._steps[i]);
+            }
+
+            return new Locator(_frame, next, scope, inner._description, _anyFrame);
         }
 
         private static async Task<IReadOnlyList<IElementHandle>> QueryStepAsync(IFrame frame, IElementHandle parent, Step step, bool ariaDescendants = true)
@@ -3343,7 +3424,7 @@ namespace PlaywrightNative
 
         ILocator ILocator.Locator(string selectorOrLocator, LocatorLocatorOptions options)
         {
-            ILocator result = EnterThen(selectorOrLocator);
+            ILocator result = ChainLocator(selectorOrLocator);
             options ??= new LocatorLocatorOptions();
             return SelectorQuery.ApplyOptions(
                 result,
@@ -3358,7 +3439,7 @@ namespace PlaywrightNative
         ILocator ILocator.Locator(ILocator selectorOrLocator, LocatorLocatorOptions options)
         {
             ArgumentNullException.ThrowIfNull(selectorOrLocator);
-            ILocator result = EnterThenLocator(RequireLocator(selectorOrLocator));
+            ILocator result = ChainLocator(RequireLocator(selectorOrLocator));
             options ??= new LocatorLocatorOptions();
             return SelectorQuery.ApplyOptions(
                 result,

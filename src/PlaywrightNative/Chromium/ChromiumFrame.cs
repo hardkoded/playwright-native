@@ -123,9 +123,9 @@ namespace PlaywrightNative.Chromium
 
             if (EvaluateHandleArg.TryPrepareHandleCall(expression, arg, out string handleFn, out object[] handleArgs))
             {
-                await EvaluateHandleArg.StashRemoteHandlesAsync(handleArgs).ConfigureAwait(false);
+                object[] args = EvaluateHandleArg.AsCallFunctionArguments(handleArgs);
                 CRJSHandle bound = await instance.CrPage
-                    .EvaluateFunctionHandleInFrameAsync(_crFrame, handleFn, EvaluateHandleArg.TreeArgument(handleArgs))
+                    .EvaluateFunctionHandleInFrameAsync(_crFrame, handleFn, args)
                     .ConfigureAwait(false);
                 return bound == null
                     ? new ImmediateJSHandle(JsonSerializer.SerializeToElement((object)null))
@@ -485,13 +485,24 @@ namespace PlaywrightNative.Chromium
 
         private async Task<T> EvaluatePreparedInFrameAsync<T>(string handleFn, object[] handleArgs)
         {
-            await EvaluateHandleArg.StashRemoteHandlesAsync(handleArgs).ConfigureAwait(false);
-            string expression = EvaluateHandleArg.PreparedExpression(handleFn, handleArgs);
+            object[] args = EvaluateHandleArg.AsCallFunctionArguments(handleArgs);
+            string serializedFn = EvaluateHandleArg.WithSerializedHandleResult(handleFn);
             if (_page is PlaywrightNative.Page handle)
             {
-                return await EvaluateSerializedInFrameAsync<T>(handle, expression).ConfigureAwait(false);
+                try
+                {
+                    CRExecutionContext context = await handle.CrPage.WaitForFrameExecutionContextAsync(_crFrame).ConfigureAwait(false);
+                    JsonElement? wrapped = await context.EvaluateFunctionAsync(serializedFn, args).ConfigureAwait(false);
+                    return EvaluateSerialization.ParseRemote<T>(wrapped);
+                }
+                catch (PlaywrightNativeException ex)
+                {
+                    throw EvaluateSerialization.RewriteException(ex, frameEvaluate: true);
+                }
             }
 
+            await EvaluateHandleArg.StashRemoteHandlesAsync(handleArgs).ConfigureAwait(false);
+            string expression = EvaluateHandleArg.PreparedExpression(handleFn, handleArgs);
             return await _page.EvaluateAsync<T>(expression).ConfigureAwait(false);
         }
 
