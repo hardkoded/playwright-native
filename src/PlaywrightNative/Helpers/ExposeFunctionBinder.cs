@@ -85,6 +85,30 @@ namespace PlaywrightNative.Helpers
             return JsonSerializer.Deserialize<T>(element.GetRawText());
         }
 
+        /// <summary>
+        /// Awaits a callback result when it is a <see cref="Task"/>, matching official
+        /// Playwright's "if the callback returns a Promise, it is awaited".
+        /// </summary>
+        /// <param name="result">The raw callback return value.</param>
+        /// <returns>The awaited value, or <paramref name="result"/> when it is not a task.</returns>
+        internal static async Task<object> InvokeAsync(object result)
+        {
+            if (result is not Task task)
+            {
+                return result;
+            }
+
+            await task.ConfigureAwait(false);
+            Type type = task.GetType();
+            if (!type.IsGenericType)
+            {
+                return null;
+            }
+
+            object value = type.GetProperty("Result", BindingFlags.Instance | BindingFlags.Public)?.GetValue(task);
+            return await InvokeAsync(value).ConfigureAwait(false);
+        }
+
         private static object JsonElementToObject(JsonElement element)
         {
             switch (element.ValueKind)
@@ -118,30 +142,6 @@ namespace PlaywrightNative.Helpers
                 default:
                     return element.Clone();
             }
-        }
-
-        /// <summary>
-        /// Awaits a callback result when it is a <see cref="Task"/>, matching official
-        /// Playwright's "if the callback returns a Promise, it is awaited".
-        /// </summary>
-        /// <param name="result">The raw callback return value.</param>
-        /// <returns>The awaited value, or <paramref name="result"/> when it is not a task.</returns>
-        internal static async Task<object> InvokeAsync(object result)
-        {
-            if (result is not Task task)
-            {
-                return result;
-            }
-
-            await task.ConfigureAwait(false);
-            Type type = task.GetType();
-            if (!type.IsGenericType)
-            {
-                return null;
-            }
-
-            object value = type.GetProperty("Result", BindingFlags.Instance | BindingFlags.Public)?.GetValue(task);
-            return await InvokeAsync(value).ConfigureAwait(false);
         }
 
         private static bool IsTaggedValue(JsonElement element)
