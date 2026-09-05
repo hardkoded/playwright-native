@@ -36,8 +36,11 @@ namespace PlaywrightNative.Chromium
     /// </summary>
     internal static class ChromiumBrowserType
     {
+        // Match official chromiumSwitches: without --disable-field-trial-config,
+        // field trials can re-enable features we disable below (notably HttpsUpgrades).
         private static readonly string[] DefaultArgs =
         [
+            "--disable-field-trial-config",
             "--disable-background-networking",
             "--enable-features=NetworkService,NetworkServiceInProcess",
             "--disable-background-timer-throttling",
@@ -66,10 +69,13 @@ namespace PlaywrightNative.Chromium
             "--export-tagged-pdf",
             "--enable-automation",
 
-            // Official Playwright Chromium does not enforce Local Network Access on
-            // localhost↔127.0.0.1 iframe navigations. Chrome 148+ does, so disable
-            // the checks to keep automation aligned with official bundled Chromium.
-            "--disable-features=ThirdPartyStoragePartitioning,LocalNetworkAccessChecks",
+            // Official Playwright Chromium disables HttpsUpgrades so plain HTTP
+            // navigations (e.g. http://non-existent.com via a test proxy) stay
+            // HTTP. Without it, Chromium upgrades to HTTPS CONNECT and proxy
+            // parity tests fail with net::ERR_BLOCKED_BY_CLIENT.
+            // LocalNetworkAccessChecks: Chrome 148+ otherwise blocks
+            // localhost↔127.0.0.1 iframe navigations that official allows.
+            "--disable-features=ThirdPartyStoragePartitioning,LocalNetworkAccessChecks,HttpsUpgrades",
 
             // Locale handshake proxy must see localhost WebSocket upgrades.
             // Chromium otherwise bypasses loopback (Chrome < 151 ignores locale on WS).

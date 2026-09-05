@@ -201,6 +201,7 @@ namespace PlaywrightNative
             {
                 await LocatorHandlers.RunAsync(_locator.Page, timeoutMs, sw).ConfigureAwait(false);
                 IReadOnlyList<IElementHandle> all;
+                bool queryTimedOut = false;
                 try
                 {
                     int remainingMs = timeoutMs == Timeout.Infinite
@@ -210,34 +211,12 @@ namespace PlaywrightNative
                 }
                 catch (TimeoutException)
                 {
-                    // Do not treat a hung query as "hidden".
-                    all = null;
-                }
-
-                if (all == null)
-                {
-                    if (timeoutMs != Timeout.Infinite && sw.ElapsedMilliseconds >= timeoutMs)
-                    {
-                        StringBuilder timedOutLog = new StringBuilder();
-                        timedOutLog.Append(_negate
-                            ? "expect(locator).not.toBeHidden() failed"
-                            : "expect(locator).toBeHidden() failed");
-                        timedOutLog.Append("\n\nLocator: ");
-                        timedOutLog.Append(_locator);
-                        timedOutLog.Append("\nExpected: ");
-                        timedOutLog.Append(_negate ? "not hidden" : "hidden");
-                        timedOutLog.Append("\nTimeout: ");
-                        timedOutLog.Append(timeoutMs.ToString(CultureInfo.InvariantCulture));
-                        timedOutLog.Append("ms\n\nCall log:\n  - Expect \"");
-                        timedOutLog.Append(_negate ? "not toBeHidden" : "toBeHidden");
-                        timedOutLog.Append("\" with timeout ");
-                        timedOutLog.Append(timeoutMs.ToString(CultureInfo.InvariantCulture));
-                        timedOutLog.Append("ms\n");
-                        throw new TimeoutException(timedOutLog.ToString());
-                    }
-
-                    await Task.Delay(50).ConfigureAwait(false);
-                    continue;
+                    // Do not treat a hung query as "hidden" — .toBeHidden() would
+                    // otherwise pass incorrectly when the locator was merely slow to
+                    // resolve. Keep polling until the expect timeout, then fail with the
+                    // same empty-match formatting as upstream expect-boolean.
+                    queryTimedOut = true;
+                    all = Array.Empty<IElementHandle>();
                 }
 
                 if (all.Count > 1)
@@ -271,7 +250,7 @@ namespace PlaywrightNative
                 }
 
                 bool ok = isHidden;
-                if (_negate ? !ok : ok)
+                if (!queryTimedOut && (_negate ? !ok : ok))
                 {
                     return;
                 }

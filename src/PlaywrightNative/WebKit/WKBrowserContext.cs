@@ -2202,9 +2202,15 @@ namespace PlaywrightNative.WebKit
 
         Task IBrowserContext.RouteWebSocketAsync(Func<string, bool> url, Action<IWebSocketRoute> handler) => Task.CompletedTask;
 
-        Task<IConsoleMessage> IBrowserContext.RunAndWaitForConsoleMessageAsync(Func<Task> action, BrowserContextRunAndWaitForConsoleMessageOptions options) => Task.FromResult<IConsoleMessage>(default!);
+        Task<IConsoleMessage> IBrowserContext.RunAndWaitForConsoleMessageAsync(Func<Task> action, BrowserContextRunAndWaitForConsoleMessageOptions options)
+            => RunAndWaitInternalAsync(
+                action,
+                WaitForEventAsync(BrowserContextEvent.Console, options?.Predicate, options?.Timeout));
 
-        Task<IPage> IBrowserContext.RunAndWaitForPageAsync(Func<Task> action, BrowserContextRunAndWaitForPageOptions options) => Task.FromResult<IPage>(default!);
+        Task<IPage> IBrowserContext.RunAndWaitForPageAsync(Func<Task> action, BrowserContextRunAndWaitForPageOptions options)
+            => RunAndWaitInternalAsync(
+                action,
+                WaitForEventAsync(BrowserContextEvent.Page, options?.Predicate, options?.Timeout));
 
         void IBrowserContext.SetDefaultNavigationTimeout(float timeout) => _ = SetDefaultNavigationTimeoutAsync(timeout);
 
@@ -2240,9 +2246,24 @@ namespace PlaywrightNative.WebKit
 
         Task IBrowserContext.UnrouteAsync(Func<string, bool> url, Func<IRoute, Task> handler) => Task.CompletedTask;
 
-        Task<IConsoleMessage> IBrowserContext.WaitForConsoleMessageAsync(BrowserContextWaitForConsoleMessageOptions options) => Task.FromResult<IConsoleMessage>(default!);
+        Task<IConsoleMessage> IBrowserContext.WaitForConsoleMessageAsync(BrowserContextWaitForConsoleMessageOptions options)
+            => WaitForEventAsync(BrowserContextEvent.Console, options?.Predicate, options?.Timeout);
 
-        Task<IPage> IBrowserContext.WaitForPageAsync(BrowserContextWaitForPageOptions options) => Task.FromResult<IPage>(default!);
+        Task<IPage> IBrowserContext.WaitForPageAsync(BrowserContextWaitForPageOptions options)
+            => WaitForEventAsync(BrowserContextEvent.Page, options?.Predicate, options?.Timeout);
+
+        private static async Task<T> RunAndWaitInternalAsync<T>(Func<Task> action, Task<T> waitTask)
+        {
+            if (action == null)
+            {
+                throw new ArgumentNullException(nameof(action));
+            }
+
+            Task actionTask = action();
+            T result = await waitTask.ConfigureAwait(false);
+            await actionTask.ConfigureAwait(false);
+            return result;
+        }
 
         private sealed class NoopContextDisposable : IAsyncDisposable
         {
