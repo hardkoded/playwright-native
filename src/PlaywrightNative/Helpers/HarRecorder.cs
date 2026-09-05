@@ -51,7 +51,7 @@ namespace PlaywrightNative.Helpers
         /// <param name="recordHarMode">When <see cref="HarMode.Minimal"/>, response bodies are omitted.</param>
         /// <param name="recordHarContent">When <see cref="HarContentPolicy.Attach"/>, bodies are written beside the HAR.</param>
         /// <param name="recordHarUrlRegex">Optional regular expression; when set, only matching URLs are recorded.</param>
-        internal static void Start(IBrowserContext context, string recordHarPath, bool? recordHarOmitContent, string recordHarUrl = default, HarMode recordHarMode = default, HarContentPolicy recordHarContent = default, Regex recordHarUrlRegex = default)
+        internal static void Start(IBrowserContext context, string recordHarPath, bool? recordHarOmitContent, string recordHarUrl = default, HarMode recordHarMode = default, HarContentPolicy recordHarContent = EnumCompat.UndefinedHarContentPolicy, Regex recordHarUrlRegex = default)
         {
             if (context == null || string.IsNullOrEmpty(recordHarPath))
             {
@@ -82,7 +82,7 @@ namespace PlaywrightNative.Helpers
             IAPIRequestContext api,
             string recordHarPath,
             HarMode recordHarMode = default,
-            HarContentPolicy recordHarContent = default,
+            HarContentPolicy recordHarContent = EnumCompat.UndefinedHarContentPolicy,
             string recordHarUrl = default,
             Regex recordHarUrlRegex = default,
             string resourcesDir = default)
@@ -125,7 +125,7 @@ namespace PlaywrightNative.Helpers
             IAPIRequestContext api,
             string recordHarPath,
             HarMode recordHarMode = default,
-            HarContentPolicy recordHarContent = default,
+            HarContentPolicy recordHarContent = EnumCompat.UndefinedHarContentPolicy,
             string recordHarUrl = default,
             Regex recordHarUrlRegex = default,
             string resourcesDir = default)

@@ -404,14 +404,10 @@ namespace PlaywrightNative.Helpers
             }
 
             APIRequestContext request = _contexts.GetValue(context, key => new APIRequestContext(key));
-            if (request._disposed)
-            {
-                // Upstream returns a usable context.request after the previous
-                // APIRequestContext was disposed; replace the cached instance.
-                _contexts.Remove(context);
-                request = _contexts.GetValue(context, key => new APIRequestContext(key));
-            }
 
+            // Do not replace a disposed instance: upstream keeps the same
+            // context.request and fails subsequent calls with TargetClosed
+            // ("should not work after dispose").
             if (context.IsClosed)
             {
                 request.MarkOwnerClosed();
@@ -2548,14 +2544,20 @@ namespace PlaywrightNative.Helpers
 
         private PlaywrightNativeException DisposedException(bool inFlight = false)
         {
-            // Match upstream fetchRequest: closeReason || "Request context disposed."
-            _ = inFlight;
+            // Upstream: in-flight abort uses "Request context disposed.";
+            // post-dispose calls use TargetClosedError default message when no
+            // closeReason was set (browsercontext-fetch / global-fetch specs).
             if (!string.IsNullOrEmpty(_closeReason))
             {
                 return new PlaywrightNativeException(_closeReason);
             }
 
-            return new PlaywrightNativeException("Request context disposed.");
+            if (inFlight)
+            {
+                return new PlaywrightNativeException("Request context disposed.");
+            }
+
+            return new PlaywrightNativeException(PlaywrightNative.DriverMessages.BrowserOrContextClosedExceptionMessage);
         }
 
         private void EnsureNotDisposed()

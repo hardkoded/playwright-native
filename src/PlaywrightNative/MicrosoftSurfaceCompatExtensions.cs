@@ -263,7 +263,7 @@ namespace PlaywrightNative
         public static Task<IAsyncDisposable> StartHarAsync(
             this ITracing tracing,
             string path,
-            HarContentPolicy content = default,
+            HarContentPolicy content = EnumCompat.UndefinedHarContentPolicy,
             HarMode mode = default,
             string url = default,
             Regex urlRegex = default,

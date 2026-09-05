@@ -37,7 +37,7 @@ namespace PlaywrightNative.Helpers
 
         internal void AttachApi(IAPIRequestContext api) => _api = api;
 
-        internal Task<IAsyncDisposable> StartAsync(string path, HarContentPolicy content = default, HarMode mode = default, string url = default, Regex urlRegex = default, string resourcesDir = default)
+        internal Task<IAsyncDisposable> StartAsync(string path, HarContentPolicy content = EnumCompat.UndefinedHarContentPolicy, HarMode mode = default, string url = default, Regex urlRegex = default, string resourcesDir = default)
         {
             if (string.IsNullOrEmpty(path))
             {

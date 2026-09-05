@@ -319,7 +319,7 @@ namespace PlaywrightNative.Chromium
             ReducedMotion reducedMotion = ReducedMotion.Null,
             ForcedColors forcedColors = ForcedColors.Null,
             Contrast contrast = Contrast.Null,
-            HarContentPolicy recordHarContent = default,
+            HarContentPolicy recordHarContent = EnumCompat.UndefinedHarContentPolicy,
             Regex recordHarUrlRegex = default,
             bool? strictSelectors = default,
             IEnumerable<ClientCertificate> clientCertificates = default)
@@ -423,7 +423,7 @@ namespace PlaywrightNative.Chromium
             ReducedMotion reducedMotion = ReducedMotion.Null,
             ForcedColors forcedColors = ForcedColors.Null,
             Contrast contrast = Contrast.Null,
-            HarContentPolicy recordHarContent = default,
+            HarContentPolicy recordHarContent = EnumCompat.UndefinedHarContentPolicy,
             Regex recordHarUrlRegex = default,
             bool? strictSelectors = default,
             IEnumerable<ClientCertificate> clientCertificates = default)

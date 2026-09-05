@@ -122,7 +122,7 @@ namespace PlaywrightNative.Helpers
         }
 
         /// <inheritdoc/>
-        public Task<IAsyncDisposable> StartHarAsync(string path, HarContentPolicy content = default, HarMode mode = default, string url = default, Regex urlRegex = default, string resourcesDir = default)
+        public Task<IAsyncDisposable> StartHarAsync(string path, HarContentPolicy content = EnumCompat.UndefinedHarContentPolicy, HarMode mode = default, string url = default, Regex urlRegex = default, string resourcesDir = default)
             => EnsureHar().StartAsync(path, content, mode, url, urlRegex, resourcesDir);
 
         /// <inheritdoc/>
@@ -339,7 +339,7 @@ namespace PlaywrightNative.Helpers
         Task<IAsyncDisposable> ITracing.StartHarAsync(string path, TracingStartHarOptions options)
             => StartHarAsync(
                 path,
-                options?.Content ?? default,
+                options?.Content ?? EnumCompat.UndefinedHarContentPolicy,
                 options?.Mode ?? default,
                 options?.UrlFilter ?? options?.UrlFilterString,
                 options?.UrlFilterRegex);
