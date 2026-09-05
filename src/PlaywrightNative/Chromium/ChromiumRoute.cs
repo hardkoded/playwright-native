@@ -76,7 +76,10 @@ namespace PlaywrightNative.Chromium
         {
             byte[] body = postDataText != null ? Encoding.UTF8.GetBytes(postDataText) : postData;
             IDictionary<string, string> headerDict = ToDictionary(headers);
-            IBrowserContext context = _request.Frame?.Page?.Context;
+
+            // Early popup/navigation requests may not have a Frame yet; continue must
+            // still work. Prefer OwningPage (non-throwing) over Request.Frame.
+            IBrowserContext context = _request.OwningPage?.Context;
             return ActionTrace.RunAsync(
                 context,
                 "Continue request",

@@ -335,9 +335,11 @@ namespace PlaywrightNative.Chromium
         Task<IAsyncDisposable> IScreencast.ShowActionsAsync(ScreencastShowActionsOptions options)
             => ShowActionsAsync(options?.Duration, options?.Position ?? default, options?.FontSize ?? 0, options?.Cursor ?? default);
 
-        Task IScreencast.ShowChapterAsync(string title, ScreencastShowChapterOptions options) => Task.CompletedTask;
+        Task IScreencast.ShowChapterAsync(string title, ScreencastShowChapterOptions options)
+            => ShowChapterAsync(title, options?.Description, options?.Duration);
 
-        Task<IAsyncDisposable> IScreencast.ShowOverlayAsync(string html, ScreencastShowOverlayOptions options) => Task.FromResult<IAsyncDisposable>(default!);
+        Task<IAsyncDisposable> IScreencast.ShowOverlayAsync(string html, ScreencastShowOverlayOptions options)
+            => ShowOverlayAsync(html, options?.Duration);
 
         Task<IAsyncDisposable> IScreencast.StartAsync(ScreencastStartOptions options)
             => StartAsync(
