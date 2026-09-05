@@ -2582,7 +2582,10 @@ namespace PlaywrightNative
 
         Task IPage.RouteWebSocketAsync(Func<string, bool> url, Action<IWebSocketRoute> handler) => Task.CompletedTask;
 
-        Task<IConsoleMessage> IPage.RunAndWaitForConsoleMessageAsync(Func<Task> action, PageRunAndWaitForConsoleMessageOptions options) => Task.FromResult<IConsoleMessage>(default!);
+        Task<IConsoleMessage> IPage.RunAndWaitForConsoleMessageAsync(Func<Task> action, PageRunAndWaitForConsoleMessageOptions options)
+            => RunAndWaitInternalAsync(
+                action,
+                WaitForEventAsync(PageEvent.Console, options?.Predicate, options?.Timeout));
 
         Task<IDownload> IPage.RunAndWaitForDownloadAsync(Func<Task> action, PageRunAndWaitForDownloadOptions options) => Task.FromResult<IDownload>(default!);
 
@@ -2591,7 +2594,15 @@ namespace PlaywrightNative
                 action,
                 FileChooserWaitHelper.WaitAsync(this, options?.Predicate, options?.Timeout));
 
-        Task<IResponse> IPage.RunAndWaitForNavigationAsync(Func<Task> action, PageRunAndWaitForNavigationOptions options) => Task.FromResult<IResponse>(default!);
+        Task<IResponse> IPage.RunAndWaitForNavigationAsync(Func<Task> action, PageRunAndWaitForNavigationOptions options)
+            => RunAndWaitInternalAsync(
+                action,
+                WaitForNavigationAsync(
+                    options?.Url ?? options?.UrlString,
+                    options?.UrlRegex,
+                    options?.UrlFunc,
+                    options?.Timeout,
+                    options?.WaitUntil ?? default));
 
         Task<IPage> IPage.RunAndWaitForPopupAsync(Func<Task> action, PageRunAndWaitForPopupOptions options)
             => RunAndWaitInternalAsync(
@@ -2731,7 +2742,8 @@ namespace PlaywrightNative
 
         Task IPage.UnrouteAsync(Func<string, bool> url, Func<IRoute, Task> handler) => Task.CompletedTask;
 
-        Task<IConsoleMessage> IPage.WaitForConsoleMessageAsync(PageWaitForConsoleMessageOptions options) => Task.FromResult<IConsoleMessage>(default!);
+        Task<IConsoleMessage> IPage.WaitForConsoleMessageAsync(PageWaitForConsoleMessageOptions options)
+            => WaitForEventAsync(PageEvent.Console, options?.Predicate, options?.Timeout);
 
         Task<IDownload> IPage.WaitForDownloadAsync(PageWaitForDownloadOptions options) => Task.FromResult<IDownload>(default!);
 
@@ -2780,11 +2792,14 @@ namespace PlaywrightNative
                 options?.Timeout,
                 options?.Strict);
 
-        Task IPage.WaitForURLAsync(string url, PageWaitForURLOptions options) => Task.CompletedTask;
+        Task IPage.WaitForURLAsync(string url, PageWaitForURLOptions options)
+            => WaitForURLAsync(url, null, null, options?.Timeout, options?.WaitUntil ?? default);
 
-        Task IPage.WaitForURLAsync(Regex url, PageWaitForURLOptions options) => Task.CompletedTask;
+        Task IPage.WaitForURLAsync(Regex url, PageWaitForURLOptions options)
+            => WaitForURLAsync(null, url, null, options?.Timeout, options?.WaitUntil ?? default);
 
-        Task IPage.WaitForURLAsync(Func<string, bool> url, PageWaitForURLOptions options) => Task.CompletedTask;
+        Task IPage.WaitForURLAsync(Func<string, bool> url, PageWaitForURLOptions options)
+            => WaitForURLAsync(null, null, url, options?.Timeout, options?.WaitUntil ?? default);
 
         Task<IWebSocket> IPage.WaitForWebSocketAsync(PageWaitForWebSocketOptions options) => Task.FromResult<IWebSocket>(default!);
 

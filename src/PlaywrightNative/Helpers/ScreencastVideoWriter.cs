@@ -64,9 +64,9 @@ namespace PlaywrightNative.Helpers
                 Directory.CreateDirectory(directory);
             }
 
-            ScreencastVideoWriter writer = new(path, width, height);
-            writer.EnsureFfmpeg();
-            return writer;
+            // Do not start ffmpeg here. Attach must always register IVideo;
+            // a missing/broken ffmpeg must not leave page.Video null.
+            return new ScreencastVideoWriter(path, width, height);
         }
 
         /// <summary>
@@ -226,7 +226,7 @@ namespace PlaywrightNative.Helpers
                 catch (Exception)
                 {
                     process.Dispose();
-                    throw;
+                    return null;
                 }
 
                 _ffmpeg = process;

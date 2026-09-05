@@ -2365,12 +2365,17 @@ namespace PlaywrightNative.Chromium
                     return;
                 }
 
-                // A later document committed while we were still waiting for
-                // waitUntil on the original navigation — official page.goto
-                // returns the already-committed response.
+                // Client redirect / meta refresh committed a newer document
+                // before waitUntil on the original navigation. Keep waiting
+                // for the target lifecycle on the latest document (upstream
+                // page.goto does not resolve early on intermediate commits).
                 if (!string.IsNullOrEmpty(documentId) && documentId != expectedDocumentId)
                 {
-                    lifecycleTcs.TrySetResult(true);
+                    expectedDocumentId = documentId;
+                    if (frame.LifecycleEvents.Contains(targetLifecycleEvent))
+                    {
+                        lifecycleTcs.TrySetResult(true);
+                    }
                 }
             }
 

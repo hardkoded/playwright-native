@@ -8375,13 +8375,24 @@ namespace PlaywrightNative.WebKit
 
         Task IPage.RouteWebSocketAsync(Func<string, bool> url, Action<IWebSocketRoute> handler) => Task.CompletedTask;
 
-        Task<IConsoleMessage> IPage.RunAndWaitForConsoleMessageAsync(Func<Task> action, PageRunAndWaitForConsoleMessageOptions options) => Task.FromResult<IConsoleMessage>(default!);
+        Task<IConsoleMessage> IPage.RunAndWaitForConsoleMessageAsync(Func<Task> action, PageRunAndWaitForConsoleMessageOptions options)
+            => RunAndWaitInternalAsync(
+                action,
+                WaitForEventAsync(PageEvent.Console, options?.Predicate, options?.Timeout));
 
         Task<IDownload> IPage.RunAndWaitForDownloadAsync(Func<Task> action, PageRunAndWaitForDownloadOptions options) => Task.FromResult<IDownload>(default!);
 
         Task<IFileChooser> IPage.RunAndWaitForFileChooserAsync(Func<Task> action, PageRunAndWaitForFileChooserOptions options) => Task.FromResult<IFileChooser>(default!);
 
-        Task<IResponse> IPage.RunAndWaitForNavigationAsync(Func<Task> action, PageRunAndWaitForNavigationOptions options) => Task.FromResult<IResponse>(default!);
+        Task<IResponse> IPage.RunAndWaitForNavigationAsync(Func<Task> action, PageRunAndWaitForNavigationOptions options)
+            => RunAndWaitInternalAsync(
+                action,
+                WaitForNavigationAsync(
+                    options?.Url ?? options?.UrlString,
+                    options?.UrlRegex,
+                    options?.UrlFunc,
+                    options?.Timeout,
+                    options?.WaitUntil ?? default));
 
         Task<IPage> IPage.RunAndWaitForPopupAsync(Func<Task> action, PageRunAndWaitForPopupOptions options)
             => RunAndWaitInternalAsync(
@@ -8513,7 +8524,8 @@ namespace PlaywrightNative.WebKit
         Task IPage.UnrouteAsync(Func<string, bool> url, Func<IRoute, Task> handler)
             => UnrouteAsync(url, handler);
 
-        Task<IConsoleMessage> IPage.WaitForConsoleMessageAsync(PageWaitForConsoleMessageOptions options) => Task.FromResult<IConsoleMessage>(default!);
+        Task<IConsoleMessage> IPage.WaitForConsoleMessageAsync(PageWaitForConsoleMessageOptions options)
+            => WaitForEventAsync(PageEvent.Console, options?.Predicate, options?.Timeout);
 
         Task<IDownload> IPage.WaitForDownloadAsync(PageWaitForDownloadOptions options)
             => WaitForDownloadAsync(options?.Timeout);

@@ -668,7 +668,26 @@ namespace PlaywrightNative.WebKit
 
         Task<IElementHandle> IFrame.QuerySelectorAsync(string selector, FrameQuerySelectorOptions options) => QuerySelectorAsync(selector);
 
-        Task<IResponse> IFrame.RunAndWaitForNavigationAsync(Func<Task> action, FrameRunAndWaitForNavigationOptions options) => Task.FromResult<IResponse>(default!);
+        async Task<IResponse> IFrame.RunAndWaitForNavigationAsync(Func<Task> action, FrameRunAndWaitForNavigationOptions options)
+        {
+            if (action == null)
+            {
+                throw new ArgumentNullException(nameof(action));
+            }
+
+            Task<IResponse> waitTask = ((IFrame)this).WaitForNavigationAsync(new FrameWaitForNavigationOptions
+            {
+                Url = options?.Url ?? options?.UrlString,
+                UrlRegex = options?.UrlRegex,
+                UrlFunc = options?.UrlFunc,
+                Timeout = options?.Timeout,
+                WaitUntil = options?.WaitUntil,
+            });
+            Task actionTask = action();
+            IResponse response = await waitTask.ConfigureAwait(false);
+            await actionTask.ConfigureAwait(false);
+            return response;
+        }
 
         async Task<IReadOnlyList<string>> IFrame.SelectOptionAsync(string selector, string values, FrameSelectOptionOptions options)
         {
@@ -747,16 +766,25 @@ namespace PlaywrightNative.WebKit
             return WaitForLoadStateAsync(state ?? LoadState.Load, o?.Timeout);
         }
 
-        Task<IResponse> IFrame.WaitForNavigationAsync(FrameWaitForNavigationOptions options) => Task.FromResult<IResponse>(default!);
+        Task<IResponse> IFrame.WaitForNavigationAsync(FrameWaitForNavigationOptions options)
+            => WaitForNavigationAsync(
+                options?.Url ?? options?.UrlString,
+                options?.UrlRegex,
+                options?.UrlFunc,
+                options?.Timeout,
+                options?.WaitUntil ?? default);
 
         Task<IElementHandle> IFrame.WaitForSelectorAsync(string selector, FrameWaitForSelectorOptions options)
             => WaitForSelectorAsync(selector, options?.State ?? WaitForSelectorState.Visible, options?.Timeout, options?.Strict);
 
-        Task IFrame.WaitForURLAsync(string url, FrameWaitForURLOptions options) => Task.CompletedTask;
+        Task IFrame.WaitForURLAsync(string url, FrameWaitForURLOptions options)
+            => WaitForURLAsync(url, null, null, options?.Timeout, options?.WaitUntil ?? default);
 
-        Task IFrame.WaitForURLAsync(Regex url, FrameWaitForURLOptions options) => Task.CompletedTask;
+        Task IFrame.WaitForURLAsync(Regex url, FrameWaitForURLOptions options)
+            => WaitForURLAsync(null, url, null, options?.Timeout, options?.WaitUntil ?? default);
 
-        Task IFrame.WaitForURLAsync(Func<string, bool> url, FrameWaitForURLOptions options) => Task.CompletedTask;
+        Task IFrame.WaitForURLAsync(Func<string, bool> url, FrameWaitForURLOptions options)
+            => WaitForURLAsync(null, null, url, options?.Timeout, options?.WaitUntil ?? default);
 #pragma warning restore SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
     }
 }
