@@ -492,6 +492,7 @@ namespace PlaywrightNative
                     acceptDownloads: persistent.AcceptDownloads,
                     httpCredentials: persistent.HttpCredentials,
                     contrast: persistent.Contrast);
+                await webkit.ApplyIgnoreCertificateErrorsAsync().ConfigureAwait(false);
                 await webkit.ApplyDownloadBehaviorAsync().ConfigureAwait(false);
                 await webkit.ApplyLanguagesAsync().ConfigureAwait(false);
                 await ApplyPersistentChromeToExistingPagesAsync(webkit).ConfigureAwait(false);
