@@ -454,13 +454,18 @@ namespace PlaywrightNative.WebKit
 
 #pragma warning disable SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
         Task<IElementHandle> IFrame.AddScriptTagAsync(FrameAddScriptTagOptions options)
-            => Page.AddScriptTagAsync(new PageAddScriptTagOptions
-            {
-                Url = options?.Url,
-                Path = options?.Path,
-                Content = options?.Content,
-                Type = options?.Type,
-            });
+        {
+            AddScriptTagHelper.Resolved resolved = AddScriptTagHelper.Resolve(
+                options?.Url,
+                options?.Path,
+                options?.Content,
+                options?.Type);
+            return _page.AddScriptTagInFrameAsync(
+                _wkFrame,
+                url: resolved.Url,
+                content: resolved.Content,
+                type: resolved.Type);
+        }
 
         Task<IElementHandle> IFrame.AddStyleTagAsync(FrameAddStyleTagOptions options)
             => Page.AddStyleTagAsync(new PageAddStyleTagOptions
