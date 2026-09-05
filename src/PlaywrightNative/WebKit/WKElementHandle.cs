@@ -157,12 +157,23 @@ namespace PlaywrightNative.WebKit
                 }
 
                 double[] point = await ClickAction.PointAsync(this, position, force).ConfigureAwait(false);
+                Input.MouseButton inputButton = button switch
+                {
+                    MouseButton.Right => Input.MouseButton.Right,
+                    MouseButton.Middle => Input.MouseButton.Middle,
+                    _ => Input.MouseButton.Left,
+                };
                 await ClickAction.RunModifiersAsync(
                     modifiers,
                     ClickAction.HeldKeys(_page.InputKeyboard.PressedModifiers),
                     _page.Keyboard.DownAsync,
                     _page.Keyboard.UpAsync,
-                    () => _page.Mouse.DblClickAsync((float)point[0], (float)point[1], button, delay, steps)).ConfigureAwait(false);
+                    () => _page.InputMouse.DoubleClickAsync(
+                        point[0],
+                        point[1],
+                        inputButton,
+                        delayMs: (int)(delay ?? 0),
+                        steps: steps ?? 1)).ConfigureAwait(false);
             }).ConfigureAwait(false);
         }
 

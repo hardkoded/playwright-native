@@ -368,6 +368,9 @@ namespace PlaywrightNative.WebKit
         /// <summary>Raw keyboard used by pointer actions for modifier snapshots.</summary>
         internal Input.Keyboard InputKeyboard => _keyboard;
 
+        /// <summary>Raw mouse used by element pointer actions that honor <c>steps</c>.</summary>
+        internal Input.Mouse InputMouse => _mouse;
+
         /// <summary>
         /// Gets the inner target session currently driving this page, or <see langword="null"/>
         /// if no target has been created yet. Used by the raw keyboard for <c>Page.insertText</c>.
@@ -4468,8 +4471,11 @@ namespace PlaywrightNative.WebKit
             }
 
             _reportAsNewNavigationTcs.TrySetResult(true);
-            _closedTcs.TrySetResult(true);
+
+            // Raise Close before unblocking CloseAsync waiters. Completing
+            // _closedTcs first races the waiter past the event subscription.
             Close?.Invoke(this, this);
+            _closedTcs.TrySetResult(true);
         }
 
         /// <summary>
@@ -7852,6 +7858,11 @@ namespace PlaywrightNative.WebKit
                 frameId = _mainFrameId;
             }
 
+            if (_closed || _targetSession == null)
+            {
+                return;
+            }
+
             WKExecutionContext created = new WKExecutionContext(_targetSession, contextId);
             if (isUtility)
             {
@@ -8615,7 +8626,10 @@ namespace PlaywrightNative.WebKit
                 action,
                 WaitForEventAsync(PageEvent.Download, options?.Predicate, options?.Timeout));
 
-        Task<IFileChooser> IPage.RunAndWaitForFileChooserAsync(Func<Task> action, PageRunAndWaitForFileChooserOptions options) => Task.FromResult<IFileChooser>(default!);
+        Task<IFileChooser> IPage.RunAndWaitForFileChooserAsync(Func<Task> action, PageRunAndWaitForFileChooserOptions options)
+            => RunAndWaitInternalAsync(
+                action,
+                FileChooserWaitHelper.WaitAsync(this, options?.Predicate, options?.Timeout));
 
         Task<IResponse> IPage.RunAndWaitForNavigationAsync(Func<Task> action, PageRunAndWaitForNavigationOptions options)
             => RunAndWaitInternalAsync(

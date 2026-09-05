@@ -147,6 +147,16 @@ namespace PlaywrightNative.Helpers
         internal static string BuildCss(string animations, string caret, string style)
         {
             StringBuilder builder = new StringBuilder();
+            if (IsDisabled(animations))
+            {
+                builder.Append(DisableAnimationsCss);
+            }
+
+            if (IsHideCaret(caret))
+            {
+                builder.Append(HideCaretCss);
+            }
+
             if (!string.IsNullOrEmpty(style))
             {
                 builder.Append(style);
