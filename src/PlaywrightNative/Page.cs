@@ -2219,9 +2219,22 @@ namespace PlaywrightNative
             => StrictSelector.QueryAsync(QuerySelectorAsync, QuerySelectorAllAsync, selector, strict ?? (_context is IHasStrictSelectors s && s.StrictSelectors));
 
 #pragma warning disable SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
-        Task IPage.AddLocatorHandlerAsync(ILocator locator, Func<ILocator, Task> handler, PageAddLocatorHandlerOptions options) => Task.CompletedTask;
+        Task IPage.AddLocatorHandlerAsync(ILocator locator, Func<ILocator, Task> handler, PageAddLocatorHandlerOptions options)
+        {
+            LocatorHandlers.Add(this, locator, handler, options?.Times, options?.NoWaitAfter);
+            return Task.CompletedTask;
+        }
 
-        Task IPage.AddLocatorHandlerAsync(ILocator locator, Func<Task> handler, PageAddLocatorHandlerOptions options) => Task.CompletedTask;
+        Task IPage.AddLocatorHandlerAsync(ILocator locator, Func<Task> handler, PageAddLocatorHandlerOptions options)
+        {
+            if (handler == null)
+            {
+                throw new ArgumentNullException(nameof(handler));
+            }
+
+            LocatorHandlers.Add(this, locator, _ => handler(), options?.Times, options?.NoWaitAfter);
+            return Task.CompletedTask;
+        }
 
         Task<IElementHandle> IPage.AddScriptTagAsync(PageAddScriptTagOptions options)
             => AddScriptTagAsync(options?.Url, options?.Path, options?.Content, options?.Type);
@@ -2525,7 +2538,11 @@ namespace PlaywrightNative
         Task<IResponse> IPage.ReloadAsync(PageReloadOptions options)
             => ReloadAsync(options?.WaitUntil ?? default, options?.Timeout);
 
-        Task IPage.RemoveLocatorHandlerAsync(ILocator locator) => Task.CompletedTask;
+        Task IPage.RemoveLocatorHandlerAsync(ILocator locator)
+        {
+            LocatorHandlers.Remove(this, locator);
+            return Task.CompletedTask;
+        }
 
         Task<IAsyncDisposable> IPage.RouteAsync(string url, Action<IRoute> handler, PageRouteOptions options)
             => RegisterRouteAsync(() => RouteAsync(url, handler, options?.Times));

@@ -387,7 +387,11 @@ namespace PlaywrightNative
             => ToHaveTitleAsync(titleOrRegExp, options?.Timeout);
 
         Task IPageAssertions.ToHaveURLAsync(string urlOrRegExp, PageAssertionsToHaveURLOptions options)
-            => ToHaveURLAsync(urlOrRegExp, options?.Timeout, options?.IgnoreCase);
+            => ToHaveURLAsync(
+                urlOrRegExp,
+                options?.Timeout,
+                options?.IgnoreCase,
+                options is Compat.LegacyPageAssertionsToHaveURLOptions legacy ? legacy.Signal : null);
 
         Task IPageAssertions.ToHaveURLAsync(Regex urlOrRegExp, PageAssertionsToHaveURLOptions options)
             => ToHaveURLAsync(urlOrRegExp, options?.Timeout, options?.IgnoreCase);

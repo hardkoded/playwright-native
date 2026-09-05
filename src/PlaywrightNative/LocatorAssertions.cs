@@ -15,6 +15,7 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Playwright;
+using PlaywrightNative.Compat;
 using PlaywrightNative.Helpers;
 
 namespace PlaywrightNative
@@ -2678,7 +2679,10 @@ namespace PlaywrightNative
             => ToBeInViewportAsync(options?.Ratio, options?.Timeout);
 
         Task ILocatorAssertions.ToBeVisibleAsync(LocatorAssertionsToBeVisibleOptions options)
-            => ToBeVisibleAsync(options?.Timeout, options?.Visible);
+            => ToBeVisibleAsync(
+                options?.Timeout,
+                options?.Visible,
+                options is Compat.LegacyLocatorAssertionsToBeVisibleOptions legacy ? legacy.Signal : null);
 
         Task ILocatorAssertions.ToContainClassAsync(string expected, LocatorAssertionsToContainClassOptions options)
             => ToContainClassAsync(expected, options?.Timeout);
@@ -2735,7 +2739,10 @@ namespace PlaywrightNative
             => ToHaveClassAsync(expected, options?.Timeout);
 
         Task ILocatorAssertions.ToHaveCountAsync(int count, LocatorAssertionsToHaveCountOptions options)
-            => ToHaveCountAsync(count, options?.Timeout);
+            => ToHaveCountAsync(
+                count,
+                options?.Timeout,
+                options is Compat.LegacyLocatorAssertionsToHaveCountOptions legacy ? legacy.Signal : null);
 
         Task ILocatorAssertions.ToHaveCSSAsync(string name, string value, LocatorAssertionsToHaveCSSOptions options)
         {
@@ -2772,7 +2779,12 @@ namespace PlaywrightNative
             => ToHaveRoleAsync(role, options?.Timeout);
 
         Task ILocatorAssertions.ToHaveTextAsync(string expected, LocatorAssertionsToHaveTextOptions options)
-            => ToHaveTextAsync(expected, timeout: options?.Timeout, ignoreCase: options?.IgnoreCase, useInnerText: options?.UseInnerText);
+            => ToHaveTextAsync(
+                expected,
+                timeout: options?.Timeout,
+                ignoreCase: options?.IgnoreCase,
+                useInnerText: options?.UseInnerText,
+                signal: options is Compat.LegacyLocatorAssertionsToHaveTextOptions legacy ? legacy.Signal : null);
 
         Task ILocatorAssertions.ToHaveTextAsync(Regex expected, LocatorAssertionsToHaveTextOptions options)
             => ToHaveTextAsync(expected, options?.Timeout, options?.IgnoreCase, options?.UseInnerText);
@@ -2796,7 +2808,10 @@ namespace PlaywrightNative
             => ToHaveValuesAsync(values, options?.Timeout);
 
         Task ILocatorAssertions.ToMatchAriaSnapshotAsync(string expected, LocatorAssertionsToMatchAriaSnapshotOptions options)
-            => ToMatchAriaSnapshotAsync(expected, timeout: options?.Timeout);
+            => ToMatchAriaSnapshotAsync(
+                expected,
+                timeout: options?.Timeout,
+                signal: options is Compat.LegacyLocatorAssertionsToMatchAriaSnapshotOptions legacy ? legacy.Signal : null);
 #pragma warning restore SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
     }
 }
