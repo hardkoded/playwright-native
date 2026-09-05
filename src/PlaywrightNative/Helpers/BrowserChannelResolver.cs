@@ -14,6 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+using System;
 using System.Collections.Generic;
 using System.IO;
 
@@ -39,12 +40,29 @@ namespace PlaywrightNative.Helpers
                 throw new PlaywrightNativeException("Browser channel is not set.");
             }
 
+            string fallback = null;
             foreach (string path in CandidatePaths(channel))
             {
-                if (File.Exists(path))
+                if (!File.Exists(path))
+                {
+                    continue;
+                }
+
+                // Prefer binaries whose path contains the channel name (e.g.
+                // /opt/microsoft/msedge/msedge over /usr/bin/microsoft-edge).
+                string name = ToName(channel);
+                if (!string.IsNullOrEmpty(name)
+                    && path.Contains(name, StringComparison.OrdinalIgnoreCase))
                 {
                     return path;
                 }
+
+                fallback ??= path;
+            }
+
+            if (fallback != null)
+            {
+                return fallback;
             }
 
             throw new PlaywrightNativeException($"Failed to find browser for channel '{ToName(channel)}'.");
@@ -89,11 +107,14 @@ namespace PlaywrightNative.Helpers
                         "/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary",
                     };
                 case BrowserChannel.Msedge:
+                    // Prefer paths that contain "msedge" (upstream registry +
+                    // LaunchChannelTests). /usr/bin/microsoft-edge* exists on
+                    // some distros but fails the msedge path assertion.
                     return new[]
                     {
+                        "/opt/microsoft/msedge/msedge",
                         "/usr/bin/microsoft-edge",
                         "/usr/bin/microsoft-edge-stable",
-                        "/opt/microsoft/msedge/msedge",
                         @"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
                         @"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
                         "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
@@ -101,14 +122,14 @@ namespace PlaywrightNative.Helpers
                 case BrowserChannel.MsedgeBeta:
                     return new[]
                     {
-                        "/usr/bin/microsoft-edge-beta",
                         "/opt/microsoft/msedge-beta/msedge",
+                        "/usr/bin/microsoft-edge-beta",
                     };
                 case BrowserChannel.MsedgeDev:
                     return new[]
                     {
-                        "/usr/bin/microsoft-edge-dev",
                         "/opt/microsoft/msedge-dev/msedge",
+                        "/usr/bin/microsoft-edge-dev",
                     };
                 case BrowserChannel.MsedgeCanary:
                     return new[]

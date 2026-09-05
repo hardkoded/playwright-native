@@ -422,13 +422,6 @@ namespace PlaywrightNative.Chromium
                 await owner.PublicContext.EvaluateInitScriptsOnCurrentAsync(PublicPage).ConfigureAwait(false);
             }
 
-            if (Opener != null && owner?.PublicContext != null && PublicPage != null)
-            {
-                owner.PublicContext.ReportPopupAsNew(PublicPage);
-                Task replay = ReplayExposedBindingsAsync();
-                await Task.WhenAny(replay, Task.Delay(1_000)).ConfigureAwait(false);
-            }
-
             if (PublicPage != null && owner?.PublicContext != null)
             {
                 await owner.PublicContext.ApplyMediaEmulationAsync(PublicPage).ConfigureAwait(false);
@@ -449,6 +442,15 @@ namespace PlaywrightNative.Chromium
 #pragma warning restore RCS1075
             {
                 _firstNonInitialNavigationTcs.TrySetResult(true);
+            }
+
+            // Report popup Page events only after the main-frame URL has synced
+            // so WaitForEvent(Page) observers see the navigated URL, not "".
+            if (Opener != null && owner?.PublicContext != null && PublicPage != null)
+            {
+                owner.PublicContext.ReportPopupAsNew(PublicPage);
+                Task replay = ReplayExposedBindingsAsync();
+                await Task.WhenAny(replay, Task.Delay(1_000)).ConfigureAwait(false);
             }
 
             _initializationTcs.TrySetResult(true);
