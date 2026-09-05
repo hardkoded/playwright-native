@@ -695,14 +695,56 @@ namespace PlaywrightNative.Helpers
                     continue;
                 }
 
-                JsonObject cookie = ParseHarCookie(header.Value, attributes: true);
-                if (cookie != null)
+                foreach (string raw in SplitSetCookieValues(header.Value))
                 {
-                    array.Add(cookie);
+                    JsonObject cookie = ParseHarCookie(raw, attributes: true);
+                    if (cookie != null)
+                    {
+                        array.Add(cookie);
+                    }
                 }
             }
 
             return array;
+        }
+
+        private static IEnumerable<string> SplitSetCookieValues(string value)
+        {
+            if (string.IsNullOrEmpty(value))
+            {
+                yield break;
+            }
+
+            string separator = ResponseHeaders.WebKitSetCookieSeparator;
+            if (value.Contains(separator, StringComparison.Ordinal))
+            {
+                foreach (string part in value.Split(separator))
+                {
+                    string trimmed = part.Trim();
+                    if (trimmed.Length > 0)
+                    {
+                        yield return trimmed;
+                    }
+                }
+
+                yield break;
+            }
+
+            if (value.Contains('\n', StringComparison.Ordinal))
+            {
+                foreach (string part in value.Split('\n'))
+                {
+                    string trimmed = part.Trim();
+                    if (trimmed.Length > 0)
+                    {
+                        yield return trimmed;
+                    }
+                }
+
+                yield break;
+            }
+
+            yield return value;
         }
 
         private static JsonObject ParseHarCookie(string raw, bool attributes)

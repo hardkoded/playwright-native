@@ -88,7 +88,10 @@ namespace PlaywrightNative.Helpers
             {
                 foreach (string script in scripts)
                 {
-                    builder.Append("(() => { ").Append(script).Append(" })();\n");
+                    // Isolate each init script so one throw cannot skip the rest.
+                    // Chromium installs separate addScriptToEvaluateOnNewDocument entries;
+                    // WebKit concatenates into one bootstrap blob.
+                    builder.Append("(() => { try { ").Append(script).Append(" } catch (e) {} })();\n");
                 }
             }
 

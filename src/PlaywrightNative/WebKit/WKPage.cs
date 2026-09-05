@@ -5727,6 +5727,7 @@ namespace PlaywrightNative.WebKit
             _executionContext = null;
             _frameContexts.Clear();
             _utilityContexts.Clear();
+            _recentBindingInvocations.Clear();
         }
 
         private async Task EnsureUtilityWorldAsync(WKTargetSession target)
@@ -7636,6 +7637,12 @@ namespace PlaywrightNative.WebKit
                 : (payload.TryGetProperty("parentFrameId", out JsonElement pfEl) ? pfEl.GetString() : null);
 
             _frameManager.FrameCommittedNavigation(id, url, name, parentId);
+            if (string.IsNullOrEmpty(parentId)
+                || string.Equals(id, _mainFrameId, StringComparison.Ordinal))
+            {
+                _recentBindingInvocations.Clear();
+            }
+
             if (!string.IsNullOrEmpty(id) && (_mainFrameId == null || id == _mainFrameId || id == _frameManager.MainFrame.FrameId))
             {
                 _mainFrameId = _frameManager.MainFrame.FrameId;
@@ -8052,9 +8059,10 @@ namespace PlaywrightNative.WebKit
             Func<JsonElement[], Task<object>> handler)
         {
             // After a WebKit process-swap, one page-side call can emit two
-            // Runtime.bindingCalled events with the same seq envelope. Key
-            // the payload (name + seq + args) so legitimate repeats of the
-            // same exposeFunction — official clock timers — still run.
+            // Runtime.bindingCalled events with the same seq envelope. Key the
+            // payload so legitimate repeats still run, and clear the map on
+            // navigation so a new document that restarts seq at 1 is not
+            // coalesced with the previous document's identical call.
             string key = argument ?? string.Empty;
             long now = DateTime.UtcNow.Ticks;
             if (_recentBindingInvocations.TryGetValue(key, out (long Ticks, Task<object> Task) recent)

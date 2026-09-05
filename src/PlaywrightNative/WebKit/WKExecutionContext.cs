@@ -432,24 +432,29 @@ namespace PlaywrightNative.WebKit
         }
 
         /// <summary>
-        /// Evaluates a structured-clone wrapped expression. Uses
-        /// <c>returnByValue: true</c> so a same-turn tagged payload survives
-        /// navigation-during-return. Promises are awaited and abort when this
+        /// Evaluates a structured-clone wrapped expression. Uses a handle
+        /// (<c>returnByValue: false</c>) so thenables keep an <c>objectId</c>,
+        /// then awaits via <c>Runtime.callFunctionOn</c>. Abort when this
         /// context is destroyed.
         /// </summary>
+        /// <remarks>
+        /// Do not fall back to a second <c>Runtime.evaluate</c> of the same
+        /// expression when <c>returnByValue: true</c> drops a Promise id —
+        /// that re-runs page side effects (exposeFunction bindings, fetch, etc.).
+        /// </remarks>
         /// <param name="expression">An expression that returns a tagged payload or a promise of one.</param>
         /// <returns>The remote object (<c>result</c>) for <see cref="EvaluateSerialization.ParseRemote{T}"/>.</returns>
         internal async Task<JsonElement?> EvaluateSerializedRemoteAsync(string expression)
         {
-            JsonElement? byValue = await _session.SendAsync(
+            JsonElement? handleResponse = await _session.SendAsync(
                 "Runtime.evaluate",
-                BuildEvaluateParams(expression, returnByValue: true)).ConfigureAwait(false);
-            if (byValue == null)
+                BuildEvaluateParams(expression, returnByValue: false)).ConfigureAwait(false);
+            if (handleResponse == null)
             {
                 return null;
             }
 
-            JsonElement response = byValue.Value;
+            JsonElement response = handleResponse.Value;
             ThrowIfThrown(response);
             if (!response.TryGetProperty("result", out JsonElement result))
             {
@@ -464,12 +469,7 @@ namespace PlaywrightNative.WebKit
             string objectId = RemoteObject.GetObjectId(result);
             if (string.IsNullOrEmpty(objectId))
             {
-                JsonElement? handle = await EvaluateHandleAsync(expression).ConfigureAwait(false);
-                objectId = handle == null ? null : RemoteObject.GetObjectId(handle.Value);
-                if (string.IsNullOrEmpty(objectId))
-                {
-                    return result;
-                }
+                return result;
             }
 
             JsonElement? awaited = await AwaitOrDestroyAsync(objectId).ConfigureAwait(false);
@@ -481,7 +481,7 @@ namespace PlaywrightNative.WebKit
             ThrowIfThrown(awaited.Value);
             return awaited.Value.TryGetProperty("result", out JsonElement awaitedResult)
                 ? awaitedResult
-                : awaited;
+                : awaited.Value;
         }
 
         /// <summary>
