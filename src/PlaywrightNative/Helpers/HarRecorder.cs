@@ -2757,6 +2757,22 @@ namespace PlaywrightNative.Helpers
 
             private async Task<byte[]> BodyFromTrackedPagesAsync(IRequest request)
             {
+                if (request?.Response != null)
+                {
+                    try
+                    {
+                        string contentType = await request.Response.HeaderValueAsync("content-type").ConfigureAwait(false);
+                        if (!string.IsNullOrEmpty(contentType)
+                            && contentType.IndexOf("html", StringComparison.OrdinalIgnoreCase) < 0)
+                        {
+                            return null;
+                        }
+                    }
+                    catch (PlaywrightNativeException)
+                    {
+                    }
+                }
+
                 List<IPage> candidates = new List<IPage>();
                 IPage matched = FindTrackedPage(request);
                 if (matched != null)
