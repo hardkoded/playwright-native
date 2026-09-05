@@ -3373,7 +3373,19 @@ namespace PlaywrightNative
         Task ILocator.PressSequentiallyAsync(string text, LocatorPressSequentiallyOptions options)
             => PressSequentiallyAsync(text, options?.Delay, options?.NoWaitAfter, options?.Timeout);
 
-        Task<byte[]> ILocator.ScreenshotAsync(LocatorScreenshotOptions options) => Task.FromResult<byte[]>(default!);
+        Task<byte[]> ILocator.ScreenshotAsync(LocatorScreenshotOptions options)
+            => ScreenshotAsync(
+                options?.Path,
+                options?.Type ?? default,
+                options?.Quality,
+                options?.OmitBackground,
+                options?.Timeout,
+                options?.Scale?.ToString(),
+                options?.Animations?.ToString(),
+                options?.Caret?.ToString(),
+                options?.Style,
+                options?.Mask,
+                options?.MaskColor);
 
         Task ILocator.ScrollIntoViewIfNeededAsync(LocatorScrollIntoViewIfNeededOptions options) => ScrollIntoViewIfNeededAsync(options?.Timeout);
 

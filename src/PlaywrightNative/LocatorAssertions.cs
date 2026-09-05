@@ -1831,9 +1831,20 @@ namespace PlaywrightNative
                         log.Append("\nError: element(s) not found");
                     }
 
-                    log.Append("\n\nCall log:\n  - Expect \"");
-                    log.Append(expectLog);
-                    log.Append("\" with timeout ");
+                    log.Append("\n\nCall log:\n  - ");
+                    if (string.Equals(method, "toHaveScreenshot", StringComparison.Ordinal))
+                    {
+                        // Upstream screenshot expect logs use "expect.toHaveScreenshot" (dot form).
+                        log.Append(ApiName(method));
+                    }
+                    else
+                    {
+                        log.Append("Expect \"");
+                        log.Append(expectLog);
+                        log.Append('"');
+                    }
+
+                    log.Append(" with timeout ");
                     log.Append(timeoutMs.ToString(CultureInfo.InvariantCulture));
                     log.Append("ms\n  - waiting for ");
                     log.Append(_locator);

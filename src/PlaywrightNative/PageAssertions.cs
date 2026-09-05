@@ -332,9 +332,20 @@ namespace PlaywrightNative
 
                     log.Append("\nTimeout:  ");
                     log.Append(timeoutMs.ToString(System.Globalization.CultureInfo.InvariantCulture));
-                    log.Append("ms\n\nCall log:\n  - Expect \"");
-                    log.Append(expectLog);
-                    log.Append("\" with timeout ");
+                    log.Append("ms\n\nCall log:\n  - ");
+                    if (string.Equals(method, "toHaveScreenshot", StringComparison.Ordinal))
+                    {
+                        // Upstream screenshot expect logs use "expect.toHaveScreenshot" (dot form).
+                        log.Append(ApiName(method));
+                    }
+                    else
+                    {
+                        log.Append("Expect \"");
+                        log.Append(expectLog);
+                        log.Append('"');
+                    }
+
+                    log.Append(" with timeout ");
                     log.Append(timeoutMs.ToString(System.Globalization.CultureInfo.InvariantCulture));
                     log.Append("ms\n");
                     string ariaSnapshot = null;
