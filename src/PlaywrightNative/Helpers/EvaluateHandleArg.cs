@@ -101,11 +101,6 @@ namespace PlaywrightNative.Helpers
         }
 
         /// <summary>
-        /// Returns the JSON tree string from a <see cref="TryPrepareHandleCall"/> result.
-        /// </summary>
-        /// <param name="callArgs">Output of <see cref="TryPrepareHandleCall"/>.</param>
-        /// <returns>The tree JSON, or <see langword="null"/>.</returns>
-        /// <summary>
         /// Enumerates stashed handle slots from a <see cref="TryPrepareHandleCall"/> result.
         /// </summary>
         /// <param name="callArgs">Output of <see cref="TryPrepareHandleCall"/>.</param>
@@ -130,6 +125,11 @@ namespace PlaywrightNative.Helpers
             }
         }
 
+        /// <summary>
+        /// Returns the JSON tree string from a <see cref="TryPrepareHandleCall"/> result.
+        /// </summary>
+        /// <param name="callArgs">Output of <see cref="TryPrepareHandleCall"/>.</param>
+        /// <returns>The tree JSON, or <see langword="null"/>.</returns>
         internal static object TreeArgument(object[] callArgs)
             => callArgs != null && callArgs.Length > 0 ? callArgs[0] : null;
 

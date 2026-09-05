@@ -484,6 +484,57 @@ namespace PlaywrightNative.WebKit
                 : awaited;
         }
 
+        /// <summary>
+        /// Adopts a DOM node object id into this execution context via
+        /// <c>DOM.resolveNode</c> (official <c>wkPage.adoptElementHandle</c>).
+        /// </summary>
+        /// <param name="objectId">Source element object id from another context.</param>
+        /// <returns>The adopted object id in this context.</returns>
+        internal async Task<string> AdoptElementObjectIdAsync(string objectId)
+        {
+            if (string.IsNullOrEmpty(objectId) || !_contextId.HasValue)
+            {
+                throw new PlaywrightNativeException(EvaluateWithArg.UnableToAdoptMessage);
+            }
+
+            try
+            {
+                JsonElement? resolved = await _session.SendAsync("DOM.resolveNode", new
+                {
+                    objectId,
+                    executionContextId = _contextId.Value,
+                }).ConfigureAwait(false);
+
+                if (resolved == null
+                    || !resolved.Value.TryGetProperty("object", out JsonElement remote)
+                    || (remote.TryGetProperty("subtype", out JsonElement subtype)
+                        && subtype.ValueKind == JsonValueKind.String
+                        && string.Equals(subtype.GetString(), "null", StringComparison.Ordinal))
+                    || !remote.TryGetProperty("objectId", out JsonElement adoptedId)
+                    || adoptedId.ValueKind != JsonValueKind.String)
+                {
+                    throw new PlaywrightNativeException(EvaluateWithArg.UnableToAdoptMessage);
+                }
+
+                string adopted = adoptedId.GetString();
+                if (string.IsNullOrEmpty(adopted))
+                {
+                    throw new PlaywrightNativeException(EvaluateWithArg.UnableToAdoptMessage);
+                }
+
+                return adopted;
+            }
+            catch (PlaywrightNativeException ex)
+            {
+                if (string.Equals(ex.Message, EvaluateWithArg.UnableToAdoptMessage, StringComparison.Ordinal))
+                {
+                    throw;
+                }
+
+                throw new PlaywrightNativeException(EvaluateWithArg.UnableToAdoptMessage);
+            }
+        }
+
         private static bool IsTaggedRemote(JsonElement result)
         {
             if (result.TryGetProperty("type", out JsonElement type)
@@ -770,57 +821,6 @@ namespace PlaywrightNative.WebKit
             }
 
             return SerializeHandleArgument(value);
-        }
-
-        /// <summary>
-        /// Adopts a DOM node object id into this execution context via
-        /// <c>DOM.resolveNode</c> (official <c>wkPage.adoptElementHandle</c>).
-        /// </summary>
-        /// <param name="objectId">Source element object id from another context.</param>
-        /// <returns>The adopted object id in this context.</returns>
-        internal async Task<string> AdoptElementObjectIdAsync(string objectId)
-        {
-            if (string.IsNullOrEmpty(objectId) || !_contextId.HasValue)
-            {
-                throw new PlaywrightNativeException(EvaluateWithArg.UnableToAdoptMessage);
-            }
-
-            try
-            {
-                JsonElement? resolved = await _session.SendAsync("DOM.resolveNode", new
-                {
-                    objectId,
-                    executionContextId = _contextId.Value,
-                }).ConfigureAwait(false);
-
-                if (resolved == null
-                    || !resolved.Value.TryGetProperty("object", out JsonElement remote)
-                    || (remote.TryGetProperty("subtype", out JsonElement subtype)
-                        && subtype.ValueKind == JsonValueKind.String
-                        && string.Equals(subtype.GetString(), "null", StringComparison.Ordinal))
-                    || !remote.TryGetProperty("objectId", out JsonElement adoptedId)
-                    || adoptedId.ValueKind != JsonValueKind.String)
-                {
-                    throw new PlaywrightNativeException(EvaluateWithArg.UnableToAdoptMessage);
-                }
-
-                string adopted = adoptedId.GetString();
-                if (string.IsNullOrEmpty(adopted))
-                {
-                    throw new PlaywrightNativeException(EvaluateWithArg.UnableToAdoptMessage);
-                }
-
-                return adopted;
-            }
-            catch (PlaywrightNativeException ex)
-            {
-                if (string.Equals(ex.Message, EvaluateWithArg.UnableToAdoptMessage, StringComparison.Ordinal))
-                {
-                    throw;
-                }
-
-                throw new PlaywrightNativeException(EvaluateWithArg.UnableToAdoptMessage);
-            }
         }
 
         private async Task<object> PrepareHandleArgumentAsync(WKJSHandle handle)

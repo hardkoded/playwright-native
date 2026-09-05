@@ -3566,17 +3566,14 @@ namespace PlaywrightNative.WebKit
         }
 
         /// <summary>
-        /// Evaluates a JavaScript function in <paramref name="frame"/>'s world with arguments.
-        /// </summary>
-        /// <typeparam name="T">The target type for the result.</typeparam>
-        /// <param name="frame">The frame whose execution context is used.</param>
-        /// <param name="functionDeclaration">The JavaScript function declaration.</param>
-        /// <param name="args">Arguments passed to the function, including JS handles.</param>
-        /// <returns>The deserialized result.</returns>
-        /// <summary>
         /// Nested-handle evaluate in <paramref name="frame"/> using adopt-then-stash
         /// (WebKit rejects mixed value/objectId <c>callFunctionOn</c> lists).
         /// </summary>
+        /// <typeparam name="T">The result type.</typeparam>
+        /// <param name="frame">The target frame.</param>
+        /// <param name="handleFn">Prepared handle wrapper function.</param>
+        /// <param name="handleArgs">Prepared handle call arguments.</param>
+        /// <returns>The deserialized result.</returns>
         internal async Task<T> EvaluatePreparedInFrameAsync<T>(WKFrame frame, string handleFn, object[] handleArgs)
         {
             WKExecutionContext context = await WaitForFrameContextAsync(frame).ConfigureAwait(false);
@@ -3590,15 +3587,28 @@ namespace PlaywrightNative.WebKit
         /// Adopts foreign ElementHandles into <paramref name="target"/> then parks them
         /// on <c>globalThis.__pw_eh</c> for the stash-based evaluate path.
         /// </summary>
+        /// <param name="target">The evaluation world that will revive stashed handles.</param>
+        /// <param name="callArgs">Prepared handle call arguments.</param>
+        /// <returns>A task that completes when handles are stashed.</returns>
         internal Task StashAdoptedHandlesForEvaluateAsync(WKExecutionContext target, object[] callArgs)
             => StashAdoptedHandlesAsync(target, callArgs);
 
         /// <summary>
         /// Waits for <paramref name="frame"/>'s main-world execution context.
         /// </summary>
+        /// <param name="frame">The frame whose context is required.</param>
+        /// <returns>The frame execution context.</returns>
         internal Task<WKExecutionContext> WaitForFrameContextForEvaluateAsync(WKFrame frame)
             => WaitForFrameContextAsync(frame);
 
+        /// <summary>
+        /// Evaluates a JavaScript function in <paramref name="frame"/>'s world with arguments.
+        /// </summary>
+        /// <typeparam name="T">The target type for the result.</typeparam>
+        /// <param name="frame">The frame whose execution context is used.</param>
+        /// <param name="functionDeclaration">The JavaScript function declaration.</param>
+        /// <param name="args">Arguments passed to the function, including JS handles.</param>
+        /// <returns>The deserialized result.</returns>
         internal async Task<T> EvaluateFunctionInFrameAsync<T>(WKFrame frame, string functionDeclaration, params object[] args)
         {
             WKExecutionContext context = await WaitForFrameContextAsync(frame).ConfigureAwait(false);
