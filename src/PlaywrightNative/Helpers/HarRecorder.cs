@@ -1588,6 +1588,42 @@ namespace PlaywrightNative.Helpers
                     }
                 }
 
+                // Refresh page HTML while the context is still live so navigation
+                // entries can embed/attach content when getResponseBody raced away.
+                if (!_omitContent && !_slimMode)
+                {
+                    List<PageRecord> pageRecords;
+                    lock (_gate)
+                    {
+                        pageRecords = new List<PageRecord>(_pages.Values);
+                    }
+
+                    foreach (PageRecord record in pageRecords)
+                    {
+                        await record.RefreshAsync().ConfigureAwait(false);
+                    }
+
+                    foreach (PendingEntry pending in snapshot)
+                    {
+                        if (pending.Body != null && pending.Body.Length > 0)
+                        {
+                            continue;
+                        }
+
+                        if (pending.Request == null || !pending.Request.IsNavigationRequest)
+                        {
+                            continue;
+                        }
+
+                        byte[] fromPage = PageText(pending.Request)
+                            ?? await BodyFromPageAsync(pending.Request).ConfigureAwait(false);
+                        if (fromPage != null && fromPage.Length > 0)
+                        {
+                            pending.Body = fromPage;
+                        }
+                    }
+                }
+
                 Detach();
 
                 JsonArray pages = _slimMode
@@ -1737,7 +1773,6 @@ namespace PlaywrightNative.Helpers
 
                 try
                 {
-                    await Task.Delay(50).ConfigureAwait(false);
                     byte[] body = await ReadBodyWithTimeoutAsync(response, TimeSpan.FromSeconds(2)).ConfigureAwait(false);
                     if (body != null && body.Length > 0)
                     {
@@ -1746,11 +1781,24 @@ namespace PlaywrightNative.Helpers
                     }
 
                     // One more attempt after the response has had time to buffer.
-                    await Task.Delay(100).ConfigureAwait(false);
+                    await Task.Delay(50).ConfigureAwait(false);
                     body = await ReadBodyWithTimeoutAsync(response, TimeSpan.FromSeconds(2)).ConfigureAwait(false);
                     if (body != null && body.Length > 0)
                     {
                         pending.Body = body;
+                        return;
+                    }
+
+                    // WebKit Linux CI often loses Network.getResponseBody under
+                    // load; fall back to the live page document while it is open.
+                    if (pending.Request != null && pending.Request.IsNavigationRequest)
+                    {
+                        byte[] fromPage = PageText(pending.Request)
+                            ?? await BodyFromPageAsync(pending.Request).ConfigureAwait(false);
+                        if (fromPage != null && fromPage.Length > 0)
+                        {
+                            pending.Body = fromPage;
+                        }
                     }
                 }
                 catch (TimeoutException)
@@ -2198,8 +2246,10 @@ namespace PlaywrightNative.Helpers
 
                 int decodedSize = body == null ? 0 : body.Length;
                 int encodedSize = sizes?.ResponseBodySize ?? decodedSize;
-                if (encodedSize >= decodedSize && decodedSize > 0 && gzip)
+                if (gzip && decodedSize > 0 && (encodedSize <= 0 || encodedSize >= decodedSize))
                 {
+                    // WebKit often reports decoded metrics.responseBodyBytesReceived
+                    // for gzip responses; recompute encoded size from the body.
                     encodedSize = GzipLength(body);
                 }
 
