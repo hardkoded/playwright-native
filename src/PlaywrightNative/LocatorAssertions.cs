@@ -114,9 +114,7 @@ namespace PlaywrightNative
                     int remainingMs = timeoutMs == Timeout.Infinite
                         ? 5_000
                         : Math.Max(50, Math.Min(5_000, timeoutMs - (int)sw.ElapsedMilliseconds));
-                    all = await ElementHandlesOrEmptyAsync()
-                        .WaitAsync(TimeSpan.FromMilliseconds(remainingMs))
-                        .ConfigureAwait(false);
+                    all = await ElementHandlesOrEmptyAsync(remainingMs).ConfigureAwait(false);
                 }
                 catch (TimeoutException)
                 {
@@ -202,7 +200,46 @@ namespace PlaywrightNative
             while (true)
             {
                 await LocatorHandlers.RunAsync(_locator.Page, timeoutMs, sw).ConfigureAwait(false);
-                IReadOnlyList<IElementHandle> all = await ElementHandlesOrEmptyAsync().ConfigureAwait(false);
+                IReadOnlyList<IElementHandle> all;
+                try
+                {
+                    int remainingMs = timeoutMs == Timeout.Infinite
+                        ? 5_000
+                        : Math.Max(50, Math.Min(5_000, timeoutMs - (int)sw.ElapsedMilliseconds));
+                    all = await ElementHandlesOrEmptyAsync(remainingMs).ConfigureAwait(false);
+                }
+                catch (TimeoutException)
+                {
+                    // Do not treat a hung query as "hidden".
+                    all = null;
+                }
+
+                if (all == null)
+                {
+                    if (timeoutMs != Timeout.Infinite && sw.ElapsedMilliseconds >= timeoutMs)
+                    {
+                        StringBuilder timedOutLog = new StringBuilder();
+                        timedOutLog.Append(_negate
+                            ? "expect(locator).not.toBeHidden() failed"
+                            : "expect(locator).toBeHidden() failed");
+                        timedOutLog.Append("\n\nLocator: ");
+                        timedOutLog.Append(_locator);
+                        timedOutLog.Append("\nExpected: ");
+                        timedOutLog.Append(_negate ? "not hidden" : "hidden");
+                        timedOutLog.Append("\nTimeout: ");
+                        timedOutLog.Append(timeoutMs.ToString(CultureInfo.InvariantCulture));
+                        timedOutLog.Append("ms\n\nCall log:\n  - Expect \"");
+                        timedOutLog.Append(_negate ? "not toBeHidden" : "toBeHidden");
+                        timedOutLog.Append("\" with timeout ");
+                        timedOutLog.Append(timeoutMs.ToString(CultureInfo.InvariantCulture));
+                        timedOutLog.Append("ms\n");
+                        throw new TimeoutException(timedOutLog.ToString());
+                    }
+
+                    await Task.Delay(50).ConfigureAwait(false);
+                    continue;
+                }
+
                 if (all.Count > 1)
                 {
                     throw new PlaywrightNativeException(
@@ -288,7 +325,21 @@ namespace PlaywrightNative
             while (true)
             {
                 await LocatorHandlers.RunAsync(_locator.Page, timeoutMs, sw).ConfigureAwait(false);
-                IReadOnlyList<IElementHandle> all = await ElementHandlesOrEmptyAsync().ConfigureAwait(false);
+                IReadOnlyList<IElementHandle> all;
+                bool queryTimedOut = false;
+                try
+                {
+                    int remainingMs = timeoutMs == Timeout.Infinite
+                        ? 5_000
+                        : Math.Max(50, Math.Min(5_000, timeoutMs - (int)sw.ElapsedMilliseconds));
+                    all = await ElementHandlesOrEmptyAsync(remainingMs).ConfigureAwait(false);
+                }
+                catch (TimeoutException)
+                {
+                    queryTimedOut = true;
+                    all = Array.Empty<IElementHandle>();
+                }
+
                 if (all.Count > 1)
                 {
                     throw new PlaywrightNativeException(
@@ -311,7 +362,7 @@ namespace PlaywrightNative
                 }
 
                 bool ok = wantAttached ? isAttached : !isAttached;
-                if (_negate ? !ok : ok)
+                if (!queryTimedOut && (_negate ? !ok : ok))
                 {
                     return;
                 }
@@ -385,7 +436,27 @@ namespace PlaywrightNative
             while (true)
             {
                 await LocatorHandlers.RunAsync(_locator.Page, timeoutMs, sw).ConfigureAwait(false);
-                IReadOnlyList<IElementHandle> all = await ElementHandlesOrEmptyAsync().ConfigureAwait(false);
+                IReadOnlyList<IElementHandle> all;
+                try
+                {
+                    int remainingMs = timeoutMs == Timeout.Infinite
+                        ? 5_000
+                        : Math.Max(50, Math.Min(5_000, timeoutMs - (int)sw.ElapsedMilliseconds));
+                    all = await ElementHandlesOrEmptyAsync(remainingMs).ConfigureAwait(false);
+                }
+                catch (TimeoutException)
+                {
+                    if (timeoutMs != Timeout.Infinite && sw.ElapsedMilliseconds >= timeoutMs)
+                    {
+                        all = Array.Empty<IElementHandle>();
+                    }
+                    else
+                    {
+                        await Task.Delay(50).ConfigureAwait(false);
+                        continue;
+                    }
+                }
+
                 if (all.Count > 1)
                 {
                     throw new PlaywrightNativeException(
@@ -506,7 +577,28 @@ namespace PlaywrightNative
                 while (true)
                 {
                     await LocatorHandlers.RunAsync(_locator.Page, timeoutMs, sw).ConfigureAwait(false);
-                    IReadOnlyList<IElementHandle> all = await ElementHandlesOrEmptyAsync().ConfigureAwait(false);
+                    IReadOnlyList<IElementHandle> all;
+                    try
+                    {
+                        int remainingMs = timeoutMs == Timeout.Infinite
+                            ? 5_000
+                            : Math.Max(50, Math.Min(5_000, timeoutMs - (int)sw.ElapsedMilliseconds));
+                        all = await ElementHandlesOrEmptyAsync(remainingMs).ConfigureAwait(false);
+                    }
+                    catch (TimeoutException)
+                    {
+                        if (timeoutMs != Timeout.Infinite && sw.ElapsedMilliseconds >= timeoutMs)
+                        {
+                            // Fall through to the timeout failure below.
+                            all = Array.Empty<IElementHandle>();
+                        }
+                        else
+                        {
+                            await Task.Delay(50).ConfigureAwait(false);
+                            continue;
+                        }
+                    }
+
                     if (all.Count > 1)
                     {
                         throw new PlaywrightNativeException(
@@ -1852,7 +1944,17 @@ namespace PlaywrightNative
             while (true)
             {
                 await LocatorHandlers.RunAsync(_locator.Page, timeoutMs, sw).ConfigureAwait(false);
-                bool ok = await predicateAsync().ConfigureAwait(false);
+                bool ok;
+                try
+                {
+                    ok = await predicateAsync().ConfigureAwait(false);
+                }
+                catch (TimeoutException)
+                {
+                    // Per-poll ElementHandles budget exhausted; retry until expect timeout.
+                    ok = false;
+                }
+
                 if (_negate ? !ok : ok)
                 {
                     return;
@@ -1940,7 +2042,27 @@ namespace PlaywrightNative
             while (true)
             {
                 await LocatorHandlers.RunAsync(_locator.Page, timeoutMs, sw).ConfigureAwait(false);
-                IReadOnlyList<IElementHandle> all = await ElementHandlesOrEmptyAsync().ConfigureAwait(false);
+                IReadOnlyList<IElementHandle> all;
+                try
+                {
+                    int remainingMs = timeoutMs == Timeout.Infinite
+                        ? 5_000
+                        : Math.Max(50, Math.Min(5_000, timeoutMs - (int)sw.ElapsedMilliseconds));
+                    all = await ElementHandlesOrEmptyAsync(remainingMs).ConfigureAwait(false);
+                }
+                catch (TimeoutException)
+                {
+                    if (timeoutMs != Timeout.Infinite && sw.ElapsedMilliseconds >= timeoutMs)
+                    {
+                        all = Array.Empty<IElementHandle>();
+                    }
+                    else
+                    {
+                        await Task.Delay(50).ConfigureAwait(false);
+                        continue;
+                    }
+                }
+
                 if (all.Count > 1)
                 {
                     throw new PlaywrightNativeException(
@@ -2006,7 +2128,27 @@ namespace PlaywrightNative
             while (true)
             {
                 await LocatorHandlers.RunAsync(_locator.Page, timeoutMs, sw).ConfigureAwait(false);
-                IReadOnlyList<IElementHandle> all = await ElementHandlesOrEmptyAsync().ConfigureAwait(false);
+                IReadOnlyList<IElementHandle> all;
+                try
+                {
+                    int remainingMs = timeoutMs == Timeout.Infinite
+                        ? 5_000
+                        : Math.Max(50, Math.Min(5_000, timeoutMs - (int)sw.ElapsedMilliseconds));
+                    all = await ElementHandlesOrEmptyAsync(remainingMs).ConfigureAwait(false);
+                }
+                catch (TimeoutException)
+                {
+                    if (timeoutMs != Timeout.Infinite && sw.ElapsedMilliseconds >= timeoutMs)
+                    {
+                        all = Array.Empty<IElementHandle>();
+                    }
+                    else
+                    {
+                        await Task.Delay(50).ConfigureAwait(false);
+                        continue;
+                    }
+                }
+
                 if (all.Count > 1)
                 {
                     throw new PlaywrightNativeException(
@@ -2139,9 +2281,7 @@ namespace PlaywrightNative
                     int remainingMs = timeoutMs == Timeout.Infinite
                         ? 5_000
                         : Math.Max(50, Math.Min(5_000, timeoutMs - (int)sw.ElapsedMilliseconds));
-                    all = await ElementHandlesOrEmptyAsync()
-                        .WaitAsync(TimeSpan.FromMilliseconds(remainingMs))
-                        .ConfigureAwait(false);
+                    all = await ElementHandlesOrEmptyAsync(remainingMs).ConfigureAwait(false);
                 }
                 catch (TimeoutException ex) when (
                     ex.Message != null
@@ -2527,7 +2667,7 @@ namespace PlaywrightNative
 
         private async Task<string[]> CollectTextContentsAsync(bool? useInnerText = default)
         {
-            IReadOnlyList<IElementHandle> all = await _locator.ElementHandlesAsync().ConfigureAwait(false);
+            IReadOnlyList<IElementHandle> all = await ElementHandlesOrEmptyAsync().ConfigureAwait(false);
             string[] texts = new string[all.Count];
             for (int i = 0; i < all.Count; i++)
             {
@@ -2539,7 +2679,7 @@ namespace PlaywrightNative
 
         private async Task<string[]> CollectClassAttributesAsync()
         {
-            IReadOnlyList<IElementHandle> all = await _locator.ElementHandlesAsync().ConfigureAwait(false);
+            IReadOnlyList<IElementHandle> all = await ElementHandlesOrEmptyAsync().ConfigureAwait(false);
             string[] classes = new string[all.Count];
             for (int i = 0; i < all.Count; i++)
             {
@@ -2549,11 +2689,20 @@ namespace PlaywrightNative
             return classes;
         }
 
-        private async Task<IReadOnlyList<IElementHandle>> ElementHandlesOrEmptyAsync()
+        private async Task<IReadOnlyList<IElementHandle>> ElementHandlesOrEmptyAsync(int? queryTimeoutMs = null)
         {
+            int waitMs = queryTimeoutMs ?? 5_000;
             try
             {
-                return await _locator.ElementHandlesAsync().ConfigureAwait(false);
+                // Bound every probe so a hung CDP query cannot stall an expect
+                // poll (or the whole CI session) forever.
+                return await _locator.ElementHandlesAsync()
+                    .WaitAsync(TimeSpan.FromMilliseconds(Math.Max(50, waitMs)))
+                    .ConfigureAwait(false);
+            }
+            catch (TimeoutException)
+            {
+                throw;
             }
             catch (PlaywrightNativeException ex) when (
                 PlaywrightNativeException.IsDestroyedContext(ex)
