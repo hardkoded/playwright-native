@@ -2300,15 +2300,56 @@ namespace PlaywrightNative
                 arg,
                 "page.$eval");
 
-        Task<IAsyncDisposable> IPage.ExposeBindingAsync(string name, Action callback) => Task.FromResult<IAsyncDisposable>(default!);
+        Task<IAsyncDisposable> IPage.ExposeBindingAsync(string name, Action callback)
+            => ExposeFunctionAsync(name, callback);
 
-        Task<IAsyncDisposable> IPage.ExposeBindingAsync(string name, Action<BindingSource> callback) => Task.FromResult<IAsyncDisposable>(default!);
+        Task<IAsyncDisposable> IPage.ExposeBindingAsync(string name, Action<BindingSource> callback)
+        {
+            if (callback == null)
+            {
+                throw new ArgumentNullException(nameof(callback));
+            }
 
-        Task<IAsyncDisposable> IPage.ExposeBindingAsync<T>(string name, Action<BindingSource, T> callback) => Task.FromResult<IAsyncDisposable>(default!);
+            return InstallExposedAsync(name, PageExposeBinder.WrapBinding<object>(Context, this, source =>
+            {
+                callback(source);
+                return null;
+            }));
+        }
 
-        Task<IAsyncDisposable> IPage.ExposeBindingAsync<T1, T2, T3, TResult>(string name, Func<BindingSource, T1, T2, T3, TResult> callback) => Task.FromResult<IAsyncDisposable>(default!);
+        Task<IAsyncDisposable> IPage.ExposeBindingAsync<T>(string name, Action<BindingSource, T> callback)
+        {
+            if (callback == null)
+            {
+                throw new ArgumentNullException(nameof(callback));
+            }
 
-        Task<IAsyncDisposable> IPage.ExposeBindingAsync<T1, T2, T3, T4, TResult>(string name, Func<BindingSource, T1, T2, T3, T4, TResult> callback) => Task.FromResult<IAsyncDisposable>(default!);
+            return InstallExposedAsync(name, PageExposeBinder.WrapBinding<T, object>(Context, this, (source, arg) =>
+            {
+                callback(source, arg);
+                return null;
+            }));
+        }
+
+        Task<IAsyncDisposable> IPage.ExposeBindingAsync<T1, T2, T3, TResult>(string name, Func<BindingSource, T1, T2, T3, TResult> callback)
+        {
+            if (callback == null)
+            {
+                throw new ArgumentNullException(nameof(callback));
+            }
+
+            return InstallExposedAsync(name, PageExposeBinder.WrapBinding(Context, this, callback));
+        }
+
+        Task<IAsyncDisposable> IPage.ExposeBindingAsync<T1, T2, T3, T4, TResult>(string name, Func<BindingSource, T1, T2, T3, T4, TResult> callback)
+        {
+            if (callback == null)
+            {
+                throw new ArgumentNullException(nameof(callback));
+            }
+
+            return InstallExposedAsync(name, PageExposeBinder.WrapBinding(Context, this, callback));
+        }
 
         Task IPage.FillAsync(string selector, string value, PageFillOptions options)
             => FillAsync(selector, value, options?.NoWaitAfter, options?.Timeout, options?.Force, default, options?.Strict);
@@ -2514,7 +2555,10 @@ namespace PlaywrightNative
 
         Task<IDownload> IPage.RunAndWaitForDownloadAsync(Func<Task> action, PageRunAndWaitForDownloadOptions options) => Task.FromResult<IDownload>(default!);
 
-        Task<IFileChooser> IPage.RunAndWaitForFileChooserAsync(Func<Task> action, PageRunAndWaitForFileChooserOptions options) => Task.FromResult<IFileChooser>(default!);
+        Task<IFileChooser> IPage.RunAndWaitForFileChooserAsync(Func<Task> action, PageRunAndWaitForFileChooserOptions options)
+            => RunAndWaitInternalAsync(
+                action,
+                FileChooserWaitHelper.WaitAsync(this, options?.Predicate, options?.Timeout));
 
         Task<IResponse> IPage.RunAndWaitForNavigationAsync(Func<Task> action, PageRunAndWaitForNavigationOptions options) => Task.FromResult<IResponse>(default!);
 
@@ -2660,7 +2704,8 @@ namespace PlaywrightNative
 
         Task<IDownload> IPage.WaitForDownloadAsync(PageWaitForDownloadOptions options) => Task.FromResult<IDownload>(default!);
 
-        Task<IFileChooser> IPage.WaitForFileChooserAsync(PageWaitForFileChooserOptions options) => Task.FromResult<IFileChooser>(default!);
+        Task<IFileChooser> IPage.WaitForFileChooserAsync(PageWaitForFileChooserOptions options)
+            => FileChooserWaitHelper.WaitAsync(this, options?.Predicate, options?.Timeout);
 
         Task<IJSHandle> IPage.WaitForFunctionAsync(string expression, object arg, PageWaitForFunctionOptions options) => WaitForFunctionAsync(expression, arg, options?.PollingInterval, options?.Timeout);
 
