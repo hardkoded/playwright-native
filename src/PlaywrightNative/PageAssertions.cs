@@ -101,20 +101,19 @@ namespace PlaywrightNative
             }
 
             string last = string.Empty;
-            return ExpectLabeledAsync(
-                async () =>
+            return ExpectUrlLabeledAsync(
+                actual =>
                 {
-                    last = await CurrentUrlAsync().ConfigureAwait(false);
-                    return ExpectTextMatch.Matches(last, url, exact: false, ignoreCase);
+                    last = actual;
+                    return ExpectTextMatch.Matches(actual, url, exact: false, ignoreCase);
                 },
                 timeout,
                 "toHaveURL",
-                () => Task.FromResult(
-                    (_negate ? "Expected: not \"" : "Expected: \"") +
-                    url +
-                    "\"\nReceived: \"" +
-                    last +
-                    "\""),
+                () => (_negate ? "Expected: not \"" : "Expected: \"") +
+                      url +
+                      "\"\nReceived: \"" +
+                      last +
+                      "\"",
                 signal,
                 alreadyAbortedDetails: "Expected: " + System.Text.Json.JsonSerializer.Serialize(url) + "\n");
         }
@@ -127,20 +126,17 @@ namespace PlaywrightNative
                 throw new ArgumentNullException(nameof(predicate));
             }
 
-            return ExpectLabeledAsync(
-                async () =>
+            string last = string.Empty;
+            return ExpectUrlLabeledAsync(
+                actual =>
                 {
-                    string actual = await CurrentUrlAsync().ConfigureAwait(false);
+                    last = actual;
                     return predicate(actual);
                 },
                 timeout,
                 "toHaveURL",
-                async () =>
-                {
-                    string actual = await CurrentUrlAsync().ConfigureAwait(false);
-                    return (_negate ? "Expected: predicate to fail" : "Expected: predicate to succeed") +
-                           "\nReceived: \"" + actual + "\"";
-                });
+                () => (_negate ? "Expected: predicate to fail" : "Expected: predicate to succeed") +
+                      "\nReceived: \"" + last + "\"");
         }
 
         /// <inheritdoc/>
@@ -159,14 +155,11 @@ namespace PlaywrightNative
                 throw new ArgumentNullException(nameof(url));
             }
 
-            return ExpectBoolAsync(
-                async () =>
-                {
-                    string actual = await CurrentUrlAsync().ConfigureAwait(false);
-                    return ExpectTextMatch.Matches(actual, url, ignoreCase);
-                },
+            return ExpectUrlLabeledAsync(
+                actual => ExpectTextMatch.Matches(actual, url, ignoreCase),
                 timeout,
-                "toHaveURL");
+                "toHaveURL",
+                extraMessage: null);
         }
 
         /// <inheritdoc/>
@@ -254,30 +247,131 @@ namespace PlaywrightNative
                 maskColor);
         }
 
-        private async Task<string> CurrentUrlAsync()
-        {
-            string actual = _page.Url ?? string.Empty;
-            try
-            {
-                string live = await _page.EvaluateAsync<string>("location.href").ConfigureAwait(false);
-                if (!string.IsNullOrEmpty(live))
-                {
-                    actual = live;
-                }
-            }
-            catch (PlaywrightNativeException)
-            {
-                // Execution context is gone mid-navigation; keep polling.
-            }
-
-            return actual;
-        }
-
         private string ApiName(string method)
             => _negate ? "expect.not." + method : "expect." + method;
 
         private Task ExpectBoolAsync(Func<Task<bool>> predicateAsync, float? timeout, string method)
             => ExpectLabeledAsync(predicateAsync, timeout, method, extraMessageAsync: null);
+
+        /// <summary>
+        /// toHaveURL poll that wakes on main-frame navigation (upstream waitForURL)
+        /// and uses the committed page URL so a 1s timeout remains enough under load.
+        /// </summary>
+        private async Task ExpectUrlLabeledAsync(
+            Func<string, bool> matches,
+            float? timeout,
+            string method,
+            Func<string> extraMessage,
+            AbortSignal signal = default,
+            string alreadyAbortedDetails = null)
+        {
+            string header = _negate
+                ? "expect(page).not." + method + "(expected) failed"
+                : "expect(page)." + method + "(expected) failed";
+            ExpectAbort.ThrowIfAlreadyAborted(
+                signal,
+                header,
+                alreadyAbortedDetails ?? string.Empty);
+
+            int timeoutMs = TimeoutSettings.ExpectTimeoutMs(timeout);
+            System.Diagnostics.Stopwatch sw = System.Diagnostics.Stopwatch.StartNew();
+            string expectLog = _negate ? "not " + method : method;
+            TaskCompletionSource<bool> navigated =
+                new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            void OnFrameNavigated(object sender, IFrame frame)
+            {
+                if (frame?.ParentFrame != null)
+                {
+                    return;
+                }
+
+                navigated.TrySetResult(true);
+            }
+
+            _page.FrameNavigated += OnFrameNavigated;
+            try
+            {
+                while (true)
+                {
+                    if (ExpectAbort.TryMidAbort(signal, out string abortReason))
+                    {
+                        throw ExpectException.Fail(
+                            header + "\n\n  - operation was aborted: " + abortReason + "\n",
+                            actual: null,
+                            expected: null,
+                            method,
+                            pass: false,
+                            timeoutMs,
+                            ariaSnapshot: null);
+                    }
+
+                    await LocatorHandlers.RunAsync(_page, timeoutMs, sw).ConfigureAwait(false);
+
+                    // Committed URL from FrameNavigated — same source as waitForURL.
+                    string actual = _page.Url ?? string.Empty;
+                    bool ok = matches(actual);
+                    if (_negate ? !ok : ok)
+                    {
+                        return;
+                    }
+
+                    if (timeoutMs != Timeout.Infinite && sw.ElapsedMilliseconds >= timeoutMs)
+                    {
+                        System.Text.StringBuilder log = new System.Text.StringBuilder();
+                        log.Append(header);
+                        log.Append('\n');
+                        if (extraMessage != null)
+                        {
+                            log.Append('\n');
+                            log.Append(extraMessage());
+                        }
+
+                        log.Append("\nTimeout:  ");
+                        log.Append(timeoutMs.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                        log.Append("ms\n\nCall log:\n  - Expect \"");
+                        log.Append(expectLog);
+                        log.Append("\" with timeout ");
+                        log.Append(timeoutMs.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                        log.Append("ms\n");
+                        string ariaSnapshot = null;
+                        try
+                        {
+                            AccessibilitySnapshotResult snapshot = await _page
+                                .SnapshotAccessibilityAsync(interestingOnly: false)
+                                .ConfigureAwait(false);
+                            ariaSnapshot = AriaSnapshotYaml.Format(snapshot) ?? string.Empty;
+                        }
+                        catch (Exception ex) when (ex is PlaywrightNativeException || ex is TimeoutException)
+                        {
+                            ariaSnapshot = string.Empty;
+                        }
+
+                        throw ExpectException.Fail(
+                            log.ToString(),
+                            actual: null,
+                            expected: null,
+                            method,
+                            pass: _negate,
+                            timeoutMs,
+                            ariaSnapshot);
+                    }
+
+                    Task delay = ExpectAbort.DelayOrAbortAsync(signal, 20);
+                    Task wake = navigated.Task;
+                    Task completed = await Task.WhenAny(delay, wake).ConfigureAwait(false);
+                    if (completed == wake)
+                    {
+                        navigated = new TaskCompletionSource<bool>(
+                            TaskCreationOptions.RunContinuationsAsynchronously);
+                    }
+                }
+            }
+            finally
+            {
+                _page.FrameNavigated -= OnFrameNavigated;
+            }
+        }
 
         private async Task ExpectLabeledAsync(
             Func<Task<bool>> predicateAsync,
