@@ -269,7 +269,6 @@ namespace PlaywrightNative.WebKit
         private async Task<byte[]> LoadBodyAsync()
         {
             await WKRequest.WaitUntilFinishedAsync().ConfigureAwait(false);
-            await Task.Delay(50).ConfigureAwait(false);
 
             if (ResponseHeaders.IsRedirectStatus(Status))
             {
@@ -278,15 +277,19 @@ namespace PlaywrightNative.WebKit
 
             if (WKRequest.FulfilledBody != null && RouteFulfill.ShouldOverrideBody(Status))
             {
+                _body = WKRequest.FulfilledBody;
                 return WKRequest.FulfilledBody;
             }
 
             if (WKRequest.Fulfilled && WKRequest.FulfilledBody != null)
             {
+                _body = WKRequest.FulfilledBody;
                 return WKRequest.FulfilledBody;
             }
 
-            for (int attempt = 0; attempt < 20; attempt++)
+            // Prefer an immediate read: Ubuntu WebKit clears the inspector
+            // buffer quickly after loadingFinished (especially under CI load).
+            for (int attempt = 0; attempt < 12; attempt++)
             {
                 try
                 {
@@ -302,7 +305,7 @@ namespace PlaywrightNative.WebKit
                 {
                 }
 
-                await Task.Delay(100).ConfigureAwait(false);
+                await Task.Delay(attempt == 0 ? 25 : 50).ConfigureAwait(false);
             }
 
             return Array.Empty<byte>();
