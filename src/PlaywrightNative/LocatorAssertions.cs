@@ -713,13 +713,11 @@ namespace PlaywrightNative
                 throw new ArgumentNullException(nameof(expected));
             }
 
-            // Single-string toHaveText: whitespace-normalized substring match by
-            // default (exact: null/false). Pass exact: true for full equality.
-            // Matches ExpectTextTests wait-for-"world" in "hello world" and the
-            // PlaywrightNative exact parameter (official .NET options have no Exact).
+            // Official single-string toHaveText is whitespace-normalized equality,
+            // with an additional trailing-segment match (see ExpectTextMatch.MatchesHaveText).
             return ExpectTextCoreAsync(
                 new[] { new ExpectTextNeedle(expected) },
-                exact: exact == true,
+                exact: exact != false,
                 requireLength: true,
                 single: true,
                 timeout,
@@ -2279,12 +2277,28 @@ namespace PlaywrightNative
                     }
                 }
 
-                bool matched = !readFailed && ExpectTextMatch.MatchesSequence(
-                    received,
-                    needles,
-                    requireLength,
-                    exact,
-                    ignoreCase);
+                bool matched;
+                if (!readFailed
+                    && single
+                    && needles.Length == 1
+                    && string.Equals(method, "toHaveText", StringComparison.Ordinal))
+                {
+                    matched = all.Count == 1
+                        && ExpectTextMatch.MatchesHaveTextNeedle(
+                            received[0],
+                            needles[0],
+                            exact,
+                            ignoreCase);
+                }
+                else
+                {
+                    matched = !readFailed && ExpectTextMatch.MatchesSequence(
+                        received,
+                        needles,
+                        requireLength,
+                        exact,
+                        ignoreCase);
+                }
 
                 // Missing elements fail both toHaveText/toContainText and
                 // not.toHaveText/not.toContainText for a single locator.
