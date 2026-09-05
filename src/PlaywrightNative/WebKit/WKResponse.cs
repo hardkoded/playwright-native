@@ -289,7 +289,7 @@ namespace PlaywrightNative.WebKit
 
             // Prefer an immediate read: Ubuntu WebKit clears the inspector
             // buffer quickly after loadingFinished (especially under CI load).
-            for (int attempt = 0; attempt < 12; attempt++)
+            for (int attempt = 0; attempt < 20; attempt++)
             {
                 try
                 {

@@ -1095,20 +1095,39 @@ namespace PlaywrightNative.Helpers
             {
                 string pageUrl = page.Url ?? string.Empty;
                 string requestUrl = request.Url ?? string.Empty;
-                if (string.IsNullOrEmpty(pageUrl)
-                    || string.IsNullOrEmpty(requestUrl)
-                    || !PathsMatch(pageUrl, requestUrl))
-                {
-                    return null;
-                }
+                bool pathsMatch = !string.IsNullOrEmpty(pageUrl)
+                    && !string.IsNullOrEmpty(requestUrl)
+                    && PathsMatch(pageUrl, requestUrl);
 
+                // WebKit can briefly report a stale page.Url while the navigation
+                // request is already committed. Prefer the live document text and
+                // only reject when paths clearly disagree and the document is empty.
                 string text = await page.EvaluateAsync<string>(
                     @"(() => {
                         if (document.body)
                             return document.body.innerHTML;
                         return document.documentElement ? document.documentElement.outerHTML : '';
                     })()").ConfigureAwait(false);
-                return string.IsNullOrEmpty(text) ? null : Encoding.UTF8.GetBytes(text);
+                if (string.IsNullOrEmpty(text))
+                {
+                    return null;
+                }
+
+                if (!pathsMatch)
+                {
+                    // Same-host navigations under load often mismatch only on the
+                    // transient about:blank / prior URL; keep non-empty HTML.
+                    if (!string.IsNullOrEmpty(pageUrl)
+                        && !string.IsNullOrEmpty(requestUrl)
+                        && Uri.TryCreate(pageUrl, UriKind.Absolute, out Uri pageUri)
+                        && Uri.TryCreate(requestUrl, UriKind.Absolute, out Uri requestUri)
+                        && !string.Equals(pageUri.Host, requestUri.Host, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return null;
+                    }
+                }
+
+                return Encoding.UTF8.GetBytes(text);
             }
             catch (PlaywrightNativeException)
             {
@@ -1700,8 +1719,6 @@ namespace PlaywrightNative.Helpers
                     }
                 }
 
-                Detach();
-
                 JsonArray pages = _slimMode
                     ? new JsonArray()
                     : await BuildPagesAsync(snapshot).ConfigureAwait(false);
@@ -1710,6 +1727,10 @@ namespace PlaywrightNative.Helpers
                 {
                     entries.Add(await BuildEntryAsync(pending).ConfigureAwait(false));
                 }
+
+                // Detach after BuildEntryAsync so navigation body fallbacks can still
+                // evaluate against the live page when getResponseBody raced away.
+                Detach();
 
                 lock (_gate)
                 {
