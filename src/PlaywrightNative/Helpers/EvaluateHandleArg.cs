@@ -105,6 +105,31 @@ namespace PlaywrightNative.Helpers
         /// </summary>
         /// <param name="callArgs">Output of <see cref="TryPrepareHandleCall"/>.</param>
         /// <returns>The tree JSON, or <see langword="null"/>.</returns>
+        /// <summary>
+        /// Enumerates stashed handle slots from a <see cref="TryPrepareHandleCall"/> result.
+        /// </summary>
+        /// <param name="callArgs">Output of <see cref="TryPrepareHandleCall"/>.</param>
+        /// <returns>Handle/key pairs in placeholder order.</returns>
+        internal static IEnumerable<(IJSHandle Handle, string Key)> EnumerateStashSlots(object[] callArgs)
+        {
+            if (callArgs == null)
+            {
+                yield break;
+            }
+
+            for (int i = 1; i < callArgs.Length; i++)
+            {
+                if (callArgs[i] is StashSlot slot)
+                {
+                    yield return (slot.Handle, slot.Key);
+                }
+                else if (callArgs[i] is IJSHandle handle)
+                {
+                    yield return (handle, i.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                }
+            }
+        }
+
         internal static object TreeArgument(object[] callArgs)
             => callArgs != null && callArgs.Length > 0 ? callArgs[0] : null;
 

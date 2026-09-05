@@ -753,14 +753,16 @@ namespace PlaywrightNative.WebKit
             ThrowIfClosed();
             return ActionTrace.EvaluateUserAsync(Context, () =>
             {
+                // Bare handles must use callFunctionOn with only objectId arguments.
+                // WebKit rejects mixed value/objectId lists used by the nested-handle tree path.
+                if (arg is IJSHandle)
+                {
+                    return EvaluateFunctionSerializedAsync<T>(EvaluateWithArg.AsFunction(expression), arg);
+                }
+
                 if (EvaluateHandleArg.TryPrepareHandleCall(expression, arg, out string handleFn, out object[] handleArgs))
                 {
                     return EvaluatePreparedAsync<T>(handleFn, handleArgs);
-                }
-
-                if (arg is IJSHandle)
-                {
-                    return EvaluateFunctionSerializedAsync<T>(expression, arg);
                 }
 
                 string toEval = arg == null
@@ -776,14 +778,14 @@ namespace PlaywrightNative.WebKit
             ThrowIfClosed();
             return ActionTrace.EvaluateUserAsync(Context, () =>
             {
+                if (arg is IJSHandle)
+                {
+                    return EvaluateFunctionSerializedAsync<JsonElement?>(EvaluateWithArg.AsFunction(expression), arg);
+                }
+
                 if (EvaluateHandleArg.TryPrepareHandleCall(expression, arg, out string handleFn, out object[] handleArgs))
                 {
                     return EvaluatePreparedAsync<JsonElement?>(handleFn, handleArgs);
-                }
-
-                if (arg is IJSHandle)
-                {
-                    return EvaluateFunctionSerializedAsync<JsonElement?>(expression, arg);
                 }
 
                 string toEval = arg == null
@@ -798,11 +800,19 @@ namespace PlaywrightNative.WebKit
             => ActionTrace.EvaluateHandleUserAsync(Context, async () =>
             {
                 WKExecutionContext context = RequireExecutionContext();
+                if (arg is IJSHandle)
+                {
+                    JsonElement? direct = await context
+                        .EvaluateFunctionHandleAsync(EvaluateWithArg.AsFunction(expression), arg)
+                        .ConfigureAwait(false);
+                    return WrapRemoteObject(context, direct);
+                }
+
                 if (EvaluateHandleArg.TryPrepareHandleCall(expression, arg, out string handleFn, out object[] handleArgs))
                 {
-                    object[] args = EvaluateHandleArg.AsCallFunctionArguments(handleArgs);
+                    await StashAdoptedHandlesAsync(context, handleArgs).ConfigureAwait(false);
                     JsonElement? bound = await context
-                        .EvaluateFunctionHandleAsync(handleFn, args)
+                        .EvaluateHandleAsync(EvaluateHandleArg.PreparedExpression(handleFn, handleArgs))
                         .ConfigureAwait(false);
                     return WrapRemoteObject(context, bound);
                 }
@@ -3563,6 +3573,32 @@ namespace PlaywrightNative.WebKit
         /// <param name="functionDeclaration">The JavaScript function declaration.</param>
         /// <param name="args">Arguments passed to the function, including JS handles.</param>
         /// <returns>The deserialized result.</returns>
+        /// <summary>
+        /// Nested-handle evaluate in <paramref name="frame"/> using adopt-then-stash
+        /// (WebKit rejects mixed value/objectId <c>callFunctionOn</c> lists).
+        /// </summary>
+        internal async Task<T> EvaluatePreparedInFrameAsync<T>(WKFrame frame, string handleFn, object[] handleArgs)
+        {
+            WKExecutionContext context = await WaitForFrameContextAsync(frame).ConfigureAwait(false);
+            await StashAdoptedHandlesAsync(context, handleArgs).ConfigureAwait(false);
+            return await EvaluateSerializedInFrameAsync<T>(
+                frame,
+                EvaluateHandleArg.PreparedExpression(handleFn, handleArgs)).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Adopts foreign ElementHandles into <paramref name="target"/> then parks them
+        /// on <c>globalThis.__pw_eh</c> for the stash-based evaluate path.
+        /// </summary>
+        internal Task StashAdoptedHandlesForEvaluateAsync(WKExecutionContext target, object[] callArgs)
+            => StashAdoptedHandlesAsync(target, callArgs);
+
+        /// <summary>
+        /// Waits for <paramref name="frame"/>'s main-world execution context.
+        /// </summary>
+        internal Task<WKExecutionContext> WaitForFrameContextForEvaluateAsync(WKFrame frame)
+            => WaitForFrameContextAsync(frame);
+
         internal async Task<T> EvaluateFunctionInFrameAsync<T>(WKFrame frame, string functionDeclaration, params object[] args)
         {
             WKExecutionContext context = await WaitForFrameContextAsync(frame).ConfigureAwait(false);
@@ -5431,20 +5467,51 @@ namespace PlaywrightNative.WebKit
 
         private async Task<T> EvaluatePreparedAsync<T>(string handleFn, object[] handleArgs)
         {
-            // Pass live handles through callFunctionOn so WKExecutionContext can
-            // adopt ElementHandles (and reject cross-context JSHandles), matching Chromium.
-            object[] args = EvaluateHandleArg.AsCallFunctionArguments(handleArgs);
-            string serializedFn = EvaluateHandleArg.WithSerializedHandleResult(handleFn);
+            // Nested handle trees still use the stash path: WebKit rejects mixed
+            // value/objectId Runtime.callFunctionOn argument lists. Adopt foreign
+            // ElementHandles into the target world before stashing.
             try
             {
                 await Task.Yield();
                 WKExecutionContext context = await WaitForMainExecutionContextAsync().ConfigureAwait(false);
-                JsonElement? wrapped = await context.EvaluateFunctionRemoteAsync(serializedFn, args).ConfigureAwait(false);
-                return EvaluateSerialization.ParseRemote<T>(wrapped);
+                await StashAdoptedHandlesAsync(context, handleArgs).ConfigureAwait(false);
+                return await EvaluateSerializedAsync<T>(
+                    EvaluateHandleArg.PreparedExpression(handleFn, handleArgs)).ConfigureAwait(false);
             }
             catch (PlaywrightNativeException ex)
             {
                 throw EvaluateSerialization.RewriteException(ex);
+            }
+        }
+
+        /// <summary>
+        /// Parks remote handles on <c>globalThis.__pw_eh</c> in the target world,
+        /// adopting ElementHandles that were created in another same-origin context.
+        /// </summary>
+        private async Task StashAdoptedHandlesAsync(WKExecutionContext target, object[] callArgs)
+        {
+            foreach ((IJSHandle handle, string key) in EvaluateHandleArg.EnumerateStashSlots(callArgs))
+            {
+                if (handle is not WKJSHandle wk || string.IsNullOrEmpty(wk.ObjectId))
+                {
+                    continue;
+                }
+
+                if (wk.ExecutionContext != null && wk.ExecutionContext.ContextId == target.ContextId)
+                {
+                    await wk.EvaluateAsync<bool>(EvaluateHandleArg.StashFunction, key).ConfigureAwait(false);
+                    continue;
+                }
+
+                if (wk.AsElement() == null)
+                {
+                    throw new PlaywrightNativeException(DispatchEventScript.DifferentContextMessage);
+                }
+
+                string adoptedId = await target.AdoptElementObjectIdAsync(wk.ObjectId).ConfigureAwait(false);
+                await target
+                    .EvaluateFunctionOnHandleAsync<bool>(adoptedId, EvaluateHandleArg.StashFunction, key)
+                    .ConfigureAwait(false);
             }
         }
 
@@ -5479,18 +5546,21 @@ namespace PlaywrightNative.WebKit
 
         private async Task<T> EvaluateFunctionSerializedAsync<T>(string expression, object arg)
         {
-            WKExecutionContext context = await WaitForMainExecutionContextAsync().ConfigureAwait(false);
-            JsonElement? remote = await context.EvaluateFunctionHandleAsync(expression, arg).ConfigureAwait(false);
-            string objectId = RemoteObject.GetObjectId(remote);
-            if (!string.IsNullOrEmpty(objectId))
+            try
             {
-                JsonElement tagged = await context
-                    .EvaluateFunctionOnHandleAsync<JsonElement>(objectId, EvaluateSerialization.SerializeJs)
+                await Task.Yield();
+                WKExecutionContext context = await WaitForMainExecutionContextAsync().ConfigureAwait(false);
+                string serializedFn = EvaluateHandleArg.WithSerializedHandleResult(
+                    "function () { return (" + expression + ").apply(null, arguments); }");
+                JsonElement? wrapped = await context
+                    .EvaluateFunctionRemoteAsync(serializedFn, arg)
                     .ConfigureAwait(false);
-                return JsonValueHelper.Parse<T>(tagged);
+                return EvaluateSerialization.ParseRemote<T>(wrapped);
             }
-
-            return EvaluateSerialization.ParseRemote<T>(remote);
+            catch (PlaywrightNativeException ex)
+            {
+                throw EvaluateSerialization.RewriteException(ex);
+            }
         }
 
         /// <summary>

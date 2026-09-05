@@ -96,6 +96,14 @@ namespace PlaywrightNative.WebKit
         public Task<IJSHandle> EvaluateHandleAsync(string expression, object arg = default)
         {
             EvaluateWithArg.ThrowIfDetached(this);
+            if (EvaluateWithArg.IsHandle(arg))
+            {
+                return _page.EvaluateFunctionHandleInFrameAsync(
+                    _wkFrame,
+                    EvaluateWithArg.AsFunction(expression),
+                    arg);
+            }
+
             if (EvaluateHandleArg.TryPrepareHandleCall(expression, arg, out string handleFn, out object[] handleArgs))
             {
                 return EvaluatePreparedHandleAsync(handleFn, handleArgs);
@@ -398,30 +406,31 @@ namespace PlaywrightNative.WebKit
 
         private async Task<IJSHandle> EvaluatePreparedHandleAsync(string handleFn, object[] handleArgs)
         {
-            object[] args = EvaluateHandleArg.AsCallFunctionArguments(handleArgs);
+            WKExecutionContext context = await _page.WaitForFrameContextForEvaluateAsync(_wkFrame).ConfigureAwait(false);
+            await _page.StashAdoptedHandlesForEvaluateAsync(context, handleArgs).ConfigureAwait(false);
             return await _page
-                .EvaluateFunctionHandleInFrameAsync(_wkFrame, handleFn, args)
+                .EvaluateHandleInFrameAsync(_wkFrame, EvaluateHandleArg.PreparedExpression(handleFn, handleArgs))
                 .ConfigureAwait(false);
         }
 
         private Task<T> EvaluatePreparedAsync<T>(string handleFn, object[] handleArgs)
-        {
-            object[] args = EvaluateHandleArg.AsCallFunctionArguments(handleArgs);
-            string serializedFn = EvaluateHandleArg.WithSerializedHandleResult(handleFn);
-            return _page.EvaluateFunctionSerializedInFrameAsync<T>(_wkFrame, serializedFn, args);
-        }
+            => _page.EvaluatePreparedInFrameAsync<T>(_wkFrame, handleFn, handleArgs);
 
         private Task<T> EvaluateInOwnFrameAsync<T>(string expression, object arg)
         {
             EvaluateWithArg.ThrowIfDetached(this);
+            if (EvaluateWithArg.IsHandle(arg))
+            {
+                return _page.EvaluateFunctionSerializedInFrameAsync<T>(
+                    _wkFrame,
+                    EvaluateHandleArg.WithSerializedHandleResult(
+                        "function () { return (" + EvaluateWithArg.AsFunction(expression) + ").apply(null, arguments); }"),
+                    arg);
+            }
+
             if (EvaluateHandleArg.TryPrepareHandleCall(expression, arg, out string handleFn, out object[] handleArgs))
             {
                 return EvaluatePreparedAsync<T>(handleFn, handleArgs);
-            }
-
-            if (EvaluateWithArg.IsHandle(arg))
-            {
-                return _page.EvaluateAsync<T>(expression, arg);
             }
 
             string toEval = arg == null ? EvaluateWithArg.InvokeIfFunction(expression) : EvaluateWithArg.Wrap(expression, arg);

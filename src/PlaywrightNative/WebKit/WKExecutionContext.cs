@@ -152,9 +152,12 @@ namespace PlaywrightNative.WebKit
                 response = await _session.SendAsync("Runtime.callFunctionOn", payload)
                     .ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightNativeException ex)
             {
-                if (HasForeignElementArgument(args))
+                if (HasForeignElementArgument(args)
+                    && (ex.Message.Contains("adopt", StringComparison.OrdinalIgnoreCase)
+                        || ex.Message.Contains("different document", StringComparison.OrdinalIgnoreCase)
+                        || ex.Message.Contains("Cannot find context", StringComparison.OrdinalIgnoreCase)))
                 {
                     throw new PlaywrightNativeException(EvaluateWithArg.UnableToAdoptMessage);
                 }
@@ -172,9 +175,12 @@ namespace PlaywrightNative.WebKit
             {
                 ThrowIfThrown(responseElement);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightNativeException ex)
             {
-                if (HasForeignElementArgument(args))
+                if (HasForeignElementArgument(args)
+                    && (ex.Message.Contains("adopt", StringComparison.OrdinalIgnoreCase)
+                        || ex.Message.Contains("different document", StringComparison.OrdinalIgnoreCase)
+                        || ex.Message.Contains("Cannot find context", StringComparison.OrdinalIgnoreCase)))
                 {
                     throw new PlaywrightNativeException(EvaluateWithArg.UnableToAdoptMessage);
                 }
@@ -766,34 +772,24 @@ namespace PlaywrightNative.WebKit
             return SerializeHandleArgument(value);
         }
 
-        private async Task<object> PrepareHandleArgumentAsync(WKJSHandle handle)
+        /// <summary>
+        /// Adopts a DOM node object id into this execution context via
+        /// <c>DOM.resolveNode</c> (official <c>wkPage.adoptElementHandle</c>).
+        /// </summary>
+        /// <param name="objectId">Source element object id from another context.</param>
+        /// <returns>The adopted object id in this context.</returns>
+        internal async Task<string> AdoptElementObjectIdAsync(string objectId)
         {
-            if (handle == null || string.IsNullOrEmpty(handle.ObjectId))
-            {
-                return new { value = (object)null };
-            }
-
-            if (handle.ExecutionContext != null && handle.ExecutionContext.ContextId == ContextId)
-            {
-                return new { objectId = handle.ObjectId };
-            }
-
-            if (handle.AsElement() == null)
-            {
-                throw new PlaywrightNativeException(DispatchEventScript.DifferentContextMessage);
-            }
-
-            if (!_contextId.HasValue)
+            if (string.IsNullOrEmpty(objectId) || !_contextId.HasValue)
             {
                 throw new PlaywrightNativeException(EvaluateWithArg.UnableToAdoptMessage);
             }
 
             try
             {
-                // Official wkPage.adoptElementHandle: DOM.resolveNode into the target world.
                 JsonElement? resolved = await _session.SendAsync("DOM.resolveNode", new
                 {
-                    objectId = handle.ObjectId,
+                    objectId,
                     executionContextId = _contextId.Value,
                 }).ConfigureAwait(false);
 
@@ -814,18 +810,38 @@ namespace PlaywrightNative.WebKit
                     throw new PlaywrightNativeException(EvaluateWithArg.UnableToAdoptMessage);
                 }
 
-                return new { objectId = adopted };
+                return adopted;
             }
             catch (PlaywrightNativeException ex)
             {
-                if (string.Equals(ex.Message, DispatchEventScript.DifferentContextMessage, StringComparison.Ordinal)
-                    || string.Equals(ex.Message, EvaluateWithArg.UnableToAdoptMessage, StringComparison.Ordinal))
+                if (string.Equals(ex.Message, EvaluateWithArg.UnableToAdoptMessage, StringComparison.Ordinal))
                 {
                     throw;
                 }
 
                 throw new PlaywrightNativeException(EvaluateWithArg.UnableToAdoptMessage);
             }
+        }
+
+        private async Task<object> PrepareHandleArgumentAsync(WKJSHandle handle)
+        {
+            if (handle == null || string.IsNullOrEmpty(handle.ObjectId))
+            {
+                return new { value = (object)null };
+            }
+
+            if (handle.ExecutionContext != null && handle.ExecutionContext.ContextId == ContextId)
+            {
+                return new { objectId = handle.ObjectId };
+            }
+
+            if (handle.AsElement() == null)
+            {
+                throw new PlaywrightNativeException(DispatchEventScript.DifferentContextMessage);
+            }
+
+            string adopted = await AdoptElementObjectIdAsync(handle.ObjectId).ConfigureAwait(false);
+            return new { objectId = adopted };
         }
     }
 }
