@@ -346,7 +346,7 @@ namespace PlaywrightNative
             float? duration = default,
             AnnotatePosition position = default,
             int fontSize = default,
-            ScreencastCursor cursor = default)
+            ScreencastCursor cursor = EnumCompat.UndefinedScreencastCursor)
         {
             if (screencast is CRScreencast chromium)
             {

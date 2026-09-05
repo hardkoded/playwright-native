@@ -174,7 +174,7 @@ namespace PlaywrightNative.WebKit
             => ScreencastOverlay.ShowChapterAsync(_page, title, description, duration);
 
         /// <inheritdoc/>
-        public Task<IAsyncDisposable> ShowActionsAsync(float? duration = default, AnnotatePosition position = default, int fontSize = default, ScreencastCursor cursor = default)
+        public Task<IAsyncDisposable> ShowActionsAsync(float? duration = default, AnnotatePosition position = default, int fontSize = default, ScreencastCursor cursor = EnumCompat.UndefinedScreencastCursor)
         {
             ScreencastActions.Show(_page, duration, position, fontSize, cursor);
             return Task.FromResult<IAsyncDisposable>(new HideOnDispose(this));
@@ -361,7 +361,11 @@ namespace PlaywrightNative.WebKit
 
 #pragma warning disable SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
         Task<IAsyncDisposable> IScreencast.ShowActionsAsync(ScreencastShowActionsOptions options)
-            => ShowActionsAsync(options?.Duration, options?.Position ?? default, options?.FontSize ?? 0, options?.Cursor ?? default);
+            => ShowActionsAsync(
+                options?.Duration,
+                options?.Position ?? default,
+                options?.FontSize ?? 0,
+                options?.Cursor ?? EnumCompat.UndefinedScreencastCursor);
 
         Task IScreencast.ShowChapterAsync(string title, ScreencastShowChapterOptions options)
             => ShowChapterAsync(title, options?.Description, options?.Duration);

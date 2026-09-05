@@ -2538,7 +2538,23 @@ namespace PlaywrightNative
 
         Task IPage.PauseAsync() => Task.CompletedTask;
 
-        Task<byte[]> IPage.PdfAsync(PagePdfOptions options) => Task.FromResult<byte[]>(default!);
+        Task<byte[]> IPage.PdfAsync(PagePdfOptions options)
+            => PdfAsync(
+                path: options?.Path,
+                scale: options?.Scale,
+                displayHeaderFooter: options?.DisplayHeaderFooter,
+                headerTemplate: options?.HeaderTemplate,
+                footerTemplate: options?.FooterTemplate,
+                printBackground: options?.PrintBackground,
+                landscape: options?.Landscape,
+                pageRanges: options?.PageRanges,
+                format: options?.Format,
+                width: options?.Width,
+                height: options?.Height,
+                margin: options?.Margin,
+                preferCSSPageSize: options?.PreferCSSPageSize,
+                tagged: options?.Tagged,
+                outline: options?.Outline);
 
         Task<ILocator> IPage.PickLocatorAsync() => Task.FromResult<ILocator>(default!);
 

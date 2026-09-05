@@ -1072,7 +1072,7 @@ namespace PlaywrightNative
         {
             ArgumentNullException.ThrowIfNull(payload);
             IElementHandle handle = await WaitForHandleAsync(timeout, "locator.drop").ConfigureAwait(false);
-            await handle.EvaluateAsync<bool>(ElementStateScript.DropPayloadFunction, ToDropJson(payload)).ConfigureAwait(false);
+            await handle.EvaluateAsync<bool>(PageDropHelper.DropFunction, ToDropJson(payload)).ConfigureAwait(false);
 
             static string ToDropJson(DropPayload drop)
             {
@@ -1086,6 +1086,20 @@ namespace PlaywrightNative
                             name = file?.Name ?? string.Empty,
                             mimeType = file?.MimeType ?? "application/octet-stream",
                             buffer = Convert.ToBase64String(file?.Buffer ?? Array.Empty<byte>()),
+                        });
+                    }
+                }
+
+                if (drop.FilePaths != null)
+                {
+                    foreach (string path in drop.FilePaths)
+                    {
+                        FilePayload fromPath = FilePayloadHelper.FromPath(path).ToOfficial();
+                        files.Add(new
+                        {
+                            name = fromPath?.Name ?? string.Empty,
+                            mimeType = fromPath?.MimeType ?? "application/octet-stream",
+                            buffer = Convert.ToBase64String(fromPath?.Buffer ?? Array.Empty<byte>()),
                         });
                     }
                 }
@@ -2860,7 +2874,9 @@ namespace PlaywrightNative
 
             if (_combine == CombineKind.Inside && _left != null && _right != null)
             {
-                return _left.ToString() + ".locator(" + QuoteJs(_right.ToString()) + ")" + suffix;
+                // Chain as locator('#outer').locator('#inner'), not
+                // locator('#outer').locator('locator(\'#inner\')').
+                return _left.ToString() + "." + _right.FormatLocator() + suffix;
             }
 
             if (_left != null)
@@ -3320,7 +3336,8 @@ namespace PlaywrightNative
                 options?.Trial,
                 options?.Steps);
 
-        Task ILocator.DropAsync(DropPayload payload, LocatorDropOptions options) => Task.CompletedTask;
+        Task ILocator.DropAsync(DropPayload payload, LocatorDropOptions options)
+            => DropAsync(payload, options?.Timeout);
 
         Task<IElementHandle> ILocator.ElementHandleAsync(LocatorElementHandleOptions options)
             => ElementHandleAsync(options?.Timeout);

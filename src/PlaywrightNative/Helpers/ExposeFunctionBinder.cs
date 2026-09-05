@@ -74,7 +74,50 @@ namespace PlaywrightNative.Helpers
                 return JsonValueHelper.Parse<T>(element);
             }
 
+            // System.Text.Json deserializes numbers/strings into JsonElement when T is
+            // object — convert primitives to CLR values so exposeFunction callbacks
+            // receive boxed ints/longs/strings like official Playwright.
+            if (typeof(T) == typeof(object))
+            {
+                return (T)JsonElementToObject(element);
+            }
+
             return JsonSerializer.Deserialize<T>(element.GetRawText());
+        }
+
+        private static object JsonElementToObject(JsonElement element)
+        {
+            switch (element.ValueKind)
+            {
+                case JsonValueKind.String:
+                    return element.GetString();
+                case JsonValueKind.True:
+                    return true;
+                case JsonValueKind.False:
+                    return false;
+                case JsonValueKind.Number:
+                    if (element.TryGetInt64(out long longValue))
+                    {
+                        if (longValue >= int.MinValue && longValue <= int.MaxValue)
+                        {
+                            return (int)longValue;
+                        }
+
+                        return longValue;
+                    }
+
+                    if (element.TryGetDouble(out double doubleValue))
+                    {
+                        return doubleValue;
+                    }
+
+                    return element.GetRawText();
+                case JsonValueKind.Null:
+                case JsonValueKind.Undefined:
+                    return null;
+                default:
+                    return element.Clone();
+            }
         }
 
         /// <summary>
