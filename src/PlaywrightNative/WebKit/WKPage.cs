@@ -8046,7 +8046,7 @@ namespace PlaywrightNative.WebKit
                     return true;
                 }
 
-                Task<object> invoked = CoalesceBindingInvocationAsync(argument, args, handler);
+                Task<object> invoked = CoalesceBindingInvocationAsync(contextId, argument, args, handler);
                 _ = Task.Run(() => DeliverInvokedBindingAsync(invoked, contextId, seq));
                 return true;
             }
@@ -8058,16 +8058,20 @@ namespace PlaywrightNative.WebKit
         }
 
         private Task<object> CoalesceBindingInvocationAsync(
+            int contextId,
             string argument,
             JsonElement[] args,
             Func<JsonElement[], Task<object>> handler)
         {
             // After a WebKit process-swap, one page-side call can emit two
-            // Runtime.bindingCalled events with the same seq envelope. Key the
-            // payload so legitimate repeats still run, and clear the map on
-            // navigation so a new document that restarts seq at 1 is not
-            // coalesced with the previous document's identical call.
-            string key = argument ?? string.Empty;
+            // Runtime.bindingCalled events with the same seq envelope. Key by
+            // execution context + payload so main/child frames that both start
+            // seq at 1 with the same args are not collapsed into one host call.
+            // Clear the map on navigation so a new document restarting seq at 1
+            // is not coalesced with the previous document's identical call.
+            string key = contextId.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                + "\n"
+                + (argument ?? string.Empty);
             long now = DateTime.UtcNow.Ticks;
             if (_recentBindingInvocations.TryGetValue(key, out (long Ticks, Task<object> Task) recent)
                 && now - recent.Ticks < TimeSpan.FromMilliseconds(100).Ticks)
