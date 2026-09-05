@@ -1401,6 +1401,22 @@ namespace PlaywrightNative.WebKit
         }
 
         /// <summary>
+        /// Applies <c>Playwright.setIgnoreCertificateErrors</c> when
+        /// <c>ignoreHTTPSErrors</c> (or a client-certificate MITM proxy) is set.
+        /// Matches official <c>WKBrowserContext.initialize</c>.
+        /// </summary>
+        /// <returns>A task that completes when the override has been set.</returns>
+        internal Task ApplyIgnoreCertificateErrorsAsync()
+        {
+            if (!_ignoreHttpsErrors && _clientCertificatesProxy == null)
+            {
+                return Task.CompletedTask;
+            }
+
+            return SetIgnoreCertificateErrorsAsync(true);
+        }
+
+        /// <summary>
         /// Applies <c>Playwright.setDownloadBehavior</c> for this context.
         /// </summary>
         /// <returns>A task that completes when the behavior has been set.</returns>

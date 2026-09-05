@@ -659,14 +659,11 @@ namespace PlaywrightNative.Helpers
                         byte[] established = Encoding.ASCII.GetBytes("HTTP/1.1 200 Connection Established\r\n\r\n");
                         await client.Stream.WriteAsync(established, token).ConfigureAwait(false);
 
-                        // TLS (wss/https) is tunneled; ws:// handshakes stay HTTP.
-                        if (port == 443 || !IsLoopbackHost(host))
-                        {
-                            await TunnelAsync(client, serverIo, token).ConfigureAwait(false);
-                            return;
-                        }
-
-                        await HandleStreamAsync(client, Tuple.Create(host, port)).ConfigureAwait(false);
+                        // CONNECT is always an opaque tunnel (https/wss), including
+                        // loopback on non-443 test-server ports. Parsing the post-CONNECT
+                        // bytes as HTTP hangs on the TLS ClientHello (WebKit HTTPS
+                        // cookie / IgnoreHTTPSErrors tests).
+                        await TunnelAsync(client, serverIo, token).ConfigureAwait(false);
                         return;
                     }
 

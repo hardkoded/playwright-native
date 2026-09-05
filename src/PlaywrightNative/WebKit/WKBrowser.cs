@@ -306,6 +306,8 @@ namespace PlaywrightNative.WebKit
                     await context.SetGeolocationAsync(geolocation).ConfigureAwait(false);
                 }
 
+                // Official initialize(): Playwright.setIgnoreCertificateErrors before pages.
+                await context.ApplyIgnoreCertificateErrorsAsync().ConfigureAwait(false);
                 await context.ApplyDownloadBehaviorAsync().ConfigureAwait(false);
                 await context.ApplyLanguagesAsync().ConfigureAwait(false);
                 await context.ApplyWebKitPageShimsAsync().ConfigureAwait(false);
