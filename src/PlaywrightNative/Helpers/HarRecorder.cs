@@ -2757,11 +2757,12 @@ namespace PlaywrightNative.Helpers
 
             private async Task<byte[]> BodyFromTrackedPagesAsync(IRequest request)
             {
-                if (request?.Response != null)
+                IResponse existing = request?.ExistingResponse;
+                if (existing != null)
                 {
                     try
                     {
-                        string contentType = await request.Response.HeaderValueAsync("content-type").ConfigureAwait(false);
+                        string contentType = await existing.HeaderValueAsync("content-type").ConfigureAwait(false);
                         if (!string.IsNullOrEmpty(contentType)
                             && contentType.IndexOf("html", StringComparison.OrdinalIgnoreCase) < 0)
                         {
