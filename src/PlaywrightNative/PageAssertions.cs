@@ -12,6 +12,7 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Playwright;
+using PlaywrightNative.Compat;
 using PlaywrightNative.Helpers;
 
 namespace PlaywrightNative
@@ -391,7 +392,7 @@ namespace PlaywrightNative
                 urlOrRegExp,
                 options?.Timeout,
                 options?.IgnoreCase,
-                options is Compat.LegacyPageAssertionsToHaveURLOptions legacy ? legacy.Signal : null);
+                options is LegacyPageAssertionsToHaveURLOptions legacy ? legacy.Signal : null);
 
         Task IPageAssertions.ToHaveURLAsync(Regex urlOrRegExp, PageAssertionsToHaveURLOptions options)
             => ToHaveURLAsync(urlOrRegExp, options?.Timeout, options?.IgnoreCase);

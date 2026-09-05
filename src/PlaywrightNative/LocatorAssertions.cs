@@ -2682,7 +2682,7 @@ namespace PlaywrightNative
             => ToBeVisibleAsync(
                 options?.Timeout,
                 options?.Visible,
-                options is Compat.LegacyLocatorAssertionsToBeVisibleOptions legacy ? legacy.Signal : null);
+                options is LegacyLocatorAssertionsToBeVisibleOptions legacy ? legacy.Signal : null);
 
         Task ILocatorAssertions.ToContainClassAsync(string expected, LocatorAssertionsToContainClassOptions options)
             => ToContainClassAsync(expected, options?.Timeout);
@@ -2742,7 +2742,7 @@ namespace PlaywrightNative
             => ToHaveCountAsync(
                 count,
                 options?.Timeout,
-                options is Compat.LegacyLocatorAssertionsToHaveCountOptions legacy ? legacy.Signal : null);
+                options is LegacyLocatorAssertionsToHaveCountOptions legacy ? legacy.Signal : null);
 
         Task ILocatorAssertions.ToHaveCSSAsync(string name, string value, LocatorAssertionsToHaveCSSOptions options)
         {
@@ -2784,7 +2784,7 @@ namespace PlaywrightNative
                 timeout: options?.Timeout,
                 ignoreCase: options?.IgnoreCase,
                 useInnerText: options?.UseInnerText,
-                signal: options is Compat.LegacyLocatorAssertionsToHaveTextOptions legacy ? legacy.Signal : null);
+                signal: options is LegacyLocatorAssertionsToHaveTextOptions legacy ? legacy.Signal : null);
 
         Task ILocatorAssertions.ToHaveTextAsync(Regex expected, LocatorAssertionsToHaveTextOptions options)
             => ToHaveTextAsync(expected, options?.Timeout, options?.IgnoreCase, options?.UseInnerText);
@@ -2811,7 +2811,7 @@ namespace PlaywrightNative
             => ToMatchAriaSnapshotAsync(
                 expected,
                 timeout: options?.Timeout,
-                signal: options is Compat.LegacyLocatorAssertionsToMatchAriaSnapshotOptions legacy ? legacy.Signal : null);
+                signal: options is LegacyLocatorAssertionsToMatchAriaSnapshotOptions legacy ? legacy.Signal : null);
 #pragma warning restore SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
     }
 }
