@@ -62,7 +62,7 @@ namespace PlaywrightNative.Helpers
                     : "-quality " + q.ToString(CultureInfo.InvariantCulture);
                 ProcessStartInfo startInfo = new ProcessStartInfo
                 {
-                    FileName = "ffmpeg",
+                    FileName = FfmpegLocator.Resolve(),
                     Arguments = "-hide_banner -loglevel error -y -i \"" + input + "\" -c:v libwebp " + qualityArg + " \"" + output + "\"",
                     RedirectStandardError = true,
                     UseShellExecute = false,
