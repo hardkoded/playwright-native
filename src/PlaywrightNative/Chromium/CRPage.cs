@@ -1568,6 +1568,40 @@ namespace PlaywrightNative.Chromium
         }
 
         /// <summary>
+        /// Re-runs registered page init scripts in the current main-world document.
+        /// Used when <c>about:blank</c> → <c>about:blank</c> does not create a new
+        /// document for <c>Page.addScriptToEvaluateOnNewDocument</c>.
+        /// </summary>
+        /// <returns>A task that completes when replay finishes.</returns>
+        internal async Task ReplayPageInitScriptsAsync()
+        {
+            List<string> scripts;
+            lock (_initScriptSync)
+            {
+                if (_initScriptSources.Count == 0)
+                {
+                    return;
+                }
+
+                scripts = new List<string>(_initScriptSources);
+            }
+
+            foreach (string script in scripts)
+            {
+                try
+                {
+                    await EvaluateAsync(script).ConfigureAwait(false);
+                }
+#pragma warning disable RCS1075
+                catch (Exception)
+#pragma warning restore RCS1075
+                {
+                    // Match bootstrap isolation: one throw must not skip the rest.
+                }
+            }
+        }
+
+        /// <summary>
         /// Removes a previously-registered init script. Safe to call on an unknown identifier
         /// (CDP returns an error which is swallowed — idempotent).
         /// </summary>
@@ -2356,19 +2390,13 @@ namespace PlaywrightNative.Chromium
 
             // Already on about:blank (including empty Frame.Url) navigating to about:blank:
             // Chromium may not emit a new load. Resolve without another navigate race.
-            // Skip the fast-path when page init scripts are registered so
-            // Page.addScriptToEvaluateOnNewDocument still runs on a real navigation.
-            bool hasPageInitScripts;
-            lock (_initScriptSync)
-            {
-                hasPageInitScripts = _initScriptSources.Count > 0;
-            }
-
-            if (!hasPageInitScripts
-                && IsBlankNavigationUrl(url)
+            // Page.addScriptToEvaluateOnNewDocument also does not re-run, so replay
+            // registered page init scripts onto the current document.
+            if (IsBlankNavigationUrl(url)
                 && IsBlankNavigationUrl(frame.Url)
                 && frame.LifecycleEvents.Contains(targetLifecycleEvent))
             {
+                await ReplayPageInitScriptsAsync().ConfigureAwait(false);
                 frame.Url = NavigationTimeout.PreserveUserInfo(url, frame.Url);
                 return;
             }
