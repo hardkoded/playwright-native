@@ -16,6 +16,7 @@
  */
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
@@ -39,7 +40,54 @@ namespace PlaywrightNative.Tests
     [NonParallelizable]
     public class LibraryExtensionsParityTests : PageTestEx
     {
-        private static SimpleServer Server => TestServerSetup.Server;
+        private static SimpleServer _ownedServer;
+        private static string Prefix = TestConstants.ServerUrl;
+        private static string EmptyPage = TestConstants.EmptyPage;
+
+        private static SimpleServer Server => _ownedServer ?? TestServerSetup.Server;
+
+        [OneTimeSetUp]
+        public async Task StartOwnedServerAsync()
+        {
+            string contentRoot = TestUtils.FindParentDirectory("PlaywrightNative.TestServer");
+            int basePort = 19981;
+            for (int i = 0; i < 20; i++)
+            {
+                int port = basePort + i;
+                try
+                {
+                    SimpleServer server = SimpleServer.Create(port, contentRoot);
+                    await server.StartAsync().ConfigureAwait(false);
+                    _ownedServer = server;
+                    string portText = port.ToString(CultureInfo.InvariantCulture);
+                    Prefix = "http://localhost:" + portText;
+                    EmptyPage = Prefix + "/empty.html";
+                    return;
+                }
+                catch (Exception)
+                {
+                }
+            }
+
+            if (TestServerSetup.Server != null)
+            {
+                Prefix = TestConstants.ServerUrl;
+                EmptyPage = TestConstants.EmptyPage;
+                return;
+            }
+
+            Assert.Ignore("Test server is unavailable.");
+        }
+
+        [OneTimeTearDown]
+        public async Task StopOwnedServerAsync()
+        {
+            if (_ownedServer != null)
+            {
+                await _ownedServer.StopAsync().ConfigureAwait(false);
+                _ownedServer = null;
+            }
+        }
 
         [SetUp]
         public void SkipNonChromiumExtensions()
@@ -178,12 +226,12 @@ namespace PlaywrightNative.Tests
             Task<IResponse> responseTask = context.WaitForEventAsync(BrowserContextEvent.Response);
             Task evaluateTask = serviceWorker.EvaluateAsync<object>(
                 "url => fetch(url, { method: 'POST', body: 'foobar', headers: { 'X-FOOBAR': 'KEKBAR' } })",
-                TestConstants.EmptyPage);
+                EmptyPage);
             await Task.WhenAll(requestTask, responseTask, evaluateTask).ConfigureAwait(false);
             IRequest request = requestTask.Result;
             IResponse response = responseTask.Result;
 
-            Assert.That(request.Url, Is.EqualTo(TestConstants.EmptyPage));
+            Assert.That(request.Url, Is.EqualTo(EmptyPage));
             Assert.That(request.Method, Is.EqualTo("POST"));
             Dictionary<string, string> requestHeaders = await request.AllHeadersAsync().ConfigureAwait(false);
             Assert.That(requestHeaders, Does.ContainKey("x-foobar"));
@@ -191,7 +239,7 @@ namespace PlaywrightNative.Tests
             Assert.That(request.PostData, Is.EqualTo("foobar"));
 
             Assert.That(response.Status, Is.EqualTo(200));
-            Assert.That(response.Url, Is.EqualTo(TestConstants.EmptyPage));
+            Assert.That(response.Url, Is.EqualTo(EmptyPage));
             Assert.That(response.Request, Is.SameAs(request));
             Assert.That(await response.TextAsync().ConfigureAwait(false), Is.EqualTo(" hello world! "));
             Dictionary<string, string> responseHeaders = await response.AllHeadersAsync().ConfigureAwait(false);
@@ -210,7 +258,7 @@ namespace PlaywrightNative.Tests
             Task<IConsoleMessage> consolePromise = page.WaitForEventAsync(
                 PageEvent.Console,
                 e => e.Text.Contains("Test console log from a third-party execution context", StringComparison.Ordinal));
-            await page.GoToAsync(TestConstants.EmptyPage).ConfigureAwait(false);
+            await page.GoToAsync(EmptyPage).ConfigureAwait(false);
             IConsoleMessage message = await consolePromise.ConfigureAwait(false);
             Assert.That(message.Text, Does.Contain("Test console log from a third-party execution context"));
             await context.CloseAsync().ConfigureAwait(false);
@@ -236,7 +284,7 @@ namespace PlaywrightNative.Tests
             IWorker sw = await FirstServiceWorkerAsync(context).ConfigureAwait(false);
             string userAgent = await sw.EvaluateAsync<string>(
                 "async url => { const response = await fetch(url); return response.text(); }",
-                TestConstants.ServerUrl + "/ua-echo").ConfigureAwait(false);
+                Prefix + "/ua-echo").ConfigureAwait(false);
             Assert.That(userAgent, Is.EqualTo("MyTestAgent/1.0"));
             await context.CloseAsync().ConfigureAwait(false);
         }

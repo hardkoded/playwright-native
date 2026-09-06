@@ -274,6 +274,11 @@ namespace PlaywrightNative.Helpers
             try
             {
                 await CapturePhaseAsync(callId, "action", method).ConfigureAwait(false);
+
+                // Yield so callers can subscribe to waitForEvent (e.g. console)
+                // before a sync-completing CapturePhase lets the action body run
+                // and emit the event in the same turn.
+                await Task.Yield();
                 value = await body().ConfigureAwait(false);
             }
             finally
