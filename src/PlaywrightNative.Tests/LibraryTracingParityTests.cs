@@ -16,6 +16,7 @@
  */
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Net.WebSockets;
 using System.Text;
@@ -38,7 +39,54 @@ namespace PlaywrightNative.Tests
     [NonParallelizable]
     public class LibraryTracingParityTests : PageTestEx
     {
-        private static SimpleServer Server => TestServerSetup.Server;
+        private static SimpleServer _ownedServer;
+        private static string Prefix = TestConstants.ServerUrl;
+        private static string EmptyPage = TestConstants.EmptyPage;
+
+        private static SimpleServer Server => _ownedServer ?? TestServerSetup.Server;
+
+        [OneTimeSetUp]
+        public async Task StartOwnedServerAsync()
+        {
+            string contentRoot = TestUtils.FindParentDirectory("PlaywrightNative.TestServer");
+            int basePort = 19991;
+            for (int i = 0; i < 20; i++)
+            {
+                int port = basePort + i;
+                try
+                {
+                    SimpleServer server = SimpleServer.Create(port, contentRoot);
+                    await server.StartAsync().ConfigureAwait(false);
+                    _ownedServer = server;
+                    string portText = port.ToString(CultureInfo.InvariantCulture);
+                    Prefix = "http://localhost:" + portText;
+                    EmptyPage = Prefix + "/empty.html";
+                    return;
+                }
+                catch (Exception)
+                {
+                }
+            }
+
+            if (TestServerSetup.Server != null)
+            {
+                Prefix = TestConstants.ServerUrl;
+                EmptyPage = TestConstants.EmptyPage;
+                return;
+            }
+
+            Assert.Ignore("Test server is unavailable.");
+        }
+
+        [OneTimeTearDown]
+        public async Task StopOwnedServerAsync()
+        {
+            if (_ownedServer != null)
+            {
+                await _ownedServer.StopAsync().ConfigureAwait(false);
+                _ownedServer = null;
+            }
+        }
 
         [PlaywrightTest("tracing.spec.ts", "should collect trace with resources, but no js")]
         [Test]
@@ -58,13 +106,13 @@ namespace PlaywrightNative.Tests
                 await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
                 IPage page = await context.NewPageAsync().ConfigureAwait(false);
                 await context.Tracing.StartAsync(new TracingStartOptions { Screenshots = true, Snapshots = true }).ConfigureAwait(false);
-                await page.GoToAsync(TestConstants.ServerUrl + "/frames/frame.html").ConfigureAwait(false);
+                await page.GoToAsync(Prefix + "/frames/frame.html").ConfigureAwait(false);
                 await page.SetContentAsync("<button>Click</button>").ConfigureAwait(false);
                 await page.ClickAsync("\"Click\"").ConfigureAwait(false);
                 await page.Mouse.MoveAsync(20, 20).ConfigureAwait(false);
                 await page.Mouse.DblClickAsync(30, 30).ConfigureAwait(false);
                 await page.Keyboard.InsertTextAsync("abc").ConfigureAwait(false);
-                await page.GoToAsync(TestConstants.ServerUrl + "/input/fileupload.html").ConfigureAwait(false);
+                await page.GoToAsync(Prefix + "/input/fileupload.html").ConfigureAwait(false);
                 await page.Locator("input[type=\"file\"]").SetInputFilesAsync(TestUtils.GetWebServerFile("file-to-upload.txt")).ConfigureAwait(false);
                 await page.WaitForTimeoutAsync(2000).ConfigureAwait(false);
                 await page.CloseAsync().ConfigureAwait(false);
@@ -164,8 +212,8 @@ namespace PlaywrightNative.Tests
                 IPage page = await context.NewPageAsync().ConfigureAwait(false);
                 await context.Tracing.StartAsync(new TracingStartOptions()).ConfigureAwait(false);
                 await page.RouteAsync("**/empty.html", route => route.ContinueAsync()).ConfigureAwait(false);
-                await page.GoToAsync(TestConstants.ServerUrl + "/empty.html").ConfigureAwait(false);
-                await page.GoToAsync(TestConstants.ServerUrl + "/grid.html").ConfigureAwait(false);
+                await page.GoToAsync(Prefix + "/empty.html").ConfigureAwait(false);
+                await page.GoToAsync(Prefix + "/grid.html").ConfigureAwait(false);
                 await page.EvaluateAsync("() => alert('yo')").ConfigureAwait(false);
                 await page.ReloadAsync().ConfigureAwait(false);
                 page.Dialog += (_, dialog) =>
@@ -213,7 +261,7 @@ namespace PlaywrightNative.Tests
                 await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
                 IPage page = await context.NewPageAsync().ConfigureAwait(false);
                 await context.Tracing.StartAsync(new TracingStartOptions()).ConfigureAwait(false);
-                await page.GoToAsync(TestConstants.EmptyPage).ConfigureAwait(false);
+                await page.GoToAsync(EmptyPage).ConfigureAwait(false);
                 await page.SetContentAsync("<button>Click</button>").ConfigureAwait(false);
                 await page.ClickAsync("\"Click\"").ConfigureAwait(false);
                 await page.CloseAsync().ConfigureAwait(false);
@@ -247,7 +295,7 @@ namespace PlaywrightNative.Tests
                 await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
                 IPage page = await context.NewPageAsync().ConfigureAwait(false);
                 await context.Tracing.StartAsync(new TracingStartOptions { Snapshots = true }).ConfigureAwait(false);
-                await page.GoToAsync(TestConstants.ServerUrl + "/input/button.html").ConfigureAwait(false);
+                await page.GoToAsync(Prefix + "/input/button.html").ConfigureAwait(false);
                 await page.ClickAsync("button").ConfigureAwait(false);
                 await context.Tracing.StopAsync(new TracingStopOptions { Path = path }).ConfigureAwait(false);
 
@@ -279,7 +327,7 @@ namespace PlaywrightNative.Tests
                 await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
                 IPage page = await context.NewPageAsync().ConfigureAwait(false);
                 await context.Tracing.StartAsync(new TracingStartOptions { ScreenSnapshots = true }).ConfigureAwait(false);
-                await page.GoToAsync(TestConstants.ServerUrl + "/input/button.html").ConfigureAwait(false);
+                await page.GoToAsync(Prefix + "/input/button.html").ConfigureAwait(false);
                 await page.ClickAsync("button").ConfigureAwait(false);
                 await context.Tracing.StopAsync(new TracingStopOptions { Path = path }).ConfigureAwait(false);
 
@@ -326,7 +374,7 @@ namespace PlaywrightNative.Tests
                 await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
                 IPage page = await context.NewPageAsync().ConfigureAwait(false);
                 await context.Tracing.StartAsync(new TracingStartOptions { AriaSnapshots = true }).ConfigureAwait(false);
-                await page.GoToAsync(TestConstants.ServerUrl + "/input/button.html").ConfigureAwait(false);
+                await page.GoToAsync(Prefix + "/input/button.html").ConfigureAwait(false);
                 await page.ClickAsync("button").ConfigureAwait(false);
                 await context.Tracing.StopAsync(new TracingStopOptions { Path = path }).ConfigureAwait(false);
 
@@ -377,7 +425,7 @@ namespace PlaywrightNative.Tests
                 await context.Tracing.GroupAsync("ignored2").ConfigureAwait(false);
                 await context.Tracing.StartAsync(new TracingStartOptions()).ConfigureAwait(false);
                 await context.Tracing.GroupAsync("actual").ConfigureAwait(false);
-                await page.GoToAsync(TestConstants.EmptyPage).ConfigureAwait(false);
+                await page.GoToAsync(EmptyPage).ConfigureAwait(false);
                 await context.Tracing.StopChunkAsync(path).ConfigureAwait(false);
                 await context.Tracing.GroupAsync("ignored3").ConfigureAwait(false);
                 await context.Tracing.GroupEndAsync().ConfigureAwait(false);
@@ -435,7 +483,7 @@ namespace PlaywrightNative.Tests
                 await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
                 IPage page = await context.NewPageAsync().ConfigureAwait(false);
                 await context.Tracing.StartAsync(new TracingStartOptions { Snapshots = true }).ConfigureAwait(false);
-                await page.GoToAsync(TestConstants.ServerUrl + "/empty.html").ConfigureAwait(false);
+                await page.GoToAsync(Prefix + "/empty.html").ConfigureAwait(false);
                 await page.ScreenshotAsync().ConfigureAwait(false);
                 await context.Tracing.StopAsync(new TracingStopOptions { Path = path }).ConfigureAwait(false);
 
@@ -484,7 +532,7 @@ namespace PlaywrightNative.Tests
                 await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
                 await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
                 IPage page = await context.NewPageAsync().ConfigureAwait(false);
-                await page.GoToAsync(TestConstants.EmptyPage).ConfigureAwait(false);
+                await page.GoToAsync(EmptyPage).ConfigureAwait(false);
                 await context.Tracing.StartAsync(new TracingStartOptions()).ConfigureAwait(false);
                 await context.StorageStateAsync().ConfigureAwait(false);
                 await page.CloseAsync().ConfigureAwait(false);
@@ -532,7 +580,7 @@ namespace PlaywrightNative.Tests
 
             string browserTracePath = TempZip();
             string apiTracePath = TempZip();
-            string apiUrl = TestConstants.ServerUrl + "/simple.json";
+            string apiUrl = Prefix + "/simple.json";
             try
             {
                 await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
@@ -542,7 +590,7 @@ namespace PlaywrightNative.Tests
 
                 await context.Tracing.StartAsync(new TracingStartOptions { Snapshots = true }).ConfigureAwait(false);
                 await context.APIRequest.Tracing.StartAsync(new TracingStartOptions { Snapshots = true }).ConfigureAwait(false);
-                await page.GoToAsync(TestConstants.ServerUrl + "/one-style.html").ConfigureAwait(false);
+                await page.GoToAsync(Prefix + "/one-style.html").ConfigureAwait(false);
                 await page.APIRequest.PostAsync(apiUrl, new() { DataObject = new { foo = "bar" } }).ConfigureAwait(false);
                 await context.Tracing.StopAsync(new TracingStopOptions { Path = browserTracePath }).ConfigureAwait(false);
                 await context.APIRequest.Tracing.StopAsync(new TracingStopOptions { Path = apiTracePath }).ConfigureAwait(false);
@@ -602,7 +650,7 @@ namespace PlaywrightNative.Tests
                 await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
                 IPage page = await context.NewPageAsync().ConfigureAwait(false);
                 await context.Tracing.StartAsync(new TracingStartOptions { Screenshots = true, Snapshots = true }).ConfigureAwait(false);
-                await page.GoToAsync(TestConstants.EmptyPage).ConfigureAwait(false);
+                await page.GoToAsync(EmptyPage).ConfigureAwait(false);
                 await page.SetContentAsync("<button>Click</button>").ConfigureAwait(false);
                 await page.ClickAsync("\"Click\"").ConfigureAwait(false);
                 await context.Tracing.StopAsync(new TracingStopOptions { Path = first }).ConfigureAwait(false);
@@ -656,13 +704,13 @@ namespace PlaywrightNative.Tests
                 await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
                 IPage page = await context.NewPageAsync().ConfigureAwait(false);
                 await context.Tracing.StartAsync(new TracingStartOptions { Name = "name1", Snapshots = true }).ConfigureAwait(false);
-                await page.GoToAsync(TestConstants.ServerUrl + "/one-style.html").ConfigureAwait(false);
+                await page.GoToAsync(Prefix + "/one-style.html").ConfigureAwait(false);
                 await context.Tracing.StopChunkAsync(first).ConfigureAwait(false);
                 Assert.That(File.Exists(Path.Combine(tracesDir, "name1.trace")), Is.True);
                 Assert.That(File.Exists(Path.Combine(tracesDir, "name1.network")), Is.True);
 
                 await context.Tracing.StartChunkAsync(new() { Name = "name2" }).ConfigureAwait(false);
-                await page.GoToAsync(TestConstants.ServerUrl + "/har.html").ConfigureAwait(false);
+                await page.GoToAsync(Prefix + "/har.html").ConfigureAwait(false);
                 await context.Tracing.StopAsync(new TracingStopOptions { Path = second }).ConfigureAwait(false);
                 Assert.That(File.Exists(Path.Combine(tracesDir, "name2.trace")), Is.True);
                 Assert.That(File.Exists(Path.Combine(tracesDir, "name2.network")), Is.True);
@@ -718,7 +766,7 @@ namespace PlaywrightNative.Tests
                 IPage page = await context.NewPageAsync().ConfigureAwait(false);
                 await context.Tracing.StartAsync(new TracingStartOptions { Screenshots = true, Snapshots = true, Sources = true }).ConfigureAwait(false);
                 await context.Tracing.StartChunkAsync().ConfigureAwait(false);
-                await page.GoToAsync(TestConstants.EmptyPage).ConfigureAwait(false);
+                await page.GoToAsync(EmptyPage).ConfigureAwait(false);
                 await page.SetContentAsync(@"
     <style>
       @keyframes move {
@@ -785,7 +833,7 @@ namespace PlaywrightNative.Tests
                 await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
                 IPage page = await context.NewPageAsync().ConfigureAwait(false);
                 await context.Tracing.StartAsync(new TracingStartOptions { Screenshots = true, Snapshots = true, Sources = true }).ConfigureAwait(false);
-                await page.GoToAsync(TestConstants.EmptyPage).ConfigureAwait(false);
+                await page.GoToAsync(EmptyPage).ConfigureAwait(false);
                 await page.SetContentAsync("<button>Click</button>").ConfigureAwait(false);
                 await page.ClickAsync("\"Click\"").ConfigureAwait(false);
                 await context.Tracing.StopAsync(new TracingStopOptions { Path = path }).ConfigureAwait(false);
@@ -832,7 +880,7 @@ namespace PlaywrightNative.Tests
                 await page.RouteAsync("**/*", route => route.AbortAsync("connectionaborted")).ConfigureAwait(false);
                 try
                 {
-                    await page.GoToAsync(TestConstants.EmptyPage).ConfigureAwait(false);
+                    await page.GoToAsync(EmptyPage).ConfigureAwait(false);
                 }
                 catch (PlaywrightNativeException)
                 {
@@ -890,7 +938,7 @@ namespace PlaywrightNative.Tests
                 Assert.That(error.Message, Does.Match("ENOTDIR|ENOENT|EEXIST"));
 
                 await context.Tracing.StartAsync(new TracingStartOptions()).ConfigureAwait(false);
-                await page.GoToAsync(TestConstants.ServerUrl + "/input/button.html").ConfigureAwait(false);
+                await page.GoToAsync(Prefix + "/input/button.html").ConfigureAwait(false);
                 await page.ClickAsync("button").ConfigureAwait(false);
                 await context.Tracing.StopAsync(new TracingStopOptions { Path = recovered }).ConfigureAwait(false);
 
@@ -927,7 +975,7 @@ namespace PlaywrightNative.Tests
             IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
             IPage page = await browser.NewPageAsync().ConfigureAwait(false);
             await page.Context.Tracing.StartAsync(new TracingStartOptions { Snapshots = true, Screenshots = true }).ConfigureAwait(false);
-            await page.GoToAsync(TestConstants.EmptyPage).ConfigureAwait(false);
+            await page.GoToAsync(EmptyPage).ConfigureAwait(false);
             await browser.CloseAsync().ConfigureAwait(false);
             await Task.Delay(1000).ConfigureAwait(false);
         }
@@ -955,7 +1003,7 @@ namespace PlaywrightNative.Tests
             await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
             await context.Tracing.StartAsync(new TracingStartOptions { Screenshots = true, Snapshots = true }).ConfigureAwait(false);
-            await page.GoToAsync(TestConstants.EmptyPage).ConfigureAwait(false);
+            await page.GoToAsync(EmptyPage).ConfigureAwait(false);
             page.Dialog += async (_, dialog) =>
             {
                 await dialog.AcceptAsync().ConfigureAwait(false);
@@ -1006,7 +1054,7 @@ namespace PlaywrightNative.Tests
                 IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
                 IPage page = await context.NewPageAsync().ConfigureAwait(false);
                 await context.Tracing.StartAsync(new TracingStartOptions { Screenshots = true, Snapshots = true }).ConfigureAwait(false);
-                await page.GoToAsync(TestConstants.EmptyPage).ConfigureAwait(false);
+                await page.GoToAsync(EmptyPage).ConfigureAwait(false);
                 await page.SetContentAsync("<button>Click</button>").ConfigureAwait(false);
                 _ = page.ClickAsync("\"ClickNoButton\"");
                 await context.Tracing.StopAsync(new TracingStopOptions { Path = path }).ConfigureAwait(false);
@@ -1040,7 +1088,7 @@ namespace PlaywrightNative.Tests
                 await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
                 IPage page = await context.NewPageAsync().ConfigureAwait(false);
                 await context.Tracing.StartAsync(new TracingStartOptions { Screenshots = true, Snapshots = true }).ConfigureAwait(false);
-                await page.GoToAsync(TestConstants.ServerUrl + "/frames/frame.html").ConfigureAwait(false);
+                await page.GoToAsync(Prefix + "/frames/frame.html").ConfigureAwait(false);
                 await context.Tracing.StartChunkAsync().ConfigureAwait(false);
                 await page.SetContentAsync("<button>Click</button>").ConfigureAwait(false);
                 await page.ClickAsync("\"Click\"").ConfigureAwait(false);
@@ -1101,8 +1149,8 @@ namespace PlaywrightNative.Tests
                 try
                 {
                     await context.Tracing.StartAsync(new TracingStartOptions { Screenshots = true, Snapshots = true }).ConfigureAwait(false);
-                    await page.GoToAsync(TestConstants.ServerUrl + "/grid.html").ConfigureAwait(false);
-                    Task<IResponse> promise = page.GoToAsync(TestConstants.ServerUrl + "/grid.html");
+                    await page.GoToAsync(Prefix + "/grid.html").ConfigureAwait(false);
+                    Task<IResponse> promise = page.GoToAsync(Prefix + "/grid.html");
                     await page.WaitForTimeoutAsync(timeout).ConfigureAwait(false);
                     await Task.WhenAll(promise, context.Tracing.StopAsync(new TracingStopOptions { Path = path })).ConfigureAwait(false);
                 }
@@ -1157,7 +1205,7 @@ namespace PlaywrightNative.Tests
                 await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
                 await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
                 IPage page = await context.NewPageAsync().ConfigureAwait(false);
-                await page.GoToAsync(TestConstants.ServerUrl + "/input/button.html").ConfigureAwait(false);
+                await page.GoToAsync(Prefix + "/input/button.html").ConfigureAwait(false);
                 await page.EvaluateAsync(@"() => {
     document.head.appendChild(document.createElement('iframe'));
     const div = document.createElement('div');
@@ -1221,7 +1269,7 @@ namespace PlaywrightNative.Tests
             }
 
             string path = TempZip();
-            string url = TestConstants.ServerUrl + "/simple.json";
+            string url = Prefix + "/simple.json";
             try
             {
                 await using IAPIRequestContext request = await Playwright.APIRequest.NewContextAsync().ConfigureAwait(false);
@@ -1277,7 +1325,7 @@ namespace PlaywrightNative.Tests
 
             string first = TempZip();
             string second = TempZip();
-            string url = TestConstants.ServerUrl + "/simple.json";
+            string url = Prefix + "/simple.json";
             try
             {
                 await using IAPIRequestContext request = await Playwright.APIRequest.NewContextAsync().ConfigureAwait(false);
@@ -1321,7 +1369,7 @@ namespace PlaywrightNative.Tests
             }
 
             string path = TempZip();
-            string url = TestConstants.ServerUrl + "/simple.json";
+            string url = Prefix + "/simple.json";
             try
             {
                 await using IAPIRequestContext request = await Playwright.APIRequest.NewContextAsync().ConfigureAwait(false);
@@ -1544,8 +1592,8 @@ namespace PlaywrightNative.Tests
                 IPage page = await context.NewPageAsync().ConfigureAwait(false);
                 await context.Tracing.StartAsync(new TracingStartOptions { Snapshots = true }).ConfigureAwait(false);
                 await context.Tracing.StartChunkAsync().ConfigureAwait(false);
-                await page.GoToAsync(TestConstants.EmptyPage).ConfigureAwait(false);
-                string wsUrl = TestConstants.ServerUrl.Replace("http://", "ws://", StringComparison.Ordinal) + "/ws";
+                await page.GoToAsync(EmptyPage).ConfigureAwait(false);
+                string wsUrl = Prefix.Replace("http://", "ws://", StringComparison.Ordinal) + "/ws";
                 await page.EvaluateAsync(
                     @"url => {
                         window.ws = new WebSocket(url);

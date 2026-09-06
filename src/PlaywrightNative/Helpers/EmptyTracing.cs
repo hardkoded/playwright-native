@@ -63,12 +63,20 @@ namespace PlaywrightNative.Helpers
                 return Task.CompletedTask;
             }
 
-            // Standalone APIRequest tracing has no browser context. Keep the lightweight
-            // chrome-events recorder so StopAsync(path) writes JSON with traceEvents
-            // (see ApiRequestTracingTests.StandaloneTracingGroupShouldBeWritten).
+            // Standalone APIRequest tracing has no browser context. Still start
+            // the official zip session (global request traces) and keep the
+            // chrome-events recorder for StopAsync(.json) group tests.
             if (_context == null)
             {
-                return StartAsync(categories: null);
+                OwnOfficial().Start(options, chunk: false);
+                lock (_gate)
+                {
+                    _recording = true;
+                    _events.Clear();
+                    _openGroups.Clear();
+                }
+
+                return Task.CompletedTask;
             }
 
             OwnOfficial().Start(options, chunk: false);
