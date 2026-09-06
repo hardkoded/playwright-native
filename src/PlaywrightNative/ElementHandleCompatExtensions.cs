@@ -475,7 +475,7 @@ namespace PlaywrightNative
             bool renderBoxes = boxes ?? false;
             if (mode == AriaSnapshotMode.Ai)
             {
-                return AriaSnapshotOfficialAi.CaptureYamlAsync(handle, depth, renderBoxes, string.Empty);
+                return AriaSnapshotAi.CaptureElementAsync(handle, depth, renderBoxes);
             }
 
             return AriaSnapshotOfficial.CaptureYamlAsync(handle, depth, renderBoxes);
@@ -487,7 +487,7 @@ namespace PlaywrightNative
             bool renderBoxes = boxes ?? false;
             if (mode == AriaSnapshotMode.Ai)
             {
-                return AriaSnapshotOfficialAi.CaptureJsonAsync(handle, depth, renderBoxes, string.Empty);
+                return AriaSnapshotAi.CaptureElementJsonAsync(handle, depth, renderBoxes);
             }
 
             return AriaSnapshotOfficial.CaptureJsonAsync(handle, depth, renderBoxes);

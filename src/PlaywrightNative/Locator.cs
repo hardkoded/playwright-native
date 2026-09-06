@@ -1385,14 +1385,16 @@ namespace PlaywrightNative
 
         /// <summary>
         /// Element-relative <c>locator.locator(selector)</c>. When already inside a
-        /// <c>contentFrame()</c> (<c>_scope</c> set), appends a step in that
-        /// document instead of nesting another frame entry.
+        /// <c>contentFrame()</c> (<c>_scope</c> set) or an any-frame chain, appends
+        /// a step instead of nesting via <see cref="Inside"/>.
         /// </summary>
         /// <param name="selector">Child selector.</param>
         /// <returns>The chained locator.</returns>
         internal Locator ChainLocator(string selector)
         {
-            if (_scope != null)
+            // Official frameLocator().locator('div').nth(1).locator('span') keeps
+            // one any-frame step list so nth applies between chained selectors.
+            if (_scope != null || _anyFrame)
             {
                 List<Step> next = CopySteps();
                 next.Add(CreateStep(selector));
@@ -1403,8 +1405,9 @@ namespace PlaywrightNative
         }
 
         /// <summary>
-        /// Element-relative <c>locator.locator(other)</c>. Frame-entered locators
-        /// rebase <paramref name="inner"/> into the same content document.
+        /// Element-relative <c>locator.locator(other)</c>. Frame-entered and
+        /// any-frame locators rebase <paramref name="inner"/> into the same
+        /// chain instead of <see cref="Inside"/>.
         /// </summary>
         /// <param name="inner">Inner locator from the same page/frame.</param>
         /// <returns>The chained locator.</returns>
@@ -1416,17 +1419,17 @@ namespace PlaywrightNative
                 throw new PlaywrightNativeException("Locators must belong to the same frame.");
             }
 
-            if (_scope == null)
+            if (_scope == null && !_anyFrame)
             {
                 return (Locator)Inside(inner);
             }
 
-            Locator AppendInContentFrame(Locator node)
+            Locator AppendInChain(Locator node)
             {
                 if (node._combine != CombineKind.None)
                 {
-                    Locator left = AppendInContentFrame(node._left);
-                    Locator right = node._right == null ? null : AppendInContentFrame(node._right);
+                    Locator left = AppendInChain(node._left);
+                    Locator right = node._right == null ? null : AppendInChain(node._right);
                     return new Locator(
                         left,
                         right,
@@ -1443,7 +1446,7 @@ namespace PlaywrightNative
                 List<Step> next = CopySteps();
                 if (node._scope != null)
                 {
-                    Locator nestedHost = AppendInContentFrame(node._scope);
+                    Locator nestedHost = AppendInChain(node._scope);
                     List<Step> nestedSteps = new List<Step>(node._steps.Count);
                     for (int i = 0; i < node._steps.Count; i++)
                     {
@@ -1461,7 +1464,7 @@ namespace PlaywrightNative
                 return new Locator(_frame, next, scope, node._description, _anyFrame);
             }
 
-            return AppendInContentFrame(inner);
+            return AppendInChain(inner);
         }
 
         internal Locator EnterThenLocator(Locator inner)
@@ -2047,10 +2050,16 @@ namespace PlaywrightNative
                 return true;
             }
 
+            if (ex is TargetClosedException || PlaywrightNativeException.IsDestroyedContext(ex))
+            {
+                return true;
+            }
+
             string message = ex?.Message ?? string.Empty;
             return ex is TimeoutException
                 || message.Contains("Missing injected script", StringComparison.OrdinalIgnoreCase)
-                || message.Contains("Execution context", StringComparison.OrdinalIgnoreCase);
+                || message.Contains("Execution context", StringComparison.OrdinalIgnoreCase)
+                || message.Contains("Target page, context or browser has been closed", StringComparison.OrdinalIgnoreCase);
         }
 
         private static async Task ThrowIfHostIsNotFrameAsync(IElementHandle host)
