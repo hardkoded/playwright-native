@@ -152,15 +152,7 @@ namespace PlaywrightNative.WebKit
         public async ValueTask DisposeAsync()
         {
             GC.SuppressFinalize(this);
-
-            _connection.Disconnected -= OnDisconnected;
-            _connection.Dispose();
-
-            if (_processManager != null)
-            {
-                await _processManager.KillAsync().ConfigureAwait(false);
-                _processManager.Dispose();
-            }
+            await CloseAsync().ConfigureAwait(false);
         }
 
         /// <inheritdoc/>
@@ -218,7 +210,7 @@ namespace PlaywrightNative.WebKit
         public async Task<IBrowserContext> NewContextAsync(
             bool? acceptDownloads = default,
             bool? bypassCSP = default,
-            ColorScheme colorScheme = default,
+            ColorScheme colorScheme = ColorScheme.Null,
             float? deviceScaleFactor = default,
             IEnumerable<KeyValuePair<string, string>> extraHTTPHeaders = default,
             Geolocation geolocation = default,
@@ -245,10 +237,10 @@ namespace PlaywrightNative.WebKit
             string baseURL = default,
             HarMode recordHarMode = default,
             ServiceWorkerPolicy serviceWorkers = default,
-            ReducedMotion reducedMotion = default,
-            ForcedColors forcedColors = default,
-            Contrast contrast = default,
-            HarContentPolicy recordHarContent = default,
+            ReducedMotion reducedMotion = ReducedMotion.Null,
+            ForcedColors forcedColors = ForcedColors.Null,
+            Contrast contrast = Contrast.Null,
+            HarContentPolicy recordHarContent = EnumCompat.UndefinedHarContentPolicy,
             Regex recordHarUrlRegex = default,
             bool? strictSelectors = default,
             IEnumerable<ClientCertificate> clientCertificates = default)
@@ -265,8 +257,15 @@ namespace PlaywrightNative.WebKit
                     ignoreHTTPSErrors == true,
                     proxy,
                     out Proxy browserProxy);
+
+                // Only attach when locale (or force via extra headers below) needs WS
+                // Accept-Language rewriting. Unconditional force:true put every WebKit
+                // context behind an HTTP proxy, and MiniBrowser then skips HTTP/2 —
+                // hanging h2-only HAR hosts (should contain http2 for http2 requests).
+                bool forceHandshake = extraHTTPHeaders != null
+                    && extraHTTPHeaders.Any(h => !string.IsNullOrEmpty(h.Key));
                 LocaleHandshakeProxy handshake = certsProxy == null
-                    ? LocaleHandshakeProxy.TryStart(locale, browserProxy, force: true, out browserProxy)
+                    ? LocaleHandshakeProxy.TryStart(locale, browserProxy, force: forceHandshake, out browserProxy)
                     : null;
                 WKBrowserContext context;
                 try
@@ -307,6 +306,15 @@ namespace PlaywrightNative.WebKit
                     reducedMotion,
                     forcedColors,
                     contrast);
+
+                // Upstream WKBrowserContext._initialize applies geolocation before any page exists.
+                if (geolocation != null)
+                {
+                    await context.SetGeolocationAsync(geolocation).ConfigureAwait(false);
+                }
+
+                // Official initialize(): Playwright.setIgnoreCertificateErrors before pages.
+                await context.ApplyIgnoreCertificateErrorsAsync().ConfigureAwait(false);
                 await context.ApplyDownloadBehaviorAsync().ConfigureAwait(false);
                 await context.ApplyLanguagesAsync().ConfigureAwait(false);
                 await context.ApplyWebKitPageShimsAsync().ConfigureAwait(false);
@@ -325,7 +333,7 @@ namespace PlaywrightNative.WebKit
         public async Task<IPage> NewPageAsync(
             bool? acceptDownloads = default,
             bool? bypassCSP = default,
-            ColorScheme colorScheme = default,
+            ColorScheme colorScheme = ColorScheme.Null,
             float? deviceScaleFactor = default,
             IEnumerable<KeyValuePair<string, string>> extraHTTPHeaders = default,
             Geolocation geolocation = default,
@@ -352,10 +360,10 @@ namespace PlaywrightNative.WebKit
             string baseURL = default,
             HarMode recordHarMode = default,
             ServiceWorkerPolicy serviceWorkers = default,
-            ReducedMotion reducedMotion = default,
-            ForcedColors forcedColors = default,
-            Contrast contrast = default,
-            HarContentPolicy recordHarContent = default,
+            ReducedMotion reducedMotion = ReducedMotion.Null,
+            ForcedColors forcedColors = ForcedColors.Null,
+            Contrast contrast = Contrast.Null,
+            HarContentPolicy recordHarContent = EnumCompat.UndefinedHarContentPolicy,
             Regex recordHarUrlRegex = default,
             bool? strictSelectors = default,
             IEnumerable<ClientCertificate> clientCertificates = default)
@@ -470,6 +478,41 @@ namespace PlaywrightNative.WebKit
             if (_processManager != null)
             {
                 await _processManager.EnsureExitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+            }
+
+            // Dispose transport/pipes after the process exits so FDs are not leaked
+            // when callers use CloseAsync without DisposeAsync.
+            try
+            {
+                _connection.Disconnected -= OnDisconnected;
+            }
+#pragma warning disable RCS1075
+            catch (Exception)
+            {
+            }
+#pragma warning restore RCS1075
+
+            try
+            {
+                _connection.Dispose();
+            }
+#pragma warning disable RCS1075
+            catch (Exception)
+            {
+            }
+#pragma warning restore RCS1075
+
+            if (_processManager != null)
+            {
+                try
+                {
+                    _processManager.Dispose();
+                }
+#pragma warning disable RCS1075
+                catch (Exception)
+                {
+                }
+#pragma warning restore RCS1075
             }
 
             RaiseDisconnected();
@@ -892,7 +935,7 @@ namespace PlaywrightNative.WebKit
 #pragma warning disable SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
         Task<BrowserBindResult> IBrowser.BindAsync(string title, BrowserBindOptions options) => Task.FromResult<BrowserBindResult>(default!);
 
-        Task IBrowser.CloseAsync(BrowserCloseOptions options) => CloseAsync();
+        Task IBrowser.CloseAsync(BrowserCloseOptions options) => CloseAsync(options?.Reason);
 
         Task<IBrowserContext> IBrowser.NewContextAsync(BrowserNewContextOptions options)
             => NewContextAsync(MicrosoftOptionsBridge.ToBrowserContextOptions(options));

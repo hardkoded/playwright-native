@@ -64,9 +64,9 @@ namespace PlaywrightNative.Helpers
                 Directory.CreateDirectory(directory);
             }
 
-            ScreencastVideoWriter writer = new(path, width, height);
-            writer.EnsureFfmpeg();
-            return writer;
+            // Do not start ffmpeg here. Attach must always register IVideo;
+            // a missing/broken ffmpeg must not leave page.Video null.
+            return new ScreencastVideoWriter(path, width, height);
         }
 
         /// <summary>
@@ -201,7 +201,7 @@ namespace PlaywrightNative.Helpers
 
                 ProcessStartInfo startInfo = new()
                 {
-                    FileName = "ffmpeg",
+                    FileName = FfmpegLocator.Resolve(),
                     Arguments = string.Format(
                         CultureInfo.InvariantCulture,
                         "-y -f image2pipe -vcodec mjpeg -i pipe:0 -an -r 25 -c:v libvpx -qmin 0 -qmax 50 -crf 8 -deadline realtime -speed 8 -b:v 1M -threads 1 -vf pad={0}:{1}:0:0:white,crop={0}:{1}:0:0 \"{2}\"",
@@ -226,7 +226,7 @@ namespace PlaywrightNative.Helpers
                 catch (Exception)
                 {
                     process.Dispose();
-                    throw;
+                    return null;
                 }
 
                 _ffmpeg = process;
@@ -241,7 +241,7 @@ namespace PlaywrightNative.Helpers
         {
             ProcessStartInfo startInfo = new()
             {
-                FileName = "ffmpeg",
+                FileName = FfmpegLocator.Resolve(),
                 Arguments = string.Format(
                     CultureInfo.InvariantCulture,
                     "-y -f lavfi -i color=c=white:s={0}x{1}:d=1 -an -r 25 -c:v libvpx -b:v 1M -pix_fmt yuv420p \"{2}\"",

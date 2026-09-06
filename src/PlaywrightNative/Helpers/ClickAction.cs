@@ -1750,7 +1750,10 @@ namespace PlaywrightNative.Helpers
                 try
                 {
                     frameElement = await owner.FrameElementAsync().ConfigureAwait(false);
-                    await frameElement.EvaluateAsync<bool>(ScrollFrameIfOffscreenFunction).ConfigureAwait(false);
+                    if (frameElement != null)
+                    {
+                        await frameElement.EvaluateAsync<bool>(ScrollFrameIfOffscreenFunction).ConfigureAwait(false);
+                    }
                 }
                 catch (PlaywrightNativeException)
                 {
@@ -1842,6 +1845,11 @@ namespace PlaywrightNative.Helpers
                 try
                 {
                     frameElement = await owner.FrameElementAsync().ConfigureAwait(false);
+                    if (frameElement == null)
+                    {
+                        return "ok";
+                    }
+
                     string style = await frameElement.EvaluateAsync<string>(DescribeIFrameStyleFunction).ConfigureAwait(false);
                     if (style == "error:notconnected")
                     {
@@ -1903,6 +1911,12 @@ namespace PlaywrightNative.Helpers
                 try
                 {
                     frameElement = await owner.FrameElementAsync().ConfigureAwait(false);
+                    if (frameElement == null)
+                    {
+                        (double offsetX, double offsetY) = await BoundingBoxHelper.OwnerFrameOffsetAsync(owner).ConfigureAwait(false);
+                        return new[] { point[0] + offsetX, point[1] + offsetY };
+                    }
+
                     double[] mapped = await frameElement.EvaluateAsync<double[]>(MapIFramePointFunction, point).ConfigureAwait(false);
                     if (mapped != null && mapped.Length >= 2)
                     {
@@ -2173,13 +2187,21 @@ namespace PlaywrightNative.Helpers
                 throw new PlaywrightNativeException(NotAttachedMessage);
             }
 
-            if (result == "notvisible")
+            if (result == "notvisible" || result == "notinviewport")
             {
-                throw new PlaywrightNativeException(NotVisibleMessage);
-            }
+                // visibility:hidden still has a layout box; force clicks use it.
+                // Some engines report empty client rects for hidden controls.
+                ElementHandleBoundingBoxResult box = await handle.BoundingBoxAsync().ConfigureAwait(false);
+                if (box != null && box.Width > 0 && box.Height > 0)
+                {
+                    return;
+                }
 
-            if (result == "notinviewport")
-            {
+                if (result == "notvisible")
+                {
+                    throw new PlaywrightNativeException(NotVisibleMessage);
+                }
+
                 throw new PlaywrightNativeException(OutsideViewportMessage + "\nelement is outside of the viewport");
             }
         }

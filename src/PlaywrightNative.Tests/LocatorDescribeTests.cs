@@ -40,7 +40,7 @@ namespace PlaywrightNative.Tests
                 () => page.Locator(".x").Describe("cards").ClickAsync());
 
             Assert.That(ex, Is.Not.Null);
-            Assert.That(ex.Message, Does.Contain("strict mode violation: cards resolved to 2 elements."));
+            Assert.That(ex.Message, Does.Contain("strict mode violation: cards resolved to 2 elements:"));
         }
 
         [PlaywrightTest("locator-convenience.spec.ts", "Describe survives First")]
@@ -72,7 +72,7 @@ namespace PlaywrightNative.Tests
                 () => page.Locator(".x").ClickAsync());
 
             Assert.That(ex, Is.Not.Null);
-            Assert.That(ex.Message, Does.Contain("strict mode violation: locator resolved to 2 elements."));
+            Assert.That(ex.Message, Does.Contain("strict mode violation: locator('.x') resolved to 2 elements:"));
         }
 
         [PlaywrightTest("locator-convenience.spec.ts", "Description returns the describe label")]

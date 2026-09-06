@@ -272,7 +272,8 @@ namespace PlaywrightNative.Firefox
 
         Task IElementHandle.DblClickAsync(ElementHandleDblClickOptions options) => Task.CompletedTask;
 
-        Task IElementHandle.DispatchEventAsync(string type, object eventInit) => Task.CompletedTask;
+        Task IElementHandle.DispatchEventAsync(string type, object eventInit)
+            => ElementDispatchEventAction.RunAsync(this, type, eventInit, default);
 
         Task<T> IElementHandle.EvalOnSelectorAllAsync<T>(string selector, string expression, object arg) => Task.FromResult<T>(default!);
 
@@ -322,9 +323,17 @@ namespace PlaywrightNative.Firefox
 
         Task IElementHandle.UncheckAsync(ElementHandleUncheckOptions options) => Task.CompletedTask;
 
-        Task IElementHandle.WaitForElementStateAsync(ElementState state, ElementHandleWaitForElementStateOptions options) => Task.CompletedTask;
+        Task IElementHandle.WaitForElementStateAsync(ElementState state, ElementHandleWaitForElementStateOptions options)
+            => ElementHandleWaitHelper.WaitForElementStateAsync(this, state, options);
 
-        Task<IElementHandle> IElementHandle.WaitForSelectorAsync(string selector, ElementHandleWaitForSelectorOptions options) => Task.FromResult<IElementHandle>(default!);
+        Task<IElementHandle> IElementHandle.WaitForSelectorAsync(string selector, ElementHandleWaitForSelectorOptions options)
+            => ElementHandleWaitHelper.WaitForSelectorAsync(
+                this,
+                selector,
+                options,
+                QuerySelectorAsync,
+                QuerySelectorAllAsync,
+                strictSelectors: false);
 #pragma warning restore SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
     }
 }

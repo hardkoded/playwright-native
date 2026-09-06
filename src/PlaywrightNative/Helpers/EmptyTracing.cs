@@ -50,10 +50,43 @@ namespace PlaywrightNative.Helpers
             {
                 host.OfficialTrace ??= new OfficialTraceSession(_context);
                 host.OfficialTrace.Start(options, chunk: false);
+
+                // Also keep the chrome-events recorder so Direct StopAsync(.json)
+                // can write traceEvents (groups) instead of an official zip.
+                lock (_gate)
+                {
+                    _recording = true;
+                    _events.Clear();
+                    _openGroups.Clear();
+                }
+
+                return Task.CompletedTask;
+            }
+
+            // Standalone APIRequest tracing has no browser context. Still start
+            // the official zip session (global request traces) and keep the
+            // chrome-events recorder for StopAsync(.json) group tests.
+            if (_context == null)
+            {
+                OwnOfficial().Start(options, chunk: false);
+                lock (_gate)
+                {
+                    _recording = true;
+                    _events.Clear();
+                    _openGroups.Clear();
+                }
+
                 return Task.CompletedTask;
             }
 
             OwnOfficial().Start(options, chunk: false);
+            lock (_gate)
+            {
+                _recording = true;
+                _events.Clear();
+                _openGroups.Clear();
+            }
+
             return Task.CompletedTask;
         }
 
@@ -81,6 +114,13 @@ namespace PlaywrightNative.Helpers
             if (official != null && official.IsRecording)
             {
                 official.Start(new TracingStartOptions { Name = name, Title = title }, chunk: true);
+                lock (_gate)
+                {
+                    _events.Clear();
+                    _openGroups.Clear();
+                    _recording = true;
+                }
+
                 return Task.CompletedTask;
             }
 
@@ -90,22 +130,21 @@ namespace PlaywrightNative.Helpers
         }
 
         /// <inheritdoc/>
-        public Task<IAsyncDisposable> StartHarAsync(string path, HarContentPolicy content = default, HarMode mode = default, string url = default, Regex urlRegex = default, string resourcesDir = default)
+        public Task<IAsyncDisposable> StartHarAsync(string path, HarContentPolicy content = EnumCompat.UndefinedHarContentPolicy, HarMode mode = default, string url = default, Regex urlRegex = default, string resourcesDir = default)
             => EnsureHar().StartAsync(path, content, mode, url, urlRegex, resourcesDir);
 
         /// <inheritdoc/>
         public Task GroupAsync(string name)
         {
+            if (string.IsNullOrEmpty(name))
+            {
+                throw new ArgumentException("name must be non-empty", nameof(name));
+            }
+
             OfficialTraceSession official = OfficialSessionOrNull();
             if (official != null && official.IsRecording)
             {
                 official.Group(name);
-                return Task.CompletedTask;
-            }
-
-            if (string.IsNullOrEmpty(name))
-            {
-                throw new ArgumentException("name must be non-empty", nameof(name));
             }
 
             lock (_gate)
@@ -129,7 +168,6 @@ namespace PlaywrightNative.Helpers
             if (official != null && official.IsRecording)
             {
                 official.GroupEnd();
-                return Task.CompletedTask;
             }
 
             lock (_gate)
@@ -147,12 +185,34 @@ namespace PlaywrightNative.Helpers
         }
 
         /// <inheritdoc/>
-        public Task StopChunkAsync(string path = default)
+        public async Task StopChunkAsync(string path = default)
         {
             OfficialTraceSession official = OfficialSessionOrNull();
             if (official != null && official.IsRecording)
             {
-                return official.StopAsync(path, keepRecording: true);
+                if (ChromeTraceEvents.IsJsonTracePath(path))
+                {
+                    await official.StopAsync(null, keepRecording: true).ConfigureAwait(false);
+                    List<JsonElement> chunkSnapshot;
+                    lock (_gate)
+                    {
+                        chunkSnapshot = new List<JsonElement>(_events);
+                        _events.Clear();
+                        _openGroups.Clear();
+                    }
+
+                    await ChromeTraceEvents.WriteAsync(path, chunkSnapshot).ConfigureAwait(false);
+                    return;
+                }
+
+                await official.StopAsync(path, keepRecording: true).ConfigureAwait(false);
+                lock (_gate)
+                {
+                    _events.Clear();
+                    _openGroups.Clear();
+                }
+
+                return;
             }
 
             List<JsonElement> snapshot;
@@ -164,10 +224,10 @@ namespace PlaywrightNative.Helpers
 
             if (string.IsNullOrEmpty(path))
             {
-                return Task.CompletedTask;
+                return;
             }
 
-            return ChromeTraceEvents.WriteAsync(path, snapshot);
+            await ChromeTraceEvents.WriteAsync(path, snapshot).ConfigureAwait(false);
         }
 
         /// <inheritdoc/>
@@ -189,20 +249,43 @@ namespace PlaywrightNative.Helpers
         }
 
         /// <inheritdoc/>
-        public Task StopAsync(TracingStopOptions options = default)
+        public async Task StopAsync(TracingStopOptions options = default)
         {
             OfficialTraceSession session = OfficialSessionOrNull();
             if (session == null)
             {
                 if (options?.Path != null)
                 {
-                    throw new PlaywrightNativeException("Must start tracing before stopping");
+                    await StopAsync(options.Path).ConfigureAwait(false);
                 }
 
-                return Task.CompletedTask;
+                return;
             }
 
-            return session.StopAsync(options?.Path, keepRecording: false);
+            string path = options?.Path;
+            if (ChromeTraceEvents.IsJsonTracePath(path))
+            {
+                await session.StopAsync(null, keepRecording: false).ConfigureAwait(false);
+                List<JsonElement> snapshot;
+                lock (_gate)
+                {
+                    snapshot = new List<JsonElement>(_events);
+                    _events.Clear();
+                    _openGroups.Clear();
+                    _recording = false;
+                }
+
+                await ChromeTraceEvents.WriteAsync(path, snapshot).ConfigureAwait(false);
+                return;
+            }
+
+            await session.StopAsync(path, keepRecording: false).ConfigureAwait(false);
+            lock (_gate)
+            {
+                _events.Clear();
+                _openGroups.Clear();
+                _recording = false;
+            }
         }
 
         /// <inheritdoc/>
@@ -252,13 +335,34 @@ namespace PlaywrightNative.Helpers
         }
 
 #pragma warning disable SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
-        Task<IAsyncDisposable> ITracing.GroupAsync(string name, TracingGroupOptions options) => Task.FromResult<IAsyncDisposable>(default!);
+        async Task<IAsyncDisposable> ITracing.GroupAsync(string name, TracingGroupOptions options)
+        {
+            await GroupAsync(name).ConfigureAwait(false);
+            return new GroupScope(this);
+        }
 
-        Task ITracing.StartChunkAsync(TracingStartChunkOptions options) => Task.CompletedTask;
+        Task ITracing.StartChunkAsync(TracingStartChunkOptions options)
+            => StartChunkAsync(options?.Name, options?.Title);
 
-        Task<IAsyncDisposable> ITracing.StartHarAsync(string path, TracingStartHarOptions options) => Task.FromResult<IAsyncDisposable>(default!);
+        Task<IAsyncDisposable> ITracing.StartHarAsync(string path, TracingStartHarOptions options)
+            => StartHarAsync(
+                path,
+                options?.Content ?? EnumCompat.UndefinedHarContentPolicy,
+                options?.Mode ?? default,
+                options?.UrlFilter ?? options?.UrlFilterString,
+                options?.UrlFilterRegex);
 
-        Task ITracing.StopChunkAsync(TracingStopChunkOptions options) => Task.CompletedTask;
+        Task ITracing.StopChunkAsync(TracingStopChunkOptions options)
+            => StopChunkAsync(options?.Path);
+
+        private sealed class GroupScope : IAsyncDisposable
+        {
+            private readonly EmptyTracing _owner;
+
+            internal GroupScope(EmptyTracing owner) => _owner = owner;
+
+            public ValueTask DisposeAsync() => new ValueTask(_owner.GroupEndAsync());
+        }
 #pragma warning restore SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
     }
 }

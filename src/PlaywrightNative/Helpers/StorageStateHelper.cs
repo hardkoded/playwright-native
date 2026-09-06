@@ -237,9 +237,17 @@ namespace PlaywrightNative.Helpers
                 }
 
                 await ApplyOriginsAsync(context, state.Origins).ConfigureAwait(false);
+
+                // Official setStorageState (replaceExisting) always clears
+                // credentials when the field is missing or empty. Initial
+                // NewContext restores only touch WebAuthn when the payload
+                // includes a credentials field (including []) — cookie /
+                // localStorage-only restores must not call InstallAsync.
                 if (replaceExisting || state.Credentials != null)
                 {
-                    await ApplyCredentialsAsync(context, state.Credentials ?? new List<VirtualCredential>()).ConfigureAwait(false);
+                    await ApplyCredentialsAsync(
+                        context,
+                        state.Credentials ?? Array.Empty<VirtualCredential>()).ConfigureAwait(false);
                 }
             }
             catch (Exception ex) when (ex is PlaywrightNativeException || ex is ArgumentException)
@@ -298,6 +306,7 @@ namespace PlaywrightNative.Helpers
                 }
             }
 
+            int restored = 0;
             foreach (VirtualCredential credential in credentials)
             {
                 if (credential == null || string.IsNullOrEmpty(credential.RpId))
@@ -311,9 +320,13 @@ namespace PlaywrightNative.Helpers
                     credential.UserHandle,
                     credential.PrivateKey,
                     credential.PublicKey).ConfigureAwait(false);
+                restored++;
             }
 
-            await context.Credentials.InstallAsync().ConfigureAwait(false);
+            if (restored > 0)
+            {
+                await context.Credentials.InstallAsync().ConfigureAwait(false);
+            }
         }
 
         private static JsonSerializerOptions CreateJsonOptions(bool writeIndented)
@@ -327,6 +340,7 @@ namespace PlaywrightNative.Helpers
             };
             options.Converters.Add(new JsonStringEnumConverter());
             options.Converters.Add(new LoneSurrogateStringConverter());
+            options.Converters.Add(new StorageStateCookieJsonConverter());
             return options;
         }
 
@@ -429,7 +443,7 @@ namespace PlaywrightNative.Helpers
                                 continue;
                             }
                         }
-                        catch (PlaywrightNativeException)
+                        catch (Exception ex) when (ex is PlaywrightNativeException || ex is TimeoutException)
                         {
                             continue;
                         }
@@ -451,7 +465,7 @@ namespace PlaywrightNative.Helpers
 
                         originsToSave.Remove(origin);
                     }
-                    catch (PlaywrightNativeException)
+                    catch (Exception ex) when (ex is PlaywrightNativeException || ex is TimeoutException)
                     {
                     }
                 }

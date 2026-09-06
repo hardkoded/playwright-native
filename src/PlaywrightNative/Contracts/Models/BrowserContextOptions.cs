@@ -117,7 +117,7 @@ namespace PlaywrightNative
         /// <summary>
         /// Emulates 'prefers-colors-scheme' media feature.
         /// </summary>
-        public ColorScheme ColorScheme { get; set; }
+        public ColorScheme ColorScheme { get; set; } = ColorScheme.Null;
 
         /// <summary>
         /// Specify user locale, for example en-GB, de-DE, etc. Locale will affect navigator.language value, Accept-Language request header value as well as number and date formatting rules.
@@ -173,23 +173,23 @@ namespace PlaywrightNative
         /// <summary>
         /// Emulates <c>prefers-reduced-motion</c> for every page in the context.
         /// </summary>
-        public ReducedMotion ReducedMotion { get; set; }
+        public ReducedMotion ReducedMotion { get; set; } = ReducedMotion.Null;
 
         /// <summary>
         /// Emulates <c>forced-colors</c> for every page in the context.
         /// </summary>
-        public ForcedColors ForcedColors { get; set; }
+        public ForcedColors ForcedColors { get; set; } = ForcedColors.Null;
 
         /// <summary>
         /// Emulates <c>prefers-contrast</c> for every page in the context.
         /// </summary>
-        public Contrast Contrast { get; set; }
+        public Contrast Contrast { get; set; } = Contrast.Null;
 
         /// <summary>
         /// How HAR response bodies are stored. <see cref="HarContentPolicy.Attach"/>
         /// writes them beside the HAR file.
         /// </summary>
-        public HarContentPolicy RecordHarContent { get; set; }
+        public HarContentPolicy RecordHarContent { get; set; } = (HarContentPolicy)(-1);
 
         /// <summary>
         /// When <see langword="true"/>, selector actions that target a single

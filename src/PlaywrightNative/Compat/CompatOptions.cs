@@ -156,14 +156,9 @@ namespace PlaywrightNative.Compat
         public object Arg { get; set; }
     }
 
-    /// <summary>Legacy persistent-context launch options with regex HAR URL filter alias.</summary>
+    /// <summary>Legacy persistent-context launch options.</summary>
     public class LegacyBrowserTypeLaunchPersistentContextOptions : Microsoft.Playwright.BrowserTypeLaunchPersistentContextOptions
     {
-        /// <summary>Legacy HAR URL glob filter (PlaywrightNative-only).</summary>
-        public new string RecordHarUrlFilter { get; set; }
-
-        /// <summary>Legacy HAR URL regex filter (PlaywrightNative-only).</summary>
-        public new System.Text.RegularExpressions.Regex RecordHarUrlFilterRegex { get; set; }
     }
 
     /// <summary>Legacy locator click options with abort signal and mouse steps.</summary>
@@ -174,6 +169,41 @@ namespace PlaywrightNative.Compat
 
         /// <summary>Scroll-into-view mode.</summary>
         public new ActionScroll Scroll { get; set; }
+    }
+
+    /// <summary>Legacy locator assertion options with abort signal.</summary>
+    public class LegacyLocatorAssertionsToBeVisibleOptions : Microsoft.Playwright.LocatorAssertionsToBeVisibleOptions
+    {
+        /// <summary>Abort signal (PlaywrightNative-only).</summary>
+        public AbortSignal Signal { get; set; }
+    }
+
+    /// <summary>Legacy locator text assertion options with abort signal.</summary>
+    public class LegacyLocatorAssertionsToHaveTextOptions : Microsoft.Playwright.LocatorAssertionsToHaveTextOptions
+    {
+        /// <summary>Abort signal (PlaywrightNative-only).</summary>
+        public AbortSignal Signal { get; set; }
+    }
+
+    /// <summary>Legacy locator count assertion options with abort signal.</summary>
+    public class LegacyLocatorAssertionsToHaveCountOptions : Microsoft.Playwright.LocatorAssertionsToHaveCountOptions
+    {
+        /// <summary>Abort signal (PlaywrightNative-only).</summary>
+        public AbortSignal Signal { get; set; }
+    }
+
+    /// <summary>Legacy aria-snapshot assertion options with abort signal.</summary>
+    public class LegacyLocatorAssertionsToMatchAriaSnapshotOptions : Microsoft.Playwright.LocatorAssertionsToMatchAriaSnapshotOptions
+    {
+        /// <summary>Abort signal (PlaywrightNative-only).</summary>
+        public AbortSignal Signal { get; set; }
+    }
+
+    /// <summary>Legacy page URL assertion options with abort signal.</summary>
+    public class LegacyPageAssertionsToHaveURLOptions : Microsoft.Playwright.PageAssertionsToHaveURLOptions
+    {
+        /// <summary>Abort signal (PlaywrightNative-only).</summary>
+        public AbortSignal Signal { get; set; }
     }
 
     /// <summary>Legacy locator hover options with scroll mode.</summary>

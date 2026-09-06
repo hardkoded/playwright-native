@@ -544,7 +544,7 @@ namespace PlaywrightNative.Tests
             {
                 await context.APIRequest.GetAsync(TestConstants.ServerUrl + "/api-hop1", new() { MaxRedirects = 1 }).ConfigureAwait(false);
             });
-            Assert.That(ex.Message, Does.Contain("maxRedirects"));
+            Assert.That(ex.Message, Does.Contain("Max redirect count exceeded"));
         }
 
         [PlaywrightTest("global-fetch.spec.ts", "APIRequest GET uses context ignoreHTTPSErrors")]
@@ -662,11 +662,14 @@ namespace PlaywrightNative.Tests
             {
                 await request.GetAsync(TestConstants.ServerUrl + "/api-dispose-fetch").ConfigureAwait(false);
             });
-            Assert.That(ex.Message, Does.Contain("disposed"));
+            Assert.That(ex.Message, Does.Contain("Target page, context or browser has been closed"));
 
-            IAPIResponse response = await context.APIRequest.GetAsync(
-                TestConstants.ServerUrl + "/api-dispose-fetch").ConfigureAwait(false);
-            Assert.That(await response.TextAsync().ConfigureAwait(false), Is.EqualTo("ok"));
+            // Upstream keeps the same disposed context.request; further calls fail.
+            PlaywrightNativeException ex2 = Assert.ThrowsAsync<PlaywrightNativeException>(async () =>
+            {
+                await context.APIRequest.GetAsync(TestConstants.ServerUrl + "/api-dispose-fetch").ConfigureAwait(false);
+            });
+            Assert.That(ex2.Message, Does.Contain("Target page, context or browser has been closed"));
         }
 
         [PlaywrightTest("global-fetch.spec.ts", "APIRequest POST sends a JSON body")]
@@ -1258,7 +1261,7 @@ namespace PlaywrightNative.Tests
             {
                 await request.GetAsync(TestConstants.ServerUrl + "/api-standalone-disposed").ConfigureAwait(false);
             });
-            Assert.That(ex.Message, Does.Contain("disposed"));
+            Assert.That(ex.Message, Does.Contain("Target page, context or browser has been closed"));
         }
 
         [PlaywrightTest("global-fetch.spec.ts", "Playwright.APIRequest ignoreHTTPSErrors accepts untrusted TLS")]
@@ -1415,7 +1418,7 @@ namespace PlaywrightNative.Tests
             {
                 await request.GetAsync(TestConstants.ServerUrl + "/api-standalone-hop1").ConfigureAwait(false);
             });
-            Assert.That(ex.Message, Does.Contain("maxRedirects"));
+            Assert.That(ex.Message, Does.Contain("Max redirect count exceeded"));
         }
 
         [PlaywrightTest("global-fetch.spec.ts", "Playwright.APIRequest storageState sends cookies")]

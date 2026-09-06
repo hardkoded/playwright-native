@@ -189,6 +189,7 @@ namespace PlaywrightNative.Tests
 
         [PlaywrightTest("geolocation.spec.ts", "should throw with missing latitude")]
         [Test]
+        [Ignore("Microsoft.Playwright.Geolocation uses non-nullable float; omitted latitude is 0, not undefined (playwright-dotnet skips this protocol check).")]
         [Timeout(TestConstants.DefaultTestTimeout)]
         public void ShouldThrowWithMissingLatitude()
         {
@@ -219,6 +220,7 @@ namespace PlaywrightNative.Tests
 
         [PlaywrightTest("geolocation.spec.ts", "should throw with missing longitude in default options")]
         [Test]
+        [Ignore("Microsoft.Playwright.Geolocation uses non-nullable float; omitted longitude is 0, not undefined (playwright-dotnet skips this protocol check).")]
         [Timeout(TestConstants.DefaultTestTimeout)]
         public void ShouldThrowWithMissingLongitudeInDefaultOptions()
         {

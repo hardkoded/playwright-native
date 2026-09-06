@@ -22,6 +22,8 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
+using BrowserContextRouteFromHAROptions = Microsoft.Playwright.BrowserContextRouteFromHAROptions;
+using PageRouteFromHAROptions = Microsoft.Playwright.PageRouteFromHAROptions;
 
 namespace PlaywrightNative.Helpers
 {
@@ -119,6 +121,56 @@ namespace PlaywrightNative.Helpers
 
             Store store = Store.Load(har, notFound);
             return page.RouteAsync("**/*", route => MatchAsync(store, url, route));
+        }
+
+        /// <summary>
+        /// Official options-bag entry for context <c>routeFromHAR</c>.
+        /// </summary>
+        internal static Task InstallAsync(IBrowserContext context, string har, BrowserContextRouteFromHAROptions options)
+        {
+            options ??= new BrowserContextRouteFromHAROptions();
+            HarNotFound notFound = options.NotFound == Microsoft.Playwright.HarNotFound.Fallback
+                ? HarNotFound.Fallback
+                : HarNotFound.Abort;
+            if (options.Update == true)
+            {
+                Regex urlRegex = options.UrlRegex;
+                string url = options.Url ?? options.UrlString;
+                HarMode mode = options.UpdateMode ?? default;
+                RouteFromHarUpdateContentPolicy content = options.UpdateContent ?? default;
+                return urlRegex != null
+                    ? HarRecorder.StartForRouteAsync(context, har, urlRegex, mode, content)
+                    : HarRecorder.StartForRouteAsync(context, har, url, mode, content);
+            }
+
+            return options.UrlRegex != null
+                ? InstallAsync(context, har, options.UrlRegex, notFound)
+                : InstallAsync(context, har, options.Url ?? options.UrlString, notFound);
+        }
+
+        /// <summary>
+        /// Official options-bag entry for page <c>routeFromHAR</c>.
+        /// </summary>
+        internal static Task InstallAsync(IPage page, string har, PageRouteFromHAROptions options)
+        {
+            options ??= new PageRouteFromHAROptions();
+            HarNotFound notFound = options.NotFound == Microsoft.Playwright.HarNotFound.Fallback
+                ? HarNotFound.Fallback
+                : HarNotFound.Abort;
+            if (options.Update == true)
+            {
+                Regex urlRegex = options.UrlRegex;
+                string url = options.Url ?? options.UrlString;
+                HarMode mode = options.UpdateMode ?? default;
+                RouteFromHarUpdateContentPolicy content = options.UpdateContent ?? default;
+                return urlRegex != null
+                    ? HarRecorder.StartForRouteAsync(page, har, urlRegex, mode, content)
+                    : HarRecorder.StartForRouteAsync(page, har, url, mode, content);
+            }
+
+            return options.UrlRegex != null
+                ? InstallAsync(page, har, options.UrlRegex, notFound)
+                : InstallAsync(page, har, options.Url ?? options.UrlString, notFound);
         }
 
         private static string Pattern(string url)

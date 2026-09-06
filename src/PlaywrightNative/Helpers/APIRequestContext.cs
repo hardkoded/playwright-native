@@ -213,7 +213,18 @@ namespace PlaywrightNative.Helpers
                     proxy = hasLaunch.LaunchProxy;
                 }
 
-                using HttpClient client = CreateClient(ignoreTls, proxy, clientCertificates, initialClientCertificate, uri.Host, tlsCapture);
+                // Always capture wire headers. Skipping HTTP broke HeadersArray casing/order
+                // and mid-body "aborted" classification. Pair with keep-alive (do not force
+                // ConnectionClose): Close+HeaderCaptureStream hung SendAsync. Separate
+                // WebKit hang-ups came from LocaleHandshakeProxy via IHasProxy (also fixed).
+                using HttpClient client = CreateClient(
+                    ignoreTls,
+                    proxy,
+                    clientCertificates,
+                    initialClientCertificate,
+                    uri.Host,
+                    tlsCapture,
+                    captureRawHeaders: true);
 
                 (HttpResponseMessage response, string finalUrl, byte[] body) = await SendWithRetriesAsync(
                     client,
@@ -393,6 +404,10 @@ namespace PlaywrightNative.Helpers
             }
 
             APIRequestContext request = _contexts.GetValue(context, key => new APIRequestContext(key));
+
+            // Do not replace a disposed instance: upstream keeps the same
+            // context.request and fails subsequent calls with TargetClosed
+            // ("should not work after dispose").
             if (context.IsClosed)
             {
                 request.MarkOwnerClosed();
@@ -486,7 +501,8 @@ namespace PlaywrightNative.Helpers
             IReadOnlyList<ClientCertificate> clientCertificates,
             X509Certificate2 initialClientCertificate,
             string initialHost,
-            TlsCapture tlsCapture)
+            TlsCapture tlsCapture,
+            bool captureRawHeaders = true)
         {
             SocketsHttpHandler handler = null;
             try
@@ -562,16 +578,16 @@ namespace PlaywrightNative.Helpers
 
                 APIRequestProxyConnect.Apply(handler, proxy, ignoreTls);
 
-                handler.PlaintextStreamFilter = (context, _) =>
+                // Capture wire header order/casing for HeadersArray and abort classification.
+                // Requires keep-alive: forcing ConnectionClose with this filter hung SendAsync.
+                if (tlsCapture != null && captureRawHeaders)
                 {
-                    Stream stream = context.PlaintextStream;
-                    if (tlsCapture != null)
+                    handler.PlaintextStreamFilter = (context, _) =>
                     {
-                        stream = new HeaderCaptureStream(stream, tlsCapture);
-                    }
-
-                    return ValueTask.FromResult(stream);
-                };
+                        Stream stream = new HeaderCaptureStream(context.PlaintextStream, tlsCapture);
+                        return ValueTask.FromResult(stream);
+                    };
+                }
 
                 HttpClient client = new HttpClient(handler, disposeHandler: true)
                 {
@@ -616,14 +632,18 @@ namespace PlaywrightNative.Helpers
 
                 DateTimeOffset notBefore = new DateTimeOffset(DateTime.SpecifyKind(cert.NotBefore.ToUniversalTime(), DateTimeKind.Utc));
                 DateTimeOffset notAfter = new DateTimeOffset(DateTime.SpecifyKind(cert.NotAfter.ToUniversalTime(), DateTimeKind.Utc));
-                return new ResponseSecurityDetailsResult
+                long validFrom = notBefore.ToUnixTimeSeconds();
+                long validTo = notAfter.ToUnixTimeSeconds();
+                ResponseSecurityDetailsResult details = new ResponseSecurityDetailsResult
                 {
                     Protocol = "TLSv1.3",
                     SubjectName = subject,
                     Issuer = issuer,
-                    ValidFrom = notBefore.ToUnixTimeSeconds(),
-                    ValidTo = notAfter.ToUnixTimeSeconds(),
+                    ValidFrom = validFrom,
+                    ValidTo = validTo,
                 };
+                SecurityDetailsUnix.Attach(details, validFrom, validTo);
+                return details;
             }
             finally
             {
@@ -848,6 +868,27 @@ namespace PlaywrightNative.Helpers
                 }
 
                 current = current.InnerException;
+            }
+
+            return false;
+        }
+
+        private static bool MidBodyFromRawHeaders(TlsCapture tlsCapture)
+        {
+            if (tlsCapture?.RawHeaders == null)
+            {
+                return false;
+            }
+
+            foreach (NameValueEntry header in tlsCapture.RawHeaders)
+            {
+                if (header.Name != null
+                    && header.Name.Equals("Content-Length", StringComparison.OrdinalIgnoreCase)
+                    && long.TryParse(header.Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out long length)
+                    && length > 0)
+                {
+                    return true;
+                }
             }
 
             return false;
@@ -1257,7 +1298,8 @@ namespace PlaywrightNative.Helpers
             if (cookie.Expires.HasValue
                 && cookie.Expires.Value >= 0
                 && (cookie.Expires.Value <= 1
-                    || (cookie.Expires.Value * 1000) < DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()))
+                    || cookie.Expires.Value <= DateTimeOffset.UtcNow.ToUnixTimeSeconds()
+                    || ((double)cookie.Expires.Value * 1000d) < DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()))
             {
                 return false;
             }
@@ -1455,8 +1497,16 @@ namespace PlaywrightNative.Helpers
                 return false;
             }
 
-            return cookie.Expires.Value <= 1
-                || (cookie.Expires.Value * 1000) < DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            if (cookie.Expires.Value <= 1)
+            {
+                return true;
+            }
+
+            // Prefer whole-second compare: float32*1000 loses precision near epoch seconds
+            // and can keep a just-expired cookie alive for up to ~ULP seconds.
+            long nowSec = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            return cookie.Expires.Value <= nowSec
+                || ((double)cookie.Expires.Value * 1000d) < DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         }
 
         private static bool IsLocalHostname(string hostname)
@@ -1628,19 +1678,34 @@ namespace PlaywrightNative.Helpers
                 else if (string.Equals(key, "Max-Age", StringComparison.OrdinalIgnoreCase)
                     && double.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out double maxAge))
                 {
-                    double expiresAt = DateTimeOffset.UtcNow.ToUnixTimeSeconds() + maxAge;
-                    cookie.Expires = (float?)(expiresAt <= 0 ? 1 : expiresAt);
+                    // RFC 6265 §5.2.2 / official parseRawCookie: max-age <= 0 => earliest time.
+                    if (maxAge <= 0)
+                    {
+                        cookie.Expires = 0;
+                    }
+                    else
+                    {
+                        double expiresAt = DateTimeOffset.UtcNow.ToUnixTimeSeconds() + maxAge;
+                        cookie.Expires = (float)Math.Min(expiresAt, ContextCookies.MaxCookieExpiresDateInSeconds);
+                    }
                 }
                 else if (string.Equals(key, "Expires", StringComparison.OrdinalIgnoreCase))
                 {
                     if (TryParseCookieDate(value, out DateTimeOffset expires))
                     {
                         long seconds = expires.ToUnixTimeSeconds();
-                        cookie.Expires = seconds <= 0 ? 1 : seconds;
+                        long nowSec = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+
+                        // float32 ULP near current unix time is ~64–128s, so a "now"
+                        // timestamp can round into the future and keep the cookie alive.
+                        // Collapse already-due expires to 0 (official earliest time).
+                        cookie.Expires = seconds <= nowSec
+                            ? 0
+                            : (float)Math.Min(seconds, ContextCookies.MaxCookieExpiresDateInSeconds);
                     }
                     else
                     {
-                        cookie.Expires = 1;
+                        cookie.Expires = 0;
                     }
                 }
             }
@@ -1766,35 +1831,19 @@ namespace PlaywrightNative.Helpers
                         request.Dispose();
                         throw new PlaywrightNativeException("Max redirect count exceeded", ex);
                     }
-                    catch (ResetAfterHeadersException ex)
+                    catch (ResetAfterHeadersException ex) when (ex.MidBody)
                     {
-                        request.Dispose();
-                        if (maxRetries == 0)
-                        {
-                            throw new PlaywrightNativeException(
-                                "apiRequestContext." + MethodLabel(verb) + ": aborted",
-                                ex);
-                        }
-
-                        if (attempt == maxRetries)
-                        {
-                            throw new PlaywrightNativeException(
-                                "APIRequest maxRetries exceeded: " + maxRetries + " " + url,
-                                ex);
-                        }
-
-                        await Task.Delay(backoffMs, token).ConfigureAwait(false);
-                        backoffMs *= 2;
-                    }
-                    catch (Exception ex) when (IsPrematureResponseEnd(ex))
-                    {
+                        // Upstream: response aborted after headers/body started → "aborted", no retry.
                         request.Dispose();
                         throw new PlaywrightNativeException(
                             "apiRequestContext." + MethodLabel(verb) + ": aborted",
                             ex);
                     }
-                    catch (Exception ex) when (IsConnectionReset(ex))
+                    catch (Exception ex) when (ex is ResetAfterHeadersException || IsPrematureResponseEnd(ex) || IsConnectionReset(ex))
                     {
+                        // Upstream retries ECONNRESET-style drops. Premature end before a
+                        // mid-body abort (HttpContext.Abort / socket destroy) maps to
+                        // "socket hang up" on Node.
                         request.Dispose();
                         if (maxRetries == 0)
                         {
@@ -1846,7 +1895,8 @@ namespace PlaywrightNative.Helpers
             {
                 request = new HttpRequestMessage(new HttpMethod(verb), uri);
                 request.Headers.ExpectContinue = false;
-                request.Headers.ConnectionClose = true;
+
+                // Do not set ConnectionClose: combined with HeaderCaptureStream it hung HTTP SendAsync.
                 HttpContent content = null;
                 if (multipart != null)
                 {
@@ -1902,7 +1952,10 @@ namespace PlaywrightNative.Helpers
                 return headers;
             }
 
-            foreach (KeyValuePair<string, IEnumerable<string>> header in request.Headers)
+            // Use NonValidated: enumerating typed Headers parses Accept-Encoding and
+            // reformats the wire value to "gzip, deflate, br" (spaces). Official
+            // fetch sends "gzip,deflate,br" without spaces.
+            foreach (KeyValuePair<string, HeaderStringValues> header in request.Headers.NonValidated)
             {
                 foreach (string value in header.Value)
                 {
@@ -1912,7 +1965,7 @@ namespace PlaywrightNative.Helpers
 
             if (request.Content != null)
             {
-                foreach (KeyValuePair<string, IEnumerable<string>> header in request.Content.Headers)
+                foreach (KeyValuePair<string, HeaderStringValues> header in request.Content.Headers.NonValidated)
                 {
                     foreach (string value in header.Value)
                     {
@@ -2103,16 +2156,19 @@ namespace PlaywrightNative.Helpers
                     HttpResponseMessage response;
                     try
                     {
+                        // Buffer the full response in one shot. ResponseHeadersRead + a
+                        // later ReadAsByteArrayAsync races HeaderCaptureStream disposal on
+                        // some CI hosts and surfaces as HttpIOException ResponseEnded.
                         response = await client.SendAsync(
                             current,
-                            HttpCompletionOption.ResponseHeadersRead,
+                            HttpCompletionOption.ResponseContentRead,
                             token).ConfigureAwait(false);
                     }
                     catch (Exception ex) when (IsConnectionReset(ex) || IsPrematureResponseEnd(ex))
                     {
                         if (tlsCapture != null && tlsCapture.RawHeaders.Count > 0)
                         {
-                            throw new ResetAfterHeadersException(ex);
+                            throw new ResetAfterHeadersException(ex, MidBodyFromRawHeaders(tlsCapture));
                         }
 
                         throw;
@@ -2179,14 +2235,11 @@ namespace PlaywrightNative.Helpers
 
                     bool preserve = PreservesMethodOnRedirect(response.StatusCode);
                     remaining--;
-                    try
-                    {
-                        await response.Content.CopyToAsync(Stream.Null, token).ConfigureAwait(false);
-                    }
-                    catch (Exception ex) when (ex is IOException || ex is HttpRequestException || ex is ObjectDisposedException)
-                    {
-                    }
 
+                    // Do not drain the redirect body. With Connection: close, servers often
+                    // omit Content-Length on empty 3xx responses; CopyToAsync then waits for
+                    // EOF forever (or until the test timeout). Dispose is enough — we never
+                    // reuse the connection.
                     response.Dispose();
                     owned?.Dispose();
                     currentUrl = next.GetComponents(UriComponents.AbsoluteUri, UriFormat.UriEscaped);
@@ -2228,7 +2281,8 @@ namespace PlaywrightNative.Helpers
                 preserveMethod ? new HttpMethod(method) : HttpMethod.Get,
                 next);
             follow.Headers.ExpectContinue = false;
-            follow.Headers.ConnectionClose = true;
+
+            // Do not set ConnectionClose: combined with HeaderCaptureStream it hung HTTP SendAsync.
             if (preserveMethod && multipart != null)
             {
                 HttpContent body = CreateMultipart(RequireFormData(multipart, nameof(multipart)));
@@ -2483,12 +2537,20 @@ namespace PlaywrightNative.Helpers
             }
             catch (Exception ex) when (IsConnectionReset(ex) || IsPrematureResponseEnd(ex))
             {
-                throw new ResetAfterHeadersException(ex);
+                // Content-Length > 0 means the server started an explicit body (Node
+                // writeHead + destroy → "aborted"). Abort()/destroy before a body maps
+                // to "socket hang up" even when headers were observed.
+                long? contentLength = response.Content?.Headers?.ContentLength;
+                bool midBody = contentLength.GetValueOrDefault() > 0;
+                throw new ResetAfterHeadersException(ex, midBody);
             }
         }
 
         private PlaywrightNativeException DisposedException(bool inFlight = false)
         {
+            // Upstream: in-flight abort uses "Request context disposed.";
+            // post-dispose calls use TargetClosedError default message when no
+            // closeReason was set (browsercontext-fetch / global-fetch specs).
             if (!string.IsNullOrEmpty(_closeReason))
             {
                 return new PlaywrightNativeException(_closeReason);
@@ -2499,7 +2561,7 @@ namespace PlaywrightNative.Helpers
                 return new PlaywrightNativeException("Request context disposed.");
             }
 
-            return new PlaywrightNativeException(DriverMessages.BrowserOrContextClosedExceptionMessage);
+            return new PlaywrightNativeException(PlaywrightNative.DriverMessages.BrowserOrContextClosedExceptionMessage);
         }
 
         private void EnsureNotDisposed()
@@ -2509,12 +2571,7 @@ namespace PlaywrightNative.Helpers
                 return;
             }
 
-            if (!string.IsNullOrEmpty(_closeReason))
-            {
-                throw new PlaywrightNativeException(_closeReason);
-            }
-
-            throw new PlaywrightNativeException(DriverMessages.BrowserOrContextClosedExceptionMessage);
+            throw DisposedException();
         }
 
         private async Task<string> ResolveUserAgentAsync()
@@ -2635,10 +2692,22 @@ namespace PlaywrightNative.Helpers
             {
             }
 
+            internal ResetAfterHeadersException(Exception inner, bool midBody)
+                : base(inner?.Message, inner)
+            {
+                MidBody = midBody;
+            }
+
             internal ResetAfterHeadersException(string message, Exception innerException)
                 : base(message, innerException)
             {
             }
+
+            /// <summary>
+            /// True when the server advertised a non-empty body (Content-Length &gt; 0)
+            /// before the connection dropped — upstream reports this as <c>aborted</c>.
+            /// </summary>
+            internal bool MidBody { get; }
         }
 #pragma warning restore CA1032, CA1064, RCS1194
 
@@ -2807,26 +2876,163 @@ namespace PlaywrightNative.Helpers
             }
         }
 
-#pragma warning disable SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
-        IFormData IAPIRequestContext.CreateFormData() => null!;
+#pragma warning disable SA1137, SA1201, SA1202, SA1204, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648, CA1846
+        private Task<IAPIResponse> FetchWithOptionsAsync(string url, string defaultMethod, APIRequestContextOptions options)
+        {
+            options ??= new APIRequestContextOptions();
+            string method = options.Method ?? defaultMethod ?? "GET";
+            string data = options.Data ?? options.DataString;
+            object json = options.DataObject;
+            byte[] dataBytes = options.DataByte;
+            IEnumerable<KeyValuePair<string, string>> queryParams = ConvertQueryParams(options.Params, options.ParamsString);
+            return FetchAsync(
+                url,
+                method: method,
+                data: data,
+                headers: options.Headers,
+                failOnStatusCode: options.FailOnStatusCode,
+                timeout: options.Timeout,
+                maxRedirects: options.MaxRedirects,
+                ignoreHTTPSErrors: options.IgnoreHTTPSErrors ?? false,
+                json: json,
+                form: options.Form,
+                multipart: options.Multipart,
+                queryParams: queryParams,
+                maxRetries: options.MaxRetries ?? 0,
+                dataBytes: dataBytes);
+        }
 
-        Task<IAPIResponse> IAPIRequestContext.DeleteAsync(string url, APIRequestContextOptions options) => Task.FromResult<IAPIResponse>(default!);
+        private Task<IAPIResponse> FetchRequestWithOptionsAsync(IRequest request, APIRequestContextOptions options)
+        {
+            if (request == null)
+            {
+                throw new ArgumentNullException(nameof(request));
+            }
 
-        Task<IAPIResponse> IAPIRequestContext.FetchAsync(string urlOrRequest, APIRequestContextOptions options) => Task.FromResult<IAPIResponse>(default!);
+            options ??= new APIRequestContextOptions();
+            string method = options.Method ?? request.Method ?? "GET";
+            IEnumerable<KeyValuePair<string, string>> headers = options.Headers ?? request.Headers;
+            string data = options.Data ?? options.DataString;
+            object json = options.DataObject;
+            byte[] dataBytes = options.DataByte;
+            if (data == null && json == null && dataBytes == null && options.Form == null && options.Multipart == null)
+            {
+                dataBytes = request.PostDataBuffer;
+                if (dataBytes == null)
+                {
+                    data = request.PostData;
+                }
+            }
 
-        Task<IAPIResponse> IAPIRequestContext.FetchAsync(IRequest urlOrRequest, APIRequestContextOptions options) => Task.FromResult<IAPIResponse>(default!);
+            IEnumerable<KeyValuePair<string, string>> queryParams = ConvertQueryParams(options.Params, options.ParamsString);
+            return FetchAsync(
+                request.Url,
+                method: method,
+                data: data,
+                headers: headers,
+                failOnStatusCode: options.FailOnStatusCode,
+                timeout: options.Timeout,
+                maxRedirects: options.MaxRedirects,
+                ignoreHTTPSErrors: options.IgnoreHTTPSErrors ?? false,
+                json: json,
+                form: options.Form,
+                multipart: options.Multipart,
+                queryParams: queryParams,
+                maxRetries: options.MaxRetries ?? 0,
+                dataBytes: dataBytes);
+        }
 
-        Task<IAPIResponse> IAPIRequestContext.GetAsync(string url, APIRequestContextOptions options) => Task.FromResult<IAPIResponse>(default!);
+        private static IEnumerable<KeyValuePair<string, string>> ConvertQueryParams(
+            IEnumerable<KeyValuePair<string, object>> parameters,
+            string paramsString)
+        {
+            if (parameters == null && string.IsNullOrEmpty(paramsString))
+            {
+                return null;
+            }
 
-        Task<IAPIResponse> IAPIRequestContext.HeadAsync(string url, APIRequestContextOptions options) => Task.FromResult<IAPIResponse>(default!);
+            List<KeyValuePair<string, string>> result = new List<KeyValuePair<string, string>>();
+            if (parameters != null)
+            {
+                foreach (KeyValuePair<string, object> entry in parameters)
+                {
+                    if (string.IsNullOrEmpty(entry.Key))
+                    {
+                        continue;
+                    }
 
-        Task<IAPIResponse> IAPIRequestContext.PatchAsync(string url, APIRequestContextOptions options) => Task.FromResult<IAPIResponse>(default!);
+                    result.Add(new KeyValuePair<string, string>(entry.Key, FormatQueryParamValue(entry.Value)));
+                }
+            }
 
-        Task<IAPIResponse> IAPIRequestContext.PostAsync(string url, APIRequestContextOptions options) => Task.FromResult<IAPIResponse>(default!);
+            if (!string.IsNullOrEmpty(paramsString))
+            {
+                foreach (string part in paramsString.Split('&', StringSplitOptions.RemoveEmptyEntries))
+                {
+                    int eq = part.IndexOf('=');
+                    if (eq <= 0)
+                    {
+                        result.Add(new KeyValuePair<string, string>(Uri.UnescapeDataString(part), string.Empty));
+                        continue;
+                    }
 
-        Task<IAPIResponse> IAPIRequestContext.PutAsync(string url, APIRequestContextOptions options) => Task.FromResult<IAPIResponse>(default!);
+                    string key = Uri.UnescapeDataString(part[..eq]);
+                    string value = Uri.UnescapeDataString(part[(eq + 1)..].Replace('+', ' '));
+                    result.Add(new KeyValuePair<string, string>(key, value));
+                }
+            }
 
-        Task<string> IAPIRequestContext.StorageStateAsync(APIRequestContextStorageStateOptions options) => Task.FromResult<string>(default!);
-#pragma warning restore SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
+            return result;
+        }
+
+        private static string FormatQueryParamValue(object value)
+        {
+            if (value == null)
+            {
+                return string.Empty;
+            }
+
+            if (value is bool boolean)
+            {
+                return boolean ? "true" : "false";
+            }
+
+            if (value is IFormattable formattable)
+            {
+                return formattable.ToString(null, CultureInfo.InvariantCulture);
+            }
+
+            return Convert.ToString(value, CultureInfo.InvariantCulture) ?? string.Empty;
+        }
+
+        IFormData IAPIRequestContext.CreateFormData() => new FormData();
+
+        Task<IAPIResponse> IAPIRequestContext.DeleteAsync(string url, APIRequestContextOptions options) =>
+            FetchWithOptionsAsync(url, "DELETE", options);
+
+        Task<IAPIResponse> IAPIRequestContext.FetchAsync(string urlOrRequest, APIRequestContextOptions options) =>
+            FetchWithOptionsAsync(urlOrRequest, options?.Method ?? "GET", options);
+
+        Task<IAPIResponse> IAPIRequestContext.FetchAsync(IRequest urlOrRequest, APIRequestContextOptions options) =>
+            FetchRequestWithOptionsAsync(urlOrRequest, options);
+
+        Task<IAPIResponse> IAPIRequestContext.GetAsync(string url, APIRequestContextOptions options) =>
+            FetchWithOptionsAsync(url, "GET", options);
+
+        Task<IAPIResponse> IAPIRequestContext.HeadAsync(string url, APIRequestContextOptions options) =>
+            FetchWithOptionsAsync(url, "HEAD", options);
+
+        Task<IAPIResponse> IAPIRequestContext.PatchAsync(string url, APIRequestContextOptions options) =>
+            FetchWithOptionsAsync(url, "PATCH", options);
+
+        Task<IAPIResponse> IAPIRequestContext.PostAsync(string url, APIRequestContextOptions options) =>
+            FetchWithOptionsAsync(url, "POST", options);
+
+        Task<IAPIResponse> IAPIRequestContext.PutAsync(string url, APIRequestContextOptions options) =>
+            FetchWithOptionsAsync(url, "PUT", options);
+
+        Task<string> IAPIRequestContext.StorageStateAsync(APIRequestContextStorageStateOptions options) =>
+            StorageStateAsync(options?.Path, options?.IndexedDB);
+#pragma warning restore SA1137, SA1201, SA1202, SA1204, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648, CA1846
     }
 }

@@ -101,12 +101,60 @@ namespace PlaywrightNative.Helpers
         }
 
         /// <summary>
+        /// Enumerates stashed handle slots from a <see cref="TryPrepareHandleCall"/> result.
+        /// </summary>
+        /// <param name="callArgs">Output of <see cref="TryPrepareHandleCall"/>.</param>
+        /// <returns>Handle/key pairs in placeholder order.</returns>
+        internal static IEnumerable<(IJSHandle Handle, string Key)> EnumerateStashSlots(object[] callArgs)
+        {
+            if (callArgs == null)
+            {
+                yield break;
+            }
+
+            for (int i = 1; i < callArgs.Length; i++)
+            {
+                if (callArgs[i] is StashSlot slot)
+                {
+                    yield return (slot.Handle, slot.Key);
+                }
+                else if (callArgs[i] is IJSHandle handle)
+                {
+                    yield return (handle, i.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                }
+            }
+        }
+
+        /// <summary>
         /// Returns the JSON tree string from a <see cref="TryPrepareHandleCall"/> result.
         /// </summary>
         /// <param name="callArgs">Output of <see cref="TryPrepareHandleCall"/>.</param>
         /// <returns>The tree JSON, or <see langword="null"/>.</returns>
         internal static object TreeArgument(object[] callArgs)
             => callArgs != null && callArgs.Length > 0 ? callArgs[0] : null;
+
+        /// <summary>
+        /// Builds <c>Runtime.callFunctionOn</c> arguments: the JSON tree plus live
+        /// <see cref="IJSHandle"/> values (Chromium adopts ElementHandles).
+        /// </summary>
+        /// <param name="callArgs">Output of <see cref="TryPrepareHandleCall"/>.</param>
+        /// <returns>Arguments suitable for <c>callFunctionOn</c>.</returns>
+        internal static object[] AsCallFunctionArguments(object[] callArgs)
+        {
+            if (callArgs == null || callArgs.Length == 0)
+            {
+                return [];
+            }
+
+            object[] args = new object[callArgs.Length];
+            args[0] = callArgs[0];
+            for (int i = 1; i < callArgs.Length; i++)
+            {
+                args[i] = callArgs[i] is StashSlot slot ? slot.Handle : callArgs[i];
+            }
+
+            return args;
+        }
 
         /// <summary>
         /// Builds a <c>Runtime.evaluate</c> expression that applies the prepared
@@ -124,9 +172,11 @@ namespace PlaywrightNative.Helpers
 
         /// <summary>
         /// Wraps <paramref name="expression"/> so evaluate can pass a JSON tree
-        /// string and revive stashed handles plus inlined Infinity / -0 tokens.
-        /// Primitive Infinity / -0 / NaN are inlined as <c>{ __pw_u }</c> tokens so
-        /// WebKit does not have to accept CDP <c>unserializableValue</c> arguments.
+        /// string and revive handles from either stashed <c>globalThis.__pw_eh</c>
+        /// (WebKit) or positional <c>callFunctionOn</c> arguments (Chromium adopts
+        /// ElementHandles across same-origin frames). Primitive Infinity / -0 / NaN
+        /// are inlined as <c>{ __pw_u }</c> tokens so WebKit does not have to accept
+        /// CDP <c>unserializableValue</c> arguments.
         /// </summary>
         /// <param name="expression">The page function or expression.</param>
         /// <returns>A function declaration that revives handles then calls the page function.</returns>
@@ -135,12 +185,14 @@ namespace PlaywrightNative.Helpers
             string fn = EvaluateWithArg.AsFunction(expression);
             return
                 "function (treeJson) {" +
-                "  const handles = globalThis.__pw_eh || Object.create(null);" +
-                "  const tree = JSON.parse(treeJson);" +
+                "  const stashed = globalThis.__pw_eh || Object.create(null);" +
+                "  const positional = Array.prototype.slice.call(arguments, 1);" +
+                "  const tree = typeof treeJson === 'string' ? JSON.parse(treeJson) : treeJson;" +
                 "  const revive = (v) => {" +
                 "    if (v && typeof v === 'object' && typeof v.__pw_h === 'string') {" +
-                "      const h = handles[v.__pw_h];" +
-                "      delete handles[v.__pw_h];" +
+                "      if (positional.length > 0) return positional[v.__pw_h];" +
+                "      const h = stashed[v.__pw_h];" +
+                "      delete stashed[v.__pw_h];" +
                 "      return h;" +
                 "    }" +
                 "    if (v && typeof v === 'object' && typeof v.__pw_u === 'string') {" +
@@ -166,6 +218,24 @@ namespace PlaywrightNative.Helpers
                 "}";
         }
 
+        /// <summary>
+        /// Wraps a handle evaluate so the completion value is structured-clone
+        /// serialized (same contract as
+        /// <see cref="EvaluateSerialization.WithSerializedResult"/>).
+        /// </summary>
+        /// <param name="handleFn">Output of <see cref="WrapWithHandles"/>.</param>
+        /// <returns>A function declaration that returns the tagged payload.</returns>
+        internal static string WithSerializedHandleResult(string handleFn)
+        {
+            return
+                "function () {" +
+                "  const s = (" + EvaluateSerialization.SerializeJs + ");" +
+                "  const v = (" + handleFn + ").apply(null, arguments);" +
+                "  if (v && typeof v.then === 'function') return v.then(s);" +
+                "  return s(v);" +
+                "}";
+        }
+
         private static object RewriteTree(object node, IReadOnlyList<object> handles, IList<object> remote)
         {
             if (node is IDictionary<string, int> placeholder
@@ -180,7 +250,9 @@ namespace PlaywrightNative.Helpers
                     return immediate.ToTreeValue();
                 }
 
-                StashSlot slot = new StashSlot((IJSHandle)handle, Guid.NewGuid().ToString("N"));
+                StashSlot slot = new StashSlot(
+                    (IJSHandle)handle,
+                    remote.Count.ToString(System.Globalization.CultureInfo.InvariantCulture));
                 remote.Add(slot);
                 return new Dictionary<string, string>(StringComparer.Ordinal) { ["__pw_h"] = slot.Key };
             }

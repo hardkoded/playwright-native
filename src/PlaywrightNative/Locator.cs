@@ -8,6 +8,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
+using System.Linq;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -326,7 +327,7 @@ namespace PlaywrightNative
             string description = null,
             Regex descriptionRegex = null,
             Regex nameRegex = null)
-            => ((ILocator)this).Locator(RoleSelector.Build(
+            => Inside(new Locator(_frame, RoleSelector.Build(
                 role,
                 name,
                 exact,
@@ -339,7 +340,7 @@ namespace PlaywrightNative
                 selected,
                 description,
                 descriptionRegex,
-                nameRegex));
+                nameRegex)));
 
         /// <inheritdoc/>
         public ILocator GetByText(string text, bool? exact = null)
@@ -1050,18 +1051,12 @@ namespace PlaywrightNative
         }
 
         /// <inheritdoc/>
-        public async Task HighlightAsync(float? timeout = default, string style = default)
-        {
-            IElementHandle handle = await WaitForHandleAsync(timeout, "locator.highlight").ConfigureAwait(false);
-            string tooltip = ToString();
-            string payload = "{\"tooltip\":" + JsonSerializer.Serialize(tooltip) + ",\"style\":" + JsonSerializer.Serialize(style ?? string.Empty) + ",\"id\":" + JsonSerializer.Serialize(tooltip) + "}";
-            await handle.EvaluateAsync<bool>(ElementStateScript.HighlightFunction, payload).ConfigureAwait(false);
-            PageHighlights.Remember(Page, this, style, tooltip);
-        }
+        public Task HighlightAsync(float? timeout = default, string style = default)
+            => HighlightInternalAsync(timeout, style);
 
         /// <inheritdoc/>
         public Task HighlightAsync(IReadOnlyDictionary<string, string> style, float? timeout = default)
-            => HighlightAsync(timeout, HighlightStyle.ToCss(style));
+            => HighlightInternalAsync(timeout, HighlightStyle.ToCss(style));
 
         /// <inheritdoc/>
         public async Task HideHighlightAsync(float? timeout = default)
@@ -1077,7 +1072,7 @@ namespace PlaywrightNative
         {
             ArgumentNullException.ThrowIfNull(payload);
             IElementHandle handle = await WaitForHandleAsync(timeout, "locator.drop").ConfigureAwait(false);
-            await handle.EvaluateAsync<bool>(ElementStateScript.DropPayloadFunction, ToDropJson(payload)).ConfigureAwait(false);
+            await handle.EvaluateAsync<bool>(PageDropHelper.DropFunction, ToDropJson(payload)).ConfigureAwait(false);
 
             static string ToDropJson(DropPayload drop)
             {
@@ -1091,6 +1086,20 @@ namespace PlaywrightNative
                             name = file?.Name ?? string.Empty,
                             mimeType = file?.MimeType ?? "application/octet-stream",
                             buffer = Convert.ToBase64String(file?.Buffer ?? Array.Empty<byte>()),
+                        });
+                    }
+                }
+
+                if (drop.FilePaths != null)
+                {
+                    foreach (string path in drop.FilePaths)
+                    {
+                        FilePayload fromPath = FilePayloadHelper.FromPath(path).ToOfficial();
+                        files.Add(new
+                        {
+                            name = fromPath?.Name ?? string.Empty,
+                            mimeType = fromPath?.MimeType ?? "application/octet-stream",
+                            buffer = Convert.ToBase64String(fromPath?.Buffer ?? Array.Empty<byte>()),
                         });
                     }
                 }
@@ -1277,7 +1286,7 @@ namespace PlaywrightNative
         /// <inheritdoc/>
         public async Task<string> AriaSnapshotAsync(
             float? timeout = default,
-            AriaSnapshotMode mode = default,
+            AriaSnapshotMode mode = AriaSnapshotMode.Default,
             int? depth = default,
             bool? boxes = default)
         {
@@ -1302,7 +1311,7 @@ namespace PlaywrightNative
         /// <inheritdoc/>
         public async Task<string> AriaSnapshotJsonAsync(
             float? timeout = default,
-            AriaSnapshotMode mode = default,
+            AriaSnapshotMode mode = AriaSnapshotMode.Default,
             int? depth = default,
             bool? boxes = default)
         {
@@ -1329,6 +1338,20 @@ namespace PlaywrightNative
 
         internal static Locator InAnyFrame(IFrame frame, string selector)
             => new Locator(frame, new[] { CreateStep(selector) }, anyFrame: true);
+
+        /// <summary>
+        /// Non-extension entry point for highlight. Compat extensions must call this —
+        /// calling <see cref="HighlightAsync(float?, string)"/> from an <see cref="ILocator"/>
+        /// extension re-resolves to the extension and overflows the stack.
+        /// </summary>
+        internal async Task HighlightInternalAsync(float? timeout, string style)
+        {
+            IElementHandle handle = await WaitForHandleAsync(timeout, "locator.highlight").ConfigureAwait(false);
+            string tooltip = ToString();
+            string payload = "{\"tooltip\":" + JsonSerializer.Serialize(tooltip) + ",\"style\":" + JsonSerializer.Serialize(style ?? string.Empty) + ",\"id\":" + JsonSerializer.Serialize(tooltip) + "}";
+            await handle.EvaluateAsync<bool>(ElementStateScript.HighlightFunction, payload).ConfigureAwait(false);
+            PageHighlights.Remember(Page, this, style, tooltip);
+        }
 
         internal Locator WithAnyFrame()
         {
@@ -1359,6 +1382,90 @@ namespace PlaywrightNative
 
         internal Locator EnterThenScript(string script, params object[] args)
             => new Locator(_frame, new[] { CreateScriptStep(script, args) }, this);
+
+        /// <summary>
+        /// Element-relative <c>locator.locator(selector)</c>. When already inside a
+        /// <c>contentFrame()</c> (<c>_scope</c> set) or an any-frame chain, appends
+        /// a step instead of nesting via <see cref="Inside"/>.
+        /// </summary>
+        /// <param name="selector">Child selector.</param>
+        /// <returns>The chained locator.</returns>
+        internal Locator ChainLocator(string selector)
+        {
+            // Official frameLocator().locator('div').nth(1).locator('span') keeps
+            // one any-frame step list so nth applies between chained selectors.
+            if (_scope != null || _anyFrame)
+            {
+                List<Step> next = CopySteps();
+                next.Add(CreateStep(selector));
+                return new Locator(_frame, next, _scope, _description, _anyFrame);
+            }
+
+            return (Locator)Inside(new Locator(_frame, selector));
+        }
+
+        /// <summary>
+        /// Element-relative <c>locator.locator(other)</c>. Frame-entered and
+        /// any-frame locators rebase <paramref name="inner"/> into the same
+        /// chain instead of <see cref="Inside"/>.
+        /// </summary>
+        /// <param name="inner">Inner locator from the same page/frame.</param>
+        /// <returns>The chained locator.</returns>
+        internal Locator ChainLocator(Locator inner)
+        {
+            ArgumentNullException.ThrowIfNull(inner);
+            if (!ReferenceEquals(inner._frame, _frame))
+            {
+                throw new PlaywrightNativeException("Locators must belong to the same frame.");
+            }
+
+            if (_scope == null && !_anyFrame)
+            {
+                return (Locator)Inside(inner);
+            }
+
+            Locator AppendInChain(Locator node)
+            {
+                if (node._combine != CombineKind.None)
+                {
+                    Locator left = AppendInChain(node._left);
+                    Locator right = node._right == null ? null : AppendInChain(node._right);
+                    return new Locator(
+                        left,
+                        right,
+                        node._hasText,
+                        node._combine,
+                        node._sliceIndex,
+                        node._sliceLast,
+                        node._description,
+                        node._hasTextRegex,
+                        node._visible);
+                }
+
+                Locator scope = _scope;
+                List<Step> next = CopySteps();
+                if (node._scope != null)
+                {
+                    Locator nestedHost = AppendInChain(node._scope);
+                    List<Step> nestedSteps = new List<Step>(node._steps.Count);
+                    for (int i = 0; i < node._steps.Count; i++)
+                    {
+                        nestedSteps.Add(node._steps[i]);
+                    }
+
+                    return new Locator(_frame, nestedSteps, nestedHost, node._description, _anyFrame);
+                }
+
+                for (int i = 0; i < node._steps.Count; i++)
+                {
+                    next.Add(node._steps[i]);
+                }
+
+                return new Locator(_frame, next, scope, node._description, _anyFrame);
+            }
+
+            return AppendInChain(inner);
+        }
 
         internal Locator EnterThenLocator(Locator inner)
         {
@@ -1943,10 +2050,16 @@ namespace PlaywrightNative
                 return true;
             }
 
+            if (ex is TargetClosedException || PlaywrightNativeException.IsDestroyedContext(ex))
+            {
+                return true;
+            }
+
             string message = ex?.Message ?? string.Empty;
             return ex is TimeoutException
                 || message.Contains("Missing injected script", StringComparison.OrdinalIgnoreCase)
-                || message.Contains("Execution context", StringComparison.OrdinalIgnoreCase);
+                || message.Contains("Execution context", StringComparison.OrdinalIgnoreCase)
+                || message.Contains("Target page, context or browser has been closed", StringComparison.OrdinalIgnoreCase);
         }
 
         private static async Task ThrowIfHostIsNotFrameAsync(IElementHandle host)
@@ -2770,7 +2883,9 @@ namespace PlaywrightNative
 
             if (_combine == CombineKind.Inside && _left != null && _right != null)
             {
-                return _left.ToString() + ".locator(" + QuoteJs(_right.ToString()) + ")" + suffix;
+                // Chain as locator('#outer').locator('#inner'), not
+                // locator('#outer').locator('locator(\'#inner\')').
+                return _left.ToString() + "." + _right.FormatLocator() + suffix;
             }
 
             if (_left != null)
@@ -3168,137 +3283,328 @@ namespace PlaywrightNative
         }
 
 #pragma warning disable SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
-        Task<string> ILocator.AriaSnapshotAsync(LocatorAriaSnapshotOptions options) => Task.FromResult<string>(default!);
+        Task<string> ILocator.AriaSnapshotAsync(LocatorAriaSnapshotOptions options)
+            => AriaSnapshotAsync(
+                options?.Timeout,
+                options?.Mode ?? AriaSnapshotMode.Default,
+                options?.Depth,
+                options?.Boxes);
+
+        Task ILocator.BlurAsync(LocatorBlurOptions options) => BlurAsync(options?.Timeout);
+
+        async Task<LocatorBoundingBoxResult> ILocator.BoundingBoxAsync(LocatorBoundingBoxOptions options)
+        {
+            ElementHandleBoundingBoxResult box = await BoundingBoxAsync(options?.Timeout).ConfigureAwait(false);
+            return box.AsLocatorBoundingBox();
+        }
+
+        Task ILocator.CheckAsync(LocatorCheckOptions options)
+            => CheckAsync(options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial);
+
+        Task ILocator.ClearAsync(LocatorClearOptions options)
+            => ClearAsync(options?.NoWaitAfter, options?.Timeout, options?.Force);
+
+        Task ILocator.ClickAsync(LocatorClickOptions options)
+            => ClickAsync(
+                options?.Button ?? default,
+                options?.ClickCount,
+                options?.Delay,
+                options?.Position,
+                options?.Modifiers,
+                options?.Force,
+                options?.NoWaitAfter,
+                options?.Timeout,
+                options?.Trial,
+                default,
+                options?.Steps);
+
+        Task ILocator.DblClickAsync(LocatorDblClickOptions options)
+            => DblClickAsync(
+                options?.Button ?? default,
+                options?.Delay,
+                options?.Position,
+                options?.Modifiers,
+                options?.Force,
+                options?.NoWaitAfter,
+                options?.Timeout,
+                options?.Trial,
+                default,
+                options?.Steps);
+
+        Task ILocator.DispatchEventAsync(string type, object eventInit, LocatorDispatchEventOptions options)
+            => DispatchEventAsync(type, eventInit, options?.Timeout);
+
+        Task ILocator.DragToAsync(ILocator target, LocatorDragToOptions options)
+            => DragToAsync(
+                target,
+                options?.SourcePosition == null ? null : new Position { X = options.SourcePosition.X, Y = options.SourcePosition.Y },
+                options?.TargetPosition == null ? null : new Position { X = options.TargetPosition.X, Y = options.TargetPosition.Y },
+                options?.Force,
+                options?.NoWaitAfter,
+                options?.Timeout,
+                options?.Trial,
+                options?.Steps);
+
+        Task ILocator.DropAsync(DropPayload payload, LocatorDropOptions options)
+            => DropAsync(payload, options?.Timeout);
+
+        Task<IElementHandle> ILocator.ElementHandleAsync(LocatorElementHandleOptions options)
+            => ElementHandleAsync(options?.Timeout);
+
+        Task<JsonElement?> ILocator.EvaluateAsync(string expression, object arg, LocatorEvaluateOptions options)
+            => EvaluateAsync<JsonElement?>(expression, arg, options?.Timeout);
+
+        Task<T> ILocator.EvaluateAsync<T>(string expression, object arg, LocatorEvaluateOptions options)
+            => EvaluateAsync<T>(expression, arg, options?.Timeout);
+
+        Task<IJSHandle> ILocator.EvaluateHandleAsync(string expression, object arg, LocatorEvaluateHandleOptions options)
+            => EvaluateHandleAsync(expression, arg, options?.Timeout);
+
+        Task ILocator.FillAsync(string value, LocatorFillOptions options)
+            => FillAsync(value, options?.NoWaitAfter, options?.Timeout, options?.Force);
+
+        ILocator ILocator.Filter(LocatorFilterOptions options)
+        {
+            options ??= new LocatorFilterOptions();
+            ILocator result = this;
+            if (options.HasText != null || options.HasTextString != null)
+            {
+                result = result.Filter(options.HasText ?? options.HasTextString);
+            }
+
+            if (options.HasTextRegex != null)
+            {
+                result = result.Filter(options.HasTextRegex);
+            }
+
+            if (options.Visible.HasValue)
+            {
+                result = result.Filter(options.Visible.Value);
+            }
+
+            return SelectorQuery.ApplyOptions(
+                result,
+                options.Has,
+                null,
+                null,
+                options.HasNot,
+                options.HasNotText ?? options.HasNotTextString,
+                options.HasNotTextRegex);
+        }
 
-        Task ILocator.BlurAsync(LocatorBlurOptions options) => Task.CompletedTask;
+        Task ILocator.FocusAsync(LocatorFocusOptions options)
+            => FocusAsync(options?.Timeout);
 
-        Task<LocatorBoundingBoxResult> ILocator.BoundingBoxAsync(LocatorBoundingBoxOptions options) => Task.FromResult<LocatorBoundingBoxResult>(default!);
+        Task<string> ILocator.GetAttributeAsync(string name, LocatorGetAttributeOptions options) => GetAttributeAsync(name, options?.Timeout);
 
-        Task ILocator.CheckAsync(LocatorCheckOptions options) => Task.CompletedTask;
+        ILocator ILocator.GetByAltText(string text, LocatorGetByAltTextOptions options) => GetByAltText(text, options?.Exact);
 
-        Task ILocator.ClearAsync(LocatorClearOptions options) => Task.CompletedTask;
+        ILocator ILocator.GetByAltText(Regex text, LocatorGetByAltTextOptions options) => GetByAltText(text);
 
-        Task ILocator.ClickAsync(LocatorClickOptions options) => Task.CompletedTask;
+        ILocator ILocator.GetByLabel(string text, LocatorGetByLabelOptions options) => GetByLabel(text, options?.Exact);
 
-        Task ILocator.DblClickAsync(LocatorDblClickOptions options) => Task.CompletedTask;
+        ILocator ILocator.GetByLabel(Regex text, LocatorGetByLabelOptions options) => GetByLabel(text);
 
-        Task ILocator.DispatchEventAsync(string type, object eventInit, LocatorDispatchEventOptions options) => Task.CompletedTask;
+        ILocator ILocator.GetByPlaceholder(string text, LocatorGetByPlaceholderOptions options) => GetByPlaceholder(text, options?.Exact);
 
-        Task ILocator.DragToAsync(ILocator target, LocatorDragToOptions options) => Task.CompletedTask;
-
-        Task ILocator.DropAsync(DropPayload payload, LocatorDropOptions options) => Task.CompletedTask;
-
-        Task<IElementHandle> ILocator.ElementHandleAsync(LocatorElementHandleOptions options) => Task.FromResult<IElementHandle>(default!);
-
-        Task<JsonElement?> ILocator.EvaluateAsync(string expression, object arg, LocatorEvaluateOptions options) => Task.FromResult<JsonElement?>(default!);
-
-        Task<T> ILocator.EvaluateAsync<T>(string expression, object arg, LocatorEvaluateOptions options) => Task.FromResult<T>(default!);
-
-        Task<IJSHandle> ILocator.EvaluateHandleAsync(string expression, object arg, LocatorEvaluateHandleOptions options) => Task.FromResult<IJSHandle>(default!);
-
-        Task ILocator.FillAsync(string value, LocatorFillOptions options) => Task.CompletedTask;
-
-        ILocator ILocator.Filter(LocatorFilterOptions options) => null!;
-
-        Task ILocator.FocusAsync(LocatorFocusOptions options) => Task.CompletedTask;
-
-        Task<string> ILocator.GetAttributeAsync(string name, LocatorGetAttributeOptions options) => Task.FromResult<string>(default!);
-
-        ILocator ILocator.GetByAltText(string text, LocatorGetByAltTextOptions options) => null!;
-
-        ILocator ILocator.GetByAltText(Regex text, LocatorGetByAltTextOptions options) => null!;
-
-        ILocator ILocator.GetByLabel(string text, LocatorGetByLabelOptions options) => null!;
-
-        ILocator ILocator.GetByLabel(Regex text, LocatorGetByLabelOptions options) => null!;
-
-        ILocator ILocator.GetByPlaceholder(string text, LocatorGetByPlaceholderOptions options) => null!;
-
-        ILocator ILocator.GetByPlaceholder(Regex text, LocatorGetByPlaceholderOptions options) => null!;
-
-        ILocator ILocator.GetByRole(AriaRole role, LocatorGetByRoleOptions options) => null!;
-
-        ILocator ILocator.GetByText(string text, LocatorGetByTextOptions options) => null!;
-
-        ILocator ILocator.GetByText(Regex text, LocatorGetByTextOptions options) => null!;
-
-        ILocator ILocator.GetByTitle(string text, LocatorGetByTitleOptions options) => null!;
-
-        ILocator ILocator.GetByTitle(Regex text, LocatorGetByTitleOptions options) => null!;
-
-        Task ILocator.HideHighlightAsync() => Task.CompletedTask;
-
-        Task<IAsyncDisposable> ILocator.HighlightAsync(LocatorHighlightOptions options) => Task.FromResult<IAsyncDisposable>(default!);
-
-        Task ILocator.HoverAsync(LocatorHoverOptions options) => Task.CompletedTask;
-
-        Task<string> ILocator.InnerHTMLAsync(LocatorInnerHTMLOptions options) => Task.FromResult<string>(default!);
-
-        Task<string> ILocator.InnerTextAsync(LocatorInnerTextOptions options) => Task.FromResult<string>(default!);
-
-        Task<string> ILocator.InputValueAsync(LocatorInputValueOptions options) => Task.FromResult<string>(default!);
-
-        Task<bool> ILocator.IsCheckedAsync(LocatorIsCheckedOptions options) => Task.FromResult<bool>(default!);
-
-        Task<bool> ILocator.IsDisabledAsync(LocatorIsDisabledOptions options) => Task.FromResult<bool>(default!);
-
-        Task<bool> ILocator.IsEditableAsync(LocatorIsEditableOptions options) => Task.FromResult<bool>(default!);
-
-        Task<bool> ILocator.IsEnabledAsync(LocatorIsEnabledOptions options) => Task.FromResult<bool>(default!);
-
-        Task<bool> ILocator.IsHiddenAsync(LocatorIsHiddenOptions options) => Task.FromResult<bool>(default!);
-
-        Task<bool> ILocator.IsVisibleAsync(LocatorIsVisibleOptions options) => Task.FromResult<bool>(default!);
-
-        ILocator ILocator.Locator(string selectorOrLocator, LocatorLocatorOptions options) => null!;
-
-        ILocator ILocator.Locator(ILocator selectorOrLocator, LocatorLocatorOptions options) => null!;
-
-        Task<ILocator> ILocator.NormalizeAsync() => Task.FromResult<ILocator>(default!);
-
-        Task ILocator.PressAsync(string key, LocatorPressOptions options) => Task.CompletedTask;
-
-        Task ILocator.PressSequentiallyAsync(string text, LocatorPressSequentiallyOptions options) => Task.CompletedTask;
-
-        Task<byte[]> ILocator.ScreenshotAsync(LocatorScreenshotOptions options) => Task.FromResult<byte[]>(default!);
-
-        Task ILocator.ScrollIntoViewIfNeededAsync(LocatorScrollIntoViewIfNeededOptions options) => Task.CompletedTask;
-
-        Task<IReadOnlyList<string>> ILocator.SelectOptionAsync(string values, LocatorSelectOptionOptions options) => Task.FromResult<IReadOnlyList<string>>(default!);
-
-        Task<IReadOnlyList<string>> ILocator.SelectOptionAsync(IElementHandle values, LocatorSelectOptionOptions options) => Task.FromResult<IReadOnlyList<string>>(default!);
-
-        Task<IReadOnlyList<string>> ILocator.SelectOptionAsync(IEnumerable<string> values, LocatorSelectOptionOptions options) => Task.FromResult<IReadOnlyList<string>>(default!);
-
-        Task<IReadOnlyList<string>> ILocator.SelectOptionAsync(SelectOptionValue values, LocatorSelectOptionOptions options) => Task.FromResult<IReadOnlyList<string>>(default!);
-
-        Task<IReadOnlyList<string>> ILocator.SelectOptionAsync(IEnumerable<IElementHandle> values, LocatorSelectOptionOptions options) => Task.FromResult<IReadOnlyList<string>>(default!);
-
-        Task<IReadOnlyList<string>> ILocator.SelectOptionAsync(IEnumerable<SelectOptionValue> values, LocatorSelectOptionOptions options) => Task.FromResult<IReadOnlyList<string>>(default!);
-
-        Task ILocator.SelectTextAsync(LocatorSelectTextOptions options) => Task.CompletedTask;
-
-        Task ILocator.SetCheckedAsync(bool checkedState, LocatorSetCheckedOptions options) => Task.CompletedTask;
-
-        Task ILocator.SetInputFilesAsync(string files, LocatorSetInputFilesOptions options) => Task.CompletedTask;
-
-        Task ILocator.SetInputFilesAsync(IEnumerable<string> files, LocatorSetInputFilesOptions options) => Task.CompletedTask;
-
-        Task ILocator.SetInputFilesAsync(FilePayload files, LocatorSetInputFilesOptions options) => Task.CompletedTask;
-
-        Task ILocator.SetInputFilesAsync(IEnumerable<FilePayload> files, LocatorSetInputFilesOptions options) => Task.CompletedTask;
-
-        Task ILocator.TapAsync(LocatorTapOptions options) => Task.CompletedTask;
-
-        Task<string> ILocator.TextContentAsync(LocatorTextContentOptions options) => Task.FromResult<string>(default!);
-
-        Task ILocator.TypeAsync(string text, LocatorTypeOptions options) => Task.CompletedTask;
-
-        Task ILocator.UncheckAsync(LocatorUncheckOptions options) => Task.CompletedTask;
-
-        Task ILocator.WaitForAsync(LocatorWaitForOptions options) => Task.CompletedTask;
+        ILocator ILocator.GetByPlaceholder(Regex text, LocatorGetByPlaceholderOptions options) => GetByPlaceholder(text);
+
+        ILocator ILocator.GetByRole(AriaRole role, LocatorGetByRoleOptions options)
+            => GetByRole(
+                role.ToRoleString(),
+                options?.Name ?? options?.NameString,
+                options?.Exact,
+                options?.Checked,
+                options?.Disabled,
+                options?.Expanded,
+                options?.IncludeHidden,
+                options?.Level,
+                options?.Pressed,
+                options?.Selected,
+                options?.Description ?? options?.DescriptionString,
+                options?.DescriptionRegex,
+                options?.NameRegex);
+
+        ILocator ILocator.GetByText(string text, LocatorGetByTextOptions options) => GetByText(text, options?.Exact);
+
+        ILocator ILocator.GetByText(Regex text, LocatorGetByTextOptions options) => GetByText(text);
+
+        ILocator ILocator.GetByTitle(string text, LocatorGetByTitleOptions options) => GetByTitle(text, options?.Exact);
+
+        ILocator ILocator.GetByTitle(Regex text, LocatorGetByTitleOptions options) => GetByTitle(text);
+
+        Task ILocator.HideHighlightAsync() => HideHighlightAsync();
+
+        async Task<IAsyncDisposable> ILocator.HighlightAsync(LocatorHighlightOptions options)
+        {
+            await HighlightInternalAsync(timeout: default, options?.Style).ConfigureAwait(false);
+            return new HighlightLease(this);
+        }
+
+        Task ILocator.HoverAsync(LocatorHoverOptions options)
+            => HoverAsync(options?.Position, options?.Modifiers, options?.Force, options?.Timeout, options?.Trial);
+
+        Task<string> ILocator.InnerHTMLAsync(LocatorInnerHTMLOptions options) => InnerHTMLAsync(options?.Timeout);
+
+        Task<string> ILocator.InnerTextAsync(LocatorInnerTextOptions options) => InnerTextAsync(options?.Timeout);
+
+        Task<string> ILocator.InputValueAsync(LocatorInputValueOptions options) => InputValueAsync(options?.Timeout);
+
+        Task<bool> ILocator.IsCheckedAsync(LocatorIsCheckedOptions options) => IsCheckedAsync(options?.Timeout);
+
+        Task<bool> ILocator.IsDisabledAsync(LocatorIsDisabledOptions options) => IsDisabledAsync(options?.Timeout);
+
+        Task<bool> ILocator.IsEditableAsync(LocatorIsEditableOptions options) => IsEditableAsync(options?.Timeout);
+
+        Task<bool> ILocator.IsEnabledAsync(LocatorIsEnabledOptions options) => IsEnabledAsync(options?.Timeout);
+
+        Task<bool> ILocator.IsHiddenAsync(LocatorIsHiddenOptions options) => IsHiddenAsync();
+
+        Task<bool> ILocator.IsVisibleAsync(LocatorIsVisibleOptions options) => IsVisibleAsync();
+
+        ILocator ILocator.Locator(string selectorOrLocator, LocatorLocatorOptions options)
+        {
+            ILocator result = ChainLocator(selectorOrLocator);
+            options ??= new LocatorLocatorOptions();
+            return SelectorQuery.ApplyOptions(
+                result,
+                options.Has,
+                options.HasText ?? options.HasTextString,
+                options.HasTextRegex,
+                options.HasNot,
+                options.HasNotText ?? options.HasNotTextString,
+                options.HasNotTextRegex);
+        }
+
+        ILocator ILocator.Locator(ILocator selectorOrLocator, LocatorLocatorOptions options)
+        {
+            ArgumentNullException.ThrowIfNull(selectorOrLocator);
+            ILocator result = ChainLocator(RequireLocator(selectorOrLocator));
+            options ??= new LocatorLocatorOptions();
+            return SelectorQuery.ApplyOptions(
+                result,
+                options.Has,
+                options.HasText ?? options.HasTextString,
+                options.HasTextRegex,
+                options.HasNot,
+                options.HasNotText ?? options.HasNotTextString,
+                options.HasNotTextRegex);
+        }
+
+        Task<ILocator> ILocator.NormalizeAsync() => NormalizeAsync();
+
+        Task ILocator.PressAsync(string key, LocatorPressOptions options)
+            => PressAsync(key, options?.Delay, options?.NoWaitAfter, options?.Timeout);
+
+        Task ILocator.PressSequentiallyAsync(string text, LocatorPressSequentiallyOptions options)
+            => PressSequentiallyAsync(text, options?.Delay, options?.NoWaitAfter, options?.Timeout);
+
+        Task<byte[]> ILocator.ScreenshotAsync(LocatorScreenshotOptions options)
+            => ScreenshotAsync(
+                options?.Path,
+                options?.Type ?? default,
+                options?.Quality,
+                options?.OmitBackground,
+                options?.Timeout,
+                options?.Scale?.ToString(),
+                options?.Animations?.ToString(),
+                options?.Caret?.ToString(),
+                options?.Style,
+                options?.Mask,
+                options?.MaskColor);
+
+        Task ILocator.ScrollIntoViewIfNeededAsync(LocatorScrollIntoViewIfNeededOptions options) => ScrollIntoViewIfNeededAsync(options?.Timeout);
+
+        async Task<IReadOnlyList<string>> ILocator.SelectOptionAsync(string values, LocatorSelectOptionOptions options)
+        {
+            IReadOnlyCollection<string> result = await SelectOptionAsync(values, options?.NoWaitAfter, options?.Timeout, options?.Force).ConfigureAwait(false);
+            return result as IReadOnlyList<string> ?? result.ToList();
+        }
+
+        async Task<IReadOnlyList<string>> ILocator.SelectOptionAsync(IElementHandle values, LocatorSelectOptionOptions options)
+        {
+            IReadOnlyCollection<string> result = await SelectOptionAsync(values, options?.NoWaitAfter, options?.Timeout, options?.Force).ConfigureAwait(false);
+            return result as IReadOnlyList<string> ?? result.ToList();
+        }
+
+        async Task<IReadOnlyList<string>> ILocator.SelectOptionAsync(IEnumerable<string> values, LocatorSelectOptionOptions options)
+        {
+            IReadOnlyCollection<string> result = await SelectOptionAsync(values, options?.NoWaitAfter, options?.Timeout, options?.Force).ConfigureAwait(false);
+            return result as IReadOnlyList<string> ?? result.ToList();
+        }
+
+        async Task<IReadOnlyList<string>> ILocator.SelectOptionAsync(SelectOptionValue values, LocatorSelectOptionOptions options)
+        {
+            IReadOnlyCollection<string> result = await SelectOptionAsync(values, options?.NoWaitAfter, options?.Timeout, options?.Force).ConfigureAwait(false);
+            return result as IReadOnlyList<string> ?? result.ToList();
+        }
+
+        async Task<IReadOnlyList<string>> ILocator.SelectOptionAsync(IEnumerable<IElementHandle> values, LocatorSelectOptionOptions options)
+        {
+            IReadOnlyCollection<string> result = await SelectOptionAsync(values, options?.NoWaitAfter, options?.Timeout, options?.Force).ConfigureAwait(false);
+            return result as IReadOnlyList<string> ?? result.ToList();
+        }
+
+        async Task<IReadOnlyList<string>> ILocator.SelectOptionAsync(IEnumerable<SelectOptionValue> values, LocatorSelectOptionOptions options)
+        {
+            IReadOnlyCollection<string> result = await SelectOptionAsync(values, options?.NoWaitAfter, options?.Timeout, options?.Force).ConfigureAwait(false);
+            return result as IReadOnlyList<string> ?? result.ToList();
+        }
+
+        Task ILocator.SelectTextAsync(LocatorSelectTextOptions options)
+            => SelectTextAsync(options?.Timeout, options?.Force);
+
+        Task ILocator.SetCheckedAsync(bool checkedState, LocatorSetCheckedOptions options)
+            => SetCheckedAsync(checkedState, options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial);
+
+        Task ILocator.SetInputFilesAsync(string files, LocatorSetInputFilesOptions options)
+            => SetInputFilesAsync(files, options?.NoWaitAfter, options?.Timeout);
+
+        Task ILocator.SetInputFilesAsync(IEnumerable<string> files, LocatorSetInputFilesOptions options)
+            => SetInputFilesAsync(files, options?.NoWaitAfter, options?.Timeout);
+
+        Task ILocator.SetInputFilesAsync(FilePayload files, LocatorSetInputFilesOptions options)
+            => SetInputFilesAsync(files, options?.NoWaitAfter, options?.Timeout);
+
+        Task ILocator.SetInputFilesAsync(IEnumerable<FilePayload> files, LocatorSetInputFilesOptions options)
+            => SetInputFilesAsync(files, options?.NoWaitAfter, options?.Timeout);
+
+        Task ILocator.TapAsync(LocatorTapOptions options)
+            => TapAsync(options?.Position, options?.Modifiers, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial);
+
+        Task<string> ILocator.TextContentAsync(LocatorTextContentOptions options) => TextContentAsync(options?.Timeout);
+
+        Task ILocator.TypeAsync(string text, LocatorTypeOptions options)
+            => TypeAsync(text, options?.Delay, options?.NoWaitAfter, options?.Timeout);
+
+        Task ILocator.UncheckAsync(LocatorUncheckOptions options)
+            => UncheckAsync(options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial);
+
+        Task ILocator.WaitForAsync(LocatorWaitForOptions options)
+            => WaitForAsync(options?.State ?? WaitForSelectorState.Visible, options?.Timeout);
 
         Task ILocator.WaitForFunctionAsync(string expression, object arg, LocatorWaitForFunctionOptions options) => Task.CompletedTask;
 #pragma warning restore SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
+
+        private sealed class HighlightLease : IAsyncDisposable
+        {
+            private readonly Locator _locator;
+            private int _disposed;
+
+            internal HighlightLease(Locator locator)
+            {
+                _locator = locator;
+            }
+
+            public async ValueTask DisposeAsync()
+            {
+                if (Interlocked.Exchange(ref _disposed, 1) != 0)
+                {
+                    return;
+                }
+
+                await _locator.HideHighlightAsync().ConfigureAwait(false);
+            }
+        }
     }
 }

@@ -47,17 +47,17 @@ namespace PlaywrightNative
         /// <summary>
         /// Emulates <c>prefers-color-scheme</c>.
         /// </summary>
-        public ColorScheme ColorScheme { get; set; }
+        public ColorScheme ColorScheme { get; set; } = ColorScheme.Null;
 
         /// <summary>
         /// Emulates <c>prefers-reduced-motion</c>.
         /// </summary>
-        public ReducedMotion ReducedMotion { get; set; }
+        public ReducedMotion ReducedMotion { get; set; } = ReducedMotion.Null;
 
         /// <summary>
         /// Emulates <c>forced-colors</c>.
         /// </summary>
-        public ForcedColors ForcedColors { get; set; }
+        public ForcedColors ForcedColors { get; set; } = ForcedColors.Null;
 
         /// <summary>
         /// Specifies if the viewport supports touch events. Defaults to
@@ -153,7 +153,7 @@ namespace PlaywrightNative
         /// Emulates <c>prefers-contrast</c> for every page in this
         /// persistent context.
         /// </summary>
-        public Contrast Contrast { get; set; }
+        public Contrast Contrast { get; set; } = Contrast.Null;
 
         /// <summary>
         /// Path to write a HAR file to when the persistent context is closed.
@@ -179,7 +179,7 @@ namespace PlaywrightNative
         /// How HAR response bodies are stored. <see cref="HarContentPolicy.Attach"/>
         /// writes them beside the HAR file.
         /// </summary>
-        public HarContentPolicy RecordHarContent { get; set; }
+        public HarContentPolicy RecordHarContent { get; set; } = (HarContentPolicy)(-1);
 
         /// <summary>
         /// Optional regular expression. When set, only matching request URLs

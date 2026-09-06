@@ -178,7 +178,16 @@ namespace PlaywrightNative
 #pragma warning disable SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
         Task<IBrowser> IBrowserType.ConnectAsync(string endpoint, BrowserTypeConnectOptions options) => Task.FromResult<IBrowser>(default!);
 
-        Task<IBrowser> IBrowserType.ConnectOverCDPAsync(string endpointURL, BrowserTypeConnectOverCDPOptions options) => Task.FromResult<IBrowser>(default!);
+        Task<IBrowser> IBrowserType.ConnectOverCDPAsync(string endpointURL, BrowserTypeConnectOverCDPOptions options)
+        {
+            options ??= new BrowserTypeConnectOverCDPOptions();
+            return ConnectOverCDPAsync(
+                endpointURL,
+                options.Timeout,
+                options.Headers,
+                options.ArtifactsDir,
+                options.NoDefaults);
+        }
 
         Task<IBrowser> IBrowserType.LaunchAsync(Microsoft.Playwright.BrowserTypeLaunchOptions options)
             => LaunchAsync(MicrosoftOptionsBridge.ToLaunchOptions(options));

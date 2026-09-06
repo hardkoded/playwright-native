@@ -53,10 +53,10 @@ namespace PlaywrightNative.Chromium
         private string _locale;
         private string _timezoneId;
         private bool _offline;
-        private ColorScheme _colorScheme;
-        private ReducedMotion _reducedMotion;
-        private ForcedColors _forcedColors;
-        private Contrast _contrast;
+        private ColorScheme _colorScheme = ColorScheme.Null;
+        private ReducedMotion _reducedMotion = ReducedMotion.Null;
+        private ForcedColors _forcedColors = ForcedColors.Null;
+        private Contrast _contrast = Contrast.Null;
         private bool _hasTouch;
         private bool _bypassCsp;
         private Geolocation _geolocation;
@@ -217,7 +217,8 @@ namespace PlaywrightNative.Chromium
         }
 
         /// <inheritdoc/>
-        IReadOnlyDictionary<string, string> IHasExtraHttpHeaders.ExtraHttpHeaders => _extraHttpHeaders;
+        IReadOnlyDictionary<string, string> IHasExtraHttpHeaders.ExtraHttpHeaders
+            => BuildExtraHeaders() ?? _extraHttpHeaders;
 
         IReadOnlyCollection<string> IHasStorageStateInternals.VisitedOrigins
         {
@@ -253,7 +254,13 @@ namespace PlaywrightNative.Chromium
         /// <inheritdoc/>
         IReadOnlyList<ClientCertificate> IHasClientCertificates.ClientCertificates => _clientCertificates;
 
-        Proxy IHasProxy.Proxy => _clientCertificatesProxy != null ? _apiRequestProxy : _crCtx.Proxy;
+        // Locale handshake and client-certificate MITM proxies are browser-only.
+        // APIRequest must see the caller proxy (often null); routing HttpClient through
+        // LocaleHandshakeProxy truncates chunked localhost responses into "socket hang up".
+        Proxy IHasProxy.Proxy =>
+            _clientCertificatesProxy != null || _localeHandshake != null
+                ? _apiRequestProxy
+                : _crCtx.Proxy;
 
         /// <summary>
         /// Directory that receives accepted downloads, or <see langword="null"/> before emulation is configured.
@@ -825,7 +832,7 @@ namespace PlaywrightNative.Chromium
             string locale = null,
             string timezoneId = null,
             bool? offline = null,
-            ColorScheme colorScheme = default,
+            ColorScheme colorScheme = ColorScheme.Null,
             bool? hasTouch = null,
             bool? bypassCSP = null,
             Geolocation geolocation = null,
@@ -837,9 +844,9 @@ namespace PlaywrightNative.Chromium
             HttpCredentials httpCredentials = null,
             ScreenSize screenSize = null,
             bool? acceptDownloads = null,
-            ReducedMotion reducedMotion = default,
-            ForcedColors forcedColors = default,
-            Contrast contrast = default)
+            ReducedMotion reducedMotion = ReducedMotion.Null,
+            ForcedColors forcedColors = ForcedColors.Null,
+            Contrast contrast = Contrast.Null)
         {
             GeolocationValidator.Validate(geolocation);
             _viewport = ViewportSizeHelper.Resolve(viewport);
@@ -851,7 +858,10 @@ namespace PlaywrightNative.Chromium
             _reducedMotion = reducedMotion;
             _forcedColors = forcedColors;
             _contrast = contrast;
-            _hasTouch = hasTouch == true;
+
+            // Official isMobile also enables touch (meta viewport + touch events).
+            _isMobile = isMobile == true;
+            _hasTouch = hasTouch == true || _isMobile;
             _bypassCsp = bypassCSP == true;
             _geolocation = geolocation;
             _crCtx.Geolocation = geolocation;
@@ -859,7 +869,6 @@ namespace PlaywrightNative.Chromium
             _ignoreHttpsErrors = ignoreHTTPSErrors == true;
             _javaScriptDisabled = javaScriptEnabled == false;
             _deviceScaleFactor = deviceScaleFactor;
-            _isMobile = isMobile == true;
             _httpCredentials = HttpBasicAuth.Snapshot(httpCredentials);
             _crCtx.HttpCredentials = _httpCredentials;
             _screenSize = screenSize;
@@ -979,7 +988,7 @@ namespace PlaywrightNative.Chromium
 
             await crPage.CrPage.SetTouchEmulationEnabledAsync(
                 _hasTouch,
-                _hasTouch || _isMobile ? "mobile" : "desktop").ConfigureAwait(false);
+                _hasTouch ? "mobile" : "desktop").ConfigureAwait(false);
 
             if (_bypassCsp)
             {
@@ -1173,7 +1182,8 @@ namespace PlaywrightNative.Chromium
         /// <summary>
         /// Official persistent launch: extension service workers attach during
         /// <c>Target.setAutoAttach</c> before this instance exists. Instrument
-        /// those workers once the context is ready (network + user-agent).
+        /// those workers once the context is ready (network + user-agent), then
+        /// resume so they were never running without Network.enable.
         /// </summary>
         internal async Task AdoptExistingServiceWorkersAsync()
         {
@@ -1501,7 +1511,7 @@ namespace PlaywrightNative.Chromium
 
                 await crPage.CrPage.SetTouchEmulationEnabledAsync(
                     _hasTouch,
-                    _hasTouch || _isMobile ? "mobile" : "desktop").ConfigureAwait(false);
+                    _hasTouch ? "mobile" : "desktop").ConfigureAwait(false);
 
                 if (!_isMobile)
                 {
@@ -1732,85 +1742,248 @@ namespace PlaywrightNative.Chromium
         }
 
 #pragma warning disable SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
-        Task<IAsyncDisposable> IBrowserContext.AddInitScriptAsync(string script, string scriptPath) => Task.FromResult<IAsyncDisposable>(default!);
+        Task<IAsyncDisposable> IBrowserContext.AddInitScriptAsync(string script, string scriptPath) => AddInitScriptAsync(script, scriptPath);
 
-        Task IBrowserContext.ClearCookiesAsync(BrowserContextClearCookiesOptions options) => Task.CompletedTask;
+        Task IBrowserContext.ClearCookiesAsync(BrowserContextClearCookiesOptions options) => CookieClearFilter.ClearAsync(this, options, ClearCookiesAsync);
 
-        Task IBrowserContext.CloseAsync(BrowserContextCloseOptions options) => Task.CompletedTask;
+        Task IBrowserContext.CloseAsync(BrowserContextCloseOptions options) => CloseAsync(options?.Reason);
 
-        Task<IReadOnlyList<BrowserContextCookiesResult>> IBrowserContext.CookiesAsync(string urls) => Task.FromResult<IReadOnlyList<BrowserContextCookiesResult>>(default!);
+        Task<IReadOnlyList<BrowserContextCookiesResult>> IBrowserContext.CookiesAsync(string urls) => string.IsNullOrEmpty(urls) ? CookiesAsync() : CookiesAsync(new[] { urls });
 
-        Task<IAsyncDisposable> IBrowserContext.ExposeBindingAsync(string name, Action callback) => Task.FromResult<IAsyncDisposable>(default!);
+        Task<IAsyncDisposable> IBrowserContext.ExposeBindingAsync(string name, Action callback) => ExposeBindingAsync(name, callback);
 
-        Task<IAsyncDisposable> IBrowserContext.ExposeBindingAsync(string name, Action<BindingSource> callback) => Task.FromResult<IAsyncDisposable>(default!);
+        Task<IAsyncDisposable> IBrowserContext.ExposeBindingAsync(string name, Action<BindingSource> callback)
+        {
+            if (callback == null)
+            {
+                throw new ArgumentNullException(nameof(callback));
+            }
 
-        Task<IAsyncDisposable> IBrowserContext.ExposeBindingAsync<T>(string name, Action<BindingSource, T> callback) => Task.FromResult<IAsyncDisposable>(default!);
+            return RegisterExposedAsync(
+                name,
+                page => InstallOnAsync(
+                    page,
+                    name,
+                    PageExposeBinder.WrapBinding<object>(this, page, source =>
+                    {
+                        callback(source);
+                        return null;
+                    })));
+        }
 
-        Task<IAsyncDisposable> IBrowserContext.ExposeBindingAsync<TResult>(string name, Func<BindingSource, TResult> callback) => Task.FromResult<IAsyncDisposable>(default!);
+        Task<IAsyncDisposable> IBrowserContext.ExposeBindingAsync<T>(string name, Action<BindingSource, T> callback)
+        {
+            if (callback == null)
+            {
+                throw new ArgumentNullException(nameof(callback));
+            }
 
-        Task<IAsyncDisposable> IBrowserContext.ExposeBindingAsync<T, TResult>(string name, Func<BindingSource, T, TResult> callback) => Task.FromResult<IAsyncDisposable>(default!);
+            return RegisterExposedAsync(
+                name,
+                page => InstallOnAsync(
+                    page,
+                    name,
+                    PageExposeBinder.WrapBinding<T, object>(this, page, (source, arg) =>
+                    {
+                        callback(source, arg);
+                        return null;
+                    })));
+        }
 
-        Task<IAsyncDisposable> IBrowserContext.ExposeBindingAsync<T1, T2, T3, TResult>(string name, Func<BindingSource, T1, T2, T3, TResult> callback) => Task.FromResult<IAsyncDisposable>(default!);
+        Task<IAsyncDisposable> IBrowserContext.ExposeBindingAsync<TResult>(string name, Func<BindingSource, TResult> callback)
+        {
+            if (callback == null)
+            {
+                throw new ArgumentNullException(nameof(callback));
+            }
 
-        Task<IAsyncDisposable> IBrowserContext.ExposeBindingAsync<T1, T2, T3, T4, TResult>(string name, Func<BindingSource, T1, T2, T3, T4, TResult> callback) => Task.FromResult<IAsyncDisposable>(default!);
+            return RegisterExposedAsync(name, page => InstallOnAsync(page, name, PageExposeBinder.WrapBinding(this, page, callback)));
+        }
 
-        Task<IAsyncDisposable> IBrowserContext.ExposeFunctionAsync<T1, T2, T3, TResult>(string name, Func<T1, T2, T3, TResult> callback) => Task.FromResult<IAsyncDisposable>(default!);
+        Task<IAsyncDisposable> IBrowserContext.ExposeBindingAsync<T, TResult>(string name, Func<BindingSource, T, TResult> callback)
+        {
+            if (callback == null)
+            {
+                throw new ArgumentNullException(nameof(callback));
+            }
 
-        Task<IAsyncDisposable> IBrowserContext.ExposeFunctionAsync<T1, T2, T3, T4, TResult>(string name, Func<T1, T2, T3, T4, TResult> callback) => Task.FromResult<IAsyncDisposable>(default!);
+            if (typeof(T) == typeof(IJSHandle))
+            {
+                return ExposeBindingAsync(
+                    name,
+                    (BindingSource source, IJSHandle handle) => (object)callback(source, (T)(object)handle));
+            }
 
-        Task IBrowserContext.GrantPermissionsAsync(IEnumerable<string> permissions, BrowserContextGrantPermissionsOptions options) => Task.CompletedTask;
+            return RegisterExposedAsync(name, page => InstallOnAsync(page, name, PageExposeBinder.WrapBinding(this, page, callback)));
+        }
 
-        Task<IAsyncDisposable> IBrowserContext.RouteAsync(string url, Action<IRoute> handler, BrowserContextRouteOptions options) => Task.FromResult<IAsyncDisposable>(default!);
+        Task<IAsyncDisposable> IBrowserContext.ExposeBindingAsync<T1, T2, T3, TResult>(string name, Func<BindingSource, T1, T2, T3, TResult> callback)
+        {
+            if (callback == null)
+            {
+                throw new ArgumentNullException(nameof(callback));
+            }
 
-        Task<IAsyncDisposable> IBrowserContext.RouteAsync(Regex url, Action<IRoute> handler, BrowserContextRouteOptions options) => Task.FromResult<IAsyncDisposable>(default!);
+            return RegisterExposedAsync(name, page => InstallOnAsync(page, name, PageExposeBinder.WrapBinding(this, page, callback)));
+        }
 
-        Task<IAsyncDisposable> IBrowserContext.RouteAsync(Func<string, bool> url, Action<IRoute> handler, BrowserContextRouteOptions options) => Task.FromResult<IAsyncDisposable>(default!);
+        Task<IAsyncDisposable> IBrowserContext.ExposeBindingAsync<T1, T2, T3, T4, TResult>(string name, Func<BindingSource, T1, T2, T3, T4, TResult> callback)
+        {
+            if (callback == null)
+            {
+                throw new ArgumentNullException(nameof(callback));
+            }
 
-        Task<IAsyncDisposable> IBrowserContext.RouteAsync(string url, Func<IRoute, Task> handler, BrowserContextRouteOptions options) => Task.FromResult<IAsyncDisposable>(default!);
+            return RegisterExposedAsync(name, page => InstallOnAsync(page, name, PageExposeBinder.WrapBinding(this, page, callback)));
+        }
 
-        Task<IAsyncDisposable> IBrowserContext.RouteAsync(Regex url, Func<IRoute, Task> handler, BrowserContextRouteOptions options) => Task.FromResult<IAsyncDisposable>(default!);
+        Task<IAsyncDisposable> IBrowserContext.ExposeFunctionAsync<T1, T2, T3, TResult>(string name, Func<T1, T2, T3, TResult> callback)
+        {
+            if (callback == null)
+            {
+                throw new ArgumentNullException(nameof(callback));
+            }
 
-        Task<IAsyncDisposable> IBrowserContext.RouteAsync(Func<string, bool> url, Func<IRoute, Task> handler, BrowserContextRouteOptions options) => Task.FromResult<IAsyncDisposable>(default!);
+            return RegisterExposedAsync(name, page => InstallOnAsync(page, name, PageExposeBinder.Wrap(callback)));
+        }
 
-        Task IBrowserContext.RouteFromHARAsync(string har, BrowserContextRouteFromHAROptions options) => Task.CompletedTask;
+        Task<IAsyncDisposable> IBrowserContext.ExposeFunctionAsync<T1, T2, T3, T4, TResult>(string name, Func<T1, T2, T3, T4, TResult> callback)
+        {
+            if (callback == null)
+            {
+                throw new ArgumentNullException(nameof(callback));
+            }
 
-        Task IBrowserContext.RouteWebSocketAsync(string url, Action<IWebSocketRoute> handler) => Task.CompletedTask;
+            return RegisterExposedAsync(name, page => InstallOnAsync(page, name, PageExposeBinder.Wrap(callback)));
+        }
 
-        Task IBrowserContext.RouteWebSocketAsync(Regex url, Action<IWebSocketRoute> handler) => Task.CompletedTask;
+        Task IBrowserContext.GrantPermissionsAsync(IEnumerable<string> permissions, BrowserContextGrantPermissionsOptions options) => GrantPermissionsAsync(permissions, options?.Origin);
 
-        Task IBrowserContext.RouteWebSocketAsync(Func<string, bool> url, Action<IWebSocketRoute> handler) => Task.CompletedTask;
+        async Task<IAsyncDisposable> IBrowserContext.RouteAsync(string url, Action<IRoute> handler, BrowserContextRouteOptions options)
+        {
+            await RouteAsync(url, handler, options?.Times).ConfigureAwait(false);
+            return NoopContextDisposable.Instance;
+        }
 
-        Task<IConsoleMessage> IBrowserContext.RunAndWaitForConsoleMessageAsync(Func<Task> action, BrowserContextRunAndWaitForConsoleMessageOptions options) => Task.FromResult<IConsoleMessage>(default!);
+        async Task<IAsyncDisposable> IBrowserContext.RouteAsync(Regex url, Action<IRoute> handler, BrowserContextRouteOptions options)
+        {
+            await RouteAsync(url, handler, options?.Times).ConfigureAwait(false);
+            return NoopContextDisposable.Instance;
+        }
 
-        Task<IPage> IBrowserContext.RunAndWaitForPageAsync(Func<Task> action, BrowserContextRunAndWaitForPageOptions options) => Task.FromResult<IPage>(default!);
+        async Task<IAsyncDisposable> IBrowserContext.RouteAsync(Func<string, bool> url, Action<IRoute> handler, BrowserContextRouteOptions options)
+        {
+            await RouteAsync(url, handler, options?.Times).ConfigureAwait(false);
+            return NoopContextDisposable.Instance;
+        }
 
-        void IBrowserContext.SetDefaultNavigationTimeout(float timeout) { }
+        async Task<IAsyncDisposable> IBrowserContext.RouteAsync(string url, Func<IRoute, Task> handler, BrowserContextRouteOptions options)
+        {
+            await RouteAsync(url, handler, options?.Times).ConfigureAwait(false);
+            return NoopContextDisposable.Instance;
+        }
 
-        void IBrowserContext.SetDefaultTimeout(float timeout) { }
+        async Task<IAsyncDisposable> IBrowserContext.RouteAsync(Regex url, Func<IRoute, Task> handler, BrowserContextRouteOptions options)
+        {
+            await RouteAsync(url, handler, options?.Times).ConfigureAwait(false);
+            return NoopContextDisposable.Instance;
+        }
 
-        Task IBrowserContext.SetExtraHTTPHeadersAsync(IEnumerable<KeyValuePair<string, string>> headers) => Task.CompletedTask;
+        async Task<IAsyncDisposable> IBrowserContext.RouteAsync(Func<string, bool> url, Func<IRoute, Task> handler, BrowserContextRouteOptions options)
+        {
+            await RouteAsync(url, handler, options?.Times).ConfigureAwait(false);
+            return NoopContextDisposable.Instance;
+        }
 
-        Task IBrowserContext.SetStorageStateAsync(string storageStatePath) => Task.CompletedTask;
+        Task IBrowserContext.RouteFromHARAsync(string har, BrowserContextRouteFromHAROptions options)
+            => HarPlayback.InstallAsync(this, har, options);
 
-        Task<string> IBrowserContext.StorageStateAsync(BrowserContextStorageStateOptions options) => Task.FromResult<string>(default!);
+        Task IBrowserContext.RouteWebSocketAsync(string url, Action<IWebSocketRoute> handler)
+            => WebSocketRouter.InstallAsync(this, url, handler);
 
-        Task IBrowserContext.UnrouteAllAsync(BrowserContextUnrouteAllOptions options) => Task.CompletedTask;
+        Task IBrowserContext.RouteWebSocketAsync(Regex url, Action<IWebSocketRoute> handler)
+            => WebSocketRouter.InstallAsync(this, url, handler);
 
-        Task IBrowserContext.UnrouteAsync(string url, Action<IRoute> handler) => Task.CompletedTask;
+        Task IBrowserContext.RouteWebSocketAsync(Func<string, bool> url, Action<IWebSocketRoute> handler)
+            => WebSocketRouter.InstallAsync(this, url, handler);
 
-        Task IBrowserContext.UnrouteAsync(Regex url, Action<IRoute> handler) => Task.CompletedTask;
+        Task<IConsoleMessage> IBrowserContext.RunAndWaitForConsoleMessageAsync(Func<Task> action, BrowserContextRunAndWaitForConsoleMessageOptions options)
+            => RunAndWaitInternalAsync(
+                action,
+                WaitForEventAsync(BrowserContextEvent.Console, options?.Predicate, options?.Timeout));
 
-        Task IBrowserContext.UnrouteAsync(Func<string, bool> url, Action<IRoute> handler) => Task.CompletedTask;
+        Task<IPage> IBrowserContext.RunAndWaitForPageAsync(Func<Task> action, BrowserContextRunAndWaitForPageOptions options)
+            => RunAndWaitInternalAsync(
+                action,
+                WaitForEventAsync(BrowserContextEvent.Page, options?.Predicate, options?.Timeout));
 
-        Task IBrowserContext.UnrouteAsync(string url, Func<IRoute, Task> handler) => Task.CompletedTask;
+        void IBrowserContext.SetDefaultNavigationTimeout(float timeout) => DefaultNavigationTimeout = timeout;
 
-        Task IBrowserContext.UnrouteAsync(Regex url, Func<IRoute, Task> handler) => Task.CompletedTask;
+        void IBrowserContext.SetDefaultTimeout(float timeout) => DefaultTimeout = timeout;
 
-        Task IBrowserContext.UnrouteAsync(Func<string, bool> url, Func<IRoute, Task> handler) => Task.CompletedTask;
+        Task IBrowserContext.SetExtraHTTPHeadersAsync(IEnumerable<KeyValuePair<string, string>> headers) => SetExtraHttpHeadersAsync(headers);
 
-        Task<IConsoleMessage> IBrowserContext.WaitForConsoleMessageAsync(BrowserContextWaitForConsoleMessageOptions options) => Task.FromResult<IConsoleMessage>(default!);
+        Task IBrowserContext.SetStorageStateAsync(string storageStatePath)
+        {
+            string value = storageStatePath;
+            bool inlineJson = !string.IsNullOrEmpty(value)
+                && value.TrimStart().StartsWith('{');
+            return StorageStateHelper.ApplyAsync(
+                this,
+                inlineJson ? value : null,
+                inlineJson ? null : value,
+                replaceExisting: true);
+        }
 
-        Task<IPage> IBrowserContext.WaitForPageAsync(BrowserContextWaitForPageOptions options) => Task.FromResult<IPage>(default!);
+        Task<string> IBrowserContext.StorageStateAsync(BrowserContextStorageStateOptions options) => StorageStateAsync(options?.Path, options?.IndexedDB, options?.Credentials);
+
+        Task IBrowserContext.UnrouteAllAsync(BrowserContextUnrouteAllOptions options)
+            => UnrouteAllAsync(UnrouteBehaviorBridge.FromOfficial(options?.Behavior));
+
+        Task IBrowserContext.UnrouteAsync(string url, Action<IRoute> handler)
+            => UnrouteAsync(url, handler);
+
+        Task IBrowserContext.UnrouteAsync(Regex url, Action<IRoute> handler)
+            => UnrouteAsync(url, handler);
+
+        Task IBrowserContext.UnrouteAsync(Func<string, bool> url, Action<IRoute> handler)
+            => UnrouteAsync(url, handler);
+
+        Task IBrowserContext.UnrouteAsync(string url, Func<IRoute, Task> handler)
+            => UnrouteAsync(url, handler);
+
+        Task IBrowserContext.UnrouteAsync(Regex url, Func<IRoute, Task> handler)
+            => UnrouteAsync(url, handler);
+
+        Task IBrowserContext.UnrouteAsync(Func<string, bool> url, Func<IRoute, Task> handler)
+            => UnrouteAsync(url, handler);
+
+        Task<IConsoleMessage> IBrowserContext.WaitForConsoleMessageAsync(BrowserContextWaitForConsoleMessageOptions options)
+            => WaitForEventAsync(BrowserContextEvent.Console, options?.Predicate, options?.Timeout);
+
+        Task<IPage> IBrowserContext.WaitForPageAsync(BrowserContextWaitForPageOptions options)
+            => WaitForEventAsync(BrowserContextEvent.Page, options?.Predicate, options?.Timeout);
+
+        private static async Task<T> RunAndWaitInternalAsync<T>(Func<Task> action, Task<T> waitTask)
+        {
+            if (action == null)
+            {
+                throw new ArgumentNullException(nameof(action));
+            }
+
+            Task actionTask = action();
+            T result = await waitTask.ConfigureAwait(false);
+            await actionTask.ConfigureAwait(false);
+            return result;
+        }
+
+        private sealed class NoopContextDisposable : IAsyncDisposable
+        {
+            internal static readonly NoopContextDisposable Instance = new();
+
+            public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+        }
+
 #pragma warning restore SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
     }
 }

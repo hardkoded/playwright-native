@@ -28,6 +28,7 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using NUnit.Framework;
+using PlaywrightNative.Helpers;
 using PlaywrightNative.NUnit;
 using PlaywrightNative.TestServer;
 
@@ -648,7 +649,7 @@ namespace PlaywrightNative.Tests
 
         private async Task<HarSession> PageWithHarAsync(
             string outputName = "test.har",
-            HarContentPolicy content = default)
+            HarContentPolicy content = EnumCompat.UndefinedHarContentPolicy)
         {
             string harPath = TempHarPath(Path.GetFileNameWithoutExtension(outputName), Path.GetExtension(outputName));
             IBrowserContext context = await _browser.NewContextAsync(new() { RecordHarPath = harPath, RecordHarContent = content, IgnoreHTTPSErrors = true }).ConfigureAwait(false);

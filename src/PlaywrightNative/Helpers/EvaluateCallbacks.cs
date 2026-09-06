@@ -88,7 +88,7 @@ namespace PlaywrightNative.Helpers
 
             if (!exposeFunctions)
             {
-                await page.AddInitScriptAsync(script, DropFunctions(arg)).ConfigureAwait(false);
+                await page.AddInitScriptAsync(script, DropFunctions(AddInitScriptHelper.UnwrapInitScriptArg(arg))).ConfigureAwait(false);
                 return AddInitScriptHelper.CreateDisposable(() => Task.CompletedTask);
             }
 

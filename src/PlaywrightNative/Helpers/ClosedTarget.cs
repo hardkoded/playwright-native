@@ -60,9 +60,19 @@ namespace PlaywrightNative.Helpers
                 return true;
             }
 
+            if (ex is ArgumentNullException ane
+                && (string.Equals(ane.ParamName, "session", StringComparison.Ordinal)
+                    || (ane.Message != null
+                        && ane.Message.Contains("Parameter 'session'", StringComparison.Ordinal))))
+            {
+                // WebKit may surface a disposed/null session mid-probe after the page closes.
+                return true;
+            }
+
             string message = ex?.Message;
             return !string.IsNullOrEmpty(message)
-                && message.Contains("closed", StringComparison.OrdinalIgnoreCase);
+                && (message.Contains("closed", StringComparison.OrdinalIgnoreCase)
+                    || message.Contains("Parameter 'session'", StringComparison.Ordinal));
         }
     }
 }

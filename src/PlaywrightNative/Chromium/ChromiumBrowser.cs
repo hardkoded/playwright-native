@@ -289,7 +289,7 @@ namespace PlaywrightNative.Chromium
         public async Task<IBrowserContext> NewContextAsync(
             bool? acceptDownloads = default,
             bool? bypassCSP = default,
-            ColorScheme colorScheme = default,
+            ColorScheme colorScheme = ColorScheme.Null,
             float? deviceScaleFactor = default,
             IEnumerable<KeyValuePair<string, string>> extraHTTPHeaders = default,
             Geolocation geolocation = default,
@@ -316,10 +316,10 @@ namespace PlaywrightNative.Chromium
             string baseURL = default,
             HarMode recordHarMode = default,
             ServiceWorkerPolicy serviceWorkers = default,
-            ReducedMotion reducedMotion = default,
-            ForcedColors forcedColors = default,
-            Contrast contrast = default,
-            HarContentPolicy recordHarContent = default,
+            ReducedMotion reducedMotion = ReducedMotion.Null,
+            ForcedColors forcedColors = ForcedColors.Null,
+            Contrast contrast = Contrast.Null,
+            HarContentPolicy recordHarContent = EnumCompat.UndefinedHarContentPolicy,
             Regex recordHarUrlRegex = default,
             bool? strictSelectors = default,
             IEnumerable<ClientCertificate> clientCertificates = default)
@@ -393,7 +393,7 @@ namespace PlaywrightNative.Chromium
         public async Task<IPage> NewPageAsync(
             bool? acceptDownloads = default,
             bool? bypassCSP = default,
-            ColorScheme colorScheme = default,
+            ColorScheme colorScheme = ColorScheme.Null,
             float? deviceScaleFactor = default,
             IEnumerable<KeyValuePair<string, string>> extraHTTPHeaders = default,
             Geolocation geolocation = default,
@@ -420,10 +420,10 @@ namespace PlaywrightNative.Chromium
             string baseURL = default,
             HarMode recordHarMode = default,
             ServiceWorkerPolicy serviceWorkers = default,
-            ReducedMotion reducedMotion = default,
-            ForcedColors forcedColors = default,
-            Contrast contrast = default,
-            HarContentPolicy recordHarContent = default,
+            ReducedMotion reducedMotion = ReducedMotion.Null,
+            ForcedColors forcedColors = ForcedColors.Null,
+            Contrast contrast = Contrast.Null,
+            HarContentPolicy recordHarContent = EnumCompat.UndefinedHarContentPolicy,
             Regex recordHarUrlRegex = default,
             bool? strictSelectors = default,
             IEnumerable<ClientCertificate> clientCertificates = default)
@@ -555,7 +555,7 @@ namespace PlaywrightNative.Chromium
 #pragma warning disable SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
         Task<BrowserBindResult> IBrowser.BindAsync(string title, BrowserBindOptions options) => Task.FromResult<BrowserBindResult>(default!);
 
-        Task IBrowser.CloseAsync(BrowserCloseOptions options) => CloseAsync();
+        Task IBrowser.CloseAsync(BrowserCloseOptions options) => CloseAsync(options?.Reason);
 
         Task<IBrowserContext> IBrowser.NewContextAsync(BrowserNewContextOptions options)
             => NewContextAsync(MicrosoftOptionsBridge.ToBrowserContextOptions(options));

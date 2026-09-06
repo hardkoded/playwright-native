@@ -74,7 +74,8 @@ namespace PlaywrightNative.Helpers
                 return UrlMatches(baseUrl, value, urlString);
             }
 
-            return false;
+            // No matcher means "any URL" (page.waitForRequest / waitForEvent without a filter).
+            return true;
         }
 
         /// <summary>

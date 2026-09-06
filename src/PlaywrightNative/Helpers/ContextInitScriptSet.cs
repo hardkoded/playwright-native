@@ -183,7 +183,10 @@ namespace PlaywrightNative.Helpers
 
             if (arg != null && !string.IsNullOrEmpty(script))
             {
-                script = EvaluateWithArg.Wrap(script, EvaluateCallbacks.DropFunctions(arg), throwOnFunctions: false);
+                script = EvaluateWithArg.Wrap(
+                    script,
+                    EvaluateCallbacks.DropFunctions(AddInitScriptHelper.UnwrapInitScriptArg(arg)),
+                    throwOnFunctions: false);
             }
 
             if (string.IsNullOrEmpty(script))

@@ -19,6 +19,7 @@ using System.Collections.Generic;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using PlaywrightNative.Compat;
 
 namespace PlaywrightNative.Helpers
 {
@@ -58,6 +59,7 @@ namespace PlaywrightNative.Helpers
                 throw new PlaywrightNativeException(MissingOptionsMessage);
             }
 
+            arg = UnwrapInitScriptArg(arg);
             if (arg != null)
             {
                 script = EvaluateWithArg.Wrap(script, EvaluateCallbacks.DropFunctions(arg), throwOnFunctions: false);
@@ -88,11 +90,31 @@ namespace PlaywrightNative.Helpers
             {
                 foreach (string script in scripts)
                 {
-                    builder.Append("(() => { ").Append(script).Append(" })();\n");
+                    // Isolate each init script so one throw cannot skip the rest.
+                    // Chromium installs separate addScriptToEvaluateOnNewDocument entries;
+                    // WebKit concatenates into one bootstrap blob.
+                    builder.Append("(() => { try { ").Append(script).Append(" } catch (e) {} })();\n");
                 }
             }
 
             return builder.ToString();
+        }
+
+        /// <summary>
+        /// Wave-170 tests pass <see cref="LegacyLocatorWaitForFunctionOptions"/> as the
+        /// init-script argument bag; unwrap <c>Arg</c> so the page function receives the
+        /// evaluation value (e.g. <c>170</c>), not the options object.
+        /// </summary>
+        /// <param name="arg">Raw second argument to <c>addInitScript</c>.</param>
+        /// <returns>The value to serialize into the wrapped init script.</returns>
+        internal static object UnwrapInitScriptArg(object arg)
+        {
+            if (arg is LegacyLocatorWaitForFunctionOptions options)
+            {
+                return options.Arg;
+            }
+
+            return arg;
         }
 
         /// <summary>

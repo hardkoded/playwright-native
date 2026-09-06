@@ -492,10 +492,19 @@ namespace PlaywrightNative.Helpers
             internal bool IsResident { get; set; }
         }
 
-#pragma warning disable SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
-        Task<VirtualCredential> ICredentials.CreateAsync(string rpId, CredentialsCreateOptions options) => Task.FromResult<VirtualCredential>(default!);
+#pragma warning disable SA1201 // Explicit interface members kept after nested CredentialRecord.
+        /// <inheritdoc/>
+        Task<VirtualCredential> ICredentials.CreateAsync(string rpId, CredentialsCreateOptions options)
+            => CreateAsync(
+                rpId,
+                options?.Id,
+                options?.UserHandle,
+                options?.PrivateKey,
+                options?.PublicKey);
 
-        Task<IReadOnlyList<VirtualCredential>> ICredentials.GetAsync(CredentialsGetOptions options) => Task.FromResult<IReadOnlyList<VirtualCredential>>(default!);
-#pragma warning restore SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
+        /// <inheritdoc/>
+        Task<IReadOnlyList<VirtualCredential>> ICredentials.GetAsync(CredentialsGetOptions options)
+            => GetAsync(options?.RpId, options?.Id);
+#pragma warning restore SA1201
     }
 }

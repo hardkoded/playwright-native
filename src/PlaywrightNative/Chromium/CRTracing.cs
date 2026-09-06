@@ -40,6 +40,7 @@ namespace PlaywrightNative.Chromium
         private readonly object _gate = new();
         private TaskCompletionSource<bool> _complete;
         private bool _recording;
+        private bool _cdpTracingActive;
 
         internal CRTracing(CRSession session, IBrowserContext context)
         {
@@ -53,15 +54,23 @@ namespace PlaywrightNative.Chromium
         {
             OfficialTraceSession session = OfficialSession();
             session.Start(options, chunk: false);
+
+            // Keep an in-memory chrome-events buffer for Direct StopAsync(.json) paths
+            // (groups / non-empty traceEvents). Official zip remains for .zip stops.
+            lock (_gate)
+            {
+                _recording = true;
+                _events.Clear();
+                _openGroups.Clear();
+                _events.Add(ChromeTraceEvents.GroupBegin("__tracing__"));
+                _events.Add(ChromeTraceEvents.GroupEnd("__tracing__"));
+            }
+
             return Task.CompletedTask;
         }
 
         Task ITracing.StartAsync(Microsoft.Playwright.TracingStartOptions options)
-        {
-            OfficialTraceSession session = OfficialSession();
-            session.Start(MicrosoftOptionsBridge.ToTracingStartOptions(options), chunk: false);
-            return Task.CompletedTask;
-        }
+            => StartAsync(MicrosoftOptionsBridge.ToTracingStartOptions(options));
 
         /// <inheritdoc/>
         public async Task StartAsync(string categories = null)
@@ -74,6 +83,7 @@ namespace PlaywrightNative.Chromium
                 }
 
                 _recording = true;
+                _cdpTracingActive = true;
                 _events.Clear();
                 _openGroups.Clear();
                 _complete = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -94,6 +104,15 @@ namespace PlaywrightNative.Chromium
             if (official != null && official.IsRecording)
             {
                 official.Start(new TracingStartOptions { Name = name, Title = title }, chunk: true);
+                lock (_gate)
+                {
+                    _events.Clear();
+                    _openGroups.Clear();
+                    _recording = true;
+                    _events.Add(ChromeTraceEvents.GroupBegin("__tracing__"));
+                    _events.Add(ChromeTraceEvents.GroupEnd("__tracing__"));
+                }
+
                 return Task.CompletedTask;
             }
 
@@ -113,22 +132,21 @@ namespace PlaywrightNative.Chromium
         }
 
         /// <inheritdoc/>
-        public Task<IAsyncDisposable> StartHarAsync(string path, HarContentPolicy content = default, HarMode mode = default, string url = default, Regex urlRegex = default, string resourcesDir = default)
+        public Task<IAsyncDisposable> StartHarAsync(string path, HarContentPolicy content = EnumCompat.UndefinedHarContentPolicy, HarMode mode = default, string url = default, Regex urlRegex = default, string resourcesDir = default)
             => _har.StartAsync(path, content, mode, url, urlRegex, resourcesDir);
 
         /// <inheritdoc/>
         public Task GroupAsync(string name)
         {
+            if (string.IsNullOrEmpty(name))
+            {
+                throw new ArgumentException("name must be non-empty", nameof(name));
+            }
+
             OfficialTraceSession official = OfficialSessionOrNull();
             if (official != null && official.IsRecording)
             {
                 official.Group(name);
-                return Task.CompletedTask;
-            }
-
-            if (string.IsNullOrEmpty(name))
-            {
-                throw new ArgumentException("name must be non-empty", nameof(name));
             }
 
             lock (_gate)
@@ -152,17 +170,11 @@ namespace PlaywrightNative.Chromium
             if (official != null && official.IsRecording)
             {
                 official.GroupEnd();
-                return Task.CompletedTask;
             }
 
             lock (_gate)
             {
-                if (!_recording)
-                {
-                    return Task.CompletedTask;
-                }
-
-                if (_openGroups.Count == 0)
+                if (!_recording || _openGroups.Count == 0)
                 {
                     return Task.CompletedTask;
                 }
@@ -180,7 +192,30 @@ namespace PlaywrightNative.Chromium
             OfficialTraceSession official = OfficialSessionOrNull();
             if (official != null && official.IsRecording)
             {
+                if (ChromeTraceEvents.IsJsonTracePath(path))
+                {
+                    await official.StopAsync(null, keepRecording: true).ConfigureAwait(false);
+                    List<JsonElement> chunkSnapshot;
+                    lock (_gate)
+                    {
+                        chunkSnapshot = new List<JsonElement>(_events);
+                        _events.Clear();
+                        _openGroups.Clear();
+                        _recording = true;
+                        _events.Add(ChromeTraceEvents.GroupBegin("__tracing__"));
+                        _events.Add(ChromeTraceEvents.GroupEnd("__tracing__"));
+                    }
+
+                    await WriteTraceSnapshotAsync(path, chunkSnapshot).ConfigureAwait(false);
+                    return;
+                }
+
                 await official.StopAsync(path, keepRecording: true).ConfigureAwait(false);
+                lock (_gate)
+                {
+                    _events.Clear();
+                }
+
                 return;
             }
 
@@ -205,7 +240,7 @@ namespace PlaywrightNative.Chromium
         }
 
         /// <inheritdoc/>
-        public Task StopAsync(TracingStopOptions options = default)
+        public async Task StopAsync(TracingStopOptions options = default)
         {
             OfficialTraceSession session = OfficialSessionOrNull();
             if (session == null)
@@ -215,10 +250,40 @@ namespace PlaywrightNative.Chromium
                     throw new PlaywrightNativeException("Must start tracing before stopping");
                 }
 
-                return Task.CompletedTask;
+                return;
             }
 
-            return session.StopAsync(options?.Path, keepRecording: false);
+            string path = options?.Path;
+            if (ChromeTraceEvents.IsJsonTracePath(path))
+            {
+                await session.StopAsync(null, keepRecording: false).ConfigureAwait(false);
+                List<JsonElement> snapshot;
+                lock (_gate)
+                {
+                    snapshot = new List<JsonElement>(_events);
+                    _events.Clear();
+                    _openGroups.Clear();
+                    _recording = false;
+                }
+
+                await WriteTraceSnapshotAsync(path, snapshot).ConfigureAwait(false);
+                return;
+            }
+
+            if (_cdpTracingActive)
+            {
+                // Only end CDP Tracing when StartAsync(categories) actually started it.
+                await DiscardCdpTracingAsync().ConfigureAwait(false);
+            }
+
+            lock (_gate)
+            {
+                _events.Clear();
+                _openGroups.Clear();
+                _recording = false;
+            }
+
+            await session.StopAsync(path, keepRecording: false).ConfigureAwait(false);
         }
 
         /// <inheritdoc/>
@@ -282,6 +347,38 @@ namespace PlaywrightNative.Chromium
             return _context is IHasOfficialTrace host ? host.OfficialTrace : null;
         }
 
+        private async Task DiscardCdpTracingAsync()
+        {
+            TaskCompletionSource<bool> complete;
+            lock (_gate)
+            {
+                if (!_cdpTracingActive || _complete == null)
+                {
+                    _cdpTracingActive = false;
+                    return;
+                }
+
+                complete = _complete;
+            }
+
+            try
+            {
+                await _session.SendAsync("Tracing.end").ConfigureAwait(false);
+                await complete.Task.ConfigureAwait(false);
+            }
+            finally
+            {
+                _session.MessageReceived -= OnMessage;
+                lock (_gate)
+                {
+                    _recording = false;
+                    _cdpTracingActive = false;
+                    _events.Clear();
+                    _openGroups.Clear();
+                }
+            }
+        }
+
         private async Task WriteTraceSnapshotAsync(string path, List<JsonElement> snapshot)
         {
             string directory = Path.GetDirectoryName(path);
@@ -336,13 +433,34 @@ namespace PlaywrightNative.Chromium
         }
 
 #pragma warning disable SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
-        Task<IAsyncDisposable> ITracing.GroupAsync(string name, TracingGroupOptions options) => Task.FromResult<IAsyncDisposable>(default!);
+        async Task<IAsyncDisposable> ITracing.GroupAsync(string name, TracingGroupOptions options)
+        {
+            await GroupAsync(name).ConfigureAwait(false);
+            return new GroupScope(this);
+        }
 
-        Task ITracing.StartChunkAsync(TracingStartChunkOptions options) => Task.CompletedTask;
+        Task ITracing.StartChunkAsync(TracingStartChunkOptions options)
+            => StartChunkAsync(options?.Name, options?.Title);
 
-        Task<IAsyncDisposable> ITracing.StartHarAsync(string path, TracingStartHarOptions options) => Task.FromResult<IAsyncDisposable>(default!);
+        Task<IAsyncDisposable> ITracing.StartHarAsync(string path, TracingStartHarOptions options)
+            => StartHarAsync(
+                path,
+                options?.Content ?? EnumCompat.UndefinedHarContentPolicy,
+                options?.Mode ?? default,
+                options?.UrlFilter ?? options?.UrlFilterString,
+                options?.UrlFilterRegex);
 
-        Task ITracing.StopChunkAsync(TracingStopChunkOptions options) => Task.CompletedTask;
+        Task ITracing.StopChunkAsync(TracingStopChunkOptions options)
+            => StopChunkAsync(options?.Path);
+
+        private sealed class GroupScope : IAsyncDisposable
+        {
+            private readonly CRTracing _owner;
+
+            internal GroupScope(CRTracing owner) => _owner = owner;
+
+            public ValueTask DisposeAsync() => new ValueTask(_owner.GroupEndAsync());
+        }
 #pragma warning restore SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
     }
 }

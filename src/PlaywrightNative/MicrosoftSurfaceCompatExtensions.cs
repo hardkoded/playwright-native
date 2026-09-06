@@ -170,7 +170,7 @@ namespace PlaywrightNative
         public static async Task<string> AriaSnapshotJsonAsync(
             this IPage page,
             float? timeout = default,
-            AriaSnapshotMode mode = default,
+            AriaSnapshotMode mode = AriaSnapshotMode.Default,
             int? depth = default,
             bool? boxes = default)
         {
@@ -184,7 +184,7 @@ namespace PlaywrightNative
         public static Task<string> AriaSnapshotJsonAsync(
             this ILocator locator,
             float? timeout = default,
-            AriaSnapshotMode mode = default,
+            AriaSnapshotMode mode = AriaSnapshotMode.Default,
             int? depth = default,
             bool? boxes = default)
         {
@@ -263,7 +263,7 @@ namespace PlaywrightNative
         public static Task<IAsyncDisposable> StartHarAsync(
             this ITracing tracing,
             string path,
-            HarContentPolicy content = default,
+            HarContentPolicy content = EnumCompat.UndefinedHarContentPolicy,
             HarMode mode = default,
             string url = default,
             Regex urlRegex = default,
@@ -284,7 +284,7 @@ namespace PlaywrightNative
 
         /// <summary>Clock install with fractional numeric types.</summary>
         public static Task InstallAsync(this IClock clock, double time)
-            => clock.InstallAsync(time.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            => clock.InstallAsync((long)time);
 
         /// <summary>Clock install with fractional numeric types.</summary>
         public static Task InstallAsync(this IClock clock, float time)
@@ -292,7 +292,12 @@ namespace PlaywrightNative
 
         /// <summary>Clock install with integral numeric types.</summary>
         public static Task InstallAsync(this IClock clock, long time)
-            => clock.InstallAsync(time.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            => clock is Clock concreteLong
+                ? concreteLong.InstallAsync(time)
+                : clock.InstallAsync(new ClockInstallOptions
+                {
+                    TimeDate = DateTimeOffset.FromUnixTimeMilliseconds(time).UtcDateTime,
+                });
 
         /// <summary>Clock install with <see cref="DateTime"/>.</summary>
         public static Task InstallAsync(this IClock clock, DateTime time)
@@ -339,9 +344,9 @@ namespace PlaywrightNative
         public static Task<IAsyncDisposable> ShowActionsAsync(
             this IScreencast screencast,
             float? duration = default,
-            AnnotatePosition position = default,
+            AnnotatePosition position = EnumCompat.UndefinedAnnotatePosition,
             int fontSize = default,
-            ScreencastCursor cursor = default)
+            ScreencastCursor cursor = EnumCompat.UndefinedScreencastCursor)
         {
             if (screencast is CRScreencast chromium)
             {

@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 using System.Text.Json;
+using PlaywrightNative.Helpers;
 
 namespace PlaywrightNative
 {
@@ -332,7 +333,10 @@ namespace PlaywrightNative
             int i = 0;
             foreach (JsonElement arg in argsElement.EnumerateArray())
             {
-                args[i++] = clone ? arg.Clone() : arg;
+                // Page-side serialize() wraps primitives as { n }, { s }, { b }, …
+                // Revive to plain JSON so CR ExposeFunction handlers can GetInt32/etc.
+                JsonElement revived = JsonValueHelper.Parse<JsonElement>(arg);
+                args[i++] = clone ? revived.Clone() : revived;
             }
 
             return true;

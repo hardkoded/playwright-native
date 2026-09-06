@@ -112,8 +112,11 @@ namespace PlaywrightNative.Chromium
 
             // Create the input simulators. The keyboard is shared with mouse/touch so
             // that chorded inputs (e.g. Shift+Click) pick up currently-pressed modifiers.
-            _keyboard = new Input.Keyboard(new CRRawKeyboard(_client));
-            _mouse = new Input.Mouse(new CRRawMouse(_client), _keyboard);
+            // DragManager mirrors upstream crDragDrop: intercept HTML5 drag so custom
+            // DataTransfer types are preserved without chromium/x-drag-id.
+            CRDragManager dragManager = new CRDragManager(this);
+            _keyboard = new Input.Keyboard(new CRRawKeyboard(_client, dragManager));
+            _mouse = new Input.Mouse(new CRRawMouse(_client, dragManager), _keyboard);
             _touchscreen = new Input.Touchscreen(new CRRawTouchscreen(_client), _keyboard);
 
             // Subscribe to CDP events from the page session.
@@ -422,13 +425,6 @@ namespace PlaywrightNative.Chromium
                 await owner.PublicContext.EvaluateInitScriptsOnCurrentAsync(PublicPage).ConfigureAwait(false);
             }
 
-            if (Opener != null && owner?.PublicContext != null && PublicPage != null)
-            {
-                owner.PublicContext.ReportPopupAsNew(PublicPage);
-                Task replay = ReplayExposedBindingsAsync();
-                await Task.WhenAny(replay, Task.Delay(1_000)).ConfigureAwait(false);
-            }
-
             if (PublicPage != null && owner?.PublicContext != null)
             {
                 await owner.PublicContext.ApplyMediaEmulationAsync(PublicPage).ConfigureAwait(false);
@@ -449,6 +445,16 @@ namespace PlaywrightNative.Chromium
 #pragma warning restore RCS1075
             {
                 _firstNonInitialNavigationTcs.TrySetResult(true);
+            }
+
+            // Report popup Page events only after the main-frame URL has synced
+            // so WaitForEvent(Page) observers see the navigated URL, not "".
+            // Binding dispatch may already have reported (page|binding order).
+            if (Opener != null && owner?.PublicContext != null && PublicPage != null)
+            {
+                owner.PublicContext.ReportPopupAsNew(PublicPage);
+                Task replay = ReplayExposedBindingsAsync();
+                await Task.WhenAny(replay, Task.Delay(1_000)).ConfigureAwait(false);
             }
 
             _initializationTcs.TrySetResult(true);
@@ -1227,6 +1233,7 @@ namespace PlaywrightNative.Chromium
                 // Official Playwright writes from the utility world so parser-inserted
                 // scripts (including exposeFunction calls) do not nest inside this evaluate.
                 CRSession frameSession = SessionForFrame(frame);
+                CRExecutionContext writeContext = null;
                 JsonElement? isolated = null;
                 try
                 {
@@ -1248,32 +1255,29 @@ namespace PlaywrightNative.Chromium
                     && isolated.Value.TryGetProperty("executionContextId", out JsonElement isolatedId)
                     && isolatedId.TryGetInt32(out int isolatedContextId))
                 {
-                    CRExecutionContext utility = new CRExecutionContext(frameSession, isolatedContextId);
-                    await utility.EvaluateFunctionAsync<bool>(writeHtml, html).WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+                    writeContext = new CRExecutionContext(frameSession, isolatedContextId);
+                    await writeContext.EvaluateFunctionAsync<bool>(writeHtml, html).WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
                 }
                 else
                 {
                     await EvaluateFunctionInFrameAsync<bool>(frame, writeHtml, html).WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
                 }
 
-                if (frame.LifecycleEvents.Contains(targetLifecycleEvent))
-                {
-                    return;
-                }
-
+                // document.open() destroys the utility world used for the write.
+                writeContext = null;
                 try
                 {
-                    string ready = await EvaluateFunctionInFrameAsync<string>(frame, "() => document.readyState")
-                        .WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
-                    if (string.Equals(ready, "interactive", StringComparison.Ordinal)
-                        || string.Equals(ready, "complete", StringComparison.Ordinal))
+                    JsonElement? after = await frameSession.SendAsync("Page.createIsolatedWorld", new
                     {
-                        frame.OnLifecycleEvent("DOMContentLoaded");
-                    }
-
-                    if (string.Equals(ready, "complete", StringComparison.Ordinal))
+                        frameId = frame.FrameId,
+                        worldName = _utilityWorldName + ":setContent",
+                        grantUniveralAccess = true,
+                    }).WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+                    if (after.HasValue
+                        && after.Value.TryGetProperty("executionContextId", out JsonElement afterId)
+                        && afterId.TryGetInt32(out int afterContextId))
                     {
-                        frame.OnLifecycleEvent("load");
+                        writeContext = new CRExecutionContext(frameSession, afterContextId);
                     }
                 }
                 catch (TimeoutException)
@@ -1281,6 +1285,103 @@ namespace PlaywrightNative.Chromium
                 }
                 catch (PlaywrightNativeException)
                 {
+                }
+
+                if (frame.LifecycleEvents.Contains(targetLifecycleEvent))
+                {
+                    return;
+                }
+
+                // Prefer the utility world used for document.write — the main-world
+                // context is often destroyed mid-parse, which previously caused
+                // SetContent to wait the full timeout for a load event.
+                for (int attempt = 0; attempt < 20; attempt++)
+                {
+                    if (frame.LifecycleEvents.Contains(targetLifecycleEvent))
+                    {
+                        return;
+                    }
+
+                    try
+                    {
+                        string ready;
+                        if (writeContext != null)
+                        {
+                            ready = await writeContext.EvaluateFunctionAsync<string>("() => document.readyState")
+                                .WaitAsync(TimeSpan.FromMilliseconds(250)).ConfigureAwait(false);
+                        }
+                        else
+                        {
+                            ready = await EvaluateFunctionInFrameAsync<string>(frame, "() => document.readyState")
+                                .WaitAsync(TimeSpan.FromMilliseconds(250)).ConfigureAwait(false);
+                        }
+
+                        if (string.Equals(ready, "interactive", StringComparison.Ordinal)
+                            || string.Equals(ready, "complete", StringComparison.Ordinal))
+                        {
+                            frame.OnLifecycleEvent("DOMContentLoaded");
+                        }
+
+                        if (string.Equals(ready, "complete", StringComparison.Ordinal))
+                        {
+                            frame.OnLifecycleEvent("load");
+                        }
+
+                        if (frame.LifecycleEvents.Contains(targetLifecycleEvent))
+                        {
+                            return;
+                        }
+                    }
+                    catch (TimeoutException)
+                    {
+                    }
+                    catch (PlaywrightNativeException)
+                    {
+                    }
+
+                    await Task.Delay(25).ConfigureAwait(false);
+                }
+
+                if (frame.LifecycleEvents.Contains(targetLifecycleEvent))
+                {
+                    return;
+                }
+
+                // Static document.write HTML is complete once the write evaluate
+                // returns. Prefer synthesizing the common lifecycle targets over
+                // hanging until the navigation timeout when CDP load events are
+                // lost after the utility-world context swap.
+                if (!string.Equals(targetLifecycleEvent, "networkidle", StringComparison.Ordinal))
+                {
+                    frame.OnLifecycleEvent("DOMContentLoaded");
+                    frame.OnLifecycleEvent("load");
+                }
+
+                // document.open destroys the main-world context. Wait until a new
+                // one exists so callers do not hang on the first post-SetContent
+                // evaluate / query. CDP may also raise OnNavigated during this
+                // window and ClearLifecycleEvents, wiping the synthetic load.
+                try
+                {
+                    await WaitForFrameExecutionContextAsync(frame, timeout: 5_000).ConfigureAwait(false);
+                }
+                catch (TimeoutException)
+                {
+                }
+
+                if (!string.Equals(targetLifecycleEvent, "networkidle", StringComparison.Ordinal))
+                {
+                    if (!frame.LifecycleEvents.Contains("DOMContentLoaded"))
+                    {
+                        frame.OnLifecycleEvent("DOMContentLoaded");
+                    }
+
+                    if (!frame.LifecycleEvents.Contains("load"))
+                    {
+                        frame.OnLifecycleEvent("load");
+                    }
+
+                    return;
                 }
 
                 if (frame.LifecycleEvents.Contains(targetLifecycleEvent))
@@ -1341,7 +1442,24 @@ namespace PlaywrightNative.Chromium
         /// <param name="type">Optional <c>type</c> attribute (e.g. <c>module</c>).</param>
         /// <param name="path">Local file injected as content with a <c>sourceURL</c> suffix.</param>
         /// <returns>A handle to the injected <c>script</c> element.</returns>
-        internal async Task<CRElementHandle> AddScriptTagAsync(string url = null, string content = null, string type = null, string path = null)
+        internal Task<CRElementHandle> AddScriptTagAsync(string url = null, string content = null, string type = null, string path = null)
+            => AddScriptTagInFrameAsync(MainFrame, url, content, type, path);
+
+        /// <summary>
+        /// Injects a script tag into <paramref name="frame"/> (not always the main frame).
+        /// </summary>
+        /// <param name="frame">Target frame.</param>
+        /// <param name="url">External script URL.</param>
+        /// <param name="content">Inline script content.</param>
+        /// <param name="type">Optional script type.</param>
+        /// <param name="path">Local file path.</param>
+        /// <returns>A handle to the injected script element.</returns>
+        internal async Task<CRElementHandle> AddScriptTagInFrameAsync(
+            Frame frame,
+            string url = null,
+            string content = null,
+            string type = null,
+            string path = null)
         {
             if (string.IsNullOrEmpty(path) && !string.IsNullOrEmpty(url) && !string.IsNullOrEmpty(content))
             {
@@ -1356,19 +1474,21 @@ namespace PlaywrightNative.Chromium
                 {
                     if (!string.IsNullOrEmpty(resolved.Url))
                     {
-                        return await QueryFunctionAsync(
+                        return await QueryFunctionInFrameAsync(
+                            frame,
                             AddScriptTagHelper.AddScriptUrlFunction,
                             resolved.Url,
                             resolved.Type).ConfigureAwait(false);
                     }
 
-                    CRElementHandle handle = await QueryFunctionAsync(
+                    CRElementHandle handle = await QueryFunctionInFrameAsync(
+                        frame,
                         AddScriptTagHelper.AddScriptContentFunction,
                         resolved.Content,
                         resolved.Type).ConfigureAwait(false);
 
                     // Official extra round-trip so async CSP console errors can win the race.
-                    await EvaluateAsync("true").ConfigureAwait(false);
+                    await EvaluateHandleInFrameAsync(frame, "true").ConfigureAwait(false);
                     return handle;
                 }).ConfigureAwait(false);
         }
@@ -1737,6 +1857,7 @@ namespace PlaywrightNative.Chromium
         internal async Task<IReadOnlyList<CRElementHandle>> QuerySelectorAllInFrameAsync(Frame frame, string selector)
         {
             SelectorQuery.EnsureSelector(selector);
+            DomVisibility.ThrowIfUnknownEngine(selector);
             if (FrameSelector.ContainsControl(selector))
             {
                 IReadOnlyList<IElementHandle> matches = await FrameSelector.QueryAllAsync(
@@ -2112,6 +2233,20 @@ namespace PlaywrightNative.Chromium
         }
 
         /// <summary>
+        /// Like <see cref="QueryFunctionAsync"/> but evaluates in <paramref name="frame"/>.
+        /// </summary>
+        /// <param name="frame">The frame whose execution context is used.</param>
+        /// <param name="functionDeclaration">A function declaration returning an Element or null.</param>
+        /// <param name="args">Arguments passed to the function.</param>
+        /// <returns>The matched element, or <see langword="null"/>.</returns>
+        internal async Task<CRElementHandle> QueryFunctionInFrameAsync(Frame frame, string functionDeclaration, params object[] args)
+        {
+            CRExecutionContext context = await WaitForFrameExecutionContextAsync(frame).ConfigureAwait(false);
+            JsonElement? handleValue = await context.EvaluateFunctionHandleAsync(functionDeclaration, args).ConfigureAwait(false);
+            return WrapElementHandle(context, handleValue);
+        }
+
+        /// <summary>
         /// Evaluates <paramref name="expression"/> and returns a JS handle to the result.
         /// </summary>
         /// <param name="expression">A JavaScript expression or function IIFE.</param>
@@ -2204,6 +2339,12 @@ namespace PlaywrightNative.Chromium
             int timeout = 30_000,
             string referrer = null)
         {
+            static bool IsBlankNavigationUrl(string candidate)
+                => string.IsNullOrEmpty(candidate)
+                    || string.Equals(candidate, "about:blank", StringComparison.OrdinalIgnoreCase)
+                    || candidate.StartsWith("about:blank?", StringComparison.OrdinalIgnoreCase)
+                    || candidate.StartsWith("about:blank#", StringComparison.OrdinalIgnoreCase);
+
             url = NavigationTimeout.CompleteUserUrl(url);
             ThrowIfWebUiWouldCrashIsolatedContext();
             referrer = NavigationTimeout.ReferrerFromExtraHeaders(referrer, _networkManager.ExtraHttpHeaders);
@@ -2212,6 +2353,92 @@ namespace PlaywrightNative.Chromium
             string targetLifecycleEvent = WaitUntilMapping.ToLifecycleEvent(waitUntil);
             string apiName = frame.ParentFrame == null ? "page.goto" : "frame.goto";
             int waitMs = timeout <= 0 ? System.Threading.Timeout.Infinite : timeout;
+
+            // Already on about:blank (including empty Frame.Url) navigating to about:blank:
+            // Chromium may not emit a new load. Resolve without another navigate race.
+            if (IsBlankNavigationUrl(url)
+                && IsBlankNavigationUrl(frame.Url)
+                && frame.LifecycleEvents.Contains(targetLifecycleEvent))
+            {
+                frame.Url = NavigationTimeout.PreserveUserInfo(url, frame.Url);
+                return;
+            }
+
+            TaskCompletionSource<bool> lifecycleTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            string expectedDocumentId = null;
+            bool navigationSettled = false;
+            bool sawTargetLifecycle = false;
+
+            void OnLifecycle(string name)
+            {
+                if (name != targetLifecycleEvent)
+                {
+                    return;
+                }
+
+                if (!navigationSettled)
+                {
+                    // Lifecycle can fire while Page.navigate is still awaiting.
+                    sawTargetLifecycle = true;
+                    return;
+                }
+
+                // Accept only lifecycle events that belong to the navigation we issued.
+                if (expectedDocumentId == null || frame.DocumentId == expectedDocumentId)
+                {
+                    lifecycleTcs.TrySetResult(true);
+                }
+            }
+
+            void OnDetached(Frame detached)
+            {
+                if (ReferenceEquals(detached, frame))
+                {
+                    lifecycleTcs.TrySetException(new PlaywrightNativeException("frame was detached"));
+                }
+            }
+
+            void OnNavigated(Frame navigated, string documentId)
+            {
+                if (!ReferenceEquals(navigated, frame) || !navigationSettled)
+                {
+                    return;
+                }
+
+                // Same-document (hash) navigations have no loaderId. Complete
+                // once the frame URL has been updated.
+                if (string.IsNullOrEmpty(expectedDocumentId))
+                {
+                    lifecycleTcs.TrySetResult(true);
+                    return;
+                }
+
+                // Client redirect / meta refresh committed a newer document
+                // before waitUntil on the original navigation. Keep waiting
+                // for the target lifecycle on the latest document (upstream
+                // page.goto does not resolve early on intermediate commits).
+                if (!string.IsNullOrEmpty(documentId) && documentId != expectedDocumentId)
+                {
+                    expectedDocumentId = documentId;
+                    if (frame.LifecycleEvents.Contains(targetLifecycleEvent))
+                    {
+                        lifecycleTcs.TrySetResult(true);
+                    }
+                }
+            }
+
+            void OnClosed(object sender, EventArgs e)
+            {
+                lifecycleTcs.TrySetException(
+                    new TargetClosedException(DriverMessages.BrowserOrContextClosedExceptionMessage));
+            }
+
+            // Subscribe before Page.navigate so about:blank -> about:blank cannot
+            // lose load between navigate returning and the wait starting.
+            frame.LifecycleChanged += OnLifecycle;
+            _frameManager.FrameDetached += OnDetached;
+            _frameManager.FrameNavigated += OnNavigated;
+            Closed += OnClosed;
 
             // Race Page.navigate with the navigation timeout. A hanging server
             // can keep the CDP command outstanding; official progress.race
@@ -2231,63 +2458,8 @@ namespace PlaywrightNative.Chromium
             }
 
             GotoResult result = await navigateTask.ConfigureAwait(false);
-            string expectedDocumentId = result.NewDocumentId;
-
-            TaskCompletionSource<bool> lifecycleTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-            void OnLifecycle(string name)
-            {
-                // Accept only lifecycle events that belong to the navigation we issued.
-                // Stale events from prior documents have a different DocumentId.
-                if (name == targetLifecycleEvent &&
-                    (expectedDocumentId == null || frame.DocumentId == expectedDocumentId))
-                {
-                    lifecycleTcs.TrySetResult(true);
-                }
-            }
-
-            void OnDetached(Frame detached)
-            {
-                if (ReferenceEquals(detached, frame))
-                {
-                    lifecycleTcs.TrySetException(new PlaywrightNativeException("frame was detached"));
-                }
-            }
-
-            void OnNavigated(Frame navigated, string documentId)
-            {
-                if (!ReferenceEquals(navigated, frame))
-                {
-                    return;
-                }
-
-                // Same-document (hash) navigations have no loaderId. Complete
-                // once the frame URL has been updated.
-                if (string.IsNullOrEmpty(expectedDocumentId))
-                {
-                    lifecycleTcs.TrySetResult(true);
-                    return;
-                }
-
-                // A later document committed while we were still waiting for
-                // waitUntil on the original navigation — official page.goto
-                // returns the already-committed response.
-                if (!string.IsNullOrEmpty(documentId) && documentId != expectedDocumentId)
-                {
-                    lifecycleTcs.TrySetResult(true);
-                }
-            }
-
-            void OnClosed(object sender, EventArgs e)
-            {
-                lifecycleTcs.TrySetException(
-                    new TargetClosedException(DriverMessages.BrowserOrContextClosedExceptionMessage));
-            }
-
-            frame.LifecycleChanged += OnLifecycle;
-            _frameManager.FrameDetached += OnDetached;
-            _frameManager.FrameNavigated += OnNavigated;
-            Closed += OnClosed;
+            expectedDocumentId = result.NewDocumentId;
+            navigationSettled = true;
 
             try
             {
@@ -2296,18 +2468,30 @@ namespace PlaywrightNative.Chromium
                     throw new PlaywrightNativeException("frame was detached");
                 }
 
-                // Fast-path: lifecycle may have already fired before we subscribed
-                // (very fast navigation or events processed by the receive loop before
-                // this continuation was scheduled). Subscribe first, then check, to
-                // prevent a window where the event fires between check and subscribe.
-                if ((expectedDocumentId == null || frame.DocumentId == expectedDocumentId) &&
-                    frame.LifecycleEvents.Contains(targetLifecycleEvent) &&
+                // Fast-path: lifecycle may have fired during navigate (sawTargetLifecycle)
+                // or already be present in LifecycleEvents after subscribe.
+                bool lifecycleReady =
+                    (sawTargetLifecycle || frame.LifecycleEvents.Contains(targetLifecycleEvent)) &&
+                    (expectedDocumentId == null || frame.DocumentId == expectedDocumentId) &&
                     (string.IsNullOrEmpty(expectedDocumentId)
                         ? string.Equals(
                             NavigationTimeout.WithoutUserInfo(frame.Url),
                             NavigationTimeout.WithoutUserInfo(url),
                             StringComparison.Ordinal)
-                        : true))
+                        : true);
+
+                // Same-document navigations (including about:blank -> about:blank with a
+                // null loaderId) resolve once navigate returns.
+                if (lifecycleReady || string.IsNullOrEmpty(expectedDocumentId))
+                {
+                    frame.Url = NavigationTimeout.PreserveUserInfo(url, frame.Url);
+                    return;
+                }
+
+                // Chromium often omits a second load when navigating about:blank to
+                // about:blank even though Page.navigate returns a new loaderId.
+                // Frame.Url may still be "" while the public page URL is about:blank.
+                if (IsBlankNavigationUrl(url) && IsBlankNavigationUrl(frame.Url))
                 {
                     frame.Url = NavigationTimeout.PreserveUserInfo(url, frame.Url);
                     return;
@@ -3080,7 +3264,7 @@ namespace PlaywrightNative.Chromium
             {
                 latitude = geolocation.Latitude,
                 longitude = geolocation.Longitude,
-                accuracy = geolocation.Accuracy,
+                accuracy = geolocation.Accuracy ?? 0f,
             });
         }
 
@@ -4071,7 +4255,7 @@ namespace PlaywrightNative.Chromium
             JsonElement p = parameters.Value;
 
             // DevTools replays buffered logs with executionContextId = 0 after
-            // Runtime.enable. Those objects are already gone (puppeteer#3865).
+            // Runtime.enable. Those objects are already gone.
             if (p.TryGetProperty("executionContextId", out JsonElement ctxIdEl)
                 && ctxIdEl.TryGetInt32(out int replayContextId)
                 && replayContextId == 0)
@@ -4495,6 +4679,8 @@ namespace PlaywrightNative.Chromium
                     return true;
                 }
 
+                // Official popup.spec: context "page" precedes exposeFunction callback.
+                ReportPopupBeforeBinding();
                 Task<object> invoked = handler(args);
                 _ = Task.Run(() => DeliverInvokedBindingAsync(invoked, executionContextId, seq));
                 return true;
@@ -4504,6 +4690,32 @@ namespace PlaywrightNative.Chromium
                 _ = Task.Run(() => DeliverBindingErrorAsync(executionContextId, seq, ex));
                 return true;
             }
+        }
+
+        private void ReportPopupBeforeBinding()
+        {
+            if (Opener == null || PublicPage == null)
+            {
+                return;
+            }
+
+            ChromiumBrowserContext context = PublicPage.Context as ChromiumBrowserContext
+                ?? _browser.DefaultContext?.PublicContext
+                ?? FindOwningPublicContext();
+            context?.ReportPopupAsNew(PublicPage);
+        }
+
+        private ChromiumBrowserContext FindOwningPublicContext()
+        {
+            foreach (CRBrowserContext context in _browser.Contexts)
+            {
+                if (context.Pages.Contains(this) && context.PublicContext != null)
+                {
+                    return context.PublicContext;
+                }
+            }
+
+            return null;
         }
 
         private async Task DeliverInvokedBindingAsync(Task<object> invoked, int executionContextId, long seq)
@@ -4545,6 +4757,7 @@ namespace PlaywrightNative.Chromium
                         return;
                     }
 
+                    ReportPopupBeforeBinding();
                     CRExecutionContext context = new CRExecutionContext(_client, executionContextId);
                     JsonElement? handleValue = await context.EvaluateHandleAsync(PageBindingScript.TakeHandleExpression(seq)).ConfigureAwait(false);
                     CRJSHandle jsHandle = WrapJSHandle(context, handleValue);
@@ -4570,6 +4783,7 @@ namespace PlaywrightNative.Chromium
                     return;
                 }
 
+                ReportPopupBeforeBinding();
                 object result = await handler(args).ConfigureAwait(false);
                 await DeliverBindingResultAsync(executionContextId, seq, result).ConfigureAwait(false);
             }

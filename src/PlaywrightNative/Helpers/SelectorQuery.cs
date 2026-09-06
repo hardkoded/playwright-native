@@ -77,6 +77,9 @@ namespace PlaywrightNative.Helpers
     let rest = (part || '').trim();
     if (rest.charAt(0) === '*' && rest.length > 1) {
       const after = rest.slice(1);
+      // Official: `*=div` is capture + empty engine (parse-time error).
+      if (after.charAt(0) === '=' || !after.trim())
+        throw new Error('Unknown engine ' + dq + dq + ' while parsing selector ' + part);
       const cap = /^([a-zA-Z_][\w:-]*)\s*=/.exec(after);
       if (cap && official[cap[1]]) {
         capture = true;

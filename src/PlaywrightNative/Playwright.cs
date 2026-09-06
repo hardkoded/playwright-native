@@ -388,6 +388,62 @@ namespace PlaywrightNative
             }
 
             await ServiceWorkerPolicyHelper.ApplyAsync(context, persistent.ServiceWorkers).ConfigureAwait(false);
+
+            // Chromium extension SWs stay paused until Network.enable. Adopt as
+            // soon as emulation fields are known so waitForDebugger does not
+            // time out the target during HAR/storage/page shims (UA test).
+            if (context is PlaywrightNative.Chromium.ChromiumBrowserContext chromiumEarly)
+            {
+                if (persistent.ViewportSize != null
+                    || !string.IsNullOrEmpty(persistent.Locale)
+                    || !string.IsNullOrEmpty(persistent.TimezoneId)
+                    || !string.IsNullOrEmpty(persistent.UserAgent)
+                    || persistent.Offline == true
+                    || persistent.ColorScheme != ColorScheme.Null
+                    || persistent.ReducedMotion != ReducedMotion.Null
+                    || persistent.ForcedColors != ForcedColors.Null
+                    || persistent.HasTouch == true
+                    || (persistent.ExtraHTTPHeaders != null && persistent.ExtraHTTPHeaders.Count > 0)
+                    || persistent.Geolocation != null
+                    || (persistent.Permissions != null && persistent.Permissions.Length > 0)
+                    || persistent.BypassCSP == true
+                    || persistent.IgnoreHTTPSErrors == true
+                    || persistent.JavaScriptEnabled == false
+                    || persistent.DeviceScaleFactor.HasValue
+                    || persistent.IsMobile == true
+                    || persistent.ScreenSize != null
+                    || persistent.AcceptDownloads == true
+                    || persistent.HttpCredentials != null
+                    || persistent.Contrast != Contrast.Null
+                    || ClientCertificateHelper.HasAny(persistent.ClientCertificates))
+                {
+                    chromiumEarly.ConfigureEmulation(
+                        persistent.ViewportSize,
+                        userAgent: persistent.UserAgent,
+                        extraHeaders: persistent.ExtraHTTPHeaders,
+                        locale: persistent.Locale,
+                        timezoneId: persistent.TimezoneId,
+                        offline: persistent.Offline,
+                        colorScheme: persistent.ColorScheme,
+                        reducedMotion: persistent.ReducedMotion,
+                        forcedColors: persistent.ForcedColors,
+                        hasTouch: persistent.HasTouch,
+                        geolocation: persistent.Geolocation,
+                        permissions: persistent.Permissions,
+                        bypassCSP: persistent.BypassCSP,
+                        ignoreHTTPSErrors: persistent.IgnoreHTTPSErrors,
+                        javaScriptEnabled: persistent.JavaScriptEnabled,
+                        deviceScaleFactor: persistent.DeviceScaleFactor,
+                        isMobile: persistent.IsMobile,
+                        screenSize: persistent.ScreenSize,
+                        acceptDownloads: persistent.AcceptDownloads,
+                        httpCredentials: persistent.HttpCredentials,
+                        contrast: persistent.Contrast);
+                }
+
+                await chromiumEarly.AdoptExistingServiceWorkersAsync().ConfigureAwait(false);
+            }
+
             HarRecorder.Start(
                 context,
                 persistent.RecordHarPath,
@@ -428,42 +484,15 @@ namespace PlaywrightNative
                 && !ClientCertificateHelper.HasAny(persistent.ClientCertificates))
             {
                 await ApplyPersistentDownloadBehaviorAsync(context).ConfigureAwait(false);
-                if (context is PlaywrightNative.Chromium.ChromiumBrowserContext chromiumWorkers)
-                {
-                    await chromiumWorkers.AdoptExistingServiceWorkersAsync().ConfigureAwait(false);
-                }
-
                 VideoRecorder.Start(context, persistent.RecordVideoDir, persistent.RecordVideoSize, persistent.ViewportSize);
                 return;
             }
 
             if (context is PlaywrightNative.Chromium.ChromiumBrowserContext chromium)
             {
-                chromium.ConfigureEmulation(
-                    persistent.ViewportSize,
-                    userAgent: persistent.UserAgent,
-                    extraHeaders: persistent.ExtraHTTPHeaders,
-                    locale: persistent.Locale,
-                    timezoneId: persistent.TimezoneId,
-                    offline: persistent.Offline,
-                    colorScheme: persistent.ColorScheme,
-                    reducedMotion: persistent.ReducedMotion,
-                    forcedColors: persistent.ForcedColors,
-                    hasTouch: persistent.HasTouch,
-                    geolocation: persistent.Geolocation,
-                    permissions: persistent.Permissions,
-                    bypassCSP: persistent.BypassCSP,
-                    ignoreHTTPSErrors: persistent.IgnoreHTTPSErrors,
-                    javaScriptEnabled: persistent.JavaScriptEnabled,
-                    deviceScaleFactor: persistent.DeviceScaleFactor,
-                    isMobile: persistent.IsMobile,
-                    screenSize: persistent.ScreenSize,
-                    acceptDownloads: persistent.AcceptDownloads,
-                    httpCredentials: persistent.HttpCredentials,
-                    contrast: persistent.Contrast);
+                // ConfigureEmulation + AdoptExisting already ran above.
                 await chromium.ApplyDownloadBehaviorAsync().ConfigureAwait(false);
                 await ApplyPersistentChromeToExistingPagesAsync(chromium).ConfigureAwait(false);
-                await chromium.AdoptExistingServiceWorkersAsync().ConfigureAwait(false);
                 VideoRecorder.Start(context, persistent.RecordVideoDir, persistent.RecordVideoSize, persistent.ViewportSize);
                 return;
             }
@@ -492,6 +521,7 @@ namespace PlaywrightNative
                     acceptDownloads: persistent.AcceptDownloads,
                     httpCredentials: persistent.HttpCredentials,
                     contrast: persistent.Contrast);
+                await webkit.ApplyIgnoreCertificateErrorsAsync().ConfigureAwait(false);
                 await webkit.ApplyDownloadBehaviorAsync().ConfigureAwait(false);
                 await webkit.ApplyLanguagesAsync().ConfigureAwait(false);
                 await ApplyPersistentChromeToExistingPagesAsync(webkit).ConfigureAwait(false);

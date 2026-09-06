@@ -375,7 +375,7 @@ namespace PlaywrightNative.WebKit
                 raw = await WaitForRawHeadersAsync().ConfigureAwait(false);
             }
 
-            return raw.Select(e => new Header { Name = e.Name, Value = e.Value }).ToList();
+            return EquatableHeader.FromEntries(raw);
         }
 
         /// <summary>

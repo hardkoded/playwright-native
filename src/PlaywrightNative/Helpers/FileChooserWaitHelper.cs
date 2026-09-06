@@ -38,8 +38,29 @@ namespace PlaywrightNative.Helpers
         /// </param>
         /// <param name="cancellationToken">Cancels the wait (Node <c>signal</c>).</param>
         /// <returns>The file chooser that opened.</returns>
+        internal static Task<IFileChooser> WaitAsync(
+            IPage page,
+            float? timeout = default,
+            CancellationToken cancellationToken = default)
+            => WaitAsync(page, predicate: null, timeout, cancellationToken);
+
+        /// <summary>
+        /// Waits for the next matching <see cref="IPage.FileChooser"/> event on
+        /// <paramref name="page"/>.
+        /// </summary>
+        /// <param name="page">The page that raises the event.</param>
+        /// <param name="predicate">
+        /// Optional filter. When omitted, the first chooser resolves the wait.
+        /// </param>
+        /// <param name="timeout">
+        /// Timeout in milliseconds. When omitted, <see cref="IPage.DefaultTimeout"/>
+        /// is used. Pass <c>0</c> to disable the timeout.
+        /// </param>
+        /// <param name="cancellationToken">Cancels the wait (Node <c>signal</c>).</param>
+        /// <returns>The file chooser that opened.</returns>
         internal static async Task<IFileChooser> WaitAsync(
             IPage page,
+            Func<IFileChooser, bool> predicate,
             float? timeout = default,
             CancellationToken cancellationToken = default)
         {
@@ -48,11 +69,12 @@ namespace PlaywrightNative.Helpers
                 throw new ArgumentNullException(nameof(page));
             }
 
+            Func<IFileChooser, bool> matches = predicate ?? (_ => true);
             await EnsureInterceptAsync(page).ConfigureAwait(false);
             return await WaitForEventHelper.WaitAsync<IFileChooser>(
                 h => page.FileChooser += h,
                 h => page.FileChooser -= h,
-                _ => true,
+                matches,
                 timeout ?? page.DefaultTimeout(),
                 "page.waitForFileChooser",
                 cancellationToken: cancellationToken).ConfigureAwait(false);

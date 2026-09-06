@@ -15,6 +15,7 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Playwright;
+using PlaywrightNative.Compat;
 using PlaywrightNative.Helpers;
 
 namespace PlaywrightNative
@@ -86,7 +87,14 @@ namespace PlaywrightNative
             Stopwatch sw = Stopwatch.StartNew();
             int resolved = 0;
             string preview = null;
+            bool lastIsVisible = false;
             bool wantVisible = visible != false;
+
+            // Upstream frames._expect performs a noAbort one-shot before retries so
+            // timeout: 1 still succeeds when the locator already matches — and so
+            // .not.toBeVisible() succeeds immediately when nothing matches
+            // (missing elements are not visible).
+            bool oneShotPending = true;
 
             while (true)
             {
@@ -102,11 +110,25 @@ namespace PlaywrightNative
                         ariaSnapshot: null);
                 }
 
-                await LocatorHandlers.RunAsync(_locator.Page, timeout).ConfigureAwait(false);
+                await LocatorHandlers.RunAsync(_locator.Page, timeoutMs, sw).ConfigureAwait(false);
                 IReadOnlyList<IElementHandle> all;
+                bool queryTimedOut = false;
                 try
                 {
-                    all = await ElementHandlesOrEmptyAsync().ConfigureAwait(false);
+                    // Cap retry probes so a hung ElementHandles during navigation
+                    // cannot burn the entire expect timeout in one WaitAsync.
+                    // The first probe is a one-shot (up to 5s) and is never aborted
+                    // by the expect timeout budget.
+                    int remainingMs = ExpectElementHandlesBudgetMs(timeoutMs, sw, ref oneShotPending);
+                    all = await ElementHandlesOrEmptyAsync(remainingMs).ConfigureAwait(false);
+                }
+                catch (TimeoutException)
+                {
+                    // Exhausted the per-poll budget. Do not treat this as a missing
+                    // element — .not.toBeVisible() would otherwise pass incorrectly when
+                    // the locator was visible on prior polls or the query was merely slow.
+                    queryTimedOut = true;
+                    all = Array.Empty<IElementHandle>();
                 }
                 catch (PlaywrightNativeException ex) when (IsSelectorSyntaxError(ex))
                 {
@@ -140,25 +162,31 @@ namespace PlaywrightNative
                     {
                         isVisible = false;
                     }
+
+                    lastIsVisible = isVisible;
+                }
+                else if (!queryTimedOut)
+                {
+                    lastIsVisible = false;
                 }
 
                 bool ok = wantVisible ? isVisible : !isVisible;
-                if (_negate ? !ok : ok)
+                if (!queryTimedOut && (_negate ? !ok : ok))
                 {
                     return;
                 }
 
                 if (timeoutMs != Timeout.Infinite && sw.ElapsedMilliseconds >= timeoutMs)
                 {
-                    ExpectSnapshotKind snapshotKind = resolved == 0 || !isVisible
+                    ExpectSnapshotKind snapshotKind = resolved == 0 || !lastIsVisible
                         ? ExpectSnapshotKind.Page
                         : ExpectSnapshotKind.Property;
                     throw CreateExpectException(
-                        FormatVisibleExpectFailure(timeoutMs, resolved, isVisible, preview),
-                        resolved > 0 ? (isVisible ? "visible" : "hidden") : null,
+                        FormatVisibleExpectFailure(timeoutMs, resolved, lastIsVisible, preview),
+                        resolved > 0 ? (lastIsVisible ? "visible" : "hidden") : null,
                         "visible",
                         "toBeVisible",
-                        pass: _negate && isVisible,
+                        pass: _negate && lastIsVisible,
                         timeoutMs,
                         await CaptureExpectAriaSnapshotAsync(snapshotKind).ConfigureAwait(false));
                 }
@@ -175,10 +203,30 @@ namespace PlaywrightNative
             string preview = null;
             int resolved = 0;
 
+            // One-shot first probe: missing elements are hidden, so toBeHidden()
+            // with timeout: 1 must succeed immediately when nothing matches.
+            bool oneShotPending = true;
+
             while (true)
             {
-                await LocatorHandlers.RunAsync(_locator.Page, timeout).ConfigureAwait(false);
-                IReadOnlyList<IElementHandle> all = await ElementHandlesOrEmptyAsync().ConfigureAwait(false);
+                await LocatorHandlers.RunAsync(_locator.Page, timeoutMs, sw).ConfigureAwait(false);
+                IReadOnlyList<IElementHandle> all;
+                bool queryTimedOut = false;
+                try
+                {
+                    int remainingMs = ExpectElementHandlesBudgetMs(timeoutMs, sw, ref oneShotPending);
+                    all = await ElementHandlesOrEmptyAsync(remainingMs).ConfigureAwait(false);
+                }
+                catch (TimeoutException)
+                {
+                    // Do not treat a hung query as "hidden" — .toBeHidden() would
+                    // otherwise pass incorrectly when the locator was merely slow to
+                    // resolve. Keep polling until the expect timeout, then fail with the
+                    // same empty-match formatting as upstream expect-boolean.
+                    queryTimedOut = true;
+                    all = Array.Empty<IElementHandle>();
+                }
+
                 if (all.Count > 1)
                 {
                     throw new PlaywrightNativeException(
@@ -210,7 +258,7 @@ namespace PlaywrightNative
                 }
 
                 bool ok = isHidden;
-                if (_negate ? !ok : ok)
+                if (!queryTimedOut && (_negate ? !ok : ok))
                 {
                     return;
                 }
@@ -261,10 +309,26 @@ namespace PlaywrightNative
             string preview = null;
             int resolved = 0;
 
+            // One-shot first probe: missing elements are detached, so
+            // .not.toBeAttached() with timeout: 1 must succeed immediately.
+            bool oneShotPending = true;
+
             while (true)
             {
-                await LocatorHandlers.RunAsync(_locator.Page, timeout).ConfigureAwait(false);
-                IReadOnlyList<IElementHandle> all = await ElementHandlesOrEmptyAsync().ConfigureAwait(false);
+                await LocatorHandlers.RunAsync(_locator.Page, timeoutMs, sw).ConfigureAwait(false);
+                IReadOnlyList<IElementHandle> all;
+                bool queryTimedOut = false;
+                try
+                {
+                    int remainingMs = ExpectElementHandlesBudgetMs(timeoutMs, sw, ref oneShotPending);
+                    all = await ElementHandlesOrEmptyAsync(remainingMs).ConfigureAwait(false);
+                }
+                catch (TimeoutException)
+                {
+                    queryTimedOut = true;
+                    all = Array.Empty<IElementHandle>();
+                }
+
                 if (all.Count > 1)
                 {
                     throw new PlaywrightNativeException(
@@ -287,7 +351,7 @@ namespace PlaywrightNative
                 }
 
                 bool ok = wantAttached ? isAttached : !isAttached;
-                if (_negate ? !ok : ok)
+                if (!queryTimedOut && (_negate ? !ok : ok))
                 {
                     return;
                 }
@@ -360,8 +424,28 @@ namespace PlaywrightNative
 
             while (true)
             {
-                await LocatorHandlers.RunAsync(_locator.Page, timeout).ConfigureAwait(false);
-                IReadOnlyList<IElementHandle> all = await ElementHandlesOrEmptyAsync().ConfigureAwait(false);
+                await LocatorHandlers.RunAsync(_locator.Page, timeoutMs, sw).ConfigureAwait(false);
+                IReadOnlyList<IElementHandle> all;
+                try
+                {
+                    int remainingMs = timeoutMs == Timeout.Infinite
+                        ? 5_000
+                        : Math.Max(50, Math.Min(5_000, timeoutMs - (int)sw.ElapsedMilliseconds));
+                    all = await ElementHandlesOrEmptyAsync(remainingMs).ConfigureAwait(false);
+                }
+                catch (TimeoutException)
+                {
+                    if (timeoutMs != Timeout.Infinite && sw.ElapsedMilliseconds >= timeoutMs)
+                    {
+                        all = Array.Empty<IElementHandle>();
+                    }
+                    else
+                    {
+                        await Task.Delay(50).ConfigureAwait(false);
+                        continue;
+                    }
+                }
+
                 if (all.Count > 1)
                 {
                     throw new PlaywrightNativeException(
@@ -446,18 +530,22 @@ namespace PlaywrightNative
 
             async Task WaitAsync()
             {
-                Dictionary<string, object> spec = new Dictionary<string, object>(StringComparer.Ordinal)
+                // Only send defined options - mirrors upstream expectedValue.
+                Dictionary<string, object> spec = new Dictionary<string, object>(StringComparer.Ordinal);
+                if (@checked.HasValue)
                 {
-                    ["checked"] = @checked,
-                    ["indeterminate"] = indeterminate,
-                };
-                string expected = indeterminate == true
+                    spec["checked"] = @checked.Value;
+                }
+
+                if (indeterminate.HasValue)
+                {
+                    spec["indeterminate"] = indeterminate.Value;
+                }
+
+                string matcherExpected = indeterminate == true
                     ? "indeterminate"
                     : @checked == false ? "unchecked" : "checked";
-                if (_negate)
-                {
-                    expected = "not " + expected;
-                }
+                string expected = _negate ? "not " + matcherExpected : matcherExpected;
 
                 string call = "toBeChecked()";
                 if (indeterminate == true)
@@ -478,11 +566,60 @@ namespace PlaywrightNative
                 string preview = null;
                 string received = null;
                 bool sawElement = false;
+                bool lastMatched = false;
+
+                async Task ReadCheckedStateAsync(IElementHandle handle)
+                {
+                    sawElement = true;
+                    try
+                    {
+                        preview = await handle.EvaluateAsync<string>(ElementStateScript.PreviewNodeFunction)
+                            .ConfigureAwait(false);
+                    }
+                    catch (PlaywrightNativeException)
+                    {
+                        preview = "element";
+                    }
+
+                    try
+                    {
+                        received = await handle.EvaluateAsync<string>(ElementStateScript.CheckedReceivedFunction)
+                            .ConfigureAwait(false);
+                        lastMatched = await handle
+                            .EvaluateAsync<bool>(ElementStateScript.MatchesCheckedStateFunction, spec)
+                            .ConfigureAwait(false);
+                    }
+                    catch (PlaywrightNativeException)
+                    {
+                        lastMatched = false;
+                    }
+                }
 
                 while (true)
                 {
-                    await LocatorHandlers.RunAsync(_locator.Page, timeout).ConfigureAwait(false);
-                    IReadOnlyList<IElementHandle> all = await ElementHandlesOrEmptyAsync().ConfigureAwait(false);
+                    await LocatorHandlers.RunAsync(_locator.Page, timeoutMs, sw).ConfigureAwait(false);
+                    IReadOnlyList<IElementHandle> all;
+                    try
+                    {
+                        int remainingMs = timeoutMs == Timeout.Infinite
+                            ? 5_000
+                            : Math.Max(50, Math.Min(5_000, timeoutMs - (int)sw.ElapsedMilliseconds));
+                        all = await ElementHandlesOrEmptyAsync(remainingMs).ConfigureAwait(false);
+                    }
+                    catch (TimeoutException)
+                    {
+                        if (timeoutMs != Timeout.Infinite && sw.ElapsedMilliseconds >= timeoutMs)
+                        {
+                            // Fall through to the timeout failure below.
+                            all = Array.Empty<IElementHandle>();
+                        }
+                        else
+                        {
+                            await Task.Delay(50).ConfigureAwait(false);
+                            continue;
+                        }
+                    }
+
                     if (all.Count > 1)
                     {
                         throw new PlaywrightNativeException(
@@ -492,29 +629,8 @@ namespace PlaywrightNative
                     bool matched = false;
                     if (all.Count == 1)
                     {
-                        sawElement = true;
-                        try
-                        {
-                            preview = await all[0].EvaluateAsync<string>(ElementStateScript.PreviewNodeFunction)
-                                .ConfigureAwait(false);
-                        }
-                        catch (PlaywrightNativeException)
-                        {
-                            preview = "element";
-                        }
-
-                        try
-                        {
-                            received = await all[0].EvaluateAsync<string>(ElementStateScript.CheckedReceivedFunction)
-                                .ConfigureAwait(false);
-                            matched = await all[0]
-                                .EvaluateAsync<bool>(ElementStateScript.MatchesCheckedStateFunction, spec)
-                                .ConfigureAwait(false);
-                        }
-                        catch (PlaywrightNativeException)
-                        {
-                            matched = false;
-                        }
+                        await ReadCheckedStateAsync(all[0]).ConfigureAwait(false);
+                        matched = lastMatched;
                     }
 
                     // Missing elements fail both toBeChecked and not.toBeChecked.
@@ -526,6 +642,40 @@ namespace PlaywrightNative
 
                     if (timeoutMs != Timeout.Infinite && sw.ElapsedMilliseconds >= timeoutMs)
                     {
+                        // Upstream runs a no-abort one-shot so timeout: 1 still
+                        // reports received/actual when the node is already there.
+                        // A tight per-poll ElementHandles budget can miss that on
+                        // a loaded machine - resolve once more for error details.
+                        if (!sawElement)
+                        {
+                            try
+                            {
+                                IReadOnlyList<IElementHandle> lastChance =
+                                    await ElementHandlesOrEmptyAsync(5_000).ConfigureAwait(false);
+                                if (lastChance.Count == 1)
+                                {
+                                    await ReadCheckedStateAsync(lastChance[0]).ConfigureAwait(false);
+                                }
+                            }
+                            catch (TimeoutException)
+                            {
+                            }
+                            catch (PlaywrightNativeException)
+                            {
+                            }
+                        }
+
+                        // Upstream toBeTruthy: when pass (failed not.*), Received
+                        // is printed from `expected`; actual is received.value
+                        // (same checked-state label). Fall back to matcherExpected
+                        // so .not.toBeChecked({ checked: false }) still exposes
+                        // Actual = "unchecked" when the positive matcher matched.
+                        string receivedLabel = received;
+                        if (_negate && lastMatched && string.IsNullOrEmpty(receivedLabel))
+                        {
+                            receivedLabel = matcherExpected;
+                        }
+
                         StringBuilder log = new StringBuilder();
                         log.Append(header);
                         log.Append("\n\nLocator:");
@@ -533,10 +683,10 @@ namespace PlaywrightNative
                         log.Append(_locator);
                         log.Append("\nExpected: ");
                         log.Append(expected);
-                        if (sawElement && !string.IsNullOrEmpty(received))
+                        if (sawElement && !string.IsNullOrEmpty(receivedLabel))
                         {
                             log.Append("\nReceived: ");
-                            log.Append(received);
+                            log.Append(_negate && lastMatched ? matcherExpected : receivedLabel);
                         }
 
                         log.Append("\nTimeout:");
@@ -565,26 +715,16 @@ namespace PlaywrightNative
                             log.Append("  locator resolved to ");
                             log.Append(preview);
                             log.Append("\n  unexpected value \"");
-                            log.Append(received);
+                            log.Append(_negate && lastMatched ? matcherExpected : receivedLabel);
                             log.Append("\"\n");
-                        }
-
-                        string matcherExpected = "checked";
-                        if (indeterminate == true)
-                        {
-                            matcherExpected = "indeterminate";
-                        }
-                        else if (@checked == false)
-                        {
-                            matcherExpected = "unchecked";
                         }
 
                         throw CreateExpectException(
                             log.ToString(),
-                            sawElement ? received : null,
+                            sawElement ? receivedLabel : null,
                             matcherExpected,
                             "toBeChecked",
-                            pass: _negate && sawElement && matched,
+                            pass: _negate && sawElement && lastMatched,
                             timeoutMs,
                             await CaptureExpectAriaSnapshotAsync(ExpectSnapshotKind.Property).ConfigureAwait(false));
                     }
@@ -632,7 +772,7 @@ namespace PlaywrightNative
                         ariaSnapshot: null);
                 }
 
-                await LocatorHandlers.RunAsync(_locator.Page, timeout).ConfigureAwait(false);
+                await LocatorHandlers.RunAsync(_locator.Page, timeoutMs, sw).ConfigureAwait(false);
                 last = await _locator.CountAsync().ConfigureAwait(false);
                 bool match = last == count;
                 if (_negate ? !match : match)
@@ -691,6 +831,8 @@ namespace PlaywrightNative
                 throw new ArgumentNullException(nameof(expected));
             }
 
+            // Official single-string toHaveText is whitespace-normalized equality,
+            // with an additional trailing-segment match (see ExpectTextMatch.MatchesHaveText).
             return ExpectTextCoreAsync(
                 new[] { new ExpectTextNeedle(expected) },
                 exact: exact != false,
@@ -869,6 +1011,24 @@ namespace PlaywrightNative
 
             string lastActual = string.Empty;
             bool lastMissing = true;
+
+            // Empty expected value asserts attribute presence (boolean / name-only
+            // parity with upstream toHaveAttribute(name) / toHaveAttribute(name, options)).
+            if (value is { Length: 0 })
+            {
+                return ExpectBoolAsync(
+                    () => UniqueStateAsync(async handle =>
+                    {
+                        string actual = await handle.GetAttributeAsync(name).ConfigureAwait(false);
+                        lastMissing = actual == null;
+                        lastActual = actual ?? string.Empty;
+                        return actual != null;
+                    }),
+                    timeout,
+                    "toHaveAttribute",
+                    _ => FormatAttributeStringExtra(value, lastActual, lastMissing));
+            }
+
             return ExpectBoolAsync(
                 () => UniqueStateAsync(async handle =>
                 {
@@ -1590,6 +1750,25 @@ namespace PlaywrightNative
             return log.ToString();
         }
 
+        private static int ExpectElementHandlesBudgetMs(int timeoutMs, Stopwatch sw, ref bool oneShotPending)
+        {
+            // Mirror upstream frames._expect: the first probe always finishes
+            // (noAbort / nullProgress) so timeout: 1 still observes the current DOM.
+            // Later polls stay bounded by the remaining expect budget.
+            if (oneShotPending)
+            {
+                oneShotPending = false;
+                return 5_000;
+            }
+
+            if (timeoutMs == Timeout.Infinite)
+            {
+                return 5_000;
+            }
+
+            return Math.Max(50, Math.Min(5_000, timeoutMs - (int)sw.ElapsedMilliseconds));
+        }
+
         private string ApiName(string method)
             => _negate ? "expect.not." + method : "expect." + method;
 
@@ -1614,10 +1793,21 @@ namespace PlaywrightNative
             {
                 if (kind == ExpectSnapshotKind.Page)
                 {
-                    return await _locator.Page.AriaSnapshotAsync(timeout: 1000).ConfigureAwait(false);
+                    return await CapturePageExpectAriaSnapshotAsync().ConfigureAwait(false);
                 }
 
-                IReadOnlyList<IElementHandle> all = await ElementHandlesOrEmptyAsync().ConfigureAwait(false);
+                IReadOnlyList<IElementHandle> all;
+                try
+                {
+                    all = await ElementHandlesOrEmptyAsync()
+                        .WaitAsync(TimeSpan.FromSeconds(2))
+                        .ConfigureAwait(false);
+                }
+                catch (TimeoutException)
+                {
+                    return await CapturePageExpectAriaSnapshotAsync().ConfigureAwait(false);
+                }
+
                 bool visible = false;
                 if (all.Count == 1)
                 {
@@ -1632,12 +1822,13 @@ namespace PlaywrightNative
 
                 if (!visible)
                 {
-                    return await _locator.Page.AriaSnapshotAsync(timeout: 1000).ConfigureAwait(false);
+                    return await CapturePageExpectAriaSnapshotAsync().ConfigureAwait(false);
                 }
 
                 int? depth = kind == ExpectSnapshotKind.Containment ? (int?)null : 1;
                 AccessibilitySnapshotResult snapshot = await _locator.Page
                     .SnapshotAccessibilityAsync(interestingOnly: false, root: all[0])
+                    .WaitAsync(TimeSpan.FromSeconds(2))
                     .ConfigureAwait(false);
                 string yaml = AriaSnapshotYaml.Format(
                     snapshot,
@@ -1668,12 +1859,32 @@ namespace PlaywrightNative
             {
                 try
                 {
-                    return await _locator.Page.AriaSnapshotAsync(timeout: 1000).ConfigureAwait(false);
+                    return await CapturePageExpectAriaSnapshotAsync().ConfigureAwait(false);
                 }
                 catch (Exception fallback) when (fallback is PlaywrightNativeException || fallback is TimeoutException)
                 {
-                    return null;
+                    // Prefer empty over null so matcherResult.ariaSnapshot stays populated.
+                    return string.Empty;
                 }
+            }
+        }
+
+        private async Task<string> CapturePageExpectAriaSnapshotAsync()
+        {
+            // Use CDP accessibility rather than locator('body').ariaSnapshot():
+            // after SetContent the main-world context can be briefly unavailable and
+            // the locator wait would burn the full default timeout.
+            try
+            {
+                AccessibilitySnapshotResult snapshot = await _locator.Page
+                    .SnapshotAccessibilityAsync(interestingOnly: false)
+                    .WaitAsync(TimeSpan.FromSeconds(2))
+                    .ConfigureAwait(false);
+                return AriaSnapshotYaml.Format(snapshot) ?? string.Empty;
+            }
+            catch (TimeoutException)
+            {
+                return string.Empty;
             }
         }
 
@@ -1772,12 +1983,47 @@ namespace PlaywrightNative
                 ? "expect(locator).not." + method + "(expected) failed"
                 : "expect(locator)." + method + "(expected) failed";
             string expectLog = _negate ? "not " + method : method;
+            Task<bool> probe = null;
 
             while (true)
             {
-                await LocatorHandlers.RunAsync(_locator.Page, timeout).ConfigureAwait(false);
-                bool ok = await predicateAsync().ConfigureAwait(false);
-                if (_negate ? !ok : ok)
+                await LocatorHandlers.RunAsync(_locator.Page, timeoutMs, sw).ConfigureAwait(false);
+                probe ??= predicateAsync();
+                Task finished = await Task.WhenAny(probe, Task.Delay(50)).ConfigureAwait(false);
+                if (!ReferenceEquals(finished, probe))
+                {
+                    if (timeoutMs != Timeout.Infinite && sw.ElapsedMilliseconds >= timeoutMs)
+                    {
+                        probe = null;
+
+                        // Fall through to the expect-timeout failure below without
+                        // treating the abandoned probe as a successful negation.
+                    }
+                    else
+                    {
+                        continue;
+                    }
+                }
+
+                bool ok = false;
+                bool probeCompleted = probe != null;
+                if (probeCompleted)
+                {
+                    try
+                    {
+                        ok = await probe.ConfigureAwait(false);
+                    }
+                    catch (TimeoutException)
+                    {
+                        ok = false;
+                    }
+                    finally
+                    {
+                        probe = null;
+                    }
+                }
+
+                if (probeCompleted && (_negate ? !ok : ok))
                 {
                     return;
                 }
@@ -1813,9 +2059,20 @@ namespace PlaywrightNative
                         log.Append("\nError: element(s) not found");
                     }
 
-                    log.Append("\n\nCall log:\n  - Expect \"");
-                    log.Append(expectLog);
-                    log.Append("\" with timeout ");
+                    log.Append("\n\nCall log:\n  - ");
+                    if (string.Equals(method, "toHaveScreenshot", StringComparison.Ordinal))
+                    {
+                        // Upstream screenshot expect logs use "expect.toHaveScreenshot" (dot form).
+                        log.Append(ApiName(method));
+                    }
+                    else
+                    {
+                        log.Append("Expect \"");
+                        log.Append(expectLog);
+                        log.Append('"');
+                    }
+
+                    log.Append(" with timeout ");
                     log.Append(timeoutMs.ToString(CultureInfo.InvariantCulture));
                     log.Append("ms\n  - waiting for ");
                     log.Append(_locator);
@@ -1852,8 +2109,28 @@ namespace PlaywrightNative
 
             while (true)
             {
-                await LocatorHandlers.RunAsync(_locator.Page, timeout).ConfigureAwait(false);
-                IReadOnlyList<IElementHandle> all = await ElementHandlesOrEmptyAsync().ConfigureAwait(false);
+                await LocatorHandlers.RunAsync(_locator.Page, timeoutMs, sw).ConfigureAwait(false);
+                IReadOnlyList<IElementHandle> all;
+                try
+                {
+                    int remainingMs = timeoutMs == Timeout.Infinite
+                        ? 5_000
+                        : Math.Max(50, Math.Min(5_000, timeoutMs - (int)sw.ElapsedMilliseconds));
+                    all = await ElementHandlesOrEmptyAsync(remainingMs).ConfigureAwait(false);
+                }
+                catch (TimeoutException)
+                {
+                    if (timeoutMs != Timeout.Infinite && sw.ElapsedMilliseconds >= timeoutMs)
+                    {
+                        all = Array.Empty<IElementHandle>();
+                    }
+                    else
+                    {
+                        await Task.Delay(50).ConfigureAwait(false);
+                        continue;
+                    }
+                }
+
                 if (all.Count > 1)
                 {
                     throw new PlaywrightNativeException(
@@ -1918,8 +2195,28 @@ namespace PlaywrightNative
 
             while (true)
             {
-                await LocatorHandlers.RunAsync(_locator.Page, timeout).ConfigureAwait(false);
-                IReadOnlyList<IElementHandle> all = await ElementHandlesOrEmptyAsync().ConfigureAwait(false);
+                await LocatorHandlers.RunAsync(_locator.Page, timeoutMs, sw).ConfigureAwait(false);
+                IReadOnlyList<IElementHandle> all;
+                try
+                {
+                    int remainingMs = timeoutMs == Timeout.Infinite
+                        ? 5_000
+                        : Math.Max(50, Math.Min(5_000, timeoutMs - (int)sw.ElapsedMilliseconds));
+                    all = await ElementHandlesOrEmptyAsync(remainingMs).ConfigureAwait(false);
+                }
+                catch (TimeoutException)
+                {
+                    if (timeoutMs != Timeout.Infinite && sw.ElapsedMilliseconds >= timeoutMs)
+                    {
+                        all = Array.Empty<IElementHandle>();
+                    }
+                    else
+                    {
+                        await Task.Delay(50).ConfigureAwait(false);
+                        continue;
+                    }
+                }
+
                 if (all.Count > 1)
                 {
                     throw new PlaywrightNativeException(
@@ -2045,8 +2342,14 @@ namespace PlaywrightNative
                 IReadOnlyList<IElementHandle> all;
                 try
                 {
-                    await LocatorHandlers.RunAsync(_locator.Page, timeout).ConfigureAwait(false);
-                    all = await ElementHandlesOrEmptyAsync().ConfigureAwait(false);
+                    await LocatorHandlers.RunAsync(_locator.Page, timeoutMs, sw).ConfigureAwait(false);
+
+                    // Cap each probe so a hung ElementHandles during navigation
+                    // cannot burn the entire expect timeout in one WaitAsync.
+                    int remainingMs = timeoutMs == Timeout.Infinite
+                        ? 5_000
+                        : Math.Max(50, Math.Min(5_000, timeoutMs - (int)sw.ElapsedMilliseconds));
+                    all = await ElementHandlesOrEmptyAsync(remainingMs).ConfigureAwait(false);
                 }
                 catch (TimeoutException ex) when (
                     ex.Message != null
@@ -2106,6 +2409,11 @@ namespace PlaywrightNative
                         timeoutMs,
                         await CaptureTextAriaSnapshotAsync(single, sawElement: true).ConfigureAwait(false));
                 }
+                catch (TimeoutException)
+                {
+                    // Per-poll query budget exhausted; keep last received and retry or fail below.
+                    all = Array.Empty<IElementHandle>();
+                }
                 catch (Exception ex) when (ClosedTarget.IsClosed(ex))
                 {
                     if (sawElement)
@@ -2128,7 +2436,7 @@ namespace PlaywrightNative
                             method,
                             pass: _negate,
                             timeoutMs,
-                            await CaptureTextAriaSnapshotAsync(single, sawElement).ConfigureAwait(false));
+                            ariaSnapshot: null);
                     }
 
                     throw new PlaywrightNativeException(header + "\n" + ex.Message, ex);
@@ -2150,44 +2458,92 @@ namespace PlaywrightNative
                         "\n\nCall log:\n");
                 }
 
-                string[] received = new string[all.Count];
-                bool readFailed = false;
-                for (int i = 0; i < all.Count; i++)
+                string[] received;
+                bool readFailed;
+                try
                 {
-                    try
-                    {
-                        received[i] = await ReadTextAsync(all[i], useInnerText).ConfigureAwait(false);
-                    }
-                    catch (PlaywrightNativeException)
-                    {
-                        readFailed = true;
-                        break;
-                    }
-                }
-
-                if (!readFailed && all.Count > 0)
-                {
-                    lastReceived = received;
-                    sawElement = true;
-                    if (all.Count == 1)
+                    received = new string[all.Count];
+                    readFailed = false;
+                    for (int i = 0; i < all.Count; i++)
                     {
                         try
                         {
-                            lastPreview = await all[0].EvaluateAsync<string>(ElementPreviewFunction)
-                                .ConfigureAwait(false);
+                            received[i] = await ReadTextAsync(all[i], useInnerText).ConfigureAwait(false);
                         }
                         catch (PlaywrightNativeException)
                         {
+                            readFailed = true;
+                            break;
+                        }
+                    }
+
+                    if (!readFailed && all.Count > 0)
+                    {
+                        lastReceived = received;
+                        sawElement = true;
+                        if (all.Count == 1)
+                        {
+                            try
+                            {
+                                lastPreview = await all[0].EvaluateAsync<string>(ElementPreviewFunction)
+                                    .ConfigureAwait(false);
+                            }
+                            catch (PlaywrightNativeException)
+                            {
+                            }
                         }
                     }
                 }
+                catch (Exception ex) when (ClosedTarget.IsClosed(ex))
+                {
+                    if (sawElement)
+                    {
+                        throw CreateTextExpectException(
+                            FormatTextExpectFailure(
+                                header,
+                                expectLog,
+                                method,
+                                needles,
+                                lastReceived,
+                                sawElement,
+                                single,
+                                exact,
+                                ignoreCase,
+                                timeoutMs,
+                                lastPreview),
+                            needles,
+                            lastReceived,
+                            method,
+                            pass: _negate,
+                            timeoutMs,
+                            ariaSnapshot: null);
+                    }
 
-                bool matched = !readFailed && ExpectTextMatch.MatchesSequence(
-                    received,
-                    needles,
-                    requireLength,
-                    exact,
-                    ignoreCase);
+                    throw new PlaywrightNativeException(header + "\n" + ex.Message, ex);
+                }
+
+                bool matched;
+                if (!readFailed
+                    && single
+                    && needles.Length == 1
+                    && string.Equals(method, "toHaveText", StringComparison.Ordinal))
+                {
+                    matched = all.Count == 1
+                        && ExpectTextMatch.MatchesHaveTextNeedle(
+                            received[0],
+                            needles[0],
+                            exact,
+                            ignoreCase);
+                }
+                else
+                {
+                    matched = !readFailed && ExpectTextMatch.MatchesSequence(
+                        received,
+                        needles,
+                        requireLength,
+                        exact,
+                        ignoreCase);
+                }
 
                 // Missing elements fail both toHaveText/toContainText and
                 // not.toHaveText/not.toContainText for a single locator.
@@ -2411,7 +2767,7 @@ namespace PlaywrightNative
 
         private async Task<string[]> CollectTextContentsAsync(bool? useInnerText = default)
         {
-            IReadOnlyList<IElementHandle> all = await _locator.ElementHandlesAsync().ConfigureAwait(false);
+            IReadOnlyList<IElementHandle> all = await ElementHandlesOrEmptyAsync().ConfigureAwait(false);
             string[] texts = new string[all.Count];
             for (int i = 0; i < all.Count; i++)
             {
@@ -2423,7 +2779,7 @@ namespace PlaywrightNative
 
         private async Task<string[]> CollectClassAttributesAsync()
         {
-            IReadOnlyList<IElementHandle> all = await _locator.ElementHandlesAsync().ConfigureAwait(false);
+            IReadOnlyList<IElementHandle> all = await ElementHandlesOrEmptyAsync().ConfigureAwait(false);
             string[] classes = new string[all.Count];
             for (int i = 0; i < all.Count; i++)
             {
@@ -2433,11 +2789,29 @@ namespace PlaywrightNative
             return classes;
         }
 
-        private async Task<IReadOnlyList<IElementHandle>> ElementHandlesOrEmptyAsync()
+        private async Task<IReadOnlyList<IElementHandle>> ElementHandlesOrEmptyAsync(int? queryTimeoutMs = null)
         {
             try
             {
-                return await _locator.ElementHandlesAsync().ConfigureAwait(false);
+                Task<IReadOnlyList<IElementHandle>> query = _locator.ElementHandlesAsync();
+                if (!queryTimeoutMs.HasValue)
+                {
+                    // Single-shot helpers (UniqueStateAsync): still bound so a hung
+                    // CDP query cannot stall ExpectBoolAsync forever.
+                    return await query.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+                }
+
+                return await query
+                    .WaitAsync(TimeSpan.FromMilliseconds(Math.Max(50, queryTimeoutMs.Value)))
+                    .ConfigureAwait(false);
+            }
+            catch (TimeoutException)
+            {
+                throw;
+            }
+            catch (Exception ex) when (ClosedTarget.IsClosed(ex))
+            {
+                throw;
             }
             catch (PlaywrightNativeException ex) when (
                 PlaywrightNativeException.IsDestroyedContext(ex)
@@ -2592,93 +2966,167 @@ namespace PlaywrightNative
         }
 
 #pragma warning disable SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
-        Task ILocatorAssertions.ToBeAttachedAsync(LocatorAssertionsToBeAttachedOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToBeAttachedAsync(LocatorAssertionsToBeAttachedOptions options)
+            => ToBeAttachedAsync(options?.Timeout, options?.Attached);
 
-        Task ILocatorAssertions.ToBeCheckedAsync(LocatorAssertionsToBeCheckedOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToBeCheckedAsync(LocatorAssertionsToBeCheckedOptions options)
+            => ToBeCheckedAsync(options?.Timeout, options?.Checked, options?.Indeterminate);
 
-        Task ILocatorAssertions.ToBeDisabledAsync(LocatorAssertionsToBeDisabledOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToBeDisabledAsync(LocatorAssertionsToBeDisabledOptions options)
+            => ToBeDisabledAsync(options?.Timeout);
 
-        Task ILocatorAssertions.ToBeEditableAsync(LocatorAssertionsToBeEditableOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToBeEditableAsync(LocatorAssertionsToBeEditableOptions options)
+            => ToBeEditableAsync(options?.Timeout, options?.Editable);
 
-        Task ILocatorAssertions.ToBeEmptyAsync(LocatorAssertionsToBeEmptyOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToBeEmptyAsync(LocatorAssertionsToBeEmptyOptions options)
+            => ToBeEmptyAsync(options?.Timeout);
 
-        Task ILocatorAssertions.ToBeEnabledAsync(LocatorAssertionsToBeEnabledOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToBeEnabledAsync(LocatorAssertionsToBeEnabledOptions options)
+            => ToBeEnabledAsync(options?.Timeout, options?.Enabled);
 
-        Task ILocatorAssertions.ToBeFocusedAsync(LocatorAssertionsToBeFocusedOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToBeFocusedAsync(LocatorAssertionsToBeFocusedOptions options)
+            => ToBeFocusedAsync(options?.Timeout);
 
-        Task ILocatorAssertions.ToBeHiddenAsync(LocatorAssertionsToBeHiddenOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToBeHiddenAsync(LocatorAssertionsToBeHiddenOptions options)
+            => ToBeHiddenAsync(options?.Timeout);
 
-        Task ILocatorAssertions.ToBeInViewportAsync(LocatorAssertionsToBeInViewportOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToBeInViewportAsync(LocatorAssertionsToBeInViewportOptions options)
+            => ToBeInViewportAsync(options?.Ratio, options?.Timeout);
 
-        Task ILocatorAssertions.ToBeVisibleAsync(LocatorAssertionsToBeVisibleOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToBeVisibleAsync(LocatorAssertionsToBeVisibleOptions options)
+            => ToBeVisibleAsync(
+                options?.Timeout,
+                options?.Visible,
+                options is LegacyLocatorAssertionsToBeVisibleOptions legacy ? legacy.Signal : null);
 
-        Task ILocatorAssertions.ToContainClassAsync(string expected, LocatorAssertionsToContainClassOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToContainClassAsync(string expected, LocatorAssertionsToContainClassOptions options)
+            => ToContainClassAsync(expected, options?.Timeout);
 
-        Task ILocatorAssertions.ToContainClassAsync(IEnumerable<string> expected, LocatorAssertionsToContainClassOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToContainClassAsync(IEnumerable<string> expected, LocatorAssertionsToContainClassOptions options)
+            => ToContainClassAsync(expected, options?.Timeout);
 
-        Task ILocatorAssertions.ToContainTextAsync(string expected, LocatorAssertionsToContainTextOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToContainTextAsync(string expected, LocatorAssertionsToContainTextOptions options)
+            => ToContainTextAsync(expected, options?.Timeout, options?.IgnoreCase, options?.UseInnerText);
 
-        Task ILocatorAssertions.ToContainTextAsync(Regex expected, LocatorAssertionsToContainTextOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToContainTextAsync(Regex expected, LocatorAssertionsToContainTextOptions options)
+            => ToContainTextAsync(expected, options?.Timeout, options?.IgnoreCase, options?.UseInnerText);
 
-        Task ILocatorAssertions.ToContainTextAsync(IEnumerable<string> expected, LocatorAssertionsToContainTextOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToContainTextAsync(IEnumerable<string> expected, LocatorAssertionsToContainTextOptions options)
+            => ToContainTextAsync(expected, options?.Timeout, options?.IgnoreCase, options?.UseInnerText);
 
-        Task ILocatorAssertions.ToContainTextAsync(IEnumerable<Regex> expected, LocatorAssertionsToContainTextOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToContainTextAsync(IEnumerable<Regex> expected, LocatorAssertionsToContainTextOptions options)
+            => ToContainTextAsync(expected, options?.Timeout, options?.IgnoreCase, options?.UseInnerText);
 
-        Task ILocatorAssertions.ToHaveAccessibleDescriptionAsync(string description, LocatorAssertionsToHaveAccessibleDescriptionOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToHaveAccessibleDescriptionAsync(string description, LocatorAssertionsToHaveAccessibleDescriptionOptions options)
+            => ToHaveAccessibleDescriptionAsync(description, timeout: options?.Timeout, ignoreCase: options?.IgnoreCase);
 
-        Task ILocatorAssertions.ToHaveAccessibleDescriptionAsync(Regex description, LocatorAssertionsToHaveAccessibleDescriptionOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToHaveAccessibleDescriptionAsync(Regex description, LocatorAssertionsToHaveAccessibleDescriptionOptions options)
+            => ToHaveAccessibleDescriptionAsync(description, options?.Timeout, options?.IgnoreCase);
 
-        Task ILocatorAssertions.ToHaveAccessibleErrorMessageAsync(string errorMessage, LocatorAssertionsToHaveAccessibleErrorMessageOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToHaveAccessibleErrorMessageAsync(string errorMessage, LocatorAssertionsToHaveAccessibleErrorMessageOptions options)
+            => ToHaveAccessibleErrorMessageAsync(errorMessage, timeout: options?.Timeout, ignoreCase: options?.IgnoreCase);
 
-        Task ILocatorAssertions.ToHaveAccessibleErrorMessageAsync(Regex errorMessage, LocatorAssertionsToHaveAccessibleErrorMessageOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToHaveAccessibleErrorMessageAsync(Regex errorMessage, LocatorAssertionsToHaveAccessibleErrorMessageOptions options)
+            => ToHaveAccessibleErrorMessageAsync(errorMessage, options?.Timeout, options?.IgnoreCase);
 
-        Task ILocatorAssertions.ToHaveAccessibleNameAsync(string name, LocatorAssertionsToHaveAccessibleNameOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToHaveAccessibleNameAsync(string name, LocatorAssertionsToHaveAccessibleNameOptions options)
+            => ToHaveAccessibleNameAsync(name, timeout: options?.Timeout, ignoreCase: options?.IgnoreCase);
 
-        Task ILocatorAssertions.ToHaveAccessibleNameAsync(Regex name, LocatorAssertionsToHaveAccessibleNameOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToHaveAccessibleNameAsync(Regex name, LocatorAssertionsToHaveAccessibleNameOptions options)
+            => ToHaveAccessibleNameAsync(name, options?.Timeout, options?.IgnoreCase);
 
-        Task ILocatorAssertions.ToHaveAttributeAsync(string name, string value, LocatorAssertionsToHaveAttributeOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToHaveAttributeAsync(string name, string value, LocatorAssertionsToHaveAttributeOptions options)
+            => ToHaveAttributeAsync(name, value, options?.Timeout, options?.IgnoreCase);
 
-        Task ILocatorAssertions.ToHaveAttributeAsync(string name, Regex value, LocatorAssertionsToHaveAttributeOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToHaveAttributeAsync(string name, Regex value, LocatorAssertionsToHaveAttributeOptions options)
+            => ToHaveAttributeAsync(name, value, options?.Timeout, options?.IgnoreCase);
 
-        Task ILocatorAssertions.ToHaveClassAsync(string expected, LocatorAssertionsToHaveClassOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToHaveClassAsync(string expected, LocatorAssertionsToHaveClassOptions options)
+            => ToHaveClassAsync(expected, options?.Timeout);
 
-        Task ILocatorAssertions.ToHaveClassAsync(Regex expected, LocatorAssertionsToHaveClassOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToHaveClassAsync(Regex expected, LocatorAssertionsToHaveClassOptions options)
+            => ToHaveClassAsync(expected, options?.Timeout);
 
-        Task ILocatorAssertions.ToHaveClassAsync(IEnumerable<string> expected, LocatorAssertionsToHaveClassOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToHaveClassAsync(IEnumerable<string> expected, LocatorAssertionsToHaveClassOptions options)
+            => ToHaveClassAsync(expected, options?.Timeout);
 
-        Task ILocatorAssertions.ToHaveClassAsync(IEnumerable<Regex> expected, LocatorAssertionsToHaveClassOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToHaveClassAsync(IEnumerable<Regex> expected, LocatorAssertionsToHaveClassOptions options)
+            => ToHaveClassAsync(expected, options?.Timeout);
 
-        Task ILocatorAssertions.ToHaveCountAsync(int count, LocatorAssertionsToHaveCountOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToHaveCountAsync(int count, LocatorAssertionsToHaveCountOptions options)
+            => ToHaveCountAsync(
+                count,
+                options?.Timeout,
+                options is LegacyLocatorAssertionsToHaveCountOptions legacy ? legacy.Signal : null);
 
-        Task ILocatorAssertions.ToHaveCSSAsync(string name, string value, LocatorAssertionsToHaveCSSOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToHaveCSSAsync(string name, string value, LocatorAssertionsToHaveCSSOptions options)
+        {
+            string pseudo = options?.Pseudo switch
+            {
+                PseudoElement.Before => "before",
+                PseudoElement.After => "after",
+                _ => null,
+            };
+            return ToHaveCSSAsync(name, value, options?.Timeout, pseudo);
+        }
 
-        Task ILocatorAssertions.ToHaveCSSAsync(string name, Regex value, LocatorAssertionsToHaveCSSOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToHaveCSSAsync(string name, Regex value, LocatorAssertionsToHaveCSSOptions options)
+        {
+            string pseudo = options?.Pseudo switch
+            {
+                PseudoElement.Before => "before",
+                PseudoElement.After => "after",
+                _ => null,
+            };
+            return ToHaveCSSAsync(name, value, options?.Timeout, pseudo);
+        }
 
-        Task ILocatorAssertions.ToHaveIdAsync(string id, LocatorAssertionsToHaveIdOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToHaveIdAsync(string id, LocatorAssertionsToHaveIdOptions options)
+            => ToHaveIdAsync(id, options?.Timeout);
 
-        Task ILocatorAssertions.ToHaveIdAsync(Regex id, LocatorAssertionsToHaveIdOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToHaveIdAsync(Regex id, LocatorAssertionsToHaveIdOptions options)
+            => ToHaveIdAsync(id, options?.Timeout);
 
-        Task ILocatorAssertions.ToHaveJSPropertyAsync(string name, object value, LocatorAssertionsToHaveJSPropertyOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToHaveJSPropertyAsync(string name, object value, LocatorAssertionsToHaveJSPropertyOptions options)
+            => ToHaveJSPropertyAsync(name, value, options?.Timeout);
 
-        Task ILocatorAssertions.ToHaveRoleAsync(AriaRole role, LocatorAssertionsToHaveRoleOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToHaveRoleAsync(AriaRole role, LocatorAssertionsToHaveRoleOptions options)
+            => ToHaveRoleAsync(role, options?.Timeout);
 
-        Task ILocatorAssertions.ToHaveTextAsync(string expected, LocatorAssertionsToHaveTextOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToHaveTextAsync(string expected, LocatorAssertionsToHaveTextOptions options)
+            => ToHaveTextAsync(
+                expected,
+                timeout: options?.Timeout,
+                ignoreCase: options?.IgnoreCase,
+                useInnerText: options?.UseInnerText,
+                signal: options is LegacyLocatorAssertionsToHaveTextOptions legacy ? legacy.Signal : null);
 
-        Task ILocatorAssertions.ToHaveTextAsync(Regex expected, LocatorAssertionsToHaveTextOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToHaveTextAsync(Regex expected, LocatorAssertionsToHaveTextOptions options)
+            => ToHaveTextAsync(expected, options?.Timeout, options?.IgnoreCase, options?.UseInnerText);
 
-        Task ILocatorAssertions.ToHaveTextAsync(IEnumerable<string> expected, LocatorAssertionsToHaveTextOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToHaveTextAsync(IEnumerable<string> expected, LocatorAssertionsToHaveTextOptions options)
+            => ToHaveTextAsync(expected, options?.Timeout, options?.IgnoreCase, options?.UseInnerText);
 
-        Task ILocatorAssertions.ToHaveTextAsync(IEnumerable<Regex> expected, LocatorAssertionsToHaveTextOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToHaveTextAsync(IEnumerable<Regex> expected, LocatorAssertionsToHaveTextOptions options)
+            => ToHaveTextAsync(expected, options?.Timeout, options?.IgnoreCase, options?.UseInnerText);
 
-        Task ILocatorAssertions.ToHaveValueAsync(string value, LocatorAssertionsToHaveValueOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToHaveValueAsync(string value, LocatorAssertionsToHaveValueOptions options)
+            => ToHaveValueAsync(value, options?.Timeout);
 
-        Task ILocatorAssertions.ToHaveValueAsync(Regex value, LocatorAssertionsToHaveValueOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToHaveValueAsync(Regex value, LocatorAssertionsToHaveValueOptions options)
+            => ToHaveValueAsync(value, options?.Timeout);
 
-        Task ILocatorAssertions.ToHaveValuesAsync(IEnumerable<string> values, LocatorAssertionsToHaveValuesOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToHaveValuesAsync(IEnumerable<string> values, LocatorAssertionsToHaveValuesOptions options)
+            => ToHaveValuesAsync(values, options?.Timeout);
 
-        Task ILocatorAssertions.ToHaveValuesAsync(IEnumerable<Regex> values, LocatorAssertionsToHaveValuesOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToHaveValuesAsync(IEnumerable<Regex> values, LocatorAssertionsToHaveValuesOptions options)
+            => ToHaveValuesAsync(values, options?.Timeout);
 
-        Task ILocatorAssertions.ToMatchAriaSnapshotAsync(string expected, LocatorAssertionsToMatchAriaSnapshotOptions options) => Task.CompletedTask;
+        Task ILocatorAssertions.ToMatchAriaSnapshotAsync(string expected, LocatorAssertionsToMatchAriaSnapshotOptions options)
+            => ToMatchAriaSnapshotAsync(
+                expected,
+                timeout: options?.Timeout,
+                signal: options is LegacyLocatorAssertionsToMatchAriaSnapshotOptions legacy ? legacy.Signal : null);
 #pragma warning restore SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
     }
 }

@@ -16,6 +16,7 @@
  */
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
@@ -65,7 +66,7 @@ namespace PlaywrightNative.WebKit
             => _wkFrame.ParentFrame == null ? null : _page.GetOrCreateFrame(_wkFrame.ParentFrame);
 
         /// <inheritdoc/>
-        public string Url => _wkFrame.Url;
+        public string Url => PopupOpenedHelper.PublicDocumentUrl(_wkFrame.Url);
 
         /// <inheritdoc/>
         public Task CheckAsync(string selector, Position position = default, bool? force = default, bool? noWaitAfter = default, float? timeout = default, bool? trial = default, ActionScroll scroll = default, bool? strict = default)
@@ -95,6 +96,14 @@ namespace PlaywrightNative.WebKit
         public Task<IJSHandle> EvaluateHandleAsync(string expression, object arg = default)
         {
             EvaluateWithArg.ThrowIfDetached(this);
+            if (EvaluateWithArg.IsHandle(arg))
+            {
+                return _page.EvaluateFunctionHandleInFrameAsync(
+                    _wkFrame,
+                    EvaluateWithArg.AsFunction(expression),
+                    arg);
+            }
+
             if (EvaluateHandleArg.TryPrepareHandleCall(expression, arg, out string handleFn, out object[] handleArgs))
             {
                 return EvaluatePreparedHandleAsync(handleFn, handleArgs);
@@ -397,36 +406,49 @@ namespace PlaywrightNative.WebKit
 
         private async Task<IJSHandle> EvaluatePreparedHandleAsync(string handleFn, object[] handleArgs)
         {
-            await EvaluateHandleArg.StashRemoteHandlesAsync(handleArgs).ConfigureAwait(false);
+            WKExecutionContext context = await _page.WaitForFrameContextForEvaluateAsync(_wkFrame).ConfigureAwait(false);
+            await _page.StashAdoptedHandlesForEvaluateAsync(context, handleArgs).ConfigureAwait(false);
             return await _page
-                .EvaluateFunctionHandleInFrameAsync(_wkFrame, handleFn, EvaluateHandleArg.TreeArgument(handleArgs))
+                .EvaluateHandleInFrameAsync(_wkFrame, EvaluateHandleArg.PreparedExpression(handleFn, handleArgs))
                 .ConfigureAwait(false);
         }
 
-        private async Task<T> EvaluatePreparedAsync<T>(string handleFn, object[] handleArgs)
-        {
-            await EvaluateHandleArg.StashRemoteHandlesAsync(handleArgs).ConfigureAwait(false);
-            return await _page
-                .EvaluateSerializedInFrameAsync<T>(_wkFrame, EvaluateHandleArg.PreparedExpression(handleFn, handleArgs))
-                .ConfigureAwait(false);
-        }
+        private Task<T> EvaluatePreparedAsync<T>(string handleFn, object[] handleArgs)
+            => _page.EvaluatePreparedInFrameAsync<T>(_wkFrame, handleFn, handleArgs);
 
         private Task<T> EvaluateInOwnFrameAsync<T>(string expression, object arg)
         {
             EvaluateWithArg.ThrowIfDetached(this);
+            if (EvaluateWithArg.IsHandle(arg))
+            {
+                return _page.EvaluateFunctionSerializedInFrameAsync<T>(
+                    _wkFrame,
+                    EvaluateHandleArg.WithSerializedHandleResult(
+                        "function () { return (" + EvaluateWithArg.AsFunction(expression) + ").apply(null, arguments); }"),
+                    arg);
+            }
+
             if (EvaluateHandleArg.TryPrepareHandleCall(expression, arg, out string handleFn, out object[] handleArgs))
             {
                 return EvaluatePreparedAsync<T>(handleFn, handleArgs);
             }
 
-            if (EvaluateWithArg.IsHandle(arg))
-            {
-                return _page.EvaluateAsync<T>(expression, arg);
-            }
-
             string toEval = arg == null ? EvaluateWithArg.InvokeIfFunction(expression) : EvaluateWithArg.Wrap(expression, arg);
             return _page.EvaluateSerializedInFrameAsync<T>(_wkFrame, toEval);
         }
+
+        private Task DispatchEventInternalAsync(string selector, string type, object eventInit, float? timeout, bool? strict)
+            => DispatchEventAction.RunAsync(
+                EvaluateDispatchBoolAsync,
+                selector,
+                type,
+                eventInit,
+                timeout,
+                strict ?? (_page.Context is IHasStrictSelectors s && s.StrictSelectors),
+                "frame.dispatchEvent");
+
+        private Task<bool> EvaluateDispatchBoolAsync(string script, object arg)
+            => EvaluateInOwnFrameAsync<bool>(script, arg);
 
         private Task<IElementHandle> QueryActionAsync(string selector)
             => QueryActionAsync(selector, default);
@@ -439,127 +461,317 @@ namespace PlaywrightNative.WebKit
                 strict ?? (_page.Context is IHasStrictSelectors s && s.StrictSelectors));
 
 #pragma warning disable SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
-        Task<IElementHandle> IFrame.AddScriptTagAsync(FrameAddScriptTagOptions options) => Task.FromResult<IElementHandle>(default!);
+        Task<IElementHandle> IFrame.AddScriptTagAsync(FrameAddScriptTagOptions options)
+        {
+            AddScriptTagHelper.Resolved resolved = AddScriptTagHelper.Resolve(
+                options?.Url,
+                options?.Path,
+                options?.Content,
+                options?.Type);
+            return _page.AddScriptTagInFrameAsync(
+                _wkFrame,
+                url: resolved.Url,
+                content: resolved.Content,
+                type: resolved.Type);
+        }
 
-        Task<IElementHandle> IFrame.AddStyleTagAsync(FrameAddStyleTagOptions options) => Task.FromResult<IElementHandle>(default!);
+        Task<IElementHandle> IFrame.AddStyleTagAsync(FrameAddStyleTagOptions options)
+            => Page.AddStyleTagAsync(new PageAddStyleTagOptions
+            {
+                Url = options?.Url,
+                Path = options?.Path,
+                Content = options?.Content,
+            });
 
-        Task IFrame.CheckAsync(string selector, FrameCheckOptions options) => Task.CompletedTask;
+        Task IFrame.CheckAsync(string selector, FrameCheckOptions options)
+            => CheckAsync(selector, options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, default, options?.Strict);
 
-        Task IFrame.ClickAsync(string selector, FrameClickOptions options) => Task.CompletedTask;
+        Task IFrame.ClickAsync(string selector, FrameClickOptions options)
+            => ClickAsync(selector, options?.Button ?? default, options?.ClickCount, options?.Delay, options?.Position, options?.Modifiers, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, default, null, options?.Strict);
 
-        Task IFrame.DblClickAsync(string selector, FrameDblClickOptions options) => Task.CompletedTask;
+        Task IFrame.DblClickAsync(string selector, FrameDblClickOptions options)
+            => DblClickAsync(selector, options?.Button ?? default, options?.Delay, options?.Position, options?.Modifiers, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, default, options?.Strict);
 
-        Task IFrame.DispatchEventAsync(string selector, string type, object eventInit, FrameDispatchEventOptions options) => Task.CompletedTask;
+        Task IFrame.DispatchEventAsync(string selector, string type, object eventInit, FrameDispatchEventOptions options)
+            => DispatchEventInternalAsync(selector, type, eventInit, options?.Timeout, options?.Strict);
 
-        Task IFrame.DragAndDropAsync(string source, string target, FrameDragAndDropOptions options) => Task.CompletedTask;
+        Task IFrame.DragAndDropAsync(string source, string target, FrameDragAndDropOptions options)
+            => DragAndDropHelper.RunAsync(
+                this,
+                source,
+                target,
+                options?.SourcePosition == null ? null : new Position { X = options.SourcePosition.X, Y = options.SourcePosition.Y },
+                options?.TargetPosition == null ? null : new Position { X = options.TargetPosition.X, Y = options.TargetPosition.Y },
+                options?.Force,
+                options?.Timeout,
+                options?.Trial,
+                options?.Steps,
+                ActionScrollBridge.FromScrollOption(options?.Scroll),
+                options?.Strict);
 
-        Task<JsonElement?> IFrame.EvalOnSelectorAllAsync(string selector, string expression, object arg) => Task.FromResult<JsonElement?>(default!);
+        Task<JsonElement?> IFrame.EvalOnSelectorAllAsync(string selector, string expression, object arg)
+            => EvalOnSelector.OnArrayAsync<JsonElement?>(
+                EvaluateHandleAsync(EvalOnSelector.DocumentQuerySelectorAllExpression(selector)),
+                expression,
+                arg);
 
-        Task<T> IFrame.EvalOnSelectorAllAsync<T>(string selector, string expression, object arg) => Task.FromResult<T>(default!);
+        Task<T> IFrame.EvalOnSelectorAllAsync<T>(string selector, string expression, object arg)
+            => EvalOnSelector.OnArrayAsync<T>(
+                EvaluateHandleAsync(EvalOnSelector.DocumentQuerySelectorAllExpression(selector)),
+                expression,
+                arg);
 
-        Task<JsonElement?> IFrame.EvalOnSelectorAsync(string selector, string expression, object arg) => Task.FromResult<JsonElement?>(default!);
+        Task<JsonElement?> IFrame.EvalOnSelectorAsync(string selector, string expression, object arg)
+            => EvalOnSelector.OnHandleAsync<JsonElement?>(QuerySelectorAsync(selector), selector, expression, arg, "frame.$eval");
 
-        Task<T> IFrame.EvalOnSelectorAsync<T>(string selector, string expression, object arg, FrameEvalOnSelectorOptions options) => Task.FromResult<T>(default!);
+        Task<T> IFrame.EvalOnSelectorAsync<T>(string selector, string expression, object arg, FrameEvalOnSelectorOptions options)
+            => EvalOnSelector.OnHandleAsync<T>(
+                QueryActionAsync(selector, options?.Strict),
+                selector,
+                expression,
+                arg,
+                "frame.$eval");
 
-        Task IFrame.FillAsync(string selector, string value, FrameFillOptions options) => Task.CompletedTask;
+        Task IFrame.FillAsync(string selector, string value, FrameFillOptions options)
+            => FillAsync(selector, value, options?.NoWaitAfter, options?.Timeout, options?.Force, default, options?.Strict);
 
-        Task IFrame.FocusAsync(string selector, FrameFocusOptions options) => Task.CompletedTask;
+        Task IFrame.FocusAsync(string selector, FrameFocusOptions options)
+            => FocusAsync(selector, options?.Timeout, default, options?.Strict);
 
-        Task<IElementHandle> IFrame.FrameElementAsync() => Task.FromResult<IElementHandle>(default!);
+        Task<IElementHandle> IFrame.FrameElementAsync() => FrameElementHelper.ResolveAsync(this);
 
-        IFrameLocator IFrame.FrameLocator(string selector) => null!;
+        IFrameLocator IFrame.FrameLocator(string selector) => new FrameLocator(this, selector);
 
-        Task<string> IFrame.GetAttributeAsync(string selector, string name, FrameGetAttributeOptions options) => Task.FromResult<string>(default!);
+        Task<string> IFrame.GetAttributeAsync(string selector, string name, FrameGetAttributeOptions options)
+            => GetAttributeAsync(selector, name, options?.Timeout, options?.Strict);
 
-        ILocator IFrame.GetByAltText(string text, FrameGetByAltTextOptions options) => null!;
+        ILocator IFrame.GetByAltText(string text, FrameGetByAltTextOptions options)
+            => Locator.FromScript(this, GetByAllScript.FindAllByAttribute, "alt", text, options?.Exact ?? false);
 
-        ILocator IFrame.GetByAltText(Regex text, FrameGetByAltTextOptions options) => null!;
+        ILocator IFrame.GetByAltText(Regex text, FrameGetByAltTextOptions options)
+            => Locator.FromScript(
+                this,
+                GetByAllScript.FindAllByAttributeRegex,
+                "alt",
+                GetByAllScript.Pattern(text),
+                GetByAllScript.Flags(text));
 
-        ILocator IFrame.GetByLabel(string text, FrameGetByLabelOptions options) => null!;
+        ILocator IFrame.GetByLabel(string text, FrameGetByLabelOptions options)
+            => Locator.FromScript(this, GetByAllScript.FindAllByLabel, text, options?.Exact ?? false);
 
-        ILocator IFrame.GetByLabel(Regex text, FrameGetByLabelOptions options) => null!;
+        ILocator IFrame.GetByLabel(Regex text, FrameGetByLabelOptions options)
+            => Locator.FromScript(
+                this,
+                GetByAllScript.FindAllByLabelRegex,
+                GetByAllScript.Pattern(text),
+                GetByAllScript.Flags(text));
 
-        ILocator IFrame.GetByPlaceholder(string text, FrameGetByPlaceholderOptions options) => null!;
+        ILocator IFrame.GetByPlaceholder(string text, FrameGetByPlaceholderOptions options)
+            => Locator.FromScript(this, GetByAllScript.FindAllByAttribute, "placeholder", text, options?.Exact ?? false);
 
-        ILocator IFrame.GetByPlaceholder(Regex text, FrameGetByPlaceholderOptions options) => null!;
+        ILocator IFrame.GetByPlaceholder(Regex text, FrameGetByPlaceholderOptions options)
+            => Locator.FromScript(
+                this,
+                GetByAllScript.FindAllByAttributeRegex,
+                "placeholder",
+                GetByAllScript.Pattern(text),
+                GetByAllScript.Flags(text));
 
-        ILocator IFrame.GetByRole(AriaRole role, FrameGetByRoleOptions options) => null!;
+        ILocator IFrame.GetByRole(AriaRole role, FrameGetByRoleOptions options)
+            => new Locator(this, RoleSelector.Build(
+                role.ToRoleString(),
+                options?.Name ?? options?.NameString,
+                options?.Exact,
+                options?.Checked,
+                options?.Disabled,
+                options?.Expanded,
+                options?.IncludeHidden,
+                options?.Level,
+                options?.Pressed,
+                options?.Selected,
+                options?.Description ?? options?.DescriptionString,
+                options?.DescriptionRegex,
+                options?.NameRegex));
 
-        ILocator IFrame.GetByTestId(string testId) => null!;
+        ILocator IFrame.GetByTestId(string testId) => new Locator(this, GetBySelectorScript.TestIdSelector(testId));
 
-        ILocator IFrame.GetByTestId(Regex testId) => null!;
+        ILocator IFrame.GetByTestId(Regex testId)
+            => Locator.FromScript(
+                this,
+                GetByAllScript.FindAllByAttributeRegex,
+                GetBySelectorScript.TestIdAttributeName(),
+                GetByAllScript.Pattern(testId),
+                GetByAllScript.Flags(testId));
 
-        ILocator IFrame.GetByText(string text, FrameGetByTextOptions options) => null!;
+        ILocator IFrame.GetByText(string text, FrameGetByTextOptions options)
+            => Locator.FromScript(this, GetByAllScript.FindAllByText, text, options?.Exact ?? false);
 
-        ILocator IFrame.GetByText(Regex text, FrameGetByTextOptions options) => null!;
+        ILocator IFrame.GetByText(Regex text, FrameGetByTextOptions options)
+            => Locator.FromScript(
+                this,
+                GetByAllScript.FindAllByTextRegex,
+                GetByAllScript.Pattern(text),
+                GetByAllScript.Flags(text));
 
-        ILocator IFrame.GetByTitle(string text, FrameGetByTitleOptions options) => null!;
+        ILocator IFrame.GetByTitle(string text, FrameGetByTitleOptions options)
+            => Locator.FromScript(this, GetByAllScript.FindAllByAttribute, "title", text, options?.Exact ?? false);
 
-        ILocator IFrame.GetByTitle(Regex text, FrameGetByTitleOptions options) => null!;
+        ILocator IFrame.GetByTitle(Regex text, FrameGetByTitleOptions options)
+            => Locator.FromScript(
+                this,
+                GetByAllScript.FindAllByAttributeRegex,
+                "title",
+                GetByAllScript.Pattern(text),
+                GetByAllScript.Flags(text));
 
-        Task<IResponse> IFrame.GotoAsync(string url, FrameGotoOptions options) => Task.FromResult<IResponse>(default!);
+        Task<IResponse> IFrame.GotoAsync(string url, FrameGotoOptions options)
+            => GoToAsync(url, options?.WaitUntil ?? default, options?.Timeout, options?.Referer);
 
-        Task IFrame.HoverAsync(string selector, FrameHoverOptions options) => Task.CompletedTask;
+        Task IFrame.HoverAsync(string selector, FrameHoverOptions options)
+            => HoverAsync(selector, options?.Position, options?.Modifiers, options?.Force, options?.Timeout, options?.Trial, default, options?.Strict);
 
-        Task<string> IFrame.InnerHTMLAsync(string selector, FrameInnerHTMLOptions options) => Task.FromResult<string>(default!);
+        Task<string> IFrame.InnerHTMLAsync(string selector, FrameInnerHTMLOptions options)
+            => InnerHTMLAsync(selector, options?.Timeout, options?.Strict);
 
-        Task<string> IFrame.InnerTextAsync(string selector, FrameInnerTextOptions options) => Task.FromResult<string>(default!);
+        Task<string> IFrame.InnerTextAsync(string selector, FrameInnerTextOptions options)
+            => InnerTextAsync(selector, options?.Timeout, options?.Strict);
 
-        Task<string> IFrame.InputValueAsync(string selector, FrameInputValueOptions options) => Task.FromResult<string>(default!);
+        Task<string> IFrame.InputValueAsync(string selector, FrameInputValueOptions options)
+            => EvalOnSelector.OnHandleAsync<string>(
+                QueryActionAsync(selector, options?.Strict),
+                selector,
+                ElementStateScript.InputValueFunction,
+                null,
+                "frame.inputValue");
 
-        Task<bool> IFrame.IsCheckedAsync(string selector, FrameIsCheckedOptions options) => Task.FromResult<bool>(default!);
+        Task<bool> IFrame.IsCheckedAsync(string selector, FrameIsCheckedOptions options)
+            => IsCheckedAsync(selector, options?.Timeout, options?.Strict);
 
-        Task<bool> IFrame.IsDisabledAsync(string selector, FrameIsDisabledOptions options) => Task.FromResult<bool>(default!);
+        Task<bool> IFrame.IsDisabledAsync(string selector, FrameIsDisabledOptions options)
+            => IsDisabledAsync(selector, options?.Timeout, options?.Strict);
 
-        Task<bool> IFrame.IsEditableAsync(string selector, FrameIsEditableOptions options) => Task.FromResult<bool>(default!);
+        Task<bool> IFrame.IsEditableAsync(string selector, FrameIsEditableOptions options)
+            => IsEditableAsync(selector, options?.Timeout, options?.Strict);
 
-        Task<bool> IFrame.IsEnabledAsync(string selector, FrameIsEnabledOptions options) => Task.FromResult<bool>(default!);
+        Task<bool> IFrame.IsEnabledAsync(string selector, FrameIsEnabledOptions options)
+            => IsEnabledAsync(selector, options?.Timeout, options?.Strict);
 
-        Task<bool> IFrame.IsHiddenAsync(string selector, FrameIsHiddenOptions options) => Task.FromResult<bool>(default!);
+        Task<bool> IFrame.IsHiddenAsync(string selector, FrameIsHiddenOptions options)
+            => IsHiddenAsync(selector, options?.Timeout, options?.Strict);
 
-        Task<bool> IFrame.IsVisibleAsync(string selector, FrameIsVisibleOptions options) => Task.FromResult<bool>(default!);
+        Task<bool> IFrame.IsVisibleAsync(string selector, FrameIsVisibleOptions options)
+            => IsVisibleAsync(selector, options?.Timeout, options?.Strict);
 
-        ILocator IFrame.Locator(string selector, FrameLocatorOptions options) => null!;
+        ILocator IFrame.Locator(string selector, FrameLocatorOptions options)
+        {
+            ILocator result = new Locator(this, selector);
+            options ??= new FrameLocatorOptions();
+            return SelectorQuery.ApplyOptions(
+                result,
+                options.Has,
+                options.HasText ?? options.HasTextString,
+                options.HasTextRegex,
+                options.HasNot,
+                options.HasNotText ?? options.HasNotTextString,
+                options.HasNotTextRegex);
+        }
 
-        Task IFrame.PressAsync(string selector, string key, FramePressOptions options) => Task.CompletedTask;
+        Task IFrame.PressAsync(string selector, string key, FramePressOptions options)
+            => PressAsync(selector, key, options?.Delay, options?.NoWaitAfter, options?.Timeout, null, default, options?.Strict);
 
-        Task<IElementHandle> IFrame.QuerySelectorAsync(string selector, FrameQuerySelectorOptions options) => Task.FromResult<IElementHandle>(default!);
+        Task<IElementHandle> IFrame.QuerySelectorAsync(string selector, FrameQuerySelectorOptions options) => QuerySelectorAsync(selector);
 
-        Task<IResponse> IFrame.RunAndWaitForNavigationAsync(Func<Task> action, FrameRunAndWaitForNavigationOptions options) => Task.FromResult<IResponse>(default!);
+        async Task<IResponse> IFrame.RunAndWaitForNavigationAsync(Func<Task> action, FrameRunAndWaitForNavigationOptions options)
+        {
+            if (action == null)
+            {
+                throw new ArgumentNullException(nameof(action));
+            }
 
-        Task<IReadOnlyList<string>> IFrame.SelectOptionAsync(string selector, string values, FrameSelectOptionOptions options) => Task.FromResult<IReadOnlyList<string>>(default!);
+            Task<IResponse> waitTask = ((IFrame)this).WaitForNavigationAsync(new FrameWaitForNavigationOptions
+            {
+                Url = options?.Url ?? options?.UrlString,
+                UrlRegex = options?.UrlRegex,
+                UrlFunc = options?.UrlFunc,
+                Timeout = options?.Timeout,
+                WaitUntil = options?.WaitUntil,
+            });
+            Task actionTask = action();
+            IResponse response = await waitTask.ConfigureAwait(false);
+            await actionTask.ConfigureAwait(false);
+            return response;
+        }
 
-        Task<IReadOnlyList<string>> IFrame.SelectOptionAsync(string selector, IElementHandle values, FrameSelectOptionOptions options) => Task.FromResult<IReadOnlyList<string>>(default!);
+        async Task<IReadOnlyList<string>> IFrame.SelectOptionAsync(string selector, string values, FrameSelectOptionOptions options)
+        {
+            IReadOnlyCollection<string> result = await SelectOptionAsync(selector, values, options?.NoWaitAfter, options?.Timeout, options?.Force, options?.Strict).ConfigureAwait(false);
+            return result as IReadOnlyList<string> ?? result.ToList();
+        }
 
-        Task<IReadOnlyList<string>> IFrame.SelectOptionAsync(string selector, IEnumerable<string> values, FrameSelectOptionOptions options) => Task.FromResult<IReadOnlyList<string>>(default!);
+        async Task<IReadOnlyList<string>> IFrame.SelectOptionAsync(string selector, IElementHandle values, FrameSelectOptionOptions options)
+        {
+            IReadOnlyCollection<string> result = await SelectOptionAsync(selector, values, options?.NoWaitAfter, options?.Timeout, options?.Strict, options?.Force).ConfigureAwait(false);
+            return result as IReadOnlyList<string> ?? result.ToList();
+        }
 
-        Task<IReadOnlyList<string>> IFrame.SelectOptionAsync(string selector, SelectOptionValue values, FrameSelectOptionOptions options) => Task.FromResult<IReadOnlyList<string>>(default!);
+        async Task<IReadOnlyList<string>> IFrame.SelectOptionAsync(string selector, IEnumerable<string> values, FrameSelectOptionOptions options)
+        {
+            IReadOnlyCollection<string> result = await SelectOptionAsync(selector, values, options?.NoWaitAfter, options?.Timeout, options?.Strict, options?.Force).ConfigureAwait(false);
+            return result as IReadOnlyList<string> ?? result.ToList();
+        }
 
-        Task<IReadOnlyList<string>> IFrame.SelectOptionAsync(string selector, IEnumerable<IElementHandle> values, FrameSelectOptionOptions options) => Task.FromResult<IReadOnlyList<string>>(default!);
+        async Task<IReadOnlyList<string>> IFrame.SelectOptionAsync(string selector, SelectOptionValue values, FrameSelectOptionOptions options)
+        {
+            IReadOnlyCollection<string> result = await SelectOptionAsync(selector, values, options?.NoWaitAfter, options?.Timeout, options?.Strict, options?.Force).ConfigureAwait(false);
+            return result as IReadOnlyList<string> ?? result.ToList();
+        }
 
-        Task<IReadOnlyList<string>> IFrame.SelectOptionAsync(string selector, IEnumerable<SelectOptionValue> values, FrameSelectOptionOptions options) => Task.FromResult<IReadOnlyList<string>>(default!);
+        async Task<IReadOnlyList<string>> IFrame.SelectOptionAsync(string selector, IEnumerable<IElementHandle> values, FrameSelectOptionOptions options)
+        {
+            IReadOnlyCollection<string> result = await SelectOptionAsync(selector, values, options?.NoWaitAfter, options?.Timeout, options?.Strict, options?.Force).ConfigureAwait(false);
+            return result as IReadOnlyList<string> ?? result.ToList();
+        }
 
-        Task IFrame.SetCheckedAsync(string selector, bool checkedState, FrameSetCheckedOptions options) => Task.CompletedTask;
+        async Task<IReadOnlyList<string>> IFrame.SelectOptionAsync(string selector, IEnumerable<SelectOptionValue> values, FrameSelectOptionOptions options)
+        {
+            IReadOnlyCollection<string> result = await SelectOptionAsync(selector, values, options?.NoWaitAfter, options?.Timeout, options?.Force, default, options?.Strict).ConfigureAwait(false);
+            return result as IReadOnlyList<string> ?? result.ToList();
+        }
 
-        Task IFrame.SetContentAsync(string html, FrameSetContentOptions options) => Task.CompletedTask;
+        Task IFrame.SetCheckedAsync(string selector, bool checkedState, FrameSetCheckedOptions options)
+            => checkedState
+                ? CheckAsync(selector, options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, default, options?.Strict)
+                : UncheckAsync(selector, options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, default, options?.Strict);
 
-        Task IFrame.SetInputFilesAsync(string selector, string files, FrameSetInputFilesOptions options) => Task.CompletedTask;
+        Task IFrame.SetContentAsync(string html, FrameSetContentOptions options)
+            => SetContentAsync(html, options?.Timeout, options?.WaitUntil ?? default);
 
-        Task IFrame.SetInputFilesAsync(string selector, IEnumerable<string> files, FrameSetInputFilesOptions options) => Task.CompletedTask;
+        Task IFrame.SetInputFilesAsync(string selector, string files, FrameSetInputFilesOptions options)
+            => SetInputFilesAsync(selector, files, options?.NoWaitAfter, options?.Timeout, options?.Strict);
 
-        Task IFrame.SetInputFilesAsync(string selector, FilePayload files, FrameSetInputFilesOptions options) => Task.CompletedTask;
+        Task IFrame.SetInputFilesAsync(string selector, IEnumerable<string> files, FrameSetInputFilesOptions options)
+            => SetInputFilesAsync(selector, files, options?.NoWaitAfter, options?.Timeout, options?.Strict);
 
-        Task IFrame.SetInputFilesAsync(string selector, IEnumerable<FilePayload> files, FrameSetInputFilesOptions options) => Task.CompletedTask;
+        Task IFrame.SetInputFilesAsync(string selector, FilePayload files, FrameSetInputFilesOptions options)
+            => SetInputFilesAsync(selector, files, options?.NoWaitAfter, options?.Timeout, options?.Strict);
 
-        Task IFrame.TapAsync(string selector, FrameTapOptions options) => Task.CompletedTask;
+        Task IFrame.SetInputFilesAsync(string selector, IEnumerable<FilePayload> files, FrameSetInputFilesOptions options)
+            => SetInputFilesAsync(selector, files, options?.NoWaitAfter, options?.Timeout, null, default, options?.Strict);
 
-        Task<string> IFrame.TextContentAsync(string selector, FrameTextContentOptions options) => Task.FromResult<string>(default!);
+        Task IFrame.TapAsync(string selector, FrameTapOptions options)
+            => TapAsync(selector, options?.Position, options?.Modifiers, options?.NoWaitAfter, options?.Force, options?.Timeout, options?.Trial, default, options?.Strict);
 
-        Task IFrame.TypeAsync(string selector, string text, FrameTypeOptions options) => Task.CompletedTask;
+        Task<string> IFrame.TextContentAsync(string selector, FrameTextContentOptions options)
+            => TextContentAsync(selector, options?.Timeout, options?.Strict);
 
-        Task IFrame.UncheckAsync(string selector, FrameUncheckOptions options) => Task.CompletedTask;
+        Task IFrame.TypeAsync(string selector, string text, FrameTypeOptions options)
+            => TypeAsync(selector, text, options?.Delay, options?.NoWaitAfter, options?.Timeout, null, default, options?.Strict);
 
-        Task<IJSHandle> IFrame.WaitForFunctionAsync(string expression, object arg, FrameWaitForFunctionOptions options) => Task.FromResult<IJSHandle>(default!);
+        Task IFrame.UncheckAsync(string selector, FrameUncheckOptions options)
+            => UncheckAsync(selector, options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, default, options?.Strict);
+
+        Task<IJSHandle> IFrame.WaitForFunctionAsync(string expression, object arg, FrameWaitForFunctionOptions options)
+            => WaitForFunctionAsync(expression, arg, options?.PollingInterval, options?.Timeout);
 
         Task IFrame.WaitForLoadStateAsync(LoadState? state, FrameWaitForLoadStateOptions options)
         {
@@ -567,15 +779,25 @@ namespace PlaywrightNative.WebKit
             return WaitForLoadStateAsync(state ?? LoadState.Load, o?.Timeout);
         }
 
-        Task<IResponse> IFrame.WaitForNavigationAsync(FrameWaitForNavigationOptions options) => Task.FromResult<IResponse>(default!);
+        Task<IResponse> IFrame.WaitForNavigationAsync(FrameWaitForNavigationOptions options)
+            => WaitForNavigationAsync(
+                options?.Url ?? options?.UrlString,
+                options?.UrlRegex,
+                options?.UrlFunc,
+                options?.Timeout,
+                options?.WaitUntil ?? default);
 
-        Task<IElementHandle> IFrame.WaitForSelectorAsync(string selector, FrameWaitForSelectorOptions options) => Task.FromResult<IElementHandle>(default!);
+        Task<IElementHandle> IFrame.WaitForSelectorAsync(string selector, FrameWaitForSelectorOptions options)
+            => WaitForSelectorAsync(selector, options?.State ?? WaitForSelectorState.Visible, options?.Timeout, options?.Strict);
 
-        Task IFrame.WaitForURLAsync(string url, FrameWaitForURLOptions options) => Task.CompletedTask;
+        Task IFrame.WaitForURLAsync(string url, FrameWaitForURLOptions options)
+            => WaitForURLAsync(url, null, null, options?.Timeout, options?.WaitUntil ?? default);
 
-        Task IFrame.WaitForURLAsync(Regex url, FrameWaitForURLOptions options) => Task.CompletedTask;
+        Task IFrame.WaitForURLAsync(Regex url, FrameWaitForURLOptions options)
+            => WaitForURLAsync(null, url, null, options?.Timeout, options?.WaitUntil ?? default);
 
-        Task IFrame.WaitForURLAsync(Func<string, bool> url, FrameWaitForURLOptions options) => Task.CompletedTask;
+        Task IFrame.WaitForURLAsync(Func<string, bool> url, FrameWaitForURLOptions options)
+            => WaitForURLAsync(null, null, url, options?.Timeout, options?.WaitUntil ?? default);
 #pragma warning restore SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
     }
 }

@@ -961,7 +961,12 @@ namespace PlaywrightNative.WebKit
                 && metrics.TryGetProperty("remoteAddress", out JsonElement remote)
                 && remote.ValueKind == JsonValueKind.String)
             {
-                wkResponse.ServerAddr = ResponseNetworkInfo.ParseRemoteAddress(remote.GetString())
+                ResponseServerAddrResult parsed = ResponseNetworkInfo.ParseRemoteAddress(remote.GetString())
+                    ?? wkResponse.ServerAddr;
+                wkResponse.ServerAddr = ResponseNetworkInfo.PreferDestinationOverInternalProxy(
+                    parsed,
+                    target.Url,
+                    _page.WKContext?.InternalProxyPort)
                     ?? wkResponse.ServerAddr;
             }
 
@@ -1326,6 +1331,12 @@ namespace PlaywrightNative.WebKit
             }
 
             request?.MarkFinished();
+
+            // WebKit discards buffered bodies shortly after loadingFinished /
+            // process-swap. Prefetch immediately so HAR / response.BodyAsync
+            // still see content under CI load (Ubuntu WebKit).
+            PrefetchResponseBody(request);
+
             if (request == null
                 || NetworkRequestEvents.IsHiddenFromPage(request.Url, request.Method, request.ResourceType))
             {
@@ -1333,6 +1344,31 @@ namespace PlaywrightNative.WebKit
             }
 
             _page.OnRequestFinished(request);
+        }
+
+        private void PrefetchResponseBody(WKRequest request)
+        {
+            if (request == null)
+            {
+                return;
+            }
+
+            WKResponse response = request.Response;
+            if (request.SuppressPageEvents)
+            {
+                WKRequest publicRequest = _page.FirstPendingNavigationRequest;
+                if (publicRequest?.Response is WKResponse adopted)
+                {
+                    response = adopted;
+                }
+            }
+
+            if (response == null || ResponseHeaders.IsRedirectStatus(response.Status))
+            {
+                return;
+            }
+
+            _ = response.PrefetchBodyAsync();
         }
 
         private void RaiseRequestFailed(WKRequest request)

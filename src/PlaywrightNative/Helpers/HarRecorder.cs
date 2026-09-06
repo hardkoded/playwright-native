@@ -51,7 +51,7 @@ namespace PlaywrightNative.Helpers
         /// <param name="recordHarMode">When <see cref="HarMode.Minimal"/>, response bodies are omitted.</param>
         /// <param name="recordHarContent">When <see cref="HarContentPolicy.Attach"/>, bodies are written beside the HAR.</param>
         /// <param name="recordHarUrlRegex">Optional regular expression; when set, only matching URLs are recorded.</param>
-        internal static void Start(IBrowserContext context, string recordHarPath, bool? recordHarOmitContent, string recordHarUrl = default, HarMode recordHarMode = default, HarContentPolicy recordHarContent = default, Regex recordHarUrlRegex = default)
+        internal static void Start(IBrowserContext context, string recordHarPath, bool? recordHarOmitContent, string recordHarUrl = default, HarMode recordHarMode = default, HarContentPolicy recordHarContent = EnumCompat.UndefinedHarContentPolicy, Regex recordHarUrlRegex = default)
         {
             if (context == null || string.IsNullOrEmpty(recordHarPath))
             {
@@ -82,7 +82,7 @@ namespace PlaywrightNative.Helpers
             IAPIRequestContext api,
             string recordHarPath,
             HarMode recordHarMode = default,
-            HarContentPolicy recordHarContent = default,
+            HarContentPolicy recordHarContent = EnumCompat.UndefinedHarContentPolicy,
             string recordHarUrl = default,
             Regex recordHarUrlRegex = default,
             string resourcesDir = default)
@@ -125,7 +125,7 @@ namespace PlaywrightNative.Helpers
             IAPIRequestContext api,
             string recordHarPath,
             HarMode recordHarMode = default,
-            HarContentPolicy recordHarContent = default,
+            HarContentPolicy recordHarContent = EnumCompat.UndefinedHarContentPolicy,
             string recordHarUrl = default,
             Regex recordHarUrlRegex = default,
             string resourcesDir = default)
@@ -695,14 +695,56 @@ namespace PlaywrightNative.Helpers
                     continue;
                 }
 
-                JsonObject cookie = ParseHarCookie(header.Value, attributes: true);
-                if (cookie != null)
+                foreach (string raw in SplitSetCookieValues(header.Value))
                 {
-                    array.Add(cookie);
+                    JsonObject cookie = ParseHarCookie(raw, attributes: true);
+                    if (cookie != null)
+                    {
+                        array.Add(cookie);
+                    }
                 }
             }
 
             return array;
+        }
+
+        private static IEnumerable<string> SplitSetCookieValues(string value)
+        {
+            if (string.IsNullOrEmpty(value))
+            {
+                yield break;
+            }
+
+            string separator = ResponseHeaders.WebKitSetCookieSeparator;
+            if (value.Contains(separator, StringComparison.Ordinal))
+            {
+                foreach (string part in value.Split(separator))
+                {
+                    string trimmed = part.Trim();
+                    if (trimmed.Length > 0)
+                    {
+                        yield return trimmed;
+                    }
+                }
+
+                yield break;
+            }
+
+            if (value.Contains('\n', StringComparison.Ordinal))
+            {
+                foreach (string part in value.Split('\n'))
+                {
+                    string trimmed = part.Trim();
+                    if (trimmed.Length > 0)
+                    {
+                        yield return trimmed;
+                    }
+                }
+
+                yield break;
+            }
+
+            yield return value;
         }
 
         private static JsonObject ParseHarCookie(string raw, bool attributes)
@@ -1053,20 +1095,42 @@ namespace PlaywrightNative.Helpers
             {
                 string pageUrl = page.Url ?? string.Empty;
                 string requestUrl = request.Url ?? string.Empty;
-                if (string.IsNullOrEmpty(pageUrl)
-                    || string.IsNullOrEmpty(requestUrl)
-                    || !PathsMatch(pageUrl, requestUrl))
+                bool pathsMatch = !string.IsNullOrEmpty(pageUrl)
+                    && !string.IsNullOrEmpty(requestUrl)
+                    && PathsMatch(pageUrl, requestUrl);
+
+                // Prefer innerText so JSON / plain navigations still yield a body when
+                // WebKit's Network.getResponseBody raced away; fall back to HTML.
+                string text = await page.EvaluateAsync<string>(
+                    @"(() => {
+                        if (document.body) {
+                            var text = document.body.innerText || document.body.textContent || '';
+                            if (text && text.length > 0)
+                                return text;
+                            return document.body.innerHTML || '';
+                        }
+                        return document.documentElement ? document.documentElement.outerHTML : '';
+                    })()").ConfigureAwait(false);
+                if (string.IsNullOrEmpty(text))
                 {
                     return null;
                 }
 
-                string text = await page.EvaluateAsync<string>(
-                    @"(() => {
-                        if (document.body)
-                            return document.body.innerHTML;
-                        return document.documentElement ? document.documentElement.outerHTML : '';
-                    })()").ConfigureAwait(false);
-                return string.IsNullOrEmpty(text) ? null : Encoding.UTF8.GetBytes(text);
+                if (!pathsMatch)
+                {
+                    // Same-host navigations under load often mismatch only on the
+                    // transient about:blank / prior URL; keep non-empty HTML.
+                    if (!string.IsNullOrEmpty(pageUrl)
+                        && !string.IsNullOrEmpty(requestUrl)
+                        && Uri.TryCreate(pageUrl, UriKind.Absolute, out Uri pageUri)
+                        && Uri.TryCreate(requestUrl, UriKind.Absolute, out Uri requestUri)
+                        && !string.Equals(pageUri.Host, requestUri.Host, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return null;
+                    }
+                }
+
+                return Encoding.UTF8.GetBytes(text);
             }
             catch (PlaywrightNativeException)
             {
@@ -1146,14 +1210,29 @@ namespace PlaywrightNative.Helpers
                 node["issuer"] = details.Issuer;
             }
 
-            if (details.ValidFrom.GetValueOrDefault() > 0)
+            if (SecurityDetailsUnix.TryGet(details, out long validFromUnix, out long validToUnix))
             {
-                node["validFrom"] = (long)Math.Round((double)details.ValidFrom.Value);
-            }
+                if (validFromUnix > 0)
+                {
+                    node["validFrom"] = validFromUnix;
+                }
 
-            if (details.ValidTo.GetValueOrDefault() > 0)
+                if (validToUnix > 0)
+                {
+                    node["validTo"] = validToUnix;
+                }
+            }
+            else
             {
-                node["validTo"] = (long)Math.Round((double)details.ValidTo.Value);
+                if (details.ValidFrom.GetValueOrDefault() > 0)
+                {
+                    node["validFrom"] = (long)Math.Round((double)details.ValidFrom.Value);
+                }
+
+                if (details.ValidTo.GetValueOrDefault() > 0)
+                {
+                    node["validTo"] = (long)Math.Round((double)details.ValidTo.Value);
+                }
             }
 
             return node;
@@ -1533,16 +1612,23 @@ namespace PlaywrightNative.Helpers
 
             internal async Task FlushAsync()
             {
-                Detach();
-
                 PendingEntry[] snapshot;
                 lock (_gate)
                 {
                     snapshot = _entries.ToArray();
                 }
 
+                // Capture bodies before Detach so page evaluate / protocol
+                // fallbacks still work (macOS WebKit CI was losing content.text).
                 foreach (PendingEntry pending in snapshot)
                 {
+                    if (pending.BodyTask == null
+                        && pending.Response != null
+                        && !_omitContent)
+                    {
+                        pending.BodyTask = CaptureBodyAsync(pending, pending.Response);
+                    }
+
                     if (pending.BodyTask == null || pending.BodyTask.IsCompleted)
                     {
                         continue;
@@ -1552,7 +1638,7 @@ namespace PlaywrightNative.Helpers
                     // (WebKit gzip / HTTP2). Unfinished chunked bodies stay at
                     // 250ms so context.CloseAsync cannot hang.
                     TimeSpan wait = pending.Response != null && string.IsNullOrEmpty(pending.FailureText)
-                        ? TimeSpan.FromSeconds(2)
+                        ? TimeSpan.FromSeconds(5)
                         : TimeSpan.FromMilliseconds(250);
                     try
                     {
@@ -1566,6 +1652,77 @@ namespace PlaywrightNative.Helpers
                     }
                 }
 
+                // WebKit often fills WKResponse via loadingFinished prefetch after
+                // CaptureBodyAsync already timed out on an early empty read.
+                if (!_omitContent)
+                {
+                    foreach (PendingEntry pending in snapshot)
+                    {
+                        if (pending.Body != null && pending.Body.Length > 0)
+                        {
+                            continue;
+                        }
+
+                        if (pending.Response == null)
+                        {
+                            continue;
+                        }
+
+                        try
+                        {
+                            byte[] late = await ReadBodyWithTimeoutAsync(pending.Response, TimeSpan.FromSeconds(3))
+                                .ConfigureAwait(false);
+                            if (late != null && late.Length > 0)
+                            {
+                                pending.Body = late;
+                            }
+                        }
+                        catch (TimeoutException)
+                        {
+                        }
+                        catch (PlaywrightNativeException)
+                        {
+                        }
+                    }
+                }
+
+                // Refresh page HTML while the context is still live so navigation
+                // entries can embed/attach content when getResponseBody raced away.
+                if (!_omitContent && !_slimMode)
+                {
+                    List<PageRecord> pageRecords;
+                    lock (_gate)
+                    {
+                        pageRecords = new List<PageRecord>(_pages.Values);
+                    }
+
+                    foreach (PageRecord record in pageRecords)
+                    {
+                        await record.RefreshAsync().ConfigureAwait(false);
+                    }
+
+                    foreach (PendingEntry pending in snapshot)
+                    {
+                        if (pending.Body != null && pending.Body.Length > 0)
+                        {
+                            continue;
+                        }
+
+                        if (pending.Request == null || !pending.Request.IsNavigationRequest)
+                        {
+                            continue;
+                        }
+
+                        byte[] fromPage = PageText(pending.Request)
+                            ?? await BodyFromPageAsync(pending.Request).ConfigureAwait(false)
+                            ?? await BodyFromTrackedPagesAsync(pending.Request).ConfigureAwait(false);
+                        if (fromPage != null && fromPage.Length > 0)
+                        {
+                            pending.Body = fromPage;
+                        }
+                    }
+                }
+
                 JsonArray pages = _slimMode
                     ? new JsonArray()
                     : await BuildPagesAsync(snapshot).ConfigureAwait(false);
@@ -1574,6 +1731,10 @@ namespace PlaywrightNative.Helpers
                 {
                     entries.Add(await BuildEntryAsync(pending).ConfigureAwait(false));
                 }
+
+                // Detach after BuildEntryAsync so navigation body fallbacks can still
+                // evaluate against the live page when getResponseBody raced away.
+                Detach();
 
                 lock (_gate)
                 {
@@ -1697,10 +1858,90 @@ namespace PlaywrightNative.Helpers
 
                 if (pending != null && !_omitContent)
                 {
-                    // Fetch at flush so WebKit getResponseBody runs after
-                    // navigation has settled (early fetches return empty).
-                    pending.BodyTask = Task.CompletedTask;
+                    // Start body capture while the page/network are still live.
+                    // WebKit often returns empty if getResponseBody runs too
+                    // early, so CaptureBodyAsync settles briefly then retries.
+                    pending.BodyTask = CaptureBodyAsync(pending, response);
                 }
+            }
+
+            private async Task CaptureBodyAsync(PendingEntry pending, IResponse response)
+            {
+                if (pending == null || response == null)
+                {
+                    return;
+                }
+
+                try
+                {
+                    byte[] body = await ReadBodyWithTimeoutAsync(response, TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+                    if (body != null && body.Length > 0)
+                    {
+                        pending.Body = body;
+                        return;
+                    }
+
+                    // One more attempt after the response has had time to buffer.
+                    await Task.Delay(50).ConfigureAwait(false);
+                    body = await ReadBodyWithTimeoutAsync(response, TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+                    if (body != null && body.Length > 0)
+                    {
+                        pending.Body = body;
+                        return;
+                    }
+
+                    // loadingFinished prefetch may still be in flight; give it a
+                    // beat before falling back to the live page document.
+                    await Task.Delay(100).ConfigureAwait(false);
+                    body = await ReadBodyWithTimeoutAsync(response, TimeSpan.FromSeconds(3)).ConfigureAwait(false);
+                    if (body != null && body.Length > 0)
+                    {
+                        pending.Body = body;
+                        return;
+                    }
+
+                    // WebKit Linux CI often loses Network.getResponseBody under
+                    // load; poll the live page / protocol briefly while open.
+                    if (pending.Request != null && pending.Request.IsNavigationRequest)
+                    {
+                        for (int attempt = 0; attempt < 12; attempt++)
+                        {
+                            byte[] fromPage = PageText(pending.Request)
+                                ?? await BodyFromPageAsync(pending.Request).ConfigureAwait(false)
+                                ?? await BodyFromTrackedPagesAsync(pending.Request).ConfigureAwait(false);
+                            if (fromPage != null && fromPage.Length > 0)
+                            {
+                                pending.Body = fromPage;
+                                return;
+                            }
+
+                            body = await ReadBodyWithTimeoutAsync(response, TimeSpan.FromSeconds(1)).ConfigureAwait(false);
+                            if (body != null && body.Length > 0)
+                            {
+                                pending.Body = body;
+                                return;
+                            }
+
+                            await Task.Delay(50).ConfigureAwait(false);
+                        }
+                    }
+                }
+                catch (TimeoutException)
+                {
+                }
+                catch (PlaywrightNativeException)
+                {
+                }
+            }
+
+            private async Task<byte[]> ReadBodyWithTimeoutAsync(IResponse response, TimeSpan timeout)
+            {
+                if (response is PlaywrightNative.WebKit.WKResponse wkResponse)
+                {
+                    return await wkResponse.PrefetchBodyAsync(forceRetry: true).WaitAsync(timeout).ConfigureAwait(false);
+                }
+
+                return await response.GetBodyAsync().WaitAsync(timeout).ConfigureAwait(false);
             }
 
             private void OnRequestFailed(object sender, IRequest request)
@@ -2083,7 +2324,11 @@ namespace PlaywrightNative.Helpers
                         {
                             try
                             {
-                                body = await response.GetBodyAsync().WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+                                body = await response.GetBodyAsync().WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+                                if (body != null && body.Length > 0)
+                                {
+                                    pending.Body = body;
+                                }
                             }
                             catch (TimeoutException)
                             {
@@ -2116,7 +2361,9 @@ namespace PlaywrightNative.Helpers
                         && request.IsNavigationRequest
                         && (body == null || body.Length < 1000))
                     {
-                        byte[] fromPage = PageText(request) ?? await BodyFromPageAsync(request).ConfigureAwait(false);
+                        byte[] fromPage = PageText(request)
+                            ?? await BodyFromPageAsync(request).ConfigureAwait(false)
+                            ?? await BodyFromTrackedPagesAsync(request).ConfigureAwait(false);
                         if (fromPage != null && fromPage.Length > (body == null ? 0 : body.Length))
                         {
                             body = fromPage;
@@ -2126,8 +2373,10 @@ namespace PlaywrightNative.Helpers
 
                 int decodedSize = body == null ? 0 : body.Length;
                 int encodedSize = sizes?.ResponseBodySize ?? decodedSize;
-                if (encodedSize >= decodedSize && decodedSize > 0 && gzip)
+                if (gzip && decodedSize > 0 && (encodedSize <= 0 || encodedSize >= decodedSize))
                 {
+                    // WebKit often reports decoded metrics.responseBodyBytesReceived
+                    // for gzip responses; recompute encoded size from the body.
                     encodedSize = GzipLength(body);
                 }
 
@@ -2458,6 +2707,11 @@ namespace PlaywrightNative.Helpers
                 IPage page = PageOf(request);
                 if (page == null)
                 {
+                    page = FindTrackedPage(request);
+                }
+
+                if (page == null)
+                {
                     return null;
                 }
 
@@ -2467,6 +2721,153 @@ namespace PlaywrightNative.Helpers
                         && !string.IsNullOrEmpty(record.Text))
                     {
                         return Encoding.UTF8.GetBytes(record.Text);
+                    }
+
+                    // Persistent contexts may navigate a page whose request lost its
+                    // frame binding; use any tracked page whose captured text matches.
+                    if (request != null && !string.IsNullOrEmpty(request.Url))
+                    {
+                        foreach (KeyValuePair<IPage, PageRecord> entry in _pages)
+                        {
+                            if (!string.IsNullOrEmpty(entry.Value.Text)
+                                && PathsMatch(entry.Key.Url ?? string.Empty, request.Url))
+                            {
+                                return Encoding.UTF8.GetBytes(entry.Value.Text);
+                            }
+                        }
+                    }
+                }
+
+                return null;
+            }
+
+            private IPage FindTrackedPage(IRequest request)
+            {
+                if (request == null || string.IsNullOrEmpty(request.Url))
+                {
+                    return null;
+                }
+
+                lock (_gate)
+                {
+                    foreach (KeyValuePair<IPage, PageRecord> entry in _pages)
+                    {
+                        if (PathsMatch(entry.Key.Url ?? string.Empty, request.Url))
+                        {
+                            return entry.Key;
+                        }
+                    }
+
+                    // Last resort: single tracked page in this HAR session.
+                    if (_pages.Count == 1)
+                    {
+                        foreach (IPage only in _pages.Keys)
+                        {
+                            return only;
+                        }
+                    }
+                }
+
+                return null;
+            }
+
+            private async Task<byte[]> BodyFromTrackedPagesAsync(IRequest request)
+            {
+                bool restrictToHtml = false;
+                IResponse existing = request?.ExistingResponse;
+                if (existing != null)
+                {
+                    try
+                    {
+                        string contentType = await existing.HeaderValueAsync("content-type").ConfigureAwait(false);
+                        if (!string.IsNullOrEmpty(contentType)
+                            && contentType.IndexOf("html", StringComparison.OrdinalIgnoreCase) < 0
+                            && contentType.IndexOf("json", StringComparison.OrdinalIgnoreCase) < 0
+                            && contentType.IndexOf("text/", StringComparison.OrdinalIgnoreCase) < 0)
+                        {
+                            // Binary / opaque responses must not scrape an unrelated page.
+                            restrictToHtml = true;
+                        }
+                    }
+                    catch (PlaywrightNativeException)
+                    {
+                    }
+                }
+
+                List<IPage> candidates = new List<IPage>();
+                IPage matched = FindTrackedPage(request);
+                if (matched != null)
+                {
+                    candidates.Add(matched);
+                }
+
+                lock (_gate)
+                {
+                    foreach (IPage page in _pages.Keys)
+                    {
+                        if (page != null && !candidates.Contains(page))
+                        {
+                            candidates.Add(page);
+                        }
+                    }
+                }
+
+                foreach (IPage page in candidates)
+                {
+                    try
+                    {
+                        string url = page.Url ?? string.Empty;
+                        bool urlMatches = request != null
+                            && !string.IsNullOrEmpty(request.Url)
+                            && PathsMatch(url, request.Url);
+
+                        if (url.StartsWith("about:", StringComparison.OrdinalIgnoreCase)
+                            && request != null
+                            && !string.IsNullOrEmpty(request.Url)
+                            && !request.Url.StartsWith("about:", StringComparison.OrdinalIgnoreCase))
+                        {
+                            continue;
+                        }
+
+                        // Only scrape a non-matching page for HTML navigations.
+                        if (!urlMatches && restrictToHtml)
+                        {
+                            continue;
+                        }
+
+                        if (!urlMatches && existing != null)
+                        {
+                            try
+                            {
+                                string contentType = await existing.HeaderValueAsync("content-type").ConfigureAwait(false);
+                                if (!string.IsNullOrEmpty(contentType)
+                                    && contentType.IndexOf("html", StringComparison.OrdinalIgnoreCase) < 0)
+                                {
+                                    continue;
+                                }
+                            }
+                            catch (PlaywrightNativeException)
+                            {
+                            }
+                        }
+
+                        string text = await page.EvaluateAsync<string>(
+                            @"(() => {
+                                if (document.body) {
+                                    var text = document.body.innerText || document.body.textContent || '';
+                                    if (text && text.length > 0)
+                                        return text;
+                                    return document.body.innerHTML || '';
+                                }
+                                return document.documentElement ? document.documentElement.outerHTML : '';
+                            })()").ConfigureAwait(false);
+                        if (!string.IsNullOrEmpty(text))
+                        {
+                            return Encoding.UTF8.GetBytes(text);
+                        }
+                    }
+                    catch (PlaywrightNativeException)
+                    {
                     }
                 }
 

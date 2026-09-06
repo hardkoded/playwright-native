@@ -170,16 +170,7 @@ namespace PlaywrightNative.Chromium
         public async ValueTask DisposeAsync()
         {
             GC.SuppressFinalize(this);
-
-            _connection.Disconnected -= OnDisconnected;
-
-            _connection.Dispose();
-
-            if (_processManager != null)
-            {
-                await _processManager.KillAsync().ConfigureAwait(false);
-                _processManager.Dispose();
-            }
+            await CloseAsync().ConfigureAwait(false);
         }
 
         /// <summary>
@@ -198,6 +189,10 @@ namespace PlaywrightNative.Chromium
         /// Official <c>connectOverCDP({ noDefaults })</c>. Skip default
         /// overrides on targets that already exist when connecting.
         /// </param>
+        /// <param name="headless">
+        /// When <see langword="false"/>, keep the automatic launch page so headed
+        /// Chromium retains a window; when <see langword="true"/>, close it.
+        /// </param>
         /// <returns>A fully initialized <see cref="CRBrowser"/> instance.</returns>
         internal static async Task<CRBrowser> ConnectAsync(
             CRConnection connection,
@@ -205,7 +200,8 @@ namespace PlaywrightNative.Chromium
             BrowserProcessManager processManager = null,
             ILoggerFactory loggerFactory = null,
             bool persistent = false,
-            bool noDefaults = false)
+            bool noDefaults = false,
+            bool headless = true)
         {
             // Retrieve browser version information.
             JsonElement? versionResponse = await connection.RootSession
@@ -269,10 +265,21 @@ namespace PlaywrightNative.Chromium
             browser._adoptingExistingTargets = false;
             if (!persistent && processManager != null)
             {
-                // Official launch() uses --no-startup-window. Websocket launch
-                // still needs leftover about:blank to start; close those pages
-                // so Target.setDiscoverTargets sees none.
-                await browser.CloseAutomaticLaunchPagesAsync().ConfigureAwait(false);
+                if (headless)
+                {
+                    // Official launch() uses --no-startup-window. Websocket launch
+                    // still needs leftover about:blank to start; close those pages
+                    // so Target.setDiscoverTargets sees none.
+                    await browser.CloseAutomaticLaunchPagesAsync().ConfigureAwait(false);
+                }
+                else
+                {
+                    // Headed Chrome must keep at least one window or
+                    // Target.createTarget fails with "Failed to open a new tab".
+                    // Still hide leftover launch contexts from browser.Contexts()
+                    // so launch() matches official "no contexts until newContext".
+                    browser.OmitAutomaticLaunchContextsFromPublicList();
+                }
             }
 
             return browser;
@@ -306,19 +313,30 @@ namespace PlaywrightNative.Chromium
                 }
             }
 
+            OmitAutomaticLaunchContextsFromPublicList();
+        }
+
+        /// <summary>
+        /// Drops leftover websocket-launch contexts from <see cref="Contexts"/> while
+        /// keeping any open pages attached (needed for headed <c>createTarget</c>).
+        /// </summary>
+        internal void OmitAutomaticLaunchContextsFromPublicList()
+        {
             // Official launch() has no contexts until newContext(). Leftover
-            // about:blank adopted Chrome's default profile; drop the empty
-            // tracking entry (it cannot Target.disposeBrowserContext).
+            // about:blank adopted Chrome's default profile; drop it from the
+            // public Contexts() list. Keep the CRBrowserContext in _contexts
+            // while a headed about:blank page is still attached (createTarget
+            // needs that window); only discard empty tracking entries.
             lock (_contextOrderLock)
             {
                 List<string> leftover = new List<string>(_contextOrder);
                 foreach (string id in leftover)
                 {
+                    _contextOrder.Remove(id);
                     if (_contexts.TryGetValue(id, out CRBrowserContext context)
                         && context.Pages.Count == 0)
                     {
                         _contexts.TryRemove(id, out _);
-                        _contextOrder.Remove(id);
                     }
                 }
             }
@@ -418,6 +436,40 @@ namespace PlaywrightNative.Chromium
             }
 
             CloseRemainingPages();
+
+            try
+            {
+                _connection.Disconnected -= OnDisconnected;
+            }
+#pragma warning disable RCS1075
+            catch (Exception)
+            {
+            }
+#pragma warning restore RCS1075
+
+            try
+            {
+                _connection.Dispose();
+            }
+#pragma warning disable RCS1075
+            catch (Exception)
+            {
+            }
+#pragma warning restore RCS1075
+
+            if (_processManager != null)
+            {
+                try
+                {
+                    _processManager.Dispose();
+                }
+#pragma warning disable RCS1075
+                catch (Exception)
+                {
+                }
+#pragma warning restore RCS1075
+            }
+
             RaiseDisconnected();
         }
 
@@ -464,9 +516,18 @@ namespace PlaywrightNative.Chromium
             CRBrowserContext created = new CRBrowserContext(this, browserContextId);
             if (_contexts.TryAdd(browserContextId, created))
             {
-                lock (_contextOrderLock)
+                // Launch (non-persistent) must not publish auto-adopted chrome
+                // profile contexts into browser.Contexts() — only
+                // Target.createBrowserContext (NewContextAsync) does. Headed
+                // websocket launch keeps about:blank attached for createTarget
+                // but still matches official "no contexts until newContext".
+                bool publish = _processManager == null || _defaultContext != null;
+                if (publish)
                 {
-                    _contextOrder.Add(browserContextId);
+                    lock (_contextOrderLock)
+                    {
+                        _contextOrder.Add(browserContextId);
+                    }
                 }
 
                 return created;
@@ -866,11 +927,13 @@ namespace PlaywrightNative.Chromium
                 return;
             }
 
-            context?.AddServiceWorker(targetId, worker);
-            _ = InitializeServiceWorkerAsync(worker, context);
+            // Defer context.AddServiceWorker (and the public ServiceWorker event)
+            // until Network is armed when PublicContext exists — otherwise
+            // FirstServiceWorkerAsync + evaluate can race ahead of Network.enable.
+            _ = InitializeServiceWorkerAsync(worker, context, targetId);
         }
 
-        private async Task InitializeServiceWorkerAsync(CRWorker worker, CRBrowserContext context)
+        private async Task InitializeServiceWorkerAsync(CRWorker worker, CRBrowserContext context, string targetId)
         {
             try
             {
@@ -878,15 +941,32 @@ namespace PlaywrightNative.Chromium
                 {
                     // Official CRServiceWorker applies UA/network before
                     // Runtime.runIfWaitingForDebugger. Persistent extension
-                    // workers attach during setAutoAttach before the instance
-                    // exists — keep them paused until AdoptExisting. For
-                    // connectOverCDP, still resume so page.goto(sw.html) can
-                    // finish while the default-context instance is created.
-                    await worker.InitializeAsync().ConfigureAwait(false);
+                    // workers attach during setAutoAttach before the public
+                    // context exists — keep them paused until
+                    // AdoptExistingServiceWorkersAsync instruments Network.
+                    // connectOverCDP (_processManager == null) still resumes so
+                    // page.goto(sw.html) can finish while the default-context
+                    // instance is created.
+                    context?.AddServiceWorker(targetId, worker);
+                    if (_processManager == null)
+                    {
+                        await worker.InitializeAsync().ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        // Keep waitForDebugger pause, but enable Runtime so the
+                        // target stays healthy until AdoptExisting resumes it.
+                        await worker.EnableRuntimeAsync().ConfigureAwait(false);
+                    }
+
                     return;
                 }
 
+                // Arm Network listeners + Network.enable before resume and before
+                // the public ServiceWorker event so SW fetch() is observed as
+                // context Request/Response (extensions.spec.ts).
                 await context.PublicContext.PrepareServiceWorkerNetworkAsync(worker).ConfigureAwait(false);
+                context.AddServiceWorker(targetId, worker);
                 await worker.InitializeAsync().ConfigureAwait(false);
             }
             catch (Exception ex)

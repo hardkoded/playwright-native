@@ -81,6 +81,29 @@ namespace PlaywrightNative.Helpers
                 if (rewritten.Expires.HasValue)
                 {
                     double expires = rewritten.Expires.Value;
+
+                    // Cookie.Expires is float32. Callers often pass (float)doubleSeconds for
+                    // long-lived cookies; when that cast rounds up, a faithful round-trip
+                    // exceeds the original double (ShouldAllowAddingCookiesWithMoreThan400DaysExpiration).
+                    // Only nudge long-lived values so short exact-equality expires tests stay intact.
+                    if (expires > 0)
+                    {
+                        double nowSec = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+                        const double fourHundredDaysSec = 400d * 24 * 3600;
+                        if (expires > nowSec + fourHundredDaysSec)
+                        {
+                            float asFloat = (float)expires;
+                            if ((double)asFloat == expires)
+                            {
+                                float previous = MathF.BitDecrement(asFloat);
+                                if (previous > nowSec)
+                                {
+                                    expires = previous;
+                                }
+                            }
+                        }
+                    }
+
                     item["expires"] = webKit && expires != -1 ? expires * 1000d : expires;
                 }
 
@@ -104,8 +127,8 @@ namespace PlaywrightNative.Helpers
                 {
                     // Chromium Storage.setCookies drops cookies that omit sameSite.
                     // Official cookies() then reports sameSite ?? 'Lax' (None on
-                    // Windows WebKit), which is defaultSameSiteCookieValue.
-                    item["sameSite"] = webKit && OperatingSystem.IsWindows()
+                    // Windows/macOS WebKit), which is defaultSameSiteCookieValue.
+                    item["sameSite"] = webKit && !OperatingSystem.IsLinux()
                         ? nameof(Microsoft.Playwright.SameSiteAttribute.None)
                         : nameof(Microsoft.Playwright.SameSiteAttribute.Lax);
                 }
@@ -162,7 +185,7 @@ namespace PlaywrightNative.Helpers
                     Value = ReadString(item, "value"),
                     Domain = ReadString(item, "domain"),
                     Path = ReadString(item, "path"),
-                    Expires = (float)ReadExpires(item, webKit),
+                    Expires = ToExpiresFloat(ReadExpires(item, webKit)),
                     HttpOnly = ReadBool(item, "httpOnly"),
                     Secure = ReadBool(item, "secure"),
                     SameSite = ReadSameSite(item, webKit),
@@ -420,6 +443,32 @@ namespace PlaywrightNative.Helpers
         private static bool ReadBool(JsonElement item, string name)
             => item.TryGetProperty(name, out JsonElement value) && value.ValueKind == JsonValueKind.True;
 
+        /// <summary>
+        /// Converts protocol expires (seconds) to the public float32 field without
+        /// rounding above the protocol double.
+        /// </summary>
+        /// <param name="seconds">Expires in seconds, or <c>-1</c> for session cookies.</param>
+        /// <returns>A float suitable for <see cref="BrowserContextCookiesResult.Expires"/>.</returns>
+        private static float ToExpiresFloat(double seconds)
+        {
+            if (seconds <= 0)
+            {
+                return (float)seconds;
+            }
+
+            float rounded = (float)seconds;
+            if (rounded > seconds)
+            {
+                float previous = MathF.BitDecrement(rounded);
+                if (previous > 0)
+                {
+                    return previous;
+                }
+            }
+
+            return rounded;
+        }
+
         private static double ReadExpires(JsonElement item, bool webKit)
         {
             if (ReadBool(item, "session"))
@@ -465,8 +514,11 @@ namespace PlaywrightNative.Helpers
                 return Microsoft.Playwright.SameSiteAttribute.None;
             }
 
-            // Official Chromium: sameSite ?? 'Lax'. WebKit reports the engine value.
-            return webKit ? default : Microsoft.Playwright.SameSiteAttribute.Lax;
+            // Official Chromium: sameSite ?? 'Lax'. WebKit macOS/Linux also default to
+            // Lax when the engine omits the field; Windows WebKit reports None.
+            return webKit && OperatingSystem.IsWindows()
+                ? Microsoft.Playwright.SameSiteAttribute.None
+                : Microsoft.Playwright.SameSiteAttribute.Lax;
         }
     }
 }

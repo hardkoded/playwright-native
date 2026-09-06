@@ -869,11 +869,15 @@ namespace PlaywrightNative
             Func<Task> handler,
             int? times = default,
             bool? noWaitAfter = default)
-            => page.AddLocatorHandlerAsync(locator, handler, new PageAddLocatorHandlerOptions
+        {
+            if (handler == null)
             {
-                Times = times,
-                NoWaitAfter = noWaitAfter,
-            });
+                throw new ArgumentNullException(nameof(handler));
+            }
+
+            LocatorHandlers.Add(page, locator, _ => handler(), times, noWaitAfter);
+            return Task.CompletedTask;
+        }
 
         /// <summary>Legacy add-locator-handler with times/noWaitAfter.</summary>
         [System.Runtime.CompilerServices.OverloadResolutionPriority(1)]
@@ -883,11 +887,10 @@ namespace PlaywrightNative
             Func<ILocator, Task> handler,
             int? times = default,
             bool? noWaitAfter = default)
-            => page.AddLocatorHandlerAsync(locator, handler, new PageAddLocatorHandlerOptions
-            {
-                Times = times,
-                NoWaitAfter = noWaitAfter,
-            });
+        {
+            LocatorHandlers.Add(page, locator, handler, times, noWaitAfter);
+            return Task.CompletedTask;
+        }
 
         /// <summary>Internal accessibility tree used by aria snapshots and expect matchers.</summary>
         internal static Task<AccessibilitySnapshotResult> SnapshotAccessibilityAsync(

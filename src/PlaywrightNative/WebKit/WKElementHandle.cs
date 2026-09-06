@@ -16,10 +16,12 @@
  */
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using Microsoft.Playwright;
+using PlaywrightNative.Compat;
 using PlaywrightNative.Helpers;
 
 namespace PlaywrightNative.WebKit
@@ -88,7 +90,7 @@ namespace PlaywrightNative.WebKit
                 return;
             }
 
-            await SetCheckedAsync(true, position, scroll).ConfigureAwait(false);
+            await SetCheckedAsync(true, position, scroll, force).ConfigureAwait(false);
         }
 
         /// <inheritdoc/>
@@ -155,12 +157,23 @@ namespace PlaywrightNative.WebKit
                 }
 
                 double[] point = await ClickAction.PointAsync(this, position, force).ConfigureAwait(false);
+                Input.MouseButton inputButton = button switch
+                {
+                    MouseButton.Right => Input.MouseButton.Right,
+                    MouseButton.Middle => Input.MouseButton.Middle,
+                    _ => Input.MouseButton.Left,
+                };
                 await ClickAction.RunModifiersAsync(
                     modifiers,
                     ClickAction.HeldKeys(_page.InputKeyboard.PressedModifiers),
                     _page.Keyboard.DownAsync,
                     _page.Keyboard.UpAsync,
-                    () => _page.Mouse.DblClickAsync((float)point[0], (float)point[1], button, delay, steps)).ConfigureAwait(false);
+                    () => _page.InputMouse.DoubleClickAsync(
+                        point[0],
+                        point[1],
+                        inputButton,
+                        delayMs: (int)(delay ?? 0),
+                        steps: steps ?? 1)).ConfigureAwait(false);
             }).ConfigureAwait(false);
         }
 
@@ -458,16 +471,16 @@ namespace PlaywrightNative.WebKit
             => SetInputFilesFromJsonAsync(FilePayloadHelper.ToJson(files), timeout, force, scroll);
 
         /// <inheritdoc/>
-        public Task SetInputFilesAsync(string files, bool? noWaitAfter = default, float? timeout = default)
-            => SetInputFilesFromPathsAsync(new[] { files }, timeout);
+        public Task SetInputFilesAsync(string files, bool? noWaitAfter = default, float? timeout = default, bool? force = default)
+            => SetInputFilesFromPathsAsync(new[] { files }, timeout, force);
 
         /// <inheritdoc/>
-        public Task SetInputFilesAsync(IEnumerable<string> files, bool? noWaitAfter = default, float? timeout = default)
-            => SetInputFilesFromPathsAsync(files, timeout);
+        public Task SetInputFilesAsync(IEnumerable<string> files, bool? noWaitAfter = default, float? timeout = default, bool? force = default)
+            => SetInputFilesFromPathsAsync(files, timeout, force);
 
         /// <inheritdoc/>
-        public Task SetInputFilesAsync(FilePayload files, bool? noWaitAfter = default, float? timeout = default)
-            => SetInputFilesFromJsonAsync(FilePayloadHelper.ToJson(files == null ? null : new[] { files }), timeout);
+        public Task SetInputFilesAsync(FilePayload files, bool? noWaitAfter = default, float? timeout = default, bool? force = default)
+            => SetInputFilesFromJsonAsync(FilePayloadHelper.ToJson(files == null ? null : new[] { files }), timeout, force);
 
         /// <inheritdoc/>
         public async Task TapAsync(Position position = default, IEnumerable<KeyboardModifier> modifiers = default, bool? force = default, bool? noWaitAfter = default, float? timeout = default, bool? trial = default, ActionScroll scroll = default)
@@ -519,7 +532,7 @@ namespace PlaywrightNative.WebKit
                 return;
             }
 
-            await SetCheckedAsync(false, position, scroll).ConfigureAwait(false);
+            await SetCheckedAsync(false, position, scroll, force).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -597,7 +610,7 @@ namespace PlaywrightNative.WebKit
             return point;
         }
 
-        private async Task SetCheckedAsync(bool check, Position position = null, ActionScroll scroll = default)
+        private async Task SetCheckedAsync(bool check, Position position = null, ActionScroll scroll = default, bool? force = default)
         {
             if (await IsCheckedAsync().ConfigureAwait(false) == check)
             {
@@ -609,8 +622,28 @@ namespace PlaywrightNative.WebKit
                 throw new PlaywrightNativeException("Cannot uncheck radio button");
             }
 
-            double[] point = await ClickPointAsync(position, scroll).ConfigureAwait(false);
-            await _page.Mouse.ClickAsync((float)point[0], (float)point[1]).ConfigureAwait(false);
+            // Prefer the full click pipeline (scroll, hit-test, modifiers). WebKit's
+            // pointer path still misses some checkbox/label hit targets on CI, so fall
+            // back to the injected DOM click used by ElementStateScript.CheckFunction.
+            // Pass force through so force:true skips hit-testing on hidden inputs.
+            await ClickAsync(position: position, force: force, scroll: scroll).ConfigureAwait(false);
+
+            if (await IsCheckedAsync().ConfigureAwait(false) == check)
+            {
+                return;
+            }
+
+            // force:true already issued a layout-center pointer click (Chromium Check
+            // stops there too). Injected el.click() synthesizes clientX/Y at 0,0 and
+            // would overwrite document-level force hit listeners for visibility:hidden.
+            if (force == true)
+            {
+                throw new PlaywrightNativeException("Clicking the checkbox did not change its state.");
+            }
+
+            await EvaluateFunctionAsync<bool>(
+                check ? ElementStateScript.CheckFunction : ElementStateScript.UncheckFunction)
+                .ConfigureAwait(false);
 
             if (await IsCheckedAsync().ConfigureAwait(false) != check)
             {
@@ -675,16 +708,20 @@ namespace PlaywrightNative.WebKit
         private Task<IReadOnlyCollection<string>> SelectOptionFromJsonAsync(string json, float? timeout = default, bool? force = default, ActionScroll scroll = default)
             => SelectOptionAction.RunAsync(this, json, timeout, force, scroll);
 
-        private async Task SetInputFilesFromPathsAsync(IEnumerable<string> files, float? timeout)
+        private async Task SetInputFilesFromPathsAsync(IEnumerable<string> files, float? timeout, bool? force = default)
         {
             ResolvedInputFilePaths resolved = SetInputFilesPathHelper.Resolve(files);
             IElementHandle target = await SetInputFilesPathHelper.FollowLabelControlAsync(this).ConfigureAwait(false);
-            await WaitForElementStateHelper.WaitVisibleUnlessForcedAsync(target, force: null, timeout).ConfigureAwait(false);
-            await target.EvaluateAsync<bool>(ElementStateScript.ScrollIntoViewIfNeededFunction).ConfigureAwait(false);
+            await WaitForElementStateHelper.WaitVisibleUnlessForcedAsync(target, force, timeout).ConfigureAwait(false);
+            if (force != true)
+            {
+                await target.EvaluateAsync<bool>(ElementStateScript.ScrollIntoViewIfNeededFunction).ConfigureAwait(false);
+            }
+
             await SetInputFilesPathHelper.ValidateAgainstInputAsync(target, resolved).ConfigureAwait(false);
             if (resolved.IsDirectory)
             {
-                await SetInputFilesFromJsonAsync(FilePayloadHelper.ToJson(resolved.Payloads), timeout).ConfigureAwait(false);
+                await SetInputFilesFromJsonAsync(FilePayloadHelper.ToJson(resolved.Payloads), timeout, force).ConfigureAwait(false);
                 return;
             }
 
@@ -727,65 +764,157 @@ namespace PlaywrightNative.WebKit
         }
 
 #pragma warning disable SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
-        Task IElementHandle.CheckAsync(ElementHandleCheckOptions options) => Task.CompletedTask;
+        Task IElementHandle.CheckAsync(ElementHandleCheckOptions options)
+            => CheckAsync(options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial);
 
-        Task IElementHandle.ClickAsync(ElementHandleClickOptions options) => Task.CompletedTask;
+        Task IElementHandle.ClickAsync(ElementHandleClickOptions options)
+            => ClickAsync(
+                options?.Button ?? default,
+                options?.ClickCount,
+                options?.Delay,
+                options?.Position,
+                options?.Modifiers,
+                options?.Force,
+                options?.NoWaitAfter,
+                options?.Timeout,
+                options?.Trial,
+                default,
+                options?.Steps);
 
-        Task IElementHandle.DblClickAsync(ElementHandleDblClickOptions options) => Task.CompletedTask;
+        Task IElementHandle.DblClickAsync(ElementHandleDblClickOptions options)
+            => DblClickAsync(
+                options?.Button ?? default,
+                options?.Delay,
+                options?.Position,
+                options?.Modifiers,
+                options?.Force,
+                options?.NoWaitAfter,
+                options?.Timeout,
+                options?.Trial,
+                default,
+                options?.Steps);
 
-        Task IElementHandle.DispatchEventAsync(string type, object eventInit) => Task.CompletedTask;
+        Task IElementHandle.DispatchEventAsync(string type, object eventInit)
+            => ElementDispatchEventAction.RunAsync(this, type, eventInit, default);
 
-        Task<T> IElementHandle.EvalOnSelectorAllAsync<T>(string selector, string expression, object arg) => Task.FromResult<T>(default!);
+        Task<T> IElementHandle.EvalOnSelectorAllAsync<T>(string selector, string expression, object arg)
+            => EvalOnSelector.OnArrayAsync<T>(
+                EvaluateHandleAsync(EvalOnSelector.ElementQuerySelectorAllExpression(selector)),
+                expression,
+                arg);
 
-        Task<JsonElement?> IElementHandle.EvalOnSelectorAsync(string selector, string expression, object arg) => Task.FromResult<JsonElement?>(default!);
+        Task<JsonElement?> IElementHandle.EvalOnSelectorAsync(string selector, string expression, object arg)
+            => EvalOnSelector.OnHandleAsync<JsonElement?>(QuerySelectorAsync(selector), selector, expression, arg, "elementHandle.$eval");
 
-        Task<T> IElementHandle.EvalOnSelectorAsync<T>(string selector, string expression, object arg) => Task.FromResult<T>(default!);
+        Task<T> IElementHandle.EvalOnSelectorAsync<T>(string selector, string expression, object arg)
+            => EvalOnSelector.OnHandleAsync<T>(QuerySelectorAsync(selector), selector, expression, arg, "elementHandle.$eval");
 
-        Task IElementHandle.FillAsync(string value, ElementHandleFillOptions options) => Task.CompletedTask;
+        Task IElementHandle.FillAsync(string value, ElementHandleFillOptions options)
+            => FillAsync(value, options?.NoWaitAfter, options?.Timeout, options?.Force);
 
-        Task IElementHandle.HoverAsync(ElementHandleHoverOptions options) => Task.CompletedTask;
+        Task IElementHandle.HoverAsync(ElementHandleHoverOptions options)
+            => HoverAsync(options?.Position, options?.Modifiers, options?.Force, options?.Timeout, options?.Trial);
 
-        Task<string> IElementHandle.InputValueAsync(ElementHandleInputValueOptions options) => Task.FromResult<string>(default!);
+        async Task<string> IElementHandle.InputValueAsync(ElementHandleInputValueOptions options)
+        {
+            await WaitForElementStateHelper.WaitAsync(this, ElementState.Visible, options?.Timeout).ConfigureAwait(false);
+            return await EvaluateFunctionAsync<string>(ElementStateScript.InputValueFunction).ConfigureAwait(false);
+        }
 
-        Task IElementHandle.PressAsync(string key, ElementHandlePressOptions options) => Task.CompletedTask;
+        Task IElementHandle.PressAsync(string key, ElementHandlePressOptions options)
+            => PressAsync(
+                key,
+                options?.Delay,
+                options?.NoWaitAfter,
+                options?.Timeout,
+                force: (options as LegacyElementHandlePressOptions)?.Force);
 
-        Task<byte[]> IElementHandle.ScreenshotAsync(ElementHandleScreenshotOptions options) => Task.FromResult<byte[]>(default!);
+        Task<byte[]> IElementHandle.ScreenshotAsync(ElementHandleScreenshotOptions options)
+            => ScreenshotAsync(
+                options?.Path,
+                options?.Type ?? default,
+                options?.Quality,
+                options?.OmitBackground,
+                options?.Timeout,
+                options?.Scale?.ToString(),
+                options?.Animations?.ToString(),
+                options?.Caret?.ToString(),
+                options?.Style,
+                options?.Mask,
+                options?.MaskColor);
 
-        Task IElementHandle.ScrollIntoViewIfNeededAsync(ElementHandleScrollIntoViewIfNeededOptions options) => Task.CompletedTask;
+        Task IElementHandle.ScrollIntoViewIfNeededAsync(ElementHandleScrollIntoViewIfNeededOptions options)
+            => ScrollIntoViewIfNeededAsync(options?.Timeout);
 
-        Task<IReadOnlyList<string>> IElementHandle.SelectOptionAsync(string values, ElementHandleSelectOptionOptions options) => Task.FromResult<IReadOnlyList<string>>(default!);
+        async Task<IReadOnlyList<string>> IElementHandle.SelectOptionAsync(string values, ElementHandleSelectOptionOptions options)
+            => (await SelectOptionAsync(values, options?.NoWaitAfter, options?.Timeout, options?.Force).ConfigureAwait(false)).ToList();
 
-        Task<IReadOnlyList<string>> IElementHandle.SelectOptionAsync(IElementHandle values, ElementHandleSelectOptionOptions options) => Task.FromResult<IReadOnlyList<string>>(default!);
+        async Task<IReadOnlyList<string>> IElementHandle.SelectOptionAsync(IElementHandle values, ElementHandleSelectOptionOptions options)
+            => (await SelectOptionAsync(values, options?.NoWaitAfter, options?.Timeout, options?.Force).ConfigureAwait(false)).ToList();
 
-        Task<IReadOnlyList<string>> IElementHandle.SelectOptionAsync(IEnumerable<string> values, ElementHandleSelectOptionOptions options) => Task.FromResult<IReadOnlyList<string>>(default!);
+        async Task<IReadOnlyList<string>> IElementHandle.SelectOptionAsync(IEnumerable<string> values, ElementHandleSelectOptionOptions options)
+            => (await SelectOptionAsync(values, options?.NoWaitAfter, options?.Timeout, options?.Force).ConfigureAwait(false)).ToList();
 
-        Task<IReadOnlyList<string>> IElementHandle.SelectOptionAsync(SelectOptionValue values, ElementHandleSelectOptionOptions options) => Task.FromResult<IReadOnlyList<string>>(default!);
+        async Task<IReadOnlyList<string>> IElementHandle.SelectOptionAsync(SelectOptionValue values, ElementHandleSelectOptionOptions options)
+            => (await SelectOptionAsync(values, options?.NoWaitAfter, options?.Timeout, options?.Force).ConfigureAwait(false)).ToList();
 
-        Task<IReadOnlyList<string>> IElementHandle.SelectOptionAsync(IEnumerable<IElementHandle> values, ElementHandleSelectOptionOptions options) => Task.FromResult<IReadOnlyList<string>>(default!);
+        async Task<IReadOnlyList<string>> IElementHandle.SelectOptionAsync(IEnumerable<IElementHandle> values, ElementHandleSelectOptionOptions options)
+            => (await SelectOptionAsync(values, options?.NoWaitAfter, options?.Timeout, options?.Force).ConfigureAwait(false)).ToList();
 
-        Task<IReadOnlyList<string>> IElementHandle.SelectOptionAsync(IEnumerable<SelectOptionValue> values, ElementHandleSelectOptionOptions options) => Task.FromResult<IReadOnlyList<string>>(default!);
+        async Task<IReadOnlyList<string>> IElementHandle.SelectOptionAsync(IEnumerable<SelectOptionValue> values, ElementHandleSelectOptionOptions options)
+            => (await SelectOptionAsync(values, options?.NoWaitAfter, options?.Timeout, options?.Force).ConfigureAwait(false)).ToList();
 
-        Task IElementHandle.SelectTextAsync(ElementHandleSelectTextOptions options) => Task.CompletedTask;
+        Task IElementHandle.SelectTextAsync(ElementHandleSelectTextOptions options)
+            => SelectTextAsync(options?.Timeout, options?.Force);
 
-        Task IElementHandle.SetCheckedAsync(bool checkedState, ElementHandleSetCheckedOptions options) => Task.CompletedTask;
+        Task IElementHandle.SetCheckedAsync(bool checkedState, ElementHandleSetCheckedOptions options)
+            => checkedState
+                ? CheckAsync(options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial)
+                : UncheckAsync(options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial);
 
-        Task IElementHandle.SetInputFilesAsync(string files, ElementHandleSetInputFilesOptions options) => Task.CompletedTask;
+        Task IElementHandle.SetInputFilesAsync(string files, ElementHandleSetInputFilesOptions options)
+            => SetInputFilesAsync(files, options?.NoWaitAfter, options?.Timeout, (options as LegacyElementHandleSetInputFilesOptions)?.Force);
 
-        Task IElementHandle.SetInputFilesAsync(IEnumerable<string> files, ElementHandleSetInputFilesOptions options) => Task.CompletedTask;
+        Task IElementHandle.SetInputFilesAsync(IEnumerable<string> files, ElementHandleSetInputFilesOptions options)
+            => SetInputFilesFromPathsAsync(files, options?.Timeout, (options as LegacyElementHandleSetInputFilesOptions)?.Force);
 
-        Task IElementHandle.SetInputFilesAsync(FilePayload files, ElementHandleSetInputFilesOptions options) => Task.CompletedTask;
+        Task IElementHandle.SetInputFilesAsync(FilePayload files, ElementHandleSetInputFilesOptions options)
+            => SetInputFilesFromJsonAsync(
+                FilePayloadHelper.ToJson(files == null ? null : new[] { files }),
+                options?.Timeout,
+                (options as LegacyElementHandleSetInputFilesOptions)?.Force);
 
-        Task IElementHandle.SetInputFilesAsync(IEnumerable<FilePayload> files, ElementHandleSetInputFilesOptions options) => Task.CompletedTask;
+        Task IElementHandle.SetInputFilesAsync(IEnumerable<FilePayload> files, ElementHandleSetInputFilesOptions options)
+            => SetInputFilesFromJsonAsync(
+                FilePayloadHelper.ToJson(files),
+                options?.Timeout,
+                (options as LegacyElementHandleSetInputFilesOptions)?.Force);
 
-        Task IElementHandle.TapAsync(ElementHandleTapOptions options) => Task.CompletedTask;
+        Task IElementHandle.TapAsync(ElementHandleTapOptions options)
+            => TapAsync(options?.Position, options?.Modifiers, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial);
 
-        Task IElementHandle.TypeAsync(string text, ElementHandleTypeOptions options) => Task.CompletedTask;
+        Task IElementHandle.TypeAsync(string text, ElementHandleTypeOptions options)
+            => TypeAsync(
+                text,
+                options?.Delay,
+                options?.NoWaitAfter,
+                options?.Timeout,
+                force: (options as LegacyElementHandleTypeOptions)?.Force);
 
-        Task IElementHandle.UncheckAsync(ElementHandleUncheckOptions options) => Task.CompletedTask;
+        Task IElementHandle.UncheckAsync(ElementHandleUncheckOptions options)
+            => UncheckAsync(options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial);
 
-        Task IElementHandle.WaitForElementStateAsync(ElementState state, ElementHandleWaitForElementStateOptions options) => Task.CompletedTask;
+        Task IElementHandle.WaitForElementStateAsync(ElementState state, ElementHandleWaitForElementStateOptions options)
+            => ElementHandleWaitHelper.WaitForElementStateAsync(this, state, options);
 
-        Task<IElementHandle> IElementHandle.WaitForSelectorAsync(string selector, ElementHandleWaitForSelectorOptions options) => Task.FromResult<IElementHandle>(default!);
+        Task<IElementHandle> IElementHandle.WaitForSelectorAsync(string selector, ElementHandleWaitForSelectorOptions options)
+            => ElementHandleWaitHelper.WaitForSelectorAsync(
+                this,
+                selector,
+                options,
+                QuerySelectorAsync,
+                QuerySelectorAllAsync,
+                _page.Context is IHasStrictSelectors strict && strict.StrictSelectors);
 #pragma warning restore SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
     }
 }

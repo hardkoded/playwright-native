@@ -20,6 +20,7 @@ using System.Collections.Generic;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using PlaywrightNative.WebKit;
 
 namespace PlaywrightNative.Helpers
 {
@@ -53,6 +54,12 @@ namespace PlaywrightNative.Helpers
   };
   const roots = collectRoots(document, []);
   const restore = [];
+  const active = document.activeElement;
+  let refocus = null;
+  if (active && active.matches && active.matches('input,textarea,[contenteditable]')) {
+    refocus = active;
+    active.blur();
+  }
   for (const root of roots) {
     root.querySelectorAll('input,textarea,[contenteditable]').forEach(element => {
       restore.push({
@@ -66,6 +73,9 @@ namespace PlaywrightNative.Helpers
   window.__pwRestoreCaret = () => {
     for (const item of restore)
       item.element.style.setProperty('caret-color', item.value, item.priority);
+    if (refocus && typeof refocus.focus === 'function') {
+      try { refocus.focus(); } catch (e) {}
+    }
     delete window.__pwRestoreCaret;
   };
 })()";
@@ -147,6 +157,16 @@ namespace PlaywrightNative.Helpers
         internal static string BuildCss(string animations, string caret, string style)
         {
             StringBuilder builder = new StringBuilder();
+            if (IsDisabled(animations))
+            {
+                builder.Append(DisableAnimationsCss);
+            }
+
+            if (IsHideCaret(caret))
+            {
+                builder.Append(HideCaretCss);
+            }
+
             if (!string.IsNullOrEmpty(style))
             {
                 builder.Append(style);
@@ -295,6 +315,12 @@ namespace PlaywrightNative.Helpers
 
         private static async Task EvaluateInFramesAsync(IPage page, string expression)
         {
+            if (page is WKPage webkit)
+            {
+                await EvaluateInWebKitUtilityAsync(webkit, expression).ConfigureAwait(false);
+                return;
+            }
+
             IReadOnlyCollection<IFrame> frames = page.Frames;
             if (frames == null || frames.Count == 0)
             {
@@ -322,6 +348,49 @@ namespace PlaywrightNative.Helpers
                 try
                 {
                     await frame.EvaluateAsync(expression).ConfigureAwait(false);
+                }
+                catch (PlaywrightNativeException)
+                {
+                }
+                catch (TimeoutException)
+                {
+                }
+            }
+        }
+
+        private static async Task EvaluateInWebKitUtilityAsync(WKPage page, string expression)
+        {
+            IReadOnlyCollection<IFrame> frames = page.Frames;
+            List<WebKitFrame> targets = new List<WebKitFrame>();
+            if (frames != null)
+            {
+                foreach (IFrame frame in frames)
+                {
+                    if (frame is WebKitFrame webkitFrame && !webkitFrame.IsDetached)
+                    {
+                        targets.Add(webkitFrame);
+                    }
+                }
+            }
+
+            if (targets.Count == 0 && page.MainFrame is WebKitFrame main)
+            {
+                targets.Add(main);
+            }
+
+            foreach (WebKitFrame frame in targets)
+            {
+                try
+                {
+                    WKExecutionContext utility = await page.GetUtilityWorldAsync(frame.GetWKFrame()).ConfigureAwait(false);
+                    if (utility != null)
+                    {
+                        await utility.EvaluateAsync(expression).ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        await frame.EvaluateAsync(expression).ConfigureAwait(false);
+                    }
                 }
                 catch (PlaywrightNativeException)
                 {

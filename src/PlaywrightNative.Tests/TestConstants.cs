@@ -38,6 +38,7 @@ namespace PlaywrightNative.Tests
         internal static readonly bool IsChromium = Product.Equals(ChromiumProduct, StringComparison.OrdinalIgnoreCase);
         internal static readonly bool IsMacOSX = RuntimeInformation.IsOSPlatform(OSPlatform.OSX);
         internal static readonly bool IsWindows = RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
+        internal static readonly bool IsLinux = RuntimeInformation.IsOSPlatform(OSPlatform.Linux);
 
         public static readonly IEnumerable<string> NestedFramesDumpResult = new List<string>()
         {

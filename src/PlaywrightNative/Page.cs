@@ -17,6 +17,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -319,7 +320,7 @@ namespace PlaywrightNative
         }
 
         /// <inheritdoc/>
-        public string Url => _crPage.MainFrame.Url;
+        public string Url => PopupOpenedHelper.PublicDocumentUrl(_crPage.MainFrame.Url);
 
         /// <inheritdoc/>
         public PageViewportSizeResult ViewportSize => _viewportSize;
@@ -695,9 +696,9 @@ namespace PlaywrightNative
             {
                 if (EvaluateHandleArg.TryPrepareHandleCall(expression, arg, out string handleFn, out object[] handleArgs))
                 {
-                    await EvaluateHandleArg.StashRemoteHandlesAsync(handleArgs).ConfigureAwait(false);
+                    object[] args = EvaluateHandleArg.AsCallFunctionArguments(handleArgs);
                     CRJSHandle bound = await _crPage
-                        .EvaluateFunctionHandleInternalAsync(handleFn, EvaluateHandleArg.TreeArgument(handleArgs))
+                        .EvaluateFunctionHandleInternalAsync(handleFn, args)
                         .ConfigureAwait(false);
                     return WrapJSHandle(bound);
                 }
@@ -962,7 +963,7 @@ namespace PlaywrightNative
             => _crPage.Session.SendAsync("Page.bringToFront");
 
         /// <inheritdoc/>
-        public Task<IReadOnlyList<IConsoleMessage>> ConsoleMessagesAsync(ConsoleMessagesFilter filter = default)
+        public Task<IReadOnlyList<IConsoleMessage>> ConsoleMessagesAsync(ConsoleMessagesFilter filter = ConsoleMessagesFilter.SinceNavigation)
             => Task.FromResult(_consoleLog.Snapshot(filter));
 
         /// <inheritdoc/>
@@ -1021,7 +1022,7 @@ namespace PlaywrightNative
             => AtomicSelectorRead.WaitStringAsync(
                 expression => EvaluateAsync<JsonElement?>(expression),
                 selector,
-                "el.innerText",
+                ElementStateScript.InnerTextValueExpression,
                 timeout,
                 "page.innerText",
                 strict ?? (_context is IHasStrictSelectors s && s.StrictSelectors));
@@ -2003,9 +2004,21 @@ namespace PlaywrightNative
 
         private async Task<T> EvaluatePreparedAsync<T>(string handleFn, object[] handleArgs)
         {
-            await EvaluateHandleArg.StashRemoteHandlesAsync(handleArgs).ConfigureAwait(false);
-            return await EvaluateSerializedAsync<T>(
-                EvaluateHandleArg.PreparedExpression(handleFn, handleArgs)).ConfigureAwait(false);
+            // Pass live handles through callFunctionOn so CRExecutionContext can
+            // adopt ElementHandles (and reject cross-context JSHandles).
+            object[] args = EvaluateHandleArg.AsCallFunctionArguments(handleArgs);
+            string serializedFn = EvaluateHandleArg.WithSerializedHandleResult(handleFn);
+            try
+            {
+                await Task.Yield();
+                CRExecutionContext context = await _crPage.WaitForExecutionContextAsync().ConfigureAwait(false);
+                JsonElement? wrapped = await context.EvaluateFunctionAsync(serializedFn, args).ConfigureAwait(false);
+                return EvaluateSerialization.ParseRemote<T>(wrapped);
+            }
+            catch (PlaywrightNativeException ex)
+            {
+                throw EvaluateSerialization.RewriteException(ex);
+            }
         }
 
         private async Task<T> EvaluateSerializedAsync<T>(string expression)
@@ -2171,6 +2184,46 @@ namespace PlaywrightNative
             FileChooser?.Invoke(this, new FileChooser(this, element, e.Multiple));
         }
 
+        private async Task<T> RunAndWaitInternalAsync<T>(Func<Task> action, Task<T> waitTask)
+        {
+            if (action == null)
+            {
+                throw new ArgumentNullException(nameof(action));
+            }
+
+            Task actionTask = action();
+            T result = await waitTask.ConfigureAwait(false);
+            await actionTask.ConfigureAwait(false);
+            return result;
+        }
+
+        private Task<IRequest> WaitForRequestFinishedInternalAsync(
+            string urlString,
+            Regex urlRegex,
+            Func<IRequest, bool> predicate,
+            float? timeout)
+            => WaitForEventAsync(
+                PageEvent.RequestFinished,
+                r => predicate != null
+                    ? predicate(r)
+                    : UrlMatcher.Matches(r.Url, urlString, urlRegex, null, NavigationUrl.ContextBase(Context)),
+                timeout);
+
+        private Task DispatchEventInternalAsync(string selector, string type, object eventInit, float? timeout, bool? strict)
+            => DispatchEventAction.RunAsync(
+                EvaluateDispatchBoolAsync,
+                selector,
+                type,
+                eventInit,
+                timeout,
+                strict ?? (_context is IHasStrictSelectors s && s.StrictSelectors),
+                "page.dispatchEvent");
+
+        private Task<bool> EvaluateDispatchBoolAsync(string script, object arg)
+            => arg == null
+                ? EvaluateSerializedAsync<bool>(script)
+                : EvaluateAsync<bool>(script, arg);
+
         private Task<IElementHandle> QueryActionAsync(string selector)
             => QueryActionAsync(selector, default);
 
@@ -2178,236 +2231,502 @@ namespace PlaywrightNative
             => StrictSelector.QueryAsync(QuerySelectorAsync, QuerySelectorAllAsync, selector, strict ?? (_context is IHasStrictSelectors s && s.StrictSelectors));
 
 #pragma warning disable SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
-        Task IPage.AddLocatorHandlerAsync(ILocator locator, Func<ILocator, Task> handler, PageAddLocatorHandlerOptions options) => Task.CompletedTask;
+        Task IPage.AddLocatorHandlerAsync(ILocator locator, Func<ILocator, Task> handler, PageAddLocatorHandlerOptions options)
+        {
+            LocatorHandlers.Add(this, locator, handler, options?.Times, options?.NoWaitAfter);
+            return Task.CompletedTask;
+        }
 
-        Task IPage.AddLocatorHandlerAsync(ILocator locator, Func<Task> handler, PageAddLocatorHandlerOptions options) => Task.CompletedTask;
+        Task IPage.AddLocatorHandlerAsync(ILocator locator, Func<Task> handler, PageAddLocatorHandlerOptions options)
+        {
+            if (handler == null)
+            {
+                throw new ArgumentNullException(nameof(handler));
+            }
 
-        Task<IElementHandle> IPage.AddScriptTagAsync(PageAddScriptTagOptions options) => Task.FromResult<IElementHandle>(default!);
+            LocatorHandlers.Add(this, locator, _ => handler(), options?.Times, options?.NoWaitAfter);
+            return Task.CompletedTask;
+        }
 
-        Task<IElementHandle> IPage.AddStyleTagAsync(PageAddStyleTagOptions options) => Task.FromResult<IElementHandle>(default!);
+        Task<IElementHandle> IPage.AddScriptTagAsync(PageAddScriptTagOptions options)
+            => AddScriptTagAsync(options?.Url, options?.Path, options?.Content, options?.Type);
 
-        Task<string> IPage.AriaSnapshotAsync(PageAriaSnapshotOptions options) => Task.FromResult<string>(default!);
+        Task<IElementHandle> IPage.AddStyleTagAsync(PageAddStyleTagOptions options)
+            => AddStyleTagAsync(options?.Url, options?.Path, options?.Content);
+
+        Task<string> IPage.AriaSnapshotAsync(PageAriaSnapshotOptions options)
+            => PageAriaSnapshot.CaptureAsync(this, options);
 
         Task IPage.CancelPickLocatorAsync() => Task.CompletedTask;
 
-        Task IPage.CheckAsync(string selector, PageCheckOptions options) => Task.CompletedTask;
+        Task IPage.CheckAsync(string selector, PageCheckOptions options)
+            => CheckAsync(selector, options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, default, options?.Strict);
 
         Task IPage.ClickAsync(string selector, PageClickOptions options)
-        {
-            PageClickOptions o = options;
-            return ClickAsync(selector, o.Button ?? default, o.ClickCount, o.Delay, o.Position, o.Modifiers, o.Force, o.NoWaitAfter, o.Timeout, o.Trial, default, null, o.Strict);
-        }
+            => ClickAsync(selector, options?.Button ?? default, options?.ClickCount, options?.Delay, options?.Position, options?.Modifiers, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, default, null, options?.Strict);
 
         Task IPage.CloseAsync(PageCloseOptions options)
         {
             return CloseAsync(options?.RunBeforeUnload, options?.Reason);
         }
 
-        Task<IReadOnlyList<IConsoleMessage>> IPage.ConsoleMessagesAsync(PageConsoleMessagesOptions options) => ConsoleMessagesAsync(options?.Filter ?? default);
+        Task<IReadOnlyList<IConsoleMessage>> IPage.ConsoleMessagesAsync(PageConsoleMessagesOptions options)
+            => ConsoleMessagesAsync(options?.Filter ?? ConsoleMessagesFilter.SinceNavigation);
 
-        Task IPage.DblClickAsync(string selector, PageDblClickOptions options) => Task.CompletedTask;
+        Task IPage.DblClickAsync(string selector, PageDblClickOptions options)
+            => DblClickAsync(selector, options?.Button ?? default, options?.Delay, options?.Position, options?.Modifiers, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, default, options?.Strict);
 
-        Task IPage.DispatchEventAsync(string selector, string type, object eventInit, PageDispatchEventOptions options) => Task.CompletedTask;
+        Task IPage.DispatchEventAsync(string selector, string type, object eventInit, PageDispatchEventOptions options)
+            => DispatchEventInternalAsync(selector, type, eventInit, options?.Timeout, options?.Strict);
 
-        Task IPage.DragAndDropAsync(string source, string target, PageDragAndDropOptions options) => Task.CompletedTask;
+        Task IPage.DragAndDropAsync(string source, string target, PageDragAndDropOptions options)
+            => DragAndDropAsync(
+                source,
+                target,
+                options?.SourcePosition == null ? null : new Position { X = options.SourcePosition.X, Y = options.SourcePosition.Y },
+                options?.TargetPosition == null ? null : new Position { X = options.TargetPosition.X, Y = options.TargetPosition.Y },
+                options?.Force,
+                options?.NoWaitAfter,
+                options?.Timeout,
+                options?.Trial,
+                options?.Steps,
+                ActionScrollBridge.FromScrollOption(options?.Scroll),
+                options?.Strict);
 
-        Task IPage.EmulateMediaAsync(PageEmulateMediaOptions options) => Task.CompletedTask;
+        async Task IPage.EmulateMediaAsync(PageEmulateMediaOptions options)
+        {
+            if (options == null)
+            {
+                return;
+            }
 
-        Task<JsonElement?> IPage.EvalOnSelectorAllAsync(string selector, string expression, object arg) => Task.FromResult<JsonElement?>(default!);
+            await EmulateMediaAsync(options.Media, options.ColorScheme).ConfigureAwait(false);
+            await EmulateMediaAsync(options.ReducedMotion, options.ForcedColors, options.Contrast).ConfigureAwait(false);
+        }
 
-        Task<T> IPage.EvalOnSelectorAllAsync<T>(string selector, string expression, object arg) => Task.FromResult<T>(default!);
+        async Task<JsonElement?> IPage.EvalOnSelectorAllAsync(string selector, string expression, object arg)
+            => await EvalOnSelector.OnArrayAsync<JsonElement?>(
+                EvaluateHandleAsync(EvalOnSelector.DocumentQuerySelectorAllExpression(selector)),
+                expression,
+                arg).ConfigureAwait(false);
 
-        Task<JsonElement?> IPage.EvalOnSelectorAsync(string selector, string expression, object arg) => Task.FromResult<JsonElement?>(default!);
+        Task<T> IPage.EvalOnSelectorAllAsync<T>(string selector, string expression, object arg)
+            => EvalOnSelector.OnArrayAsync<T>(
+                EvaluateHandleAsync(EvalOnSelector.DocumentQuerySelectorAllExpression(selector)),
+                expression,
+                arg);
 
-        Task<T> IPage.EvalOnSelectorAsync<T>(string selector, string expression, object arg, PageEvalOnSelectorOptions options) => Task.FromResult<T>(default!);
+        Task<JsonElement?> IPage.EvalOnSelectorAsync(string selector, string expression, object arg)
+            => EvalOnSelector.OnHandleAsync<JsonElement?>(QuerySelectorAsync(selector), selector, expression, arg, "page.$eval");
 
-        Task<IAsyncDisposable> IPage.ExposeBindingAsync(string name, Action callback) => Task.FromResult<IAsyncDisposable>(default!);
+        Task<T> IPage.EvalOnSelectorAsync<T>(string selector, string expression, object arg, PageEvalOnSelectorOptions options)
+            => EvalOnSelector.OnHandleAsync<T>(
+                QueryActionAsync(selector, options?.Strict),
+                selector,
+                expression,
+                arg,
+                "page.$eval");
 
-        Task<IAsyncDisposable> IPage.ExposeBindingAsync(string name, Action<BindingSource> callback) => Task.FromResult<IAsyncDisposable>(default!);
+        Task<IAsyncDisposable> IPage.ExposeBindingAsync(string name, Action callback)
+            => ExposeFunctionAsync(name, callback);
 
-        Task<IAsyncDisposable> IPage.ExposeBindingAsync<T>(string name, Action<BindingSource, T> callback) => Task.FromResult<IAsyncDisposable>(default!);
+        Task<IAsyncDisposable> IPage.ExposeBindingAsync(string name, Action<BindingSource> callback)
+        {
+            if (callback == null)
+            {
+                throw new ArgumentNullException(nameof(callback));
+            }
 
-        Task<IAsyncDisposable> IPage.ExposeBindingAsync<T1, T2, T3, TResult>(string name, Func<BindingSource, T1, T2, T3, TResult> callback) => Task.FromResult<IAsyncDisposable>(default!);
+            return InstallExposedAsync(name, PageExposeBinder.WrapBinding<object>(Context, this, source =>
+            {
+                callback(source);
+                return null;
+            }));
+        }
 
-        Task<IAsyncDisposable> IPage.ExposeBindingAsync<T1, T2, T3, T4, TResult>(string name, Func<BindingSource, T1, T2, T3, T4, TResult> callback) => Task.FromResult<IAsyncDisposable>(default!);
+        Task<IAsyncDisposable> IPage.ExposeBindingAsync<T>(string name, Action<BindingSource, T> callback)
+        {
+            if (callback == null)
+            {
+                throw new ArgumentNullException(nameof(callback));
+            }
 
-        Task IPage.FillAsync(string selector, string value, PageFillOptions options) => Task.CompletedTask;
+            return InstallExposedAsync(name, PageExposeBinder.WrapBinding<T, object>(Context, this, (source, arg) =>
+            {
+                callback(source, arg);
+                return null;
+            }));
+        }
 
-        Task IPage.FocusAsync(string selector, PageFocusOptions options) => Task.CompletedTask;
+        Task<IAsyncDisposable> IPage.ExposeBindingAsync<T1, T2, T3, TResult>(string name, Func<BindingSource, T1, T2, T3, TResult> callback)
+        {
+            if (callback == null)
+            {
+                throw new ArgumentNullException(nameof(callback));
+            }
+
+            return InstallExposedAsync(name, PageExposeBinder.WrapBinding(Context, this, callback));
+        }
+
+        Task<IAsyncDisposable> IPage.ExposeBindingAsync<T1, T2, T3, T4, TResult>(string name, Func<BindingSource, T1, T2, T3, T4, TResult> callback)
+        {
+            if (callback == null)
+            {
+                throw new ArgumentNullException(nameof(callback));
+            }
+
+            return InstallExposedAsync(name, PageExposeBinder.WrapBinding(Context, this, callback));
+        }
+
+        Task IPage.FillAsync(string selector, string value, PageFillOptions options)
+            => FillAsync(selector, value, options?.NoWaitAfter, options?.Timeout, options?.Force, default, options?.Strict);
+
+        Task IPage.FocusAsync(string selector, PageFocusOptions options)
+            => FocusAsync(selector, options?.Timeout, default, options?.Strict);
 
         IFrame IPage.Frame(string name) => FrameLookup.ByName(Frames, name);
 
-        IFrame IPage.FrameByUrl(string url) => null!;
+        IFrame IPage.FrameByUrl(string url) => FrameByUrl(url, null, null);
 
-        IFrame IPage.FrameByUrl(Regex url) => null!;
+        IFrame IPage.FrameByUrl(Regex url) => FrameByUrl(null, url, null);
 
-        IFrame IPage.FrameByUrl(Func<string, bool> url) => null!;
+        IFrame IPage.FrameByUrl(Func<string, bool> url) => FrameByUrl(null, null, url);
 
-        IFrameLocator IPage.FrameLocator(string selector) => null!;
+        IFrameLocator IPage.FrameLocator(string selector) => new FrameLocator(MainFrame, selector);
 
-        Task<string> IPage.GetAttributeAsync(string selector, string name, PageGetAttributeOptions options) => Task.FromResult<string>(default!);
+        Task<string> IPage.GetAttributeAsync(string selector, string name, PageGetAttributeOptions options)
+            => GetAttributeAsync(selector, name, options?.Timeout, options?.Strict);
 
-        ILocator IPage.GetByAltText(string text, PageGetByAltTextOptions options) => null!;
+        ILocator IPage.GetByAltText(string text, PageGetByAltTextOptions options)
+            => Locator.FromScript(MainFrame, GetByAllScript.FindAllByAttribute, "alt", text, options?.Exact ?? false);
 
-        ILocator IPage.GetByAltText(Regex text, PageGetByAltTextOptions options) => null!;
+        ILocator IPage.GetByAltText(Regex text, PageGetByAltTextOptions options)
+            => Locator.FromScript(
+                MainFrame,
+                GetByAllScript.FindAllByAttributeRegex,
+                "alt",
+                GetByAllScript.Pattern(text),
+                GetByAllScript.Flags(text));
 
-        ILocator IPage.GetByLabel(string text, PageGetByLabelOptions options) => null!;
+        ILocator IPage.GetByLabel(string text, PageGetByLabelOptions options)
+            => Locator.FromScript(MainFrame, GetByAllScript.FindAllByLabel, text, options?.Exact ?? false);
 
-        ILocator IPage.GetByLabel(Regex text, PageGetByLabelOptions options) => null!;
+        ILocator IPage.GetByLabel(Regex text, PageGetByLabelOptions options)
+            => Locator.FromScript(
+                MainFrame,
+                GetByAllScript.FindAllByLabelRegex,
+                GetByAllScript.Pattern(text),
+                GetByAllScript.Flags(text));
 
-        ILocator IPage.GetByPlaceholder(string text, PageGetByPlaceholderOptions options) => null!;
+        ILocator IPage.GetByPlaceholder(string text, PageGetByPlaceholderOptions options)
+            => Locator.FromScript(MainFrame, GetByAllScript.FindAllByAttribute, "placeholder", text, options?.Exact ?? false);
 
-        ILocator IPage.GetByPlaceholder(Regex text, PageGetByPlaceholderOptions options) => null!;
+        ILocator IPage.GetByPlaceholder(Regex text, PageGetByPlaceholderOptions options)
+            => Locator.FromScript(
+                MainFrame,
+                GetByAllScript.FindAllByAttributeRegex,
+                "placeholder",
+                GetByAllScript.Pattern(text),
+                GetByAllScript.Flags(text));
 
-        ILocator IPage.GetByRole(AriaRole role, PageGetByRoleOptions options) => null!;
+        ILocator IPage.GetByRole(AriaRole role, PageGetByRoleOptions options)
+            => new Locator(MainFrame, RoleSelector.Build(
+                role.ToRoleString(),
+                options?.Name ?? options?.NameString,
+                options?.Exact,
+                options?.Checked,
+                options?.Disabled,
+                options?.Expanded,
+                options?.IncludeHidden,
+                options?.Level,
+                options?.Pressed,
+                options?.Selected,
+                options?.Description ?? options?.DescriptionString,
+                options?.DescriptionRegex,
+                options?.NameRegex));
 
-        ILocator IPage.GetByTestId(string testId) => null!;
+        ILocator IPage.GetByTestId(string testId) => new Locator(MainFrame, GetBySelectorScript.TestIdSelector(testId));
 
-        ILocator IPage.GetByTestId(Regex testId) => null!;
+        ILocator IPage.GetByTestId(Regex testId)
+            => Locator.FromScript(
+                MainFrame,
+                GetByAllScript.FindAllByAttributeRegex,
+                GetBySelectorScript.TestIdAttributeName(),
+                GetByAllScript.Pattern(testId),
+                GetByAllScript.Flags(testId));
 
-        ILocator IPage.GetByText(string text, PageGetByTextOptions options) => null!;
+        ILocator IPage.GetByText(string text, PageGetByTextOptions options)
+            => Locator.FromScript(MainFrame, GetByAllScript.FindAllByText, text, options?.Exact ?? false);
 
-        ILocator IPage.GetByText(Regex text, PageGetByTextOptions options) => null!;
+        ILocator IPage.GetByText(Regex text, PageGetByTextOptions options)
+            => Locator.FromScript(
+                MainFrame,
+                GetByAllScript.FindAllByTextRegex,
+                GetByAllScript.Pattern(text),
+                GetByAllScript.Flags(text));
 
-        ILocator IPage.GetByTitle(string text, PageGetByTitleOptions options) => null!;
+        ILocator IPage.GetByTitle(string text, PageGetByTitleOptions options)
+            => Locator.FromScript(MainFrame, GetByAllScript.FindAllByAttribute, "title", text, options?.Exact ?? false);
 
-        ILocator IPage.GetByTitle(Regex text, PageGetByTitleOptions options) => null!;
+        ILocator IPage.GetByTitle(Regex text, PageGetByTitleOptions options)
+            => Locator.FromScript(
+                MainFrame,
+                GetByAllScript.FindAllByAttributeRegex,
+                "title",
+                GetByAllScript.Pattern(text),
+                GetByAllScript.Flags(text));
 
         Task<IResponse> IPage.GoBackAsync(PageGoBackOptions options)
-        {
-            PageGoBackOptions o = options;
-            return GoBackAsync(o.WaitUntil ?? default, o.Timeout);
-        }
+            => GoBackAsync(options?.WaitUntil ?? default, options?.Timeout);
 
         Task<IResponse> IPage.GoForwardAsync(PageGoForwardOptions options)
-        {
-            PageGoForwardOptions o = options;
-            return GoForwardAsync(o.WaitUntil ?? default, o.Timeout);
-        }
+            => GoForwardAsync(options?.WaitUntil ?? default, options?.Timeout);
 
         Task<IResponse> IPage.GotoAsync(string url, PageGotoOptions options)
+            => GoToAsync(url, options?.WaitUntil ?? default, options?.Timeout, options?.Referer);
+
+        async Task IPage.HideHighlightAsync()
         {
-            PageGotoOptions o = options;
-            return GoToAsync(url, o.WaitUntil ?? default, o.Timeout, o.Referer);
+            PageHighlights.Clear(this);
+            await EvaluateAsync(ElementStateScript.HideAllHighlightsFunction).ConfigureAwait(false);
         }
 
-        Task IPage.HideHighlightAsync() => Task.CompletedTask;
+        Task IPage.HoverAsync(string selector, PageHoverOptions options)
+            => HoverAsync(selector, options?.Position, options?.Modifiers, options?.Force, options?.Timeout, options?.Trial, default, options?.Strict);
 
-        Task IPage.HoverAsync(string selector, PageHoverOptions options) => Task.CompletedTask;
+        Task<string> IPage.InnerHTMLAsync(string selector, PageInnerHTMLOptions options)
+            => InnerHTMLAsync(selector, options?.Timeout, options?.Strict);
 
-        Task<string> IPage.InnerHTMLAsync(string selector, PageInnerHTMLOptions options) => Task.FromResult<string>(default!);
+        Task<string> IPage.InnerTextAsync(string selector, PageInnerTextOptions options)
+            => InnerTextAsync(selector, options?.Timeout, options?.Strict);
 
-        Task<string> IPage.InnerTextAsync(string selector, PageInnerTextOptions options) => Task.FromResult<string>(default!);
+        Task<string> IPage.InputValueAsync(string selector, PageInputValueOptions options)
+            => EvalOnSelector.OnHandleAsync<string>(
+                QueryActionAsync(selector, options?.Strict),
+                selector,
+                ElementStateScript.InputValueFunction,
+                null,
+                "page.inputValue");
 
-        Task<string> IPage.InputValueAsync(string selector, PageInputValueOptions options) => Task.FromResult<string>(default!);
+        Task<bool> IPage.IsCheckedAsync(string selector, PageIsCheckedOptions options)
+            => IsCheckedAsync(selector, options?.Timeout, options?.Strict);
 
-        Task<bool> IPage.IsCheckedAsync(string selector, PageIsCheckedOptions options) => Task.FromResult<bool>(default!);
+        Task<bool> IPage.IsDisabledAsync(string selector, PageIsDisabledOptions options)
+            => IsDisabledAsync(selector, options?.Timeout, options?.Strict);
 
-        Task<bool> IPage.IsDisabledAsync(string selector, PageIsDisabledOptions options) => Task.FromResult<bool>(default!);
+        Task<bool> IPage.IsEditableAsync(string selector, PageIsEditableOptions options)
+            => IsEditableAsync(selector, options?.Timeout, options?.Strict);
 
-        Task<bool> IPage.IsEditableAsync(string selector, PageIsEditableOptions options) => Task.FromResult<bool>(default!);
+        Task<bool> IPage.IsEnabledAsync(string selector, PageIsEnabledOptions options)
+            => IsEnabledAsync(selector, options?.Timeout, options?.Strict);
 
-        Task<bool> IPage.IsEnabledAsync(string selector, PageIsEnabledOptions options) => Task.FromResult<bool>(default!);
+        Task<bool> IPage.IsHiddenAsync(string selector, PageIsHiddenOptions options)
+            => IsHiddenAsync(selector, options?.Timeout, options?.Strict);
 
-        Task<bool> IPage.IsHiddenAsync(string selector, PageIsHiddenOptions options) => Task.FromResult<bool>(default!);
+        Task<bool> IPage.IsVisibleAsync(string selector, PageIsVisibleOptions options)
+            => IsVisibleAsync(selector, options?.Timeout, options?.Strict);
 
-        Task<bool> IPage.IsVisibleAsync(string selector, PageIsVisibleOptions options) => Task.FromResult<bool>(default!);
-
-        ILocator IPage.Locator(string selector, PageLocatorOptions options) => null!;
+        ILocator IPage.Locator(string selector, PageLocatorOptions options)
+        {
+            ILocator result = new Locator(MainFrame, selector);
+            options ??= new PageLocatorOptions();
+            return SelectorQuery.ApplyOptions(
+                result,
+                options.Has,
+                options.HasText ?? options.HasTextString,
+                options.HasTextRegex,
+                options.HasNot,
+                options.HasNotText ?? options.HasNotTextString,
+                options.HasNotTextRegex);
+        }
 
         Task IPage.PauseAsync() => Task.CompletedTask;
 
-        Task<byte[]> IPage.PdfAsync(PagePdfOptions options) => Task.FromResult<byte[]>(default!);
+        Task<byte[]> IPage.PdfAsync(PagePdfOptions options)
+            => PdfAsync(
+                path: options?.Path,
+                scale: options?.Scale,
+                displayHeaderFooter: options?.DisplayHeaderFooter,
+                headerTemplate: options?.HeaderTemplate,
+                footerTemplate: options?.FooterTemplate,
+                printBackground: options?.PrintBackground,
+                landscape: options?.Landscape,
+                pageRanges: options?.PageRanges,
+                format: options?.Format,
+                width: options?.Width,
+                height: options?.Height,
+                margin: options?.Margin,
+                preferCSSPageSize: options?.PreferCSSPageSize,
+                tagged: options?.Tagged,
+                outline: options?.Outline);
 
         Task<ILocator> IPage.PickLocatorAsync() => Task.FromResult<ILocator>(default!);
 
-        Task IPage.PressAsync(string selector, string key, PagePressOptions options) => Task.CompletedTask;
+        Task IPage.PressAsync(string selector, string key, PagePressOptions options)
+            => PressAsync(selector, key, options?.Delay, options?.NoWaitAfter, options?.Timeout, null, default, options?.Strict);
 
-        Task<IElementHandle> IPage.QuerySelectorAsync(string selector, PageQuerySelectorOptions options) => Task.FromResult<IElementHandle>(default!);
+        Task<IElementHandle> IPage.QuerySelectorAsync(string selector, PageQuerySelectorOptions options) => QuerySelectorAsync(selector);
 
         Task<IResponse> IPage.ReloadAsync(PageReloadOptions options)
+            => ReloadAsync(options?.WaitUntil ?? default, options?.Timeout);
+
+        Task IPage.RemoveLocatorHandlerAsync(ILocator locator)
         {
-            PageReloadOptions o = options;
-            return ReloadAsync(o.WaitUntil ?? default, o.Timeout);
+            LocatorHandlers.Remove(this, locator);
+            return Task.CompletedTask;
         }
 
-        Task IPage.RemoveLocatorHandlerAsync(ILocator locator) => Task.CompletedTask;
+        Task<IAsyncDisposable> IPage.RouteAsync(string url, Action<IRoute> handler, PageRouteOptions options)
+            => RegisterRouteAsync(() => RouteAsync(url, handler, options?.Times));
 
-        Task<IAsyncDisposable> IPage.RouteAsync(string url, Action<IRoute> handler, PageRouteOptions options) => Task.FromResult<IAsyncDisposable>(default!);
+        Task<IAsyncDisposable> IPage.RouteAsync(Regex url, Action<IRoute> handler, PageRouteOptions options)
+            => RegisterRouteAsync(() => RouteAsync(url, handler, options?.Times));
 
-        Task<IAsyncDisposable> IPage.RouteAsync(Regex url, Action<IRoute> handler, PageRouteOptions options) => Task.FromResult<IAsyncDisposable>(default!);
+        Task<IAsyncDisposable> IPage.RouteAsync(Func<string, bool> url, Action<IRoute> handler, PageRouteOptions options)
+            => RegisterRouteAsync(() => RouteAsync(url, handler, options?.Times));
 
-        Task<IAsyncDisposable> IPage.RouteAsync(Func<string, bool> url, Action<IRoute> handler, PageRouteOptions options) => Task.FromResult<IAsyncDisposable>(default!);
+        Task<IAsyncDisposable> IPage.RouteAsync(string url, Func<IRoute, Task> handler, PageRouteOptions options)
+            => RegisterRouteAsync(() => RouteAsync(url, handler, options?.Times));
 
-        Task<IAsyncDisposable> IPage.RouteAsync(string url, Func<IRoute, Task> handler, PageRouteOptions options) => Task.FromResult<IAsyncDisposable>(default!);
+        Task<IAsyncDisposable> IPage.RouteAsync(Regex url, Func<IRoute, Task> handler, PageRouteOptions options)
+            => RegisterRouteAsync(() => RouteAsync(url, handler, options?.Times));
 
-        Task<IAsyncDisposable> IPage.RouteAsync(Regex url, Func<IRoute, Task> handler, PageRouteOptions options) => Task.FromResult<IAsyncDisposable>(default!);
+        Task<IAsyncDisposable> IPage.RouteAsync(Func<string, bool> url, Func<IRoute, Task> handler, PageRouteOptions options)
+            => RegisterRouteAsync(() => RouteAsync(url, handler, options?.Times));
 
-        Task<IAsyncDisposable> IPage.RouteAsync(Func<string, bool> url, Func<IRoute, Task> handler, PageRouteOptions options) => Task.FromResult<IAsyncDisposable>(default!);
+        Task IPage.RouteFromHARAsync(string har, PageRouteFromHAROptions options)
+            => HarPlayback.InstallAsync(this, har, options);
 
-        Task IPage.RouteFromHARAsync(string har, PageRouteFromHAROptions options) => Task.CompletedTask;
+        Task IPage.RouteWebSocketAsync(string url, Action<IWebSocketRoute> handler)
+            => WebSocketRouter.InstallAsync(this, url, handler);
 
-        Task IPage.RouteWebSocketAsync(string url, Action<IWebSocketRoute> handler) => Task.CompletedTask;
+        Task IPage.RouteWebSocketAsync(Regex url, Action<IWebSocketRoute> handler)
+            => WebSocketRouter.InstallAsync(this, url, handler);
 
-        Task IPage.RouteWebSocketAsync(Regex url, Action<IWebSocketRoute> handler) => Task.CompletedTask;
+        Task IPage.RouteWebSocketAsync(Func<string, bool> url, Action<IWebSocketRoute> handler)
+            => WebSocketRouter.InstallAsync(this, url, handler);
 
-        Task IPage.RouteWebSocketAsync(Func<string, bool> url, Action<IWebSocketRoute> handler) => Task.CompletedTask;
+        Task<IConsoleMessage> IPage.RunAndWaitForConsoleMessageAsync(Func<Task> action, PageRunAndWaitForConsoleMessageOptions options)
+            => RunAndWaitInternalAsync(
+                action,
+                WaitForEventAsync(PageEvent.Console, options?.Predicate, options?.Timeout));
 
-        Task<IConsoleMessage> IPage.RunAndWaitForConsoleMessageAsync(Func<Task> action, PageRunAndWaitForConsoleMessageOptions options) => Task.FromResult<IConsoleMessage>(default!);
+        Task<IDownload> IPage.RunAndWaitForDownloadAsync(Func<Task> action, PageRunAndWaitForDownloadOptions options)
+            => RunAndWaitInternalAsync(
+                action,
+                WaitForEventAsync(PageEvent.Download, options?.Predicate, options?.Timeout));
 
-        Task<IDownload> IPage.RunAndWaitForDownloadAsync(Func<Task> action, PageRunAndWaitForDownloadOptions options) => Task.FromResult<IDownload>(default!);
+        Task<IFileChooser> IPage.RunAndWaitForFileChooserAsync(Func<Task> action, PageRunAndWaitForFileChooserOptions options)
+            => RunAndWaitInternalAsync(
+                action,
+                FileChooserWaitHelper.WaitAsync(this, options?.Predicate, options?.Timeout));
 
-        Task<IFileChooser> IPage.RunAndWaitForFileChooserAsync(Func<Task> action, PageRunAndWaitForFileChooserOptions options) => Task.FromResult<IFileChooser>(default!);
+        Task<IResponse> IPage.RunAndWaitForNavigationAsync(Func<Task> action, PageRunAndWaitForNavigationOptions options)
+            => RunAndWaitInternalAsync(
+                action,
+                WaitForNavigationAsync(
+                    options?.Url ?? options?.UrlString,
+                    options?.UrlRegex,
+                    options?.UrlFunc,
+                    options?.Timeout,
+                    options?.WaitUntil ?? default));
 
-        Task<IResponse> IPage.RunAndWaitForNavigationAsync(Func<Task> action, PageRunAndWaitForNavigationOptions options) => Task.FromResult<IResponse>(default!);
+        Task<IPage> IPage.RunAndWaitForPopupAsync(Func<Task> action, PageRunAndWaitForPopupOptions options)
+            => RunAndWaitInternalAsync(
+                action,
+                WaitForEventAsync(PageEvent.Popup, options?.Predicate, options?.Timeout));
 
-        Task<IPage> IPage.RunAndWaitForPopupAsync(Func<Task> action, PageRunAndWaitForPopupOptions options) => Task.FromResult<IPage>(default!);
+        Task<IRequest> IPage.RunAndWaitForRequestAsync(Func<Task> action, string urlOrPredicate, PageRunAndWaitForRequestOptions options)
+            => RunAndWaitInternalAsync(action, WaitForRequestAsync(urlOrPredicate, null, null, options?.Timeout));
 
-        Task<IRequest> IPage.RunAndWaitForRequestAsync(Func<Task> action, string urlOrPredicate, PageRunAndWaitForRequestOptions options) => Task.FromResult<IRequest>(default!);
+        Task<IRequest> IPage.RunAndWaitForRequestAsync(Func<Task> action, Regex urlOrPredicate, PageRunAndWaitForRequestOptions options)
+            => RunAndWaitInternalAsync(action, WaitForRequestAsync(null, urlOrPredicate, null, options?.Timeout));
 
-        Task<IRequest> IPage.RunAndWaitForRequestAsync(Func<Task> action, Regex urlOrPredicate, PageRunAndWaitForRequestOptions options) => Task.FromResult<IRequest>(default!);
+        Task<IRequest> IPage.RunAndWaitForRequestAsync(Func<Task> action, Func<IRequest, bool> urlOrPredicate, PageRunAndWaitForRequestOptions options)
+            => RunAndWaitInternalAsync(action, WaitForRequestAsync(null, null, urlOrPredicate, options?.Timeout));
 
-        Task<IRequest> IPage.RunAndWaitForRequestAsync(Func<Task> action, Func<IRequest, bool> urlOrPredicate, PageRunAndWaitForRequestOptions options) => Task.FromResult<IRequest>(default!);
+        Task<IRequest> IPage.RunAndWaitForRequestFinishedAsync(Func<Task> action, PageRunAndWaitForRequestFinishedOptions options)
+            => RunAndWaitInternalAsync(action, WaitForRequestFinishedInternalAsync(null, null, options?.Predicate, options?.Timeout));
 
-        Task<IRequest> IPage.RunAndWaitForRequestFinishedAsync(Func<Task> action, PageRunAndWaitForRequestFinishedOptions options) => Task.FromResult<IRequest>(default!);
+        Task<IResponse> IPage.RunAndWaitForResponseAsync(Func<Task> action, string urlOrPredicate, PageRunAndWaitForResponseOptions options)
+            => RunAndWaitInternalAsync(action, WaitForResponseAsync(urlOrPredicate, null, null, options?.Timeout));
 
-        Task<IResponse> IPage.RunAndWaitForResponseAsync(Func<Task> action, string urlOrPredicate, PageRunAndWaitForResponseOptions options) => Task.FromResult<IResponse>(default!);
+        Task<IResponse> IPage.RunAndWaitForResponseAsync(Func<Task> action, Regex urlOrPredicate, PageRunAndWaitForResponseOptions options)
+            => RunAndWaitInternalAsync(action, WaitForResponseAsync(null, urlOrPredicate, null, options?.Timeout));
 
-        Task<IResponse> IPage.RunAndWaitForResponseAsync(Func<Task> action, Regex urlOrPredicate, PageRunAndWaitForResponseOptions options) => Task.FromResult<IResponse>(default!);
-
-        Task<IResponse> IPage.RunAndWaitForResponseAsync(Func<Task> action, Func<IResponse, bool> urlOrPredicate, PageRunAndWaitForResponseOptions options) => Task.FromResult<IResponse>(default!);
+        Task<IResponse> IPage.RunAndWaitForResponseAsync(Func<Task> action, Func<IResponse, bool> urlOrPredicate, PageRunAndWaitForResponseOptions options)
+            => RunAndWaitInternalAsync(action, WaitForResponseAsync(null, null, urlOrPredicate, options?.Timeout));
 
         Task<IWebSocket> IPage.RunAndWaitForWebSocketAsync(Func<Task> action, PageRunAndWaitForWebSocketOptions options) => Task.FromResult<IWebSocket>(default!);
 
         Task<IWorker> IPage.RunAndWaitForWorkerAsync(Func<Task> action, PageRunAndWaitForWorkerOptions options) => Task.FromResult<IWorker>(default!);
 
-        Task<byte[]> IPage.ScreenshotAsync(PageScreenshotOptions options) => Task.FromResult<byte[]>(default!);
+        Task<byte[]> IPage.ScreenshotAsync(PageScreenshotOptions options)
+            => ScreenshotAsync(
+                options?.Path,
+                options?.Type ?? default,
+                options?.Quality,
+                options?.FullPage,
+                options?.Clip,
+                options?.OmitBackground,
+                options?.Timeout,
+                options?.Scale?.ToString(),
+                options?.Animations?.ToString(),
+                options?.Caret?.ToString(),
+                options?.Style,
+                options?.Mask,
+                options?.MaskColor);
 
-        Task<IReadOnlyList<string>> IPage.SelectOptionAsync(string selector, string values, PageSelectOptionOptions options) => Task.FromResult<IReadOnlyList<string>>(default!);
+        async Task<IReadOnlyList<string>> IPage.SelectOptionAsync(string selector, string values, PageSelectOptionOptions options)
+        {
+            IReadOnlyCollection<string> result = await SelectOptionAsync(selector, values, options?.NoWaitAfter, options?.Timeout, options?.Force, options?.Strict).ConfigureAwait(false);
+            return result as IReadOnlyList<string> ?? result.ToList();
+        }
 
-        Task<IReadOnlyList<string>> IPage.SelectOptionAsync(string selector, IElementHandle values, PageSelectOptionOptions options) => Task.FromResult<IReadOnlyList<string>>(default!);
+        async Task<IReadOnlyList<string>> IPage.SelectOptionAsync(string selector, IElementHandle values, PageSelectOptionOptions options)
+        {
+            IReadOnlyCollection<string> result = await SelectOptionAsync(selector, values, options?.NoWaitAfter, options?.Timeout, options?.Strict, options?.Force).ConfigureAwait(false);
+            return result as IReadOnlyList<string> ?? result.ToList();
+        }
 
-        Task<IReadOnlyList<string>> IPage.SelectOptionAsync(string selector, IEnumerable<string> values, PageSelectOptionOptions options) => Task.FromResult<IReadOnlyList<string>>(default!);
+        async Task<IReadOnlyList<string>> IPage.SelectOptionAsync(string selector, IEnumerable<string> values, PageSelectOptionOptions options)
+        {
+            IReadOnlyCollection<string> result = await SelectOptionAsync(selector, values, options?.NoWaitAfter, options?.Timeout, options?.Strict, options?.Force).ConfigureAwait(false);
+            return result as IReadOnlyList<string> ?? result.ToList();
+        }
 
-        Task<IReadOnlyList<string>> IPage.SelectOptionAsync(string selector, SelectOptionValue values, PageSelectOptionOptions options) => Task.FromResult<IReadOnlyList<string>>(default!);
+        async Task<IReadOnlyList<string>> IPage.SelectOptionAsync(string selector, SelectOptionValue values, PageSelectOptionOptions options)
+        {
+            IReadOnlyCollection<string> result = await SelectOptionAsync(selector, values, options?.NoWaitAfter, options?.Timeout, options?.Strict, options?.Force).ConfigureAwait(false);
+            return result as IReadOnlyList<string> ?? result.ToList();
+        }
 
-        Task<IReadOnlyList<string>> IPage.SelectOptionAsync(string selector, IEnumerable<IElementHandle> values, PageSelectOptionOptions options) => Task.FromResult<IReadOnlyList<string>>(default!);
+        async Task<IReadOnlyList<string>> IPage.SelectOptionAsync(string selector, IEnumerable<IElementHandle> values, PageSelectOptionOptions options)
+        {
+            IReadOnlyCollection<string> result = await SelectOptionAsync(selector, values, options?.NoWaitAfter, options?.Timeout, options?.Strict, options?.Force).ConfigureAwait(false);
+            return result as IReadOnlyList<string> ?? result.ToList();
+        }
 
-        Task<IReadOnlyList<string>> IPage.SelectOptionAsync(string selector, IEnumerable<SelectOptionValue> values, PageSelectOptionOptions options) => Task.FromResult<IReadOnlyList<string>>(default!);
+        async Task<IReadOnlyList<string>> IPage.SelectOptionAsync(string selector, IEnumerable<SelectOptionValue> values, PageSelectOptionOptions options)
+        {
+            IReadOnlyCollection<string> result = await SelectOptionAsync(selector, values, options?.NoWaitAfter, options?.Timeout, options?.Force, default, options?.Strict).ConfigureAwait(false);
+            return result as IReadOnlyList<string> ?? result.ToList();
+        }
 
-        Task IPage.SetCheckedAsync(string selector, bool checkedState, PageSetCheckedOptions options) => Task.CompletedTask;
+        Task IPage.SetCheckedAsync(string selector, bool checkedState, PageSetCheckedOptions options)
+            => checkedState
+                ? CheckAsync(selector, options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, default, options?.Strict)
+                : UncheckAsync(selector, options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, default, options?.Strict);
 
         Task IPage.SetContentAsync(string html, PageSetContentOptions options)
-        {
-            PageSetContentOptions o = options;
-            return SetContentAsync(html, o.Timeout, o.WaitUntil ?? default);
-        }
+            => SetContentAsync(html, options?.Timeout, options?.WaitUntil ?? default);
 
         void IPage.SetDefaultNavigationTimeout(float timeout) { }
 
         void IPage.SetDefaultTimeout(float timeout) { }
 
-        Task IPage.SetExtraHTTPHeadersAsync(IEnumerable<KeyValuePair<string, string>> headers) => Task.CompletedTask;
+        Task IPage.SetExtraHTTPHeadersAsync(IEnumerable<KeyValuePair<string, string>> headers)
+            => SetExtraHttpHeadersAsync(headers);
 
         Task IPage.SetInputFilesAsync(string selector, string files, PageSetInputFilesOptions options) => Task.CompletedTask;
 
@@ -2417,35 +2736,57 @@ namespace PlaywrightNative
 
         Task IPage.SetInputFilesAsync(string selector, IEnumerable<FilePayload> files, PageSetInputFilesOptions options) => Task.CompletedTask;
 
-        Task IPage.TapAsync(string selector, PageTapOptions options) => Task.CompletedTask;
+        Task IPage.TapAsync(string selector, PageTapOptions options)
+            => TapAsync(
+                selector,
+                options?.Position,
+                options?.Modifiers,
+                options?.NoWaitAfter,
+                options?.Force,
+                options?.Timeout,
+                options?.Trial,
+                ActionScrollBridge.FromScrollOption(options?.Scroll),
+                options?.Strict);
 
-        Task<string> IPage.TextContentAsync(string selector, PageTextContentOptions options) => Task.FromResult<string>(default!);
+        Task<string> IPage.TextContentAsync(string selector, PageTextContentOptions options) => TextContentAsync(selector, options?.Timeout, options?.Strict);
 
-        Task IPage.TypeAsync(string selector, string text, PageTypeOptions options) => Task.CompletedTask;
+        Task IPage.TypeAsync(string selector, string text, PageTypeOptions options)
+            => TypeAsync(selector, text, options?.Delay, options?.NoWaitAfter, options?.Timeout, null, default, options?.Strict);
 
-        Task IPage.UncheckAsync(string selector, PageUncheckOptions options) => Task.CompletedTask;
+        Task IPage.UncheckAsync(string selector, PageUncheckOptions options)
+            => UncheckAsync(selector, options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, default, options?.Strict);
 
-        Task IPage.UnrouteAllAsync(PageUnrouteAllOptions options) => Task.CompletedTask;
+        Task IPage.UnrouteAllAsync(PageUnrouteAllOptions options)
+            => UnrouteAllAsync(UnrouteBehaviorBridge.FromOfficial(options?.Behavior));
 
-        Task IPage.UnrouteAsync(string url, Action<IRoute> handler) => Task.CompletedTask;
+        Task IPage.UnrouteAsync(string url, Action<IRoute> handler)
+            => UnrouteAsync(url, handler);
 
-        Task IPage.UnrouteAsync(Regex url, Action<IRoute> handler) => Task.CompletedTask;
+        Task IPage.UnrouteAsync(Regex url, Action<IRoute> handler)
+            => UnrouteAsync(url, handler);
 
-        Task IPage.UnrouteAsync(Func<string, bool> url, Action<IRoute> handler) => Task.CompletedTask;
+        Task IPage.UnrouteAsync(Func<string, bool> url, Action<IRoute> handler)
+            => UnrouteAsync(url, handler);
 
-        Task IPage.UnrouteAsync(string url, Func<IRoute, Task> handler) => Task.CompletedTask;
+        Task IPage.UnrouteAsync(string url, Func<IRoute, Task> handler)
+            => UnrouteAsync(url, handler);
 
-        Task IPage.UnrouteAsync(Regex url, Func<IRoute, Task> handler) => Task.CompletedTask;
+        Task IPage.UnrouteAsync(Regex url, Func<IRoute, Task> handler)
+            => UnrouteAsync(url, handler);
 
-        Task IPage.UnrouteAsync(Func<string, bool> url, Func<IRoute, Task> handler) => Task.CompletedTask;
+        Task IPage.UnrouteAsync(Func<string, bool> url, Func<IRoute, Task> handler)
+            => UnrouteAsync(url, handler);
 
-        Task<IConsoleMessage> IPage.WaitForConsoleMessageAsync(PageWaitForConsoleMessageOptions options) => Task.FromResult<IConsoleMessage>(default!);
+        Task<IConsoleMessage> IPage.WaitForConsoleMessageAsync(PageWaitForConsoleMessageOptions options)
+            => WaitForEventAsync(PageEvent.Console, options?.Predicate, options?.Timeout);
 
-        Task<IDownload> IPage.WaitForDownloadAsync(PageWaitForDownloadOptions options) => Task.FromResult<IDownload>(default!);
+        Task<IDownload> IPage.WaitForDownloadAsync(PageWaitForDownloadOptions options)
+            => WaitForEventAsync(PageEvent.Download, options?.Predicate, options?.Timeout);
 
-        Task<IFileChooser> IPage.WaitForFileChooserAsync(PageWaitForFileChooserOptions options) => Task.FromResult<IFileChooser>(default!);
+        Task<IFileChooser> IPage.WaitForFileChooserAsync(PageWaitForFileChooserOptions options)
+            => FileChooserWaitHelper.WaitAsync(this, options?.Predicate, options?.Timeout);
 
-        Task<IJSHandle> IPage.WaitForFunctionAsync(string expression, object arg, PageWaitForFunctionOptions options) => Task.FromResult<IJSHandle>(default!);
+        Task<IJSHandle> IPage.WaitForFunctionAsync(string expression, object arg, PageWaitForFunctionOptions options) => WaitForFunctionAsync(expression, arg, options?.PollingInterval, options?.Timeout);
 
         Task IPage.WaitForLoadStateAsync(LoadState? state, PageWaitForLoadStateOptions options)
         {
@@ -2453,35 +2794,65 @@ namespace PlaywrightNative
             return WaitForLoadStateAsync(state ?? LoadState.Load, o?.Timeout);
         }
 
-        Task<IResponse> IPage.WaitForNavigationAsync(PageWaitForNavigationOptions options) => Task.FromResult<IResponse>(default!);
+        Task<IResponse> IPage.WaitForNavigationAsync(PageWaitForNavigationOptions options)
+            => WaitForNavigationAsync(options?.Url, options?.UrlRegex, options?.UrlFunc, options?.Timeout, options?.WaitUntil ?? default);
 
-        Task<IPage> IPage.WaitForPopupAsync(PageWaitForPopupOptions options) => Task.FromResult<IPage>(default!);
+        Task<IPage> IPage.WaitForPopupAsync(PageWaitForPopupOptions options)
+            => WaitForEventAsync(PageEvent.Popup, options?.Predicate, options?.Timeout);
 
-        Task<IRequest> IPage.WaitForRequestAsync(string urlOrPredicate, PageWaitForRequestOptions options) => Task.FromResult<IRequest>(default!);
+        Task<IRequest> IPage.WaitForRequestAsync(string urlOrPredicate, PageWaitForRequestOptions options)
+            => WaitForRequestAsync(urlOrPredicate, null, null, options?.Timeout);
 
-        Task<IRequest> IPage.WaitForRequestAsync(Regex urlOrPredicate, PageWaitForRequestOptions options) => Task.FromResult<IRequest>(default!);
+        Task<IRequest> IPage.WaitForRequestAsync(Regex urlOrPredicate, PageWaitForRequestOptions options)
+            => WaitForRequestAsync(null, urlOrPredicate, null, options?.Timeout);
 
-        Task<IRequest> IPage.WaitForRequestAsync(Func<IRequest, bool> urlOrPredicate, PageWaitForRequestOptions options) => Task.FromResult<IRequest>(default!);
+        Task<IRequest> IPage.WaitForRequestAsync(Func<IRequest, bool> urlOrPredicate, PageWaitForRequestOptions options)
+            => WaitForRequestAsync(null, null, urlOrPredicate, options?.Timeout);
 
-        Task<IRequest> IPage.WaitForRequestFinishedAsync(PageWaitForRequestFinishedOptions options) => Task.FromResult<IRequest>(default!);
+        Task<IRequest> IPage.WaitForRequestFinishedAsync(PageWaitForRequestFinishedOptions options)
+            => WaitForRequestFinishedInternalAsync(null, null, options?.Predicate, options?.Timeout);
 
-        Task<IResponse> IPage.WaitForResponseAsync(string urlOrPredicate, PageWaitForResponseOptions options) => Task.FromResult<IResponse>(default!);
+        Task<IResponse> IPage.WaitForResponseAsync(string urlOrPredicate, PageWaitForResponseOptions options)
+            => WaitForResponseAsync(urlOrPredicate, null, null, options?.Timeout);
 
-        Task<IResponse> IPage.WaitForResponseAsync(Regex urlOrPredicate, PageWaitForResponseOptions options) => Task.FromResult<IResponse>(default!);
+        Task<IResponse> IPage.WaitForResponseAsync(Regex urlOrPredicate, PageWaitForResponseOptions options)
+            => WaitForResponseAsync(null, urlOrPredicate, null, options?.Timeout);
 
-        Task<IResponse> IPage.WaitForResponseAsync(Func<IResponse, bool> urlOrPredicate, PageWaitForResponseOptions options) => Task.FromResult<IResponse>(default!);
+        Task<IResponse> IPage.WaitForResponseAsync(Func<IResponse, bool> urlOrPredicate, PageWaitForResponseOptions options)
+            => WaitForResponseAsync(null, null, urlOrPredicate, options?.Timeout);
 
-        Task<IElementHandle> IPage.WaitForSelectorAsync(string selector, PageWaitForSelectorOptions options) => Task.FromResult<IElementHandle>(default!);
+        Task<IElementHandle> IPage.WaitForSelectorAsync(string selector, PageWaitForSelectorOptions options)
+            => WaitForSelectorAsync(
+                selector,
+                options?.State ?? WaitForSelectorState.Visible,
+                options?.Timeout,
+                options?.Strict);
 
-        Task IPage.WaitForURLAsync(string url, PageWaitForURLOptions options) => Task.CompletedTask;
+        Task IPage.WaitForURLAsync(string url, PageWaitForURLOptions options)
+            => WaitForURLAsync(url, null, null, options?.Timeout, options?.WaitUntil ?? default);
 
-        Task IPage.WaitForURLAsync(Regex url, PageWaitForURLOptions options) => Task.CompletedTask;
+        Task IPage.WaitForURLAsync(Regex url, PageWaitForURLOptions options)
+            => WaitForURLAsync(null, url, null, options?.Timeout, options?.WaitUntil ?? default);
 
-        Task IPage.WaitForURLAsync(Func<string, bool> url, PageWaitForURLOptions options) => Task.CompletedTask;
+        Task IPage.WaitForURLAsync(Func<string, bool> url, PageWaitForURLOptions options)
+            => WaitForURLAsync(null, null, url, options?.Timeout, options?.WaitUntil ?? default);
 
         Task<IWebSocket> IPage.WaitForWebSocketAsync(PageWaitForWebSocketOptions options) => Task.FromResult<IWebSocket>(default!);
 
         Task<IWorker> IPage.WaitForWorkerAsync(PageWaitForWorkerOptions options) => Task.FromResult<IWorker>(default!);
+
+        private static async Task<IAsyncDisposable> RegisterRouteAsync(Func<Task> register)
+        {
+            await register().ConfigureAwait(false);
+            return NoopAsyncDisposable.Instance;
+        }
+
+        private sealed class NoopAsyncDisposable : IAsyncDisposable
+        {
+            internal static readonly NoopAsyncDisposable Instance = new();
+
+            public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+        }
 #pragma warning restore SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
     }
 }

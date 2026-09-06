@@ -108,7 +108,12 @@ namespace PlaywrightNative.Helpers
                 {
                     handle = await querySelectorAsync(selector).ConfigureAwait(false);
                     attached = handle != null;
-                    visible = attached && await handle.IsVisibleAsync().ConfigureAwait(false);
+                    if (attached
+                        && wanted != WaitForSelectorState.Attached
+                        && wanted != WaitForSelectorState.Detached)
+                    {
+                        visible = await handle.IsVisibleAsync().ConfigureAwait(false);
+                    }
                 }
                 catch (PlaywrightNativeException ex) when (IsFrameDetachedError(ex) || (isDetached != null && isDetached()))
                 {

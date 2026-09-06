@@ -94,7 +94,11 @@ namespace PlaywrightNative.Chromium
             }
             catch (PlaywrightNativeException)
             {
-                Dispose();
+                // Allow AdoptExisting / a later Prepare to retry StartAsync.
+                // Do not Dispose() here: that permanently sets _disposed and
+                // leaves a dead entry in ChromiumBrowserContext's map.
+                _session.MessageReceived -= OnMessage;
+                _started = false;
             }
         }
 
@@ -118,6 +122,17 @@ namespace PlaywrightNative.Chromium
             }
 
             return UpdateInterceptionAsync();
+        }
+
+        private static bool IsReportableUrl(string url)
+        {
+            if (string.IsNullOrEmpty(url))
+            {
+                return false;
+            }
+
+            return url.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+                || url.StartsWith("https://", StringComparison.OrdinalIgnoreCase);
         }
 
         private static string GetString(JsonElement element, string name)
@@ -241,7 +256,7 @@ namespace PlaywrightNative.Chromium
 
         private CRRequest CreateRequest(string requestId, JsonElement requestPayload, string type)
         {
-            return new CRRequest(
+            CRRequest request = new CRRequest(
                 requestId,
                 GetString(requestPayload, "url"),
                 GetString(requestPayload, "method"),
@@ -254,6 +269,11 @@ namespace PlaywrightNative.Chromium
             {
                 ServiceWorker = _serviceWorker,
             };
+
+            // Service-worker sessions do not emit requestWillBeSentExtraInfo.
+            // Complete raw-header waiters with provisional headers so AllHeadersAsync resolves.
+            request.EnsureRawRequestHeaders();
+            return request;
         }
 
         private void OnRequestWillBeSent(JsonElement? parameters)
@@ -284,7 +304,10 @@ namespace PlaywrightNative.Chromium
 
             CRRequest request = CreateRequest(requestId, requestPayload, GetString(payload, "type"));
             _requests[requestId] = request;
-            Request?.Invoke(this, request);
+            if (IsReportableUrl(request.Url))
+            {
+                Request?.Invoke(this, request);
+            }
         }
 
         private void OnFetchRequestPaused(JsonElement? parameters)
@@ -316,7 +339,10 @@ namespace PlaywrightNative.Chromium
                 }
 
                 _requests[networkId] = request;
-                Request?.Invoke(this, request);
+                if (IsReportableUrl(request.Url))
+                {
+                    Request?.Invoke(this, request);
+                }
             }
 
             List<CRRouteEntry> matches = new();
@@ -383,6 +409,7 @@ namespace PlaywrightNative.Chromium
                 headers,
                 fromServiceWorker: false,
                 httpVersion: "http/1.1");
+            request.Response = response;
             Response?.Invoke(this, response);
             request.Finished = true;
             request.MarkFinished();
@@ -413,7 +440,10 @@ namespace PlaywrightNative.Chromium
 
                 request = CreateRequest(requestId, willBeSentRequest, GetString(willBeSent, "type"));
                 _requests[requestId] = request;
-                Request?.Invoke(this, request);
+                if (IsReportableUrl(request.Url))
+                {
+                    Request?.Invoke(this, request);
+                }
             }
 
             if (!payload.TryGetProperty("response", out JsonElement responsePayload))
@@ -433,7 +463,11 @@ namespace PlaywrightNative.Chromium
                 ResponseNetworkInfo.ParseFromServiceWorker(responsePayload),
                 ResponseNetworkInfo.ParseHttpVersion(responsePayload));
 
-            Response?.Invoke(this, response);
+            request.Response = response;
+            if (IsReportableUrl(request.Url))
+            {
+                Response?.Invoke(this, response);
+            }
         }
 
         private void OnLoadingFinished(JsonElement? parameters)
