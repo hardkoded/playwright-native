@@ -69,7 +69,7 @@ namespace PlaywrightNative.Helpers
   };
 
   const customEngines = {};
-  const official = { css: 1, xpath: 1, text: 1, 'text:light': 1, id: 1, 'data-test': 1, 'data-testid': 1, 'data-test-id': 1, nth: 1, visible: 1, 'internal:has': 1, 'internal:has-not': 1, 'internal:and': 1, 'internal:or': 1, 'internal:chain': 1, 'id:light': 1, 'data-test:light': 1, 'data-testid:light': 1, 'data-test-id:light': 1, 'css:light': 1, 'xpath:light': 1, role: 1, 'internal:role': 1, 'aria-ref': 1 };
+  const official = { css: 1, xpath: 1, text: 1, 'text:light': 1, id: 1, 'data-test': 1, 'data-testid': 1, 'data-test-id': 1, nth: 1, visible: 1, 'internal:has': 1, 'internal:has-not': 1, 'internal:and': 1, 'internal:or': 1, 'internal:chain': 1, 'internal:control': 1, 'id:light': 1, 'data-test:light': 1, 'data-testid:light': 1, 'data-test-id:light': 1, 'css:light': 1, 'xpath:light': 1, role: 1, 'internal:role': 1, 'aria-ref': 1 };
   const cssEscapeAttr = (s) => String(s).replace(/\\/g, '\\\\').replace(new RegExp(dq, 'g'), '\\' + dq);
 
   const parsePart = (part) => {
@@ -715,6 +715,11 @@ namespace PlaywrightNative.Helpers
         const want = parsed.body === 'true';
         current = current.filter((el) => el && el.nodeType === 1 && isElementVisible(el) === want);
         continue;
+      }
+      if (parsed.engine === 'internal:control') {
+        // Official enter-frame / pierce-frames / any-frame are resolved in C#
+        // (FrameSelector). Injected query must not treat them as CSS.
+        return [];
       }
       if (parsed.engine === 'internal:and') {
         const nested = parseNestedBody('internal:and', parsed.body);

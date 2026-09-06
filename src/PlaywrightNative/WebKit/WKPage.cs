@@ -5658,6 +5658,37 @@ namespace PlaywrightNative.WebKit
             }
         }
 
+        private async Task PauseInternalAsync()
+        {
+            if (_closed || _closing)
+            {
+                throw new PlaywrightNativeException("page.pause: Page has been closed.");
+            }
+
+            int timeoutMs = TimeoutSettings.TimeoutMs(DefaultTimeout);
+            if (timeoutMs == System.Threading.Timeout.Infinite)
+            {
+                while (!_closed && !_closing)
+                {
+                    await Task.Delay(50).ConfigureAwait(false);
+                }
+
+                return;
+            }
+
+            System.Diagnostics.Stopwatch sw = System.Diagnostics.Stopwatch.StartNew();
+            while (!_closed && !_closing)
+            {
+                if (sw.ElapsedMilliseconds >= timeoutMs)
+                {
+                    throw new TimeoutException(
+                        "page.pause: Timeout " + timeoutMs.ToString(System.Globalization.CultureInfo.InvariantCulture) + "ms exceeded.");
+                }
+
+                await Task.Delay(20).ConfigureAwait(false);
+            }
+        }
+
         private TargetClosedException PageClosedException(string suffix = null)
         {
             string message = string.IsNullOrEmpty(suffix)
@@ -8302,12 +8333,12 @@ namespace PlaywrightNative.WebKit
         Task IPage.CancelPickLocatorAsync() => Task.CompletedTask;
 
         Task IPage.CheckAsync(string selector, PageCheckOptions options)
-            => CheckAsync(selector, options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, default, options?.Strict);
+            => CheckAsync(selector, options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, ActionScrollBridge.FromScrollOption(options?.Scroll), options?.Strict);
 
         Task IPage.ClickAsync(string selector, PageClickOptions options)
         {
             PageClickOptions o = options;
-            return ClickAsync(selector, o?.Button ?? default, o?.ClickCount, o?.Delay, o?.Position, o?.Modifiers, o?.Force, o?.NoWaitAfter, o?.Timeout, o?.Trial, default, null, o?.Strict);
+            return ClickAsync(selector, o?.Button ?? default, o?.ClickCount, o?.Delay, o?.Position, o?.Modifiers, o?.Force, o?.NoWaitAfter, o?.Timeout, o?.Trial, ActionScrollBridge.FromScrollOption(o?.Scroll), null, o?.Strict);
         }
 
         Task IPage.CloseAsync(PageCloseOptions options)
@@ -8319,7 +8350,7 @@ namespace PlaywrightNative.WebKit
             => ConsoleMessagesAsync(options?.Filter ?? ConsoleMessagesFilter.SinceNavigation);
 
         Task IPage.DblClickAsync(string selector, PageDblClickOptions options)
-            => DblClickAsync(selector, options?.Button ?? default, options?.Delay, options?.Position, options?.Modifiers, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, default, options?.Strict);
+            => DblClickAsync(selector, options?.Button ?? default, options?.Delay, options?.Position, options?.Modifiers, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, ActionScrollBridge.FromScrollOption(options?.Scroll), options?.Strict);
 
         Task IPage.DispatchEventAsync(string selector, string type, object eventInit, PageDispatchEventOptions options)
             => DispatchEventInternalAsync(selector, type, eventInit, options?.Timeout, options?.Strict);
@@ -8350,16 +8381,30 @@ namespace PlaywrightNative.WebKit
         }
 
         async Task<JsonElement?> IPage.EvalOnSelectorAllAsync(string selector, string expression, object arg)
-            => await EvalOnSelector.OnArrayAsync<JsonElement?>(
+        {
+            if (FrameSelector.ContainsControl(selector))
+            {
+                return await FrameSelector.EvalOnAllAsync<JsonElement?>(MainFrame, null, selector, expression, arg).ConfigureAwait(false);
+            }
+
+            return await EvalOnSelector.OnArrayAsync<JsonElement?>(
                 EvaluateHandleAsync(EvalOnSelector.DocumentQuerySelectorAllExpression(selector)),
                 expression,
                 arg).ConfigureAwait(false);
+        }
 
         Task<T> IPage.EvalOnSelectorAllAsync<T>(string selector, string expression, object arg)
-            => EvalOnSelector.OnArrayAsync<T>(
+        {
+            if (FrameSelector.ContainsControl(selector))
+            {
+                return FrameSelector.EvalOnAllAsync<T>(MainFrame, null, selector, expression, arg);
+            }
+
+            return EvalOnSelector.OnArrayAsync<T>(
                 EvaluateHandleAsync(EvalOnSelector.DocumentQuerySelectorAllExpression(selector)),
                 expression,
                 arg);
+        }
 
         Task<JsonElement?> IPage.EvalOnSelectorAsync(string selector, string expression, object arg)
             => EvalOnSelector.OnHandleAsync<JsonElement?>(QuerySelectorAsync(selector), selector, expression, arg, "page.$eval");
@@ -8537,7 +8582,7 @@ namespace PlaywrightNative.WebKit
         }
 
         Task IPage.HoverAsync(string selector, PageHoverOptions options)
-            => HoverAsync(selector, options?.Position, options?.Modifiers, options?.Force, options?.Timeout, options?.Trial, default, options?.Strict);
+            => HoverAsync(selector, options?.Position, options?.Modifiers, options?.Force, options?.Timeout, options?.Trial, ActionScrollBridge.FromScrollOption(options?.Scroll), options?.Strict);
 
         Task<string> IPage.InnerHTMLAsync(string selector, PageInnerHTMLOptions options)
             => InnerHTMLAsync(selector, options?.Timeout, options?.Strict);
@@ -8546,11 +8591,11 @@ namespace PlaywrightNative.WebKit
             => InnerTextAsync(selector, options?.Timeout, options?.Strict);
 
         Task<string> IPage.InputValueAsync(string selector, PageInputValueOptions options)
-            => EvalOnSelector.OnHandleAsync<string>(
-                QueryActionAsync(selector, options?.Strict),
+            => ElementQuery.WaitQueryAsync(
+                sel => QueryActionAsync(sel, options?.Strict),
                 selector,
-                ElementStateScript.InputValueFunction,
-                null,
+                h => h.InputValueAsync(options?.Timeout),
+                options?.Timeout,
                 "page.inputValue");
 
         Task<bool> IPage.IsCheckedAsync(string selector, PageIsCheckedOptions options)
@@ -8585,7 +8630,7 @@ namespace PlaywrightNative.WebKit
                 options.HasNotTextRegex);
         }
 
-        Task IPage.PauseAsync() => Task.CompletedTask;
+        Task IPage.PauseAsync() => PauseInternalAsync();
 
         Task<byte[]> IPage.PdfAsync(PagePdfOptions options) => Task.FromResult<byte[]>(default!);
 
@@ -8727,8 +8772,8 @@ namespace PlaywrightNative.WebKit
 
         Task IPage.SetCheckedAsync(string selector, bool checkedState, PageSetCheckedOptions options)
             => checkedState
-                ? CheckAsync(selector, options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, default, options?.Strict)
-                : UncheckAsync(selector, options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, default, options?.Strict);
+                ? CheckAsync(selector, options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, ActionScrollBridge.FromScrollOption(options?.Scroll), options?.Strict)
+                : UncheckAsync(selector, options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, ActionScrollBridge.FromScrollOption(options?.Scroll), options?.Strict);
 
         Task IPage.SetContentAsync(string html, PageSetContentOptions options)
             => SetContentAsync(html, options?.Timeout, options?.WaitUntil ?? default);
@@ -8756,10 +8801,10 @@ namespace PlaywrightNative.WebKit
             => SetInputFilesAsync(selector, files, options?.NoWaitAfter, options?.Timeout, options?.Strict);
 
         Task IPage.SetInputFilesAsync(string selector, IEnumerable<FilePayload> files, PageSetInputFilesOptions options)
-            => SetInputFilesAsync(selector, files, options?.NoWaitAfter, options?.Timeout, default, default, options?.Strict);
+            => SetInputFilesAsync(selector, files, options?.NoWaitAfter, options?.Timeout, force: null, default, options?.Strict);
 
         Task IPage.TapAsync(string selector, PageTapOptions options)
-            => TapAsync(selector, options?.Position, options?.Modifiers, options?.NoWaitAfter, options?.Force, options?.Timeout, options?.Trial, default, options?.Strict);
+            => TapAsync(selector, options?.Position, options?.Modifiers, options?.NoWaitAfter, options?.Force, options?.Timeout, options?.Trial, ActionScrollBridge.FromScrollOption(options?.Scroll), options?.Strict);
 
         Task<string> IPage.TextContentAsync(string selector, PageTextContentOptions options)
             => TextContentAsync(selector, options?.Timeout, options?.Strict);
@@ -8768,7 +8813,7 @@ namespace PlaywrightNative.WebKit
             => TypeAsync(selector, text, options?.Delay, options?.NoWaitAfter, options?.Timeout, null, default, options?.Strict);
 
         Task IPage.UncheckAsync(string selector, PageUncheckOptions options)
-            => UncheckAsync(selector, options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, default, options?.Strict);
+            => UncheckAsync(selector, options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, ActionScrollBridge.FromScrollOption(options?.Scroll), options?.Strict);
 
         Task IPage.UnrouteAllAsync(PageUnrouteAllOptions options)
             => UnrouteAllAsync(UnrouteBehaviorBridge.FromOfficial(options?.Behavior));

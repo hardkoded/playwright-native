@@ -977,6 +977,20 @@ namespace PlaywrightNative.Firefox
             throw NotImplementedHelper.ForMethod(nameof(DragAndDropAsync));
         }
 
+        private async Task PauseInternalAsync()
+        {
+            int timeoutMs = TimeoutSettings.TimeoutMs(DefaultTimeout);
+            if (timeoutMs == System.Threading.Timeout.Infinite)
+            {
+                await Task.Delay(System.Threading.Timeout.Infinite).ConfigureAwait(false);
+                return;
+            }
+
+            await Task.Delay(timeoutMs).ConfigureAwait(false);
+            throw new TimeoutException(
+                "page.pause: Timeout " + timeoutMs.ToString(System.Globalization.CultureInfo.InvariantCulture) + "ms exceeded.");
+        }
+
         private async Task<T> RunAndWaitInternalAsync<T>(Func<Task> action, Task<T> waitTask)
         {
             if (action == null)
@@ -1304,7 +1318,7 @@ namespace PlaywrightNative.Firefox
                 options.HasNotTextRegex);
         }
 
-        Task IPage.PauseAsync() => Task.CompletedTask;
+        Task IPage.PauseAsync() => PauseInternalAsync();
 
         Task<byte[]> IPage.PdfAsync(PagePdfOptions options) => Task.FromResult<byte[]>(default!);
 
@@ -1450,20 +1464,30 @@ namespace PlaywrightNative.Firefox
         Task IPage.SetContentAsync(string html, PageSetContentOptions options)
             => SetContentAsync(html, options?.Timeout, options?.WaitUntil ?? default);
 
-        void IPage.SetDefaultNavigationTimeout(float timeout) { }
+        void IPage.SetDefaultNavigationTimeout(float timeout)
+        {
+            DefaultNavigationTimeout = timeout;
+        }
 
-        void IPage.SetDefaultTimeout(float timeout) { }
+        void IPage.SetDefaultTimeout(float timeout)
+        {
+            DefaultTimeout = timeout;
+        }
 
         Task IPage.SetExtraHTTPHeadersAsync(IEnumerable<KeyValuePair<string, string>> headers)
             => SetExtraHttpHeadersAsync(headers);
 
-        Task IPage.SetInputFilesAsync(string selector, string files, PageSetInputFilesOptions options) => Task.CompletedTask;
+        Task IPage.SetInputFilesAsync(string selector, string files, PageSetInputFilesOptions options)
+            => SetInputFilesAsync(selector, files, options?.NoWaitAfter, options?.Timeout, options?.Strict);
 
-        Task IPage.SetInputFilesAsync(string selector, IEnumerable<string> files, PageSetInputFilesOptions options) => Task.CompletedTask;
+        Task IPage.SetInputFilesAsync(string selector, IEnumerable<string> files, PageSetInputFilesOptions options)
+            => SetInputFilesAsync(selector, files, options?.NoWaitAfter, options?.Timeout, options?.Strict);
 
-        Task IPage.SetInputFilesAsync(string selector, FilePayload files, PageSetInputFilesOptions options) => Task.CompletedTask;
+        Task IPage.SetInputFilesAsync(string selector, FilePayload files, PageSetInputFilesOptions options)
+            => SetInputFilesAsync(selector, files, options?.NoWaitAfter, options?.Timeout, options?.Strict);
 
-        Task IPage.SetInputFilesAsync(string selector, IEnumerable<FilePayload> files, PageSetInputFilesOptions options) => Task.CompletedTask;
+        Task IPage.SetInputFilesAsync(string selector, IEnumerable<FilePayload> files, PageSetInputFilesOptions options)
+            => SetInputFilesAsync(selector, files, options?.NoWaitAfter, options?.Timeout, force: null, default, options?.Strict);
 
         Task IPage.TapAsync(string selector, PageTapOptions options)
             => TapAsync(

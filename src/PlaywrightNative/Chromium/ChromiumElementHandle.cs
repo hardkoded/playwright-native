@@ -579,11 +579,19 @@ namespace PlaywrightNative.Chromium
         Task IElementHandle.DispatchEventAsync(string type, object eventInit)
             => ElementDispatchEventAction.RunAsync(this, type, eventInit, default);
 
-        Task<T> IElementHandle.EvalOnSelectorAllAsync<T>(string selector, string expression, object arg)
-            => EvalOnSelector.OnArrayAsync<T>(
+        async Task<T> IElementHandle.EvalOnSelectorAllAsync<T>(string selector, string expression, object arg)
+        {
+            if (FrameSelector.ContainsControl(selector))
+            {
+                IFrame owner = await OwnerFrameAsync().ConfigureAwait(false);
+                return await FrameSelector.EvalOnAllAsync<T>(owner, this, selector, expression, arg).ConfigureAwait(false);
+            }
+
+            return await EvalOnSelector.OnArrayAsync<T>(
                 EvaluateHandleAsync(EvalOnSelector.ElementQuerySelectorAllExpression(selector)),
                 expression,
-                arg);
+                arg).ConfigureAwait(false);
+        }
 
         Task<JsonElement?> IElementHandle.EvalOnSelectorAsync(string selector, string expression, object arg)
             => EvalOnSelector.OnHandleAsync<JsonElement?>(QuerySelectorAsync(selector), selector, expression, arg, "elementHandle.$eval");

@@ -30,6 +30,11 @@ namespace PlaywrightNative.Helpers
         /// <returns>The matching <see cref="WaitUntilState"/>.</returns>
         internal static WaitUntilState Parse(string waitUntil)
         {
+            if (string.IsNullOrEmpty(waitUntil))
+            {
+                return default;
+            }
+
             if (string.Equals(waitUntil, "load", StringComparison.OrdinalIgnoreCase))
             {
                 return WaitUntilState.Load;

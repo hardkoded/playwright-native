@@ -1410,7 +1410,12 @@ namespace PlaywrightNative
         /// <inheritdoc/>
         public Task SetContentAsync(string html, float? timeout = default, WaitUntilState waitUntil = default)
         {
-            int timeoutMs = timeout.HasValue ? (int)timeout.Value : (int)_defaultNavigationTimeout;
+            int timeoutMs = NavigationTimeout.ResolveMs(
+                timeout,
+                _defaultNavigationTimeout,
+                _defaultTimeout,
+                Context.DefaultNavigationTimeout(),
+                Context.DefaultTimeout());
             return ActionTrace.RunAsync(
                 _context,
                 "Set content",
@@ -1884,6 +1889,37 @@ namespace PlaywrightNative
             }
         }
 
+        private async Task PauseInternalAsync()
+        {
+            if (_isClosed)
+            {
+                throw new PlaywrightNativeException("page.pause: Page has been closed.");
+            }
+
+            int timeoutMs = TimeoutSettings.TimeoutMs(DefaultTimeout);
+            if (timeoutMs == System.Threading.Timeout.Infinite)
+            {
+                while (!_isClosed)
+                {
+                    await Task.Delay(50).ConfigureAwait(false);
+                }
+
+                return;
+            }
+
+            System.Diagnostics.Stopwatch sw = System.Diagnostics.Stopwatch.StartNew();
+            while (!_isClosed)
+            {
+                if (sw.ElapsedMilliseconds >= timeoutMs)
+                {
+                    throw new TimeoutException(
+                        "page.pause: Timeout " + timeoutMs.ToString(System.Globalization.CultureInfo.InvariantCulture) + "ms exceeded.");
+                }
+
+                await Task.Delay(20).ConfigureAwait(false);
+            }
+        }
+
         private Task RouteInternalAsync(string urlString, Regex urlRegex, Func<string, bool> urlFunc, Action<IRoute> handler, int? times = default)
         {
             if (handler == null)
@@ -2305,16 +2341,30 @@ namespace PlaywrightNative
         }
 
         async Task<JsonElement?> IPage.EvalOnSelectorAllAsync(string selector, string expression, object arg)
-            => await EvalOnSelector.OnArrayAsync<JsonElement?>(
+        {
+            if (FrameSelector.ContainsControl(selector))
+            {
+                return await FrameSelector.EvalOnAllAsync<JsonElement?>(MainFrame, null, selector, expression, arg).ConfigureAwait(false);
+            }
+
+            return await EvalOnSelector.OnArrayAsync<JsonElement?>(
                 EvaluateHandleAsync(EvalOnSelector.DocumentQuerySelectorAllExpression(selector)),
                 expression,
                 arg).ConfigureAwait(false);
+        }
 
         Task<T> IPage.EvalOnSelectorAllAsync<T>(string selector, string expression, object arg)
-            => EvalOnSelector.OnArrayAsync<T>(
+        {
+            if (FrameSelector.ContainsControl(selector))
+            {
+                return FrameSelector.EvalOnAllAsync<T>(MainFrame, null, selector, expression, arg);
+            }
+
+            return EvalOnSelector.OnArrayAsync<T>(
                 EvaluateHandleAsync(EvalOnSelector.DocumentQuerySelectorAllExpression(selector)),
                 expression,
                 arg);
+        }
 
         Task<JsonElement?> IPage.EvalOnSelectorAsync(string selector, string expression, object arg)
             => EvalOnSelector.OnHandleAsync<JsonElement?>(QuerySelectorAsync(selector), selector, expression, arg, "page.$eval");
@@ -2501,11 +2551,11 @@ namespace PlaywrightNative
             => InnerTextAsync(selector, options?.Timeout, options?.Strict);
 
         Task<string> IPage.InputValueAsync(string selector, PageInputValueOptions options)
-            => EvalOnSelector.OnHandleAsync<string>(
-                QueryActionAsync(selector, options?.Strict),
+            => ElementQuery.WaitQueryAsync(
+                sel => QueryActionAsync(sel, options?.Strict),
                 selector,
-                ElementStateScript.InputValueFunction,
-                null,
+                h => h.InputValueAsync(options?.Timeout),
+                options?.Timeout,
                 "page.inputValue");
 
         Task<bool> IPage.IsCheckedAsync(string selector, PageIsCheckedOptions options)
@@ -2540,7 +2590,7 @@ namespace PlaywrightNative
                 options.HasNotTextRegex);
         }
 
-        Task IPage.PauseAsync() => Task.CompletedTask;
+        Task IPage.PauseAsync() => PauseInternalAsync();
 
         Task<byte[]> IPage.PdfAsync(PagePdfOptions options)
             => PdfAsync(
@@ -2721,20 +2771,30 @@ namespace PlaywrightNative
         Task IPage.SetContentAsync(string html, PageSetContentOptions options)
             => SetContentAsync(html, options?.Timeout, options?.WaitUntil ?? default);
 
-        void IPage.SetDefaultNavigationTimeout(float timeout) { }
+        void IPage.SetDefaultNavigationTimeout(float timeout)
+        {
+            DefaultNavigationTimeout = timeout;
+        }
 
-        void IPage.SetDefaultTimeout(float timeout) { }
+        void IPage.SetDefaultTimeout(float timeout)
+        {
+            DefaultTimeout = timeout;
+        }
 
         Task IPage.SetExtraHTTPHeadersAsync(IEnumerable<KeyValuePair<string, string>> headers)
             => SetExtraHttpHeadersAsync(headers);
 
-        Task IPage.SetInputFilesAsync(string selector, string files, PageSetInputFilesOptions options) => Task.CompletedTask;
+        Task IPage.SetInputFilesAsync(string selector, string files, PageSetInputFilesOptions options)
+            => SetInputFilesAsync(selector, files, options?.NoWaitAfter, options?.Timeout, options?.Strict);
 
-        Task IPage.SetInputFilesAsync(string selector, IEnumerable<string> files, PageSetInputFilesOptions options) => Task.CompletedTask;
+        Task IPage.SetInputFilesAsync(string selector, IEnumerable<string> files, PageSetInputFilesOptions options)
+            => SetInputFilesAsync(selector, files, options?.NoWaitAfter, options?.Timeout, options?.Strict);
 
-        Task IPage.SetInputFilesAsync(string selector, FilePayload files, PageSetInputFilesOptions options) => Task.CompletedTask;
+        Task IPage.SetInputFilesAsync(string selector, FilePayload files, PageSetInputFilesOptions options)
+            => SetInputFilesAsync(selector, files, options?.NoWaitAfter, options?.Timeout, options?.Strict);
 
-        Task IPage.SetInputFilesAsync(string selector, IEnumerable<FilePayload> files, PageSetInputFilesOptions options) => Task.CompletedTask;
+        Task IPage.SetInputFilesAsync(string selector, IEnumerable<FilePayload> files, PageSetInputFilesOptions options)
+            => SetInputFilesAsync(selector, files, options?.NoWaitAfter, options?.Timeout, force: null, default, options?.Strict);
 
         Task IPage.TapAsync(string selector, PageTapOptions options)
             => TapAsync(

@@ -628,16 +628,30 @@ namespace PlaywrightNative.Chromium
                 options?.Strict);
 
         Task<JsonElement?> IFrame.EvalOnSelectorAllAsync(string selector, string expression, object arg)
-            => EvalOnSelector.OnArrayAsync<JsonElement?>(
+        {
+            if (FrameSelector.ContainsControl(selector))
+            {
+                return FrameSelector.EvalOnAllAsync<JsonElement?>(this, null, selector, expression, arg);
+            }
+
+            return EvalOnSelector.OnArrayAsync<JsonElement?>(
                 EvaluateHandleAsync(EvalOnSelector.DocumentQuerySelectorAllExpression(selector)),
                 expression,
                 arg);
+        }
 
         Task<T> IFrame.EvalOnSelectorAllAsync<T>(string selector, string expression, object arg)
-            => EvalOnSelector.OnArrayAsync<T>(
+        {
+            if (FrameSelector.ContainsControl(selector))
+            {
+                return FrameSelector.EvalOnAllAsync<T>(this, null, selector, expression, arg);
+            }
+
+            return EvalOnSelector.OnArrayAsync<T>(
                 EvaluateHandleAsync(EvalOnSelector.DocumentQuerySelectorAllExpression(selector)),
                 expression,
                 arg);
+        }
 
         Task<JsonElement?> IFrame.EvalOnSelectorAsync(string selector, string expression, object arg)
             => EvalOnSelector.OnHandleAsync<JsonElement?>(QuerySelectorAsync(selector), selector, expression, arg, "frame.$eval");

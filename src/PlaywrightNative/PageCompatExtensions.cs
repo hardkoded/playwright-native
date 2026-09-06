@@ -589,8 +589,8 @@ namespace PlaywrightNative
             this IPage page,
             string expression,
             object arg = default,
-            float? timeout = default,
-            object polling = default)
+            object polling = default,
+            float? timeout = default)
             => page.WaitForFunctionAsync(expression, arg, new PageWaitForFunctionOptions
             {
                 Timeout = timeout,
@@ -902,34 +902,7 @@ namespace PlaywrightNative
                 : throw new NotSupportedException("This page does not expose PlaywrightNative accessibility snapshots.");
 
         private static WaitUntilState ParseWaitUntilState(string waitUntil)
-        {
-            if (string.IsNullOrEmpty(waitUntil))
-            {
-                return default;
-            }
-
-            if (string.Equals(waitUntil, "load", StringComparison.OrdinalIgnoreCase))
-            {
-                return WaitUntilState.Load;
-            }
-
-            if (string.Equals(waitUntil, "domcontentloaded", StringComparison.OrdinalIgnoreCase))
-            {
-                return WaitUntilState.DOMContentLoaded;
-            }
-
-            if (string.Equals(waitUntil, "networkidle", StringComparison.OrdinalIgnoreCase))
-            {
-                return WaitUntilState.NetworkIdle;
-            }
-
-            if (string.Equals(waitUntil, "commit", StringComparison.OrdinalIgnoreCase))
-            {
-                return WaitUntilState.Commit;
-            }
-
-            throw new PlaywrightNativeException($"Unknown waitUntil value: {waitUntil}");
-        }
+            => Helpers.WaitUntilName.Parse(waitUntil);
 
         private static RemoveAllListenersBehavior ParseRemoveAllListenersBehavior(string behavior)
         {
@@ -967,7 +940,7 @@ namespace PlaywrightNative
             {
                 if (string.Equals(pollingText, "raf", StringComparison.OrdinalIgnoreCase))
                 {
-                    return 0;
+                    return null;
                 }
 
                 if (float.TryParse(pollingText, out float parsed))
@@ -975,6 +948,7 @@ namespace PlaywrightNative
                     return parsed;
                 }
 
+                WaitForFunctionHelper.ValidatePollingOption(pollingText);
                 throw new PlaywrightNativeException($"Unknown polling value: {pollingText}");
             }
 

@@ -463,11 +463,23 @@ namespace PlaywrightNative
 
         /// <summary>Legacy expanded-parameter select text.</summary>
         public static Task SelectTextAsync(this IElementHandle handle, float? timeout = default, bool? force = default, ActionScroll scroll = default)
-            => handle.SelectTextAsync(new ElementHandleSelectTextOptions
+        {
+            if (handle is ChromiumElementHandle chromium)
+            {
+                return chromium.SelectTextAsync(timeout, force, scroll);
+            }
+
+            if (handle is WKElementHandle webkit)
+            {
+                return webkit.SelectTextAsync(timeout, force, scroll);
+            }
+
+            return handle.SelectTextAsync(new ElementHandleSelectTextOptions
             {
                 Timeout = timeout,
                 Force = force,
             });
+        }
 
         /// <summary>Legacy element aria snapshot YAML.</summary>
         public static Task<string> AriaSnapshotAsync(this IElementHandle handle, AriaSnapshotMode mode = AriaSnapshotMode.Default, int? depth = default, bool? boxes = default)

@@ -2356,7 +2356,16 @@ namespace PlaywrightNative.Chromium
 
             // Already on about:blank (including empty Frame.Url) navigating to about:blank:
             // Chromium may not emit a new load. Resolve without another navigate race.
-            if (IsBlankNavigationUrl(url)
+            // Skip the fast-path when page init scripts are registered so
+            // Page.addScriptToEvaluateOnNewDocument still runs on a real navigation.
+            bool hasPageInitScripts;
+            lock (_initScriptSync)
+            {
+                hasPageInitScripts = _initScriptSources.Count > 0;
+            }
+
+            if (!hasPageInitScripts
+                && IsBlankNavigationUrl(url)
                 && IsBlankNavigationUrl(frame.Url)
                 && frame.LifecycleEvents.Contains(targetLifecycleEvent))
             {

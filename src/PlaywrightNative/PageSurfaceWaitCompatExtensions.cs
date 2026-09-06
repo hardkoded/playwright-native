@@ -56,7 +56,7 @@ namespace PlaywrightNative
             object arg,
             string polling,
             PageWaitForFunctionOptions options = default)
-            => page.WaitForFunctionAsync(expression, arg, options?.Timeout, polling);
+            => page.WaitForFunctionAsync(expression, arg, polling, options?.Timeout);
 
         /// <summary>Legacy wait-for-websocket with URL string.</summary>
         [OverloadResolutionPriority(1)]
