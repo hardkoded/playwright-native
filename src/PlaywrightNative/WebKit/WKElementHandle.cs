@@ -840,7 +840,7 @@ namespace PlaywrightNative.WebKit
         Task<byte[]> IElementHandle.ScreenshotAsync(ElementHandleScreenshotOptions options)
             => ScreenshotAsync(
                 options?.Path,
-                options?.Type ?? default,
+                options?.Type ?? EnumCompat.UndefinedScreenshotType,
                 options?.Quality,
                 options?.OmitBackground,
                 options?.Timeout,

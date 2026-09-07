@@ -3507,7 +3507,7 @@ namespace PlaywrightNative
         Task<byte[]> ILocator.ScreenshotAsync(LocatorScreenshotOptions options)
             => ScreenshotAsync(
                 options?.Path,
-                options?.Type ?? default,
+                options?.Type ?? EnumCompat.UndefinedScreenshotType,
                 options?.Quality,
                 options?.OmitBackground,
                 options?.Timeout,

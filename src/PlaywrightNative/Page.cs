@@ -2717,7 +2717,7 @@ namespace PlaywrightNative
         Task<byte[]> IPage.ScreenshotAsync(PageScreenshotOptions options)
             => ScreenshotAsync(
                 options?.Path,
-                options?.Type ?? default,
+                options?.Type ?? EnumCompat.UndefinedScreenshotType,
                 options?.Quality,
                 options?.FullPage,
                 options?.Clip,
