@@ -2725,6 +2725,32 @@ namespace PlaywrightNative
         private async Task<IReadOnlyList<IElementHandle>> FilterInsideAsync()
         {
             IReadOnlyList<IElementHandle> ancestors = await _left.ResolveAllAsync().ConfigureAwait(false);
+
+            // A :scope-anchored child selector (e.g. locator.locator(':scope.foo'))
+            // has nothing to bind :scope to when resolved on its own — :scope needs
+            // to be each ancestor in turn. Route only this case through the rooted
+            // per-ancestor query; every other selector keeps the existing
+            // resolve-then-filter-by-containment path below unchanged.
+            if (_right._combine == CombineKind.None && _right.HasScopeStep())
+            {
+                List<IElementHandle> scoped = new List<IElementHandle>();
+                HashSet<string> seenIds = new HashSet<string>(StringComparer.Ordinal);
+                foreach (IElementHandle ancestor in ancestors)
+                {
+                    IReadOnlyList<IElementHandle> perAncestor = await _right.ResolveAllAsync(ancestor).ConfigureAwait(false);
+                    foreach (IElementHandle candidate in perAncestor)
+                    {
+                        string id = await candidate.EvaluateAsync<string>(TagIdFunction).ConfigureAwait(false);
+                        if (seenIds.Add(id))
+                        {
+                            scoped.Add(candidate);
+                        }
+                    }
+                }
+
+                return scoped;
+            }
+
             IReadOnlyList<IElementHandle> candidates = await _right.ResolveAllAsync().ConfigureAwait(false);
 
             // Official locator.locator(getBy*) is same-document. Compare
@@ -2764,6 +2790,25 @@ namespace PlaywrightNative
 
         private Task<string> StrictResolvedMessageAsync(IReadOnlyList<IElementHandle> all)
             => StrictModeViolation.FormatAsync(ToString(), all);
+
+        /// <summary>
+        /// True when any step's selector references <c>:scope</c>. Used by
+        /// <see cref="FilterInsideAsync"/> to route a <c>:scope</c>-anchored child
+        /// selector through a per-ancestor rooted query instead of a query with
+        /// no scope to bind <c>:scope</c> to.
+        /// </summary>
+        private bool HasScopeStep()
+        {
+            for (int i = 0; i < _steps.Count; i++)
+            {
+                if (_steps[i].Selector != null && _steps[i].Selector.Contains(":scope", StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
 
         private bool TryGetSimpleSelector(out string selector)
         {
