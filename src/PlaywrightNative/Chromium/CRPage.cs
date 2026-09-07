@@ -2533,8 +2533,15 @@ namespace PlaywrightNative.Chromium
                         : true);
 
                 // Same-document navigations (including about:blank -> about:blank with a
-                // null loaderId) resolve once navigate returns.
-                if (lifecycleReady || string.IsNullOrEmpty(expectedDocumentId))
+                // null loaderId) resolve once navigate returns, but only once frame.Url
+                // actually reflects the target. Page.navigatedWithinDocument (which sets
+                // frame.Url) races with Page.navigate's own return, so resolving here
+                // whenever expectedDocumentId is empty — regardless of lifecycleReady —
+                // could hand back a page.Url that is still the pre-navigation value
+                // (e.g. a fragment navigation reported without its fragment). When the
+                // URL is not settled yet, fall through and let OnNavigated resolve this
+                // once the frame really has the new URL.
+                if (lifecycleReady)
                 {
                     frame.Url = NavigationTimeout.PreserveUserInfo(url, frame.Url);
                     return;
