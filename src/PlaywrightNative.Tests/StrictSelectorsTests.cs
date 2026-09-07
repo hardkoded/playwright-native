@@ -67,7 +67,31 @@ namespace PlaywrightNative.Tests
             Assert.That(id, Is.EqualTo("only"));
         }
 
-        [PlaywrightTest("page-strict.spec.ts", "querySelector is not strict")]
+        [PlaywrightTest("page-strict.spec.ts", "should fail page.$ in strict mode")]
+        [Test]
+        [Timeout(30_000)]
+        public async Task QuerySelectorShouldFailInStrictMode()
+        {
+            // Upstream resolves the strict option the same way for every
+            // selector-based call (FrameSelectors._parseSelector): explicit
+            // options.strict wins, otherwise it falls back to
+            // context.strictSelectors. page.$ is not exempt.
+            await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
+            await using IBrowserContext context = await browser.NewContextAsync(new BrowserContextOptions
+            {
+                StrictSelectors = true,
+            }).ConfigureAwait(false);
+            IPage page = await context.NewPageAsync().ConfigureAwait(false);
+            await page.SetContentAsync("<div><button>one</button><button>two</button></div>").ConfigureAwait(false);
+
+            PlaywrightNativeException ex = Assert.CatchAsync<PlaywrightNativeException>(
+                () => page.QuerySelectorAsync("button"));
+
+            Assert.That(ex, Is.Not.Null);
+            Assert.That(ex.Message, Does.Contain("strict mode violation"));
+        }
+
+        [PlaywrightTest("page-strict.spec.ts", "querySelector honors an explicit strict: false override")]
         [Test]
         [Timeout(30_000)]
         public async Task QuerySelectorShouldReturnTheFirstMatch()
@@ -80,7 +104,7 @@ namespace PlaywrightNative.Tests
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
             await page.SetContentAsync("<div><button>one</button><button>two</button></div>").ConfigureAwait(false);
 
-            IElementHandle handle = await page.QuerySelectorAsync("button").ConfigureAwait(false);
+            IElementHandle handle = await page.QuerySelectorAsync("button", new() { Strict = false }).ConfigureAwait(false);
 
             Assert.That(handle, Is.Not.Null);
             Assert.That(await handle.TextContentAsync().ConfigureAwait(false), Is.EqualTo("one"));
