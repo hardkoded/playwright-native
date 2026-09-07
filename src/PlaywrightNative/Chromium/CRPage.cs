@@ -2398,6 +2398,21 @@ namespace PlaywrightNative.Chromium
             {
                 await ReplayPageInitScriptsAsync().ConfigureAwait(false);
                 frame.Url = NavigationTimeout.PreserveUserInfo(url, frame.Url);
+
+                // Upstream really navigates here, so the page still observes the
+                // document lifecycle. Replay the events we skipped, or callers
+                // waiting on load / domcontentloaded never hear anything. A real
+                // navigation costs a round trip, so hand control back to the
+                // caller first — it subscribes right after calling goto.
+                await Task.Yield();
+                foreach (string replayed in new[] { "DOMContentLoaded", "load" })
+                {
+                    if (frame.LifecycleEvents.Contains(replayed))
+                    {
+                        frame.OnLifecycleEvent(replayed);
+                    }
+                }
+
                 return;
             }
 
