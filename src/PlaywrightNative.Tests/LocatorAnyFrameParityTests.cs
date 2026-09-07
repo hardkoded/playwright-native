@@ -252,7 +252,8 @@ namespace PlaywrightNative.Tests
             await RoutePageAsync(Page, "empty.html", "<iframe src=\"a.html\"></iframe>").ConfigureAwait(false);
             await RoutePageAsync(Page, "a.html", "<div>Nothing here</div>").ConfigureAwait(false);
             await Page.GoToAsync(EmptyPage).ConfigureAwait(false);
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            // A timeout is a TimeoutException everywhere else in this suite.
+            TimeoutException error = Assert.CatchAsync<TimeoutException>(
                 () => Page.FrameLocator().Locator("button").ClickAsync(new() { Timeout = 1000 }));
             Assert.That(error.Message, Does.Contain("Timeout 1000ms exceeded"));
             Assert.That(error.Message, Does.Contain("waiting for frameLocator().locator('button')"));
@@ -435,7 +436,8 @@ namespace PlaywrightNative.Tests
             await RoutePageAsync(Page, "empty.html", "<iframe src=\"a.html\"></iframe>").ConfigureAwait(false);
             await RoutePageAsync(Page, "a.html", "<div>Nothing here</div>").ConfigureAwait(false);
             await Page.GoToAsync(EmptyPage).ConfigureAwait(false);
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            // A timeout is a TimeoutException everywhere else in this suite.
+            TimeoutException error = Assert.CatchAsync<TimeoutException>(
                 () => Page.FrameLocator().Locator("button").EvaluateAsync<string>("e => e.textContent", null, 1000));
             Assert.That(error.Message, Does.Contain("Timeout 1000ms exceeded"));
             Assert.That(error.Message, Does.Contain("waiting for frameLocator().locator('button')"));
