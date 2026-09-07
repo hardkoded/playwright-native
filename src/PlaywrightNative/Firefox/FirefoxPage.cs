@@ -1400,9 +1400,11 @@ namespace PlaywrightNative.Firefox
 
         Task<IResponse> IPage.RunAndWaitForResponseAsync(Func<Task> action, Func<IResponse, bool> urlOrPredicate, PageRunAndWaitForResponseOptions options) => Task.FromResult<IResponse>(default!);
 
-        Task<IWebSocket> IPage.RunAndWaitForWebSocketAsync(Func<Task> action, PageRunAndWaitForWebSocketOptions options) => Task.FromResult<IWebSocket>(default!);
+        Task<IWebSocket> IPage.RunAndWaitForWebSocketAsync(Func<Task> action, PageRunAndWaitForWebSocketOptions options)
+            => RunAndWaitInternalAsync(action, WaitForEventAsync(PageEvent.WebSocket, options?.Predicate, options?.Timeout));
 
-        Task<IWorker> IPage.RunAndWaitForWorkerAsync(Func<Task> action, PageRunAndWaitForWorkerOptions options) => Task.FromResult<IWorker>(default!);
+        Task<IWorker> IPage.RunAndWaitForWorkerAsync(Func<Task> action, PageRunAndWaitForWorkerOptions options)
+            => RunAndWaitInternalAsync(action, WaitForEventAsync(PageEvent.Worker, options?.Predicate, options?.Timeout));
 
         Task<byte[]> IPage.ScreenshotAsync(PageScreenshotOptions options)
             => ScreenshotAsync(
@@ -1588,9 +1590,11 @@ namespace PlaywrightNative.Firefox
         Task IPage.WaitForURLAsync(Func<string, bool> url, PageWaitForURLOptions options)
             => WaitForURLAsync(null, null, url, options?.Timeout, options?.WaitUntil ?? default);
 
-        Task<IWebSocket> IPage.WaitForWebSocketAsync(PageWaitForWebSocketOptions options) => Task.FromResult<IWebSocket>(default!);
+        Task<IWebSocket> IPage.WaitForWebSocketAsync(PageWaitForWebSocketOptions options)
+            => WaitForEventAsync(PageEvent.WebSocket, options?.Predicate, options?.Timeout);
 
-        Task<IWorker> IPage.WaitForWorkerAsync(PageWaitForWorkerOptions options) => Task.FromResult<IWorker>(default!);
+        Task<IWorker> IPage.WaitForWorkerAsync(PageWaitForWorkerOptions options)
+            => WaitForEventAsync(PageEvent.Worker, options?.Predicate, options?.Timeout);
 #pragma warning restore SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
     }
 }

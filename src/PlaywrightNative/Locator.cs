@@ -504,7 +504,7 @@ namespace PlaywrightNative
             }
             catch (TimeoutException ex)
             {
-                throw new PlaywrightNativeException(ex.Message + "\nwaiting for " + ToString(), ex);
+                throw new TimeoutException(ex.Message + "\nwaiting for " + ToString(), ex);
             }
             finally
             {
@@ -2292,7 +2292,7 @@ namespace PlaywrightNative
                     throw;
                 }
 
-                throw new PlaywrightNativeException(ex.Message + "\nwaiting for " + ToString(), ex);
+                throw new TimeoutException(ex.Message + "\nwaiting for " + ToString(), ex);
             }
         }
 

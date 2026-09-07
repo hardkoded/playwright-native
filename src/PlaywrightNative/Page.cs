@@ -2707,9 +2707,11 @@ namespace PlaywrightNative
         Task<IResponse> IPage.RunAndWaitForResponseAsync(Func<Task> action, Func<IResponse, bool> urlOrPredicate, PageRunAndWaitForResponseOptions options)
             => RunAndWaitInternalAsync(action, WaitForResponseAsync(null, null, urlOrPredicate, options?.Timeout));
 
-        Task<IWebSocket> IPage.RunAndWaitForWebSocketAsync(Func<Task> action, PageRunAndWaitForWebSocketOptions options) => Task.FromResult<IWebSocket>(default!);
+        Task<IWebSocket> IPage.RunAndWaitForWebSocketAsync(Func<Task> action, PageRunAndWaitForWebSocketOptions options)
+            => RunAndWaitInternalAsync(action, WaitForEventAsync(PageEvent.WebSocket, options?.Predicate, options?.Timeout));
 
-        Task<IWorker> IPage.RunAndWaitForWorkerAsync(Func<Task> action, PageRunAndWaitForWorkerOptions options) => Task.FromResult<IWorker>(default!);
+        Task<IWorker> IPage.RunAndWaitForWorkerAsync(Func<Task> action, PageRunAndWaitForWorkerOptions options)
+            => RunAndWaitInternalAsync(action, WaitForEventAsync(PageEvent.Worker, options?.Predicate, options?.Timeout));
 
         Task<byte[]> IPage.ScreenshotAsync(PageScreenshotOptions options)
             => ScreenshotAsync(
@@ -2897,9 +2899,11 @@ namespace PlaywrightNative
         Task IPage.WaitForURLAsync(Func<string, bool> url, PageWaitForURLOptions options)
             => WaitForURLAsync(null, null, url, options?.Timeout, options?.WaitUntil ?? default);
 
-        Task<IWebSocket> IPage.WaitForWebSocketAsync(PageWaitForWebSocketOptions options) => Task.FromResult<IWebSocket>(default!);
+        Task<IWebSocket> IPage.WaitForWebSocketAsync(PageWaitForWebSocketOptions options)
+            => WaitForEventAsync(PageEvent.WebSocket, options?.Predicate, options?.Timeout);
 
-        Task<IWorker> IPage.WaitForWorkerAsync(PageWaitForWorkerOptions options) => Task.FromResult<IWorker>(default!);
+        Task<IWorker> IPage.WaitForWorkerAsync(PageWaitForWorkerOptions options)
+            => WaitForEventAsync(PageEvent.Worker, options?.Predicate, options?.Timeout);
 
         private static async Task<IAsyncDisposable> RegisterRouteAsync(Func<Task> register)
         {
