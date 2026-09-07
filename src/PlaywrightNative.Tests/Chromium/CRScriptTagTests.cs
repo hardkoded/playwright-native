@@ -60,7 +60,9 @@ namespace PlaywrightNative.Tests.Chromium
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public void ShouldThrowWhenNeitherUrlNorContent()
         {
-            System.ArgumentException ex = Assert.ThrowsAsync<System.ArgumentException>(
+            // Matches PageAddScriptTagTests.ShouldThrowAnErrorIfNoOptionsAreProvided:
+            // official validation errors surface as PlaywrightNativeException here.
+            PlaywrightNativeException ex = Assert.ThrowsAsync<PlaywrightNativeException>(
                 () => Page.AddScriptTagAsync());
             Assert.That(ex.Message, Does.Contain("url").Or.Contain("content"));
         }

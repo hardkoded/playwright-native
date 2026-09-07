@@ -4273,7 +4273,7 @@ namespace PlaywrightNative.WebKit
         {
             if (string.IsNullOrEmpty(url) && string.IsNullOrEmpty(content))
             {
-                throw new ArgumentException(AddScriptTagHelper.MissingOptionsMessage);
+                throw new PlaywrightNativeException(AddScriptTagHelper.MissingOptionsMessage);
             }
 
             if (!string.IsNullOrEmpty(url) && !string.IsNullOrEmpty(content))
@@ -4352,7 +4352,7 @@ namespace PlaywrightNative.WebKit
         {
             if (string.IsNullOrEmpty(url) && string.IsNullOrEmpty(content))
             {
-                throw new ArgumentException(AddStyleTagHelper.MissingOptionsMessage);
+                throw new PlaywrightNativeException(AddStyleTagHelper.MissingOptionsMessage);
             }
 
             if (!string.IsNullOrEmpty(url) && !string.IsNullOrEmpty(content))

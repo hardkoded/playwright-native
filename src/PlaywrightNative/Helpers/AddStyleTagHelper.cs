@@ -81,7 +81,7 @@ namespace PlaywrightNative.Helpers
         {
             if (string.IsNullOrEmpty(url) && string.IsNullOrEmpty(path) && string.IsNullOrEmpty(content))
             {
-                throw new ArgumentException(MissingOptionsMessage);
+                throw new PlaywrightNativeException(MissingOptionsMessage);
             }
 
             if (!string.IsNullOrEmpty(path))
