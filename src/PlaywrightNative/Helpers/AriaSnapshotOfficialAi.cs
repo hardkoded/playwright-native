@@ -300,7 +300,14 @@ namespace PlaywrightNative.Helpers
   };
 
   const win = (root && root.ownerDocument && root.ownerDocument.defaultView) || null;
-  if (win && typeof win.__pwAriaLastRef !== 'number') win.__pwAriaLastRef = 0;
+  // Refs number the elements of one document. document.write and navigation
+  // both install a fresh documentElement while keeping the window, so key the
+  // counter on it instead of letting it drift across setContent calls.
+  const docRoot = (root && root.ownerDocument && root.ownerDocument.documentElement) || null;
+  if (win && (typeof win.__pwAriaLastRef !== 'number' || win.__pwAriaRefRoot !== docRoot)) {
+    win.__pwAriaRefRoot = docRoot;
+    win.__pwAriaLastRef = 0;
+  }
   const assignRef = (ariaNode) => {
     if (!ariaNode.box.visible || !ariaNode.receivesPointerEvents) return;
     const element = ariaNode.el;

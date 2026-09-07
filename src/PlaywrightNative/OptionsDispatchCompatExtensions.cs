@@ -82,22 +82,7 @@ namespace PlaywrightNative
         {
             if (options?.State is string stateText)
             {
-                if (string.Equals(stateText, "load", StringComparison.OrdinalIgnoreCase))
-                {
-                    return page.WaitForLoadStateAsync(LoadState.Load, options);
-                }
-
-                if (string.Equals(stateText, "domcontentloaded", StringComparison.OrdinalIgnoreCase))
-                {
-                    return page.WaitForLoadStateAsync(LoadState.DOMContentLoaded, options);
-                }
-
-                if (string.Equals(stateText, "networkidle", StringComparison.OrdinalIgnoreCase))
-                {
-                    return page.WaitForLoadStateAsync(LoadState.NetworkIdle, options);
-                }
-
-                throw new PlaywrightNativeException("state: expected one of (load|loadstate|domcontentloaded|networkidle|commit)");
+                return page.WaitForLoadStateAsync(LoadStateName.Parse(stateText), options);
             }
 
             if (options?.State is LoadState loadState)

@@ -179,6 +179,13 @@ namespace PlaywrightNative
             int? depth = default,
             bool? boxes = default)
         {
+            if (mode == AriaSnapshotMode.Ai)
+            {
+                // AI mode numbers refs from the snapshot root. Rooting at <html>
+                // burns a ref on it, shifting every ref by one.
+                return await AriaSnapshotAi.CapturePageJsonAsync(page, timeout, depth, boxes ?? false).ConfigureAwait(false);
+            }
+
             _ = timeout;
             IElementHandle root = await page.QuerySelectorAsync("html").ConfigureAwait(false)
                 ?? throw new PlaywrightNativeException("page.ariaSnapshotJSON: no documentElement.");

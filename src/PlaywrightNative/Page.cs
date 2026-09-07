@@ -2615,7 +2615,8 @@ namespace PlaywrightNative
         Task IPage.PressAsync(string selector, string key, PagePressOptions options)
             => PressAsync(selector, key, options?.Delay, options?.NoWaitAfter, options?.Timeout, null, default, options?.Strict);
 
-        Task<IElementHandle> IPage.QuerySelectorAsync(string selector, PageQuerySelectorOptions options) => QuerySelectorAsync(selector);
+        Task<IElementHandle> IPage.QuerySelectorAsync(string selector, PageQuerySelectorOptions options)
+            => QueryActionAsync(selector, options?.Strict);
 
         Task<IResponse> IPage.ReloadAsync(PageReloadOptions options)
             => ReloadAsync(options?.WaitUntil ?? default, options?.Timeout);

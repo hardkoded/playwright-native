@@ -693,7 +693,8 @@ namespace PlaywrightNative.WebKit
         Task IFrame.PressAsync(string selector, string key, FramePressOptions options)
             => PressAsync(selector, key, options?.Delay, options?.NoWaitAfter, options?.Timeout, null, default, options?.Strict);
 
-        Task<IElementHandle> IFrame.QuerySelectorAsync(string selector, FrameQuerySelectorOptions options) => QuerySelectorAsync(selector);
+        Task<IElementHandle> IFrame.QuerySelectorAsync(string selector, FrameQuerySelectorOptions options)
+            => QueryActionAsync(selector, options?.Strict);
 
         async Task<IResponse> IFrame.RunAndWaitForNavigationAsync(Func<Task> action, FrameRunAndWaitForNavigationOptions options)
         {

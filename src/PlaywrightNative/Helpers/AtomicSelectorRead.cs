@@ -148,8 +148,12 @@ namespace PlaywrightNative.Helpers
                 return "const el = " + QueryExpression(selector) + ";";
             }
 
+            // Build the violation text in the page: only there can we render the
+            // official "N) <preview> aka <locator>" line for every match.
             return "const all = " + QueryAllExpression(selector) + ";" +
-                " if (all && all.length > 1) return { ok: true, n: all.length };" +
+                " if (all && all.length > 1) {" + StrictModeViolation.GeneratorSource +
+                " return { ok: true, n: all.length, m: formatStrict(" +
+                JsonSerializer.Serialize(StrictModeViolation.QuoteLocator(selector)) + ", all) }; }" +
                 " const el = all && all.length ? all[0] : null;";
         }
 
@@ -187,6 +191,12 @@ namespace PlaywrightNative.Helpers
                 || count <= 1)
             {
                 return;
+            }
+
+            if (raw.Value.TryGetProperty("m", out JsonElement message)
+                && message.ValueKind == JsonValueKind.String)
+            {
+                throw new PlaywrightNativeException(message.GetString());
             }
 
             throw new PlaywrightNativeException(
