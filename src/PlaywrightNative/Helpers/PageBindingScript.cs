@@ -333,10 +333,12 @@ namespace PlaywrightNative
             int i = 0;
             foreach (JsonElement arg in argsElement.EnumerateArray())
             {
-                // Page-side serialize() wraps primitives as { n }, { s }, { b }, …
-                // Revive to plain JSON so CR ExposeFunction handlers can GetInt32/etc.
-                JsonElement revived = JsonValueHelper.Parse<JsonElement>(arg);
-                args[i++] = clone ? revived.Clone() : revived;
+                // Page-side serialize() wraps each argument as { n }, { s }, { a, id }, …
+                // Leave it tagged: ExposeFunctionBinder.Arg<T> already understands this
+                // shape directly, including array/object nesting and { ref } cycles that
+                // a plain-JSON reconstruction could not represent (a JsonElement tree has
+                // no way to point back at an ancestor).
+                args[i++] = clone ? arg.Clone() : arg;
             }
 
             return true;
