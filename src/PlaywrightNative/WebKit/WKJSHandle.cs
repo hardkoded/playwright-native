@@ -29,7 +29,7 @@ namespace PlaywrightNative.WebKit
     /// a specialized subclass (<see cref="WKElementHandle"/>) is used when the remote object
     /// is a DOM node (<c>subtype == "node"</c>). Disposed via <c>Runtime.releaseObject</c>.
     /// </summary>
-    internal partial class WKJSHandle : IJSHandle
+    internal partial class WKJSHandle : IJSHandle, IHasDisposedState
     {
         private readonly WKExecutionContext _context;
         private readonly string _objectId;
@@ -57,6 +57,9 @@ namespace PlaywrightNative.WebKit
 
         /// <inheritdoc/>
         public virtual IElementHandle AsElement() => null;
+
+        /// <inheritdoc/>
+        bool IHasDisposedState.IsDisposed => _disposed;
 
         /// <summary>Gets the WIP remote object identifier for this handle.</summary>
         internal string ObjectId => _objectId;

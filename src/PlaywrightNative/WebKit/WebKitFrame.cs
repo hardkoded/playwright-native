@@ -98,6 +98,7 @@ namespace PlaywrightNative.WebKit
             EvaluateWithArg.ThrowIfDetached(this);
             if (EvaluateWithArg.IsHandle(arg))
             {
+                EvaluateWithArg.ThrowIfDisposedHandle(arg);
                 return _page.EvaluateFunctionHandleInFrameAsync(
                     _wkFrame,
                     EvaluateWithArg.AsFunction(expression),
@@ -421,6 +422,7 @@ namespace PlaywrightNative.WebKit
             EvaluateWithArg.ThrowIfDetached(this);
             if (EvaluateWithArg.IsHandle(arg))
             {
+                EvaluateWithArg.ThrowIfDisposedHandle(arg);
                 return _page.EvaluateFunctionSerializedInFrameAsync<T>(
                     _wkFrame,
                     EvaluateHandleArg.WithSerializedHandleResult(

@@ -763,6 +763,7 @@ namespace PlaywrightNative.WebKit
                 // WebKit rejects mixed value/objectId lists used by the nested-handle tree path.
                 if (arg is IJSHandle)
                 {
+                    EvaluateWithArg.ThrowIfDisposedHandle(arg);
                     return EvaluateFunctionSerializedAsync<T>(EvaluateWithArg.AsFunction(expression), arg);
                 }
 
@@ -786,6 +787,7 @@ namespace PlaywrightNative.WebKit
             {
                 if (arg is IJSHandle)
                 {
+                    EvaluateWithArg.ThrowIfDisposedHandle(arg);
                     return EvaluateFunctionSerializedAsync<JsonElement?>(EvaluateWithArg.AsFunction(expression), arg);
                 }
 
@@ -808,6 +810,7 @@ namespace PlaywrightNative.WebKit
                 WKExecutionContext context = RequireExecutionContext();
                 if (arg is WKJSHandle handleArg)
                 {
+                    EvaluateWithArg.ThrowIfDisposedHandle(handleArg);
                     string objectId = await context.ResolveHandleObjectIdAsync(handleArg).ConfigureAwait(false);
                     JsonElement? direct = await context
                         .EvaluateHandleOnHandleAsync(objectId, EvaluateWithArg.AsFunction(expression))

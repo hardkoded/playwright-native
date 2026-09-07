@@ -62,6 +62,14 @@ namespace PlaywrightNative.Helpers
                 return false;
             }
 
+            foreach (object handle in handles)
+            {
+                if (handle is IHasDisposedState disposable && disposable.IsDisposed)
+                {
+                    throw new PlaywrightNativeException(EvaluateSerialization.DisposedHandleMessage);
+                }
+            }
+
             List<object> remote = new List<object>();
             object rewritten = RewriteTree(tree, handles, remote);
             functionDeclaration = WrapWithHandles(expression);

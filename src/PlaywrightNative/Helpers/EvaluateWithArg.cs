@@ -78,6 +78,21 @@ namespace PlaywrightNative.Helpers
         internal static bool IsHandle(object arg) => arg is IJSHandle;
 
         /// <summary>
+        /// Throws the official disposed-handle error when <paramref name="arg"/> is a
+        /// handle whose <c>DisposeAsync</c> already ran. The bare-handle evaluate fast
+        /// path skips the nested-tree walk that would otherwise catch this, so it must
+        /// check on its own before embedding a stale <c>objectId</c> in the call.
+        /// </summary>
+        /// <param name="arg">The evaluate argument.</param>
+        internal static void ThrowIfDisposedHandle(object arg)
+        {
+            if (arg is IHasDisposedState disposable && disposable.IsDisposed)
+            {
+                throw new PlaywrightNativeException(EvaluateSerialization.DisposedHandleMessage);
+            }
+        }
+
+        /// <summary>
         /// Invokes function-like expressions so <c>() =&gt; document.body</c> evaluates to
         /// the body node rather than the function object. Matches Playwright's
         /// evaluate-handle string convention.
