@@ -54,13 +54,21 @@ namespace PlaywrightNative.Compat
         /// <summary>Legacy wait-for string (visible/hidden/attached/detached).</summary>
         public string WaitFor
         {
-            set => base.State = WaitForSelectorName.ToOfficialState(value);
+            set
+            {
+                WaitForSelectorName.Validate(value, null);
+                base.State = WaitForSelectorName.ToOfficialState(value);
+            }
         }
 
         /// <summary>Legacy visibility string (visible/hidden).</summary>
         public string Visibility
         {
-            set => base.State = WaitForSelectorName.ToOfficialState(value, value);
+            set
+            {
+                WaitForSelectorName.Validate(null, value);
+                base.State = WaitForSelectorName.ToOfficialState(value, value);
+            }
         }
     }
 
@@ -76,13 +84,21 @@ namespace PlaywrightNative.Compat
         /// <summary>Legacy wait-for string.</summary>
         public string WaitFor
         {
-            set => base.State = WaitForSelectorName.ToOfficialState(value);
+            set
+            {
+                WaitForSelectorName.Validate(value, null);
+                base.State = WaitForSelectorName.ToOfficialState(value);
+            }
         }
 
         /// <summary>Legacy visibility string.</summary>
         public string Visibility
         {
-            set => base.State = WaitForSelectorName.ToOfficialState(value, value);
+            set
+            {
+                WaitForSelectorName.Validate(null, value);
+                base.State = WaitForSelectorName.ToOfficialState(value, value);
+            }
         }
     }
 
@@ -296,5 +312,8 @@ namespace PlaywrightNative.Compat
     {
         internal static WaitForSelectorState? ToOfficialState(object value, string visibility = null)
             => Helpers.WaitForSelectorName.ToOfficialState(value, visibility);
+
+        internal static void Validate(string waitFor, string visibility)
+            => Helpers.WaitForSelectorName.Validate(waitFor, visibility);
     }
 }
