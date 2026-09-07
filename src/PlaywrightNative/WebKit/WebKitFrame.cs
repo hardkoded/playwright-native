@@ -26,7 +26,7 @@ using PlaywrightNative.Helpers;
 namespace PlaywrightNative.WebKit
 {
     /// <summary>Public <see cref="IFrame"/> wrapping <see cref="WKFrame"/>.</summary>
-    internal sealed partial class WebKitFrame : IFrame
+    internal sealed partial class WebKitFrame : IFrame, IHasScrollAwareActions
     {
         private readonly WKFrame _wkFrame;
         private readonly WKPage _page;
@@ -484,13 +484,13 @@ namespace PlaywrightNative.WebKit
             });
 
         Task IFrame.CheckAsync(string selector, FrameCheckOptions options)
-            => CheckAsync(selector, options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, default, options?.Strict);
+            => CheckAsync(selector, options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, ActionScrollBridge.FromScrollOption(options?.Scroll), options?.Strict);
 
         Task IFrame.ClickAsync(string selector, FrameClickOptions options)
-            => ClickAsync(selector, options?.Button ?? default, options?.ClickCount, options?.Delay, options?.Position, options?.Modifiers, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, default, null, options?.Strict);
+            => ClickAsync(selector, options?.Button ?? default, options?.ClickCount, options?.Delay, options?.Position, options?.Modifiers, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, ActionScrollBridge.FromScrollOption(options?.Scroll), null, options?.Strict);
 
         Task IFrame.DblClickAsync(string selector, FrameDblClickOptions options)
-            => DblClickAsync(selector, options?.Button ?? default, options?.Delay, options?.Position, options?.Modifiers, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, default, options?.Strict);
+            => DblClickAsync(selector, options?.Button ?? default, options?.Delay, options?.Position, options?.Modifiers, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, ActionScrollBridge.FromScrollOption(options?.Scroll), options?.Strict);
 
         Task IFrame.DispatchEventAsync(string selector, string type, object eventInit, FrameDispatchEventOptions options)
             => DispatchEventInternalAsync(selector, type, eventInit, options?.Timeout, options?.Strict);
@@ -550,7 +550,7 @@ namespace PlaywrightNative.WebKit
             => FillAsync(selector, value, options?.NoWaitAfter, options?.Timeout, options?.Force, default, options?.Strict);
 
         Task IFrame.FocusAsync(string selector, FrameFocusOptions options)
-            => FocusAsync(selector, options?.Timeout, default, options?.Strict);
+            => FocusAsync(selector, options?.Timeout, (options as PlaywrightNative.Compat.LegacyFrameFocusOptions)?.Scroll ?? default, options?.Strict);
 
         Task<IElementHandle> IFrame.FrameElementAsync() => FrameElementHelper.ResolveAsync(this);
 
@@ -642,7 +642,7 @@ namespace PlaywrightNative.WebKit
             => GoToAsync(url, options?.WaitUntil ?? default, options?.Timeout, options?.Referer);
 
         Task IFrame.HoverAsync(string selector, FrameHoverOptions options)
-            => HoverAsync(selector, options?.Position, options?.Modifiers, options?.Force, options?.Timeout, options?.Trial, default, options?.Strict);
+            => HoverAsync(selector, options?.Position, options?.Modifiers, options?.Force, options?.Timeout, options?.Trial, ActionScrollBridge.FromScrollOption(options?.Scroll), options?.Strict);
 
         Task<string> IFrame.InnerHTMLAsync(string selector, FrameInnerHTMLOptions options)
             => InnerHTMLAsync(selector, options?.Timeout, options?.Strict);
@@ -754,8 +754,8 @@ namespace PlaywrightNative.WebKit
 
         Task IFrame.SetCheckedAsync(string selector, bool checkedState, FrameSetCheckedOptions options)
             => checkedState
-                ? CheckAsync(selector, options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, default, options?.Strict)
-                : UncheckAsync(selector, options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, default, options?.Strict);
+                ? CheckAsync(selector, options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, ActionScrollBridge.FromScrollOption(options?.Scroll), options?.Strict)
+                : UncheckAsync(selector, options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, ActionScrollBridge.FromScrollOption(options?.Scroll), options?.Strict);
 
         Task IFrame.SetContentAsync(string html, FrameSetContentOptions options)
             => SetContentAsync(html, options?.Timeout, options?.WaitUntil ?? default);
@@ -773,7 +773,7 @@ namespace PlaywrightNative.WebKit
             => SetInputFilesAsync(selector, files, options?.NoWaitAfter, options?.Timeout, null, default, options?.Strict);
 
         Task IFrame.TapAsync(string selector, FrameTapOptions options)
-            => TapAsync(selector, options?.Position, options?.Modifiers, options?.NoWaitAfter, options?.Force, options?.Timeout, options?.Trial, default, options?.Strict);
+            => TapAsync(selector, options?.Position, options?.Modifiers, options?.NoWaitAfter, options?.Force, options?.Timeout, options?.Trial, ActionScrollBridge.FromScrollOption(options?.Scroll), options?.Strict);
 
         Task<string> IFrame.TextContentAsync(string selector, FrameTextContentOptions options)
             => TextContentAsync(selector, options?.Timeout, options?.Strict);
@@ -782,7 +782,7 @@ namespace PlaywrightNative.WebKit
             => TypeAsync(selector, text, options?.Delay, options?.NoWaitAfter, options?.Timeout, null, default, options?.Strict);
 
         Task IFrame.UncheckAsync(string selector, FrameUncheckOptions options)
-            => UncheckAsync(selector, options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, default, options?.Strict);
+            => UncheckAsync(selector, options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, ActionScrollBridge.FromScrollOption(options?.Scroll), options?.Strict);
 
         Task<IJSHandle> IFrame.WaitForFunctionAsync(string expression, object arg, FrameWaitForFunctionOptions options)
             => WaitForFunctionAsync(expression, arg, options?.PollingInterval, options?.Timeout);

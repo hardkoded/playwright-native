@@ -765,7 +765,7 @@ namespace PlaywrightNative.WebKit
 
 #pragma warning disable SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
         Task IElementHandle.CheckAsync(ElementHandleCheckOptions options)
-            => CheckAsync(options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial);
+            => CheckAsync(options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, ActionScrollBridge.FromScrollOption(options?.Scroll));
 
         Task IElementHandle.ClickAsync(ElementHandleClickOptions options)
             => ClickAsync(
@@ -778,7 +778,7 @@ namespace PlaywrightNative.WebKit
                 options?.NoWaitAfter,
                 options?.Timeout,
                 options?.Trial,
-                default,
+                ActionScrollBridge.FromScrollOption(options?.Scroll),
                 options?.Steps);
 
         Task IElementHandle.DblClickAsync(ElementHandleDblClickOptions options)
@@ -791,7 +791,7 @@ namespace PlaywrightNative.WebKit
                 options?.NoWaitAfter,
                 options?.Timeout,
                 options?.Trial,
-                default,
+                ActionScrollBridge.FromScrollOption(options?.Scroll),
                 options?.Steps);
 
         Task IElementHandle.DispatchEventAsync(string type, object eventInit)
@@ -821,7 +821,7 @@ namespace PlaywrightNative.WebKit
             => FillAsync(value, options?.NoWaitAfter, options?.Timeout, options?.Force);
 
         Task IElementHandle.HoverAsync(ElementHandleHoverOptions options)
-            => HoverAsync(options?.Position, options?.Modifiers, options?.Force, options?.Timeout, options?.Trial);
+            => HoverAsync(options?.Position, options?.Modifiers, options?.Force, options?.Timeout, options?.Trial, ActionScrollBridge.FromScrollOption(options?.Scroll));
 
         async Task<string> IElementHandle.InputValueAsync(ElementHandleInputValueOptions options)
         {
@@ -877,8 +877,8 @@ namespace PlaywrightNative.WebKit
 
         Task IElementHandle.SetCheckedAsync(bool checkedState, ElementHandleSetCheckedOptions options)
             => checkedState
-                ? CheckAsync(options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial)
-                : UncheckAsync(options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial);
+                ? CheckAsync(options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, ActionScrollBridge.FromScrollOption(options?.Scroll))
+                : UncheckAsync(options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, ActionScrollBridge.FromScrollOption(options?.Scroll));
 
         Task IElementHandle.SetInputFilesAsync(string files, ElementHandleSetInputFilesOptions options)
             => SetInputFilesAsync(files, options?.NoWaitAfter, options?.Timeout, (options as LegacyElementHandleSetInputFilesOptions)?.Force);
@@ -899,7 +899,7 @@ namespace PlaywrightNative.WebKit
                 (options as LegacyElementHandleSetInputFilesOptions)?.Force);
 
         Task IElementHandle.TapAsync(ElementHandleTapOptions options)
-            => TapAsync(options?.Position, options?.Modifiers, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial);
+            => TapAsync(options?.Position, options?.Modifiers, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, ActionScrollBridge.FromScrollOption(options?.Scroll));
 
         Task IElementHandle.TypeAsync(string text, ElementHandleTypeOptions options)
             => TypeAsync(
@@ -910,7 +910,7 @@ namespace PlaywrightNative.WebKit
                 force: (options as LegacyElementHandleTypeOptions)?.Force);
 
         Task IElementHandle.UncheckAsync(ElementHandleUncheckOptions options)
-            => UncheckAsync(options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial);
+            => UncheckAsync(options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, ActionScrollBridge.FromScrollOption(options?.Scroll));
 
         Task IElementHandle.WaitForElementStateAsync(ElementState state, ElementHandleWaitForElementStateOptions options)
             => ElementHandleWaitHelper.WaitForElementStateAsync(this, state, options);

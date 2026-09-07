@@ -167,8 +167,12 @@ namespace PlaywrightNative.Compat
         /// <summary>Abort signal (PlaywrightNative-only).</summary>
         public AbortSignal Signal { get; set; }
 
-        /// <summary>Scroll-into-view mode.</summary>
-        public new ActionScroll Scroll { get; set; }
+        /// <summary>Scroll-into-view mode. Writes through to the official <c>Scroll</c>.</summary>
+        public new ActionScroll Scroll
+        {
+            get => ActionScrollBridge.FromScrollOption(base.Scroll);
+            set => base.Scroll = ActionScrollBridge.ToScrollOption(value);
+        }
     }
 
     /// <summary>Legacy locator assertion options with abort signal.</summary>
@@ -209,8 +213,12 @@ namespace PlaywrightNative.Compat
     /// <summary>Legacy locator hover options with scroll mode.</summary>
     public class LegacyLocatorHoverOptions : Microsoft.Playwright.LocatorHoverOptions
     {
-        /// <summary>Scroll-into-view mode.</summary>
-        public new ActionScroll Scroll { get; set; }
+        /// <summary>Scroll-into-view mode. Writes through to the official <c>Scroll</c>.</summary>
+        public new ActionScroll Scroll
+        {
+            get => ActionScrollBridge.FromScrollOption(base.Scroll);
+            set => base.Scroll = ActionScrollBridge.ToScrollOption(value);
+        }
     }
 
     /// <summary>Legacy page drag-and-drop options with scroll mode and steps.</summary>

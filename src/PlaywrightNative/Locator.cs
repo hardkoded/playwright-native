@@ -3299,7 +3299,7 @@ namespace PlaywrightNative
         }
 
         Task ILocator.CheckAsync(LocatorCheckOptions options)
-            => CheckAsync(options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial);
+            => CheckAsync(options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, ActionScrollBridge.FromScrollOption(options?.Scroll));
 
         Task ILocator.ClearAsync(LocatorClearOptions options)
             => ClearAsync(options?.NoWaitAfter, options?.Timeout, options?.Force);
@@ -3315,7 +3315,7 @@ namespace PlaywrightNative
                 options?.NoWaitAfter,
                 options?.Timeout,
                 options?.Trial,
-                default,
+                ActionScrollBridge.FromScrollOption(options?.Scroll),
                 options?.Steps);
 
         Task ILocator.DblClickAsync(LocatorDblClickOptions options)
@@ -3328,7 +3328,7 @@ namespace PlaywrightNative
                 options?.NoWaitAfter,
                 options?.Timeout,
                 options?.Trial,
-                default,
+                ActionScrollBridge.FromScrollOption(options?.Scroll),
                 options?.Steps);
 
         Task ILocator.DispatchEventAsync(string type, object eventInit, LocatorDispatchEventOptions options)
@@ -3442,7 +3442,7 @@ namespace PlaywrightNative
         }
 
         Task ILocator.HoverAsync(LocatorHoverOptions options)
-            => HoverAsync(options?.Position, options?.Modifiers, options?.Force, options?.Timeout, options?.Trial);
+            => HoverAsync(options?.Position, options?.Modifiers, options?.Force, options?.Timeout, options?.Trial, ActionScrollBridge.FromScrollOption(options?.Scroll));
 
         Task<string> ILocator.InnerHTMLAsync(LocatorInnerHTMLOptions options) => InnerHTMLAsync(options?.Timeout);
 
@@ -3555,7 +3555,7 @@ namespace PlaywrightNative
             => SelectTextAsync(options?.Timeout, options?.Force);
 
         Task ILocator.SetCheckedAsync(bool checkedState, LocatorSetCheckedOptions options)
-            => SetCheckedAsync(checkedState, options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial);
+            => SetCheckedAsync(checkedState, options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, ActionScrollBridge.FromScrollOption(options?.Scroll));
 
         Task ILocator.SetInputFilesAsync(string files, LocatorSetInputFilesOptions options)
             => SetInputFilesAsync(files, options?.NoWaitAfter, options?.Timeout);
@@ -3570,7 +3570,7 @@ namespace PlaywrightNative
             => SetInputFilesAsync(files, options?.NoWaitAfter, options?.Timeout);
 
         Task ILocator.TapAsync(LocatorTapOptions options)
-            => TapAsync(options?.Position, options?.Modifiers, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial);
+            => TapAsync(options?.Position, options?.Modifiers, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, ActionScrollBridge.FromScrollOption(options?.Scroll));
 
         Task<string> ILocator.TextContentAsync(LocatorTextContentOptions options) => TextContentAsync(options?.Timeout);
 
@@ -3578,7 +3578,7 @@ namespace PlaywrightNative
             => TypeAsync(text, options?.Delay, options?.NoWaitAfter, options?.Timeout);
 
         Task ILocator.UncheckAsync(LocatorUncheckOptions options)
-            => UncheckAsync(options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial);
+            => UncheckAsync(options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, ActionScrollBridge.FromScrollOption(options?.Scroll));
 
         Task ILocator.WaitForAsync(LocatorWaitForOptions options)
             => WaitForAsync(options?.State ?? WaitForSelectorState.Visible, options?.Timeout);

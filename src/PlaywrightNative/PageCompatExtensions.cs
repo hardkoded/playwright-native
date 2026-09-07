@@ -186,13 +186,15 @@ namespace PlaywrightNative
             bool? force = default,
             ActionScroll scroll = default,
             bool? strict = default)
-            => page.FillAsync(selector, value, new PageFillOptions
-            {
-                NoWaitAfter = noWaitAfter,
-                Timeout = timeout,
-                Force = force,
-                Strict = strict,
-            });
+            => page is IHasScrollAwareActions scrollAware
+                ? scrollAware.FillAsync(selector, value, noWaitAfter, timeout, force, scroll, strict)
+                : page.FillAsync(selector, value, new PageFillOptions
+                {
+                    NoWaitAfter = noWaitAfter,
+                    Timeout = timeout,
+                    Force = force,
+                    Strict = strict,
+                });
 
         /// <summary>Legacy expanded-parameter focus.</summary>
         public static Task FocusAsync(
@@ -201,11 +203,13 @@ namespace PlaywrightNative
             float? timeout = default,
             ActionScroll scroll = default,
             bool? strict = default)
-            => page.FocusAsync(selector, new PageFocusOptions
-            {
-                Timeout = timeout,
-                Strict = strict,
-            });
+            => page is IHasScrollAwareActions scrollAware
+                ? scrollAware.FocusAsync(selector, timeout, scroll, strict)
+                : page.FocusAsync(selector, new PageFocusOptions
+                {
+                    Timeout = timeout,
+                    Strict = strict,
+                });
 
         /// <summary>Legacy expanded-parameter hover.</summary>
         public static Task HoverAsync(
@@ -240,13 +244,15 @@ namespace PlaywrightNative
             bool? force = default,
             ActionScroll scroll = default,
             bool? strict = default)
-            => page.PressAsync(selector, key, new PagePressOptions
-            {
-                Delay = delay,
-                NoWaitAfter = noWaitAfter,
-                Timeout = timeout,
-                Strict = strict,
-            });
+            => page is IHasScrollAwareActions scrollAware
+                ? scrollAware.PressAsync(selector, key, delay, noWaitAfter, timeout, force, scroll, strict)
+                : page.PressAsync(selector, key, new PagePressOptions
+                {
+                    Delay = delay,
+                    NoWaitAfter = noWaitAfter,
+                    Timeout = timeout,
+                    Strict = strict,
+                });
 
         /// <summary>Legacy expanded-parameter select option (two string values).</summary>
         [System.Runtime.CompilerServices.OverloadResolutionPriority(1)]
@@ -277,13 +283,15 @@ namespace PlaywrightNative
             bool? force = default,
             ActionScroll scroll = default,
             bool? strict = default)
-            => CompatCollections.AsCollectionAsync(page.SelectOptionAsync(selector, values, new PageSelectOptionOptions
-            {
-                NoWaitAfter = noWaitAfter,
-                Timeout = timeout,
-                Force = force,
-                Strict = strict,
-            }));
+            => page is IHasScrollAwareActions scrollAware
+                ? scrollAware.SelectOptionAsync(selector, values, noWaitAfter, timeout, force, scroll, strict)
+                : CompatCollections.AsCollectionAsync(page.SelectOptionAsync(selector, values, new PageSelectOptionOptions
+                {
+                    NoWaitAfter = noWaitAfter,
+                    Timeout = timeout,
+                    Force = force,
+                    Strict = strict,
+                }));
 
         /// <summary>Legacy expanded-parameter select option.</summary>
         [System.Runtime.CompilerServices.OverloadResolutionPriority(1)]
@@ -397,12 +405,14 @@ namespace PlaywrightNative
             bool? force = default,
             ActionScroll scroll = default,
             bool? strict = default)
-            => page.SetInputFilesAsync(selector, files, new PageSetInputFilesOptions
-            {
-                NoWaitAfter = noWaitAfter,
-                Timeout = timeout,
-                Strict = strict,
-            });
+            => page is IHasScrollAwareActions scrollAware
+                ? scrollAware.SetInputFilesAsync(selector, files, noWaitAfter, timeout, force, scroll, strict)
+                : page.SetInputFilesAsync(selector, files, new PageSetInputFilesOptions
+                {
+                    NoWaitAfter = noWaitAfter,
+                    Timeout = timeout,
+                    Strict = strict,
+                });
 
         /// <summary>Legacy expanded-parameter set input files.</summary>
         public static Task SetInputFilesAsync(
@@ -484,13 +494,15 @@ namespace PlaywrightNative
             bool? force = default,
             ActionScroll scroll = default,
             bool? strict = default)
-            => page.TypeAsync(selector, text, new PageTypeOptions
-            {
-                Delay = delay,
-                NoWaitAfter = noWaitAfter,
-                Timeout = timeout,
-                Strict = strict,
-            });
+            => page is IHasScrollAwareActions scrollAware
+                ? scrollAware.TypeAsync(selector, text, delay, noWaitAfter, timeout, force, scroll, strict)
+                : page.TypeAsync(selector, text, new PageTypeOptions
+                {
+                    Delay = delay,
+                    NoWaitAfter = noWaitAfter,
+                    Timeout = timeout,
+                    Strict = strict,
+                });
 
         /// <summary>Legacy expanded-parameter uncheck.</summary>
         public static Task UncheckAsync(

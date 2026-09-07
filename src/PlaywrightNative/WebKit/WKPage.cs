@@ -44,7 +44,7 @@ namespace PlaywrightNative.WebKit
     /// creation and commit so events from either side are not lost.
     /// </remarks>
     [SuppressMessage("IDisposable", "CA2213", Justification = "Target sessions are released when the page closes, not from DisposeAsync.")]
-    internal sealed partial class WKPage : IPage, IHasPageExtras, IHasDefaultTimeouts, IHasLastPageErrorLocation, IHasClientInitializedPage, IHasExposedFunctionNames, IAppliesMergedExtraHttpHeaders
+    internal sealed partial class WKPage : IPage, IHasScrollAwareActions, IHasPageExtras, IHasDefaultTimeouts, IHasLastPageErrorLocation, IHasClientInitializedPage, IHasExposedFunctionNames, IAppliesMergedExtraHttpHeaders
     {
         private const string UtilityWorldName = "__playwright_utility_world__";
 
@@ -8472,7 +8472,7 @@ namespace PlaywrightNative.WebKit
             => FillAsync(selector, value, options?.NoWaitAfter, options?.Timeout, options?.Force, default, options?.Strict);
 
         Task IPage.FocusAsync(string selector, PageFocusOptions options)
-            => FocusAsync(selector, options?.Timeout, default, options?.Strict);
+            => FocusAsync(selector, options?.Timeout, (options as PlaywrightNative.Compat.LegacyPageFocusOptions)?.Scroll ?? default, options?.Strict);
 
         IFrame IPage.Frame(string name) => FrameLookup.ByName(Frames, name);
 

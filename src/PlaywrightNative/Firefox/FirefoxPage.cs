@@ -31,7 +31,7 @@ namespace PlaywrightNative.Firefox
     /// Firefox <see cref="IPage"/> until <see cref="FFPage"/> is owned by shared
     /// <see cref="Page"/> as an <see cref="IPageDelegate"/>, matching Node.
     /// </summary>
-    internal sealed partial class FirefoxPage : IPage, IHasPageExtras, IHasDefaultTimeouts, IHasLastPageErrorLocation, IHasClientInitializedPage
+    internal sealed partial class FirefoxPage : IPage, IHasScrollAwareActions, IHasPageExtras, IHasDefaultTimeouts, IHasLastPageErrorLocation, IHasClientInitializedPage
     {
         private readonly FFPage _page;
         private readonly IBrowserContext _context;
@@ -1090,10 +1090,10 @@ namespace PlaywrightNative.Firefox
         Task IPage.CancelPickLocatorAsync() => Task.CompletedTask;
 
         Task IPage.CheckAsync(string selector, PageCheckOptions options)
-            => CheckAsync(selector, options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, default, options?.Strict);
+            => CheckAsync(selector, options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, ActionScrollBridge.FromScrollOption(options?.Scroll), options?.Strict);
 
         Task IPage.ClickAsync(string selector, PageClickOptions options)
-            => ClickAsync(selector, options?.Button ?? default, options?.ClickCount, options?.Delay, options?.Position, options?.Modifiers, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, default, null, options?.Strict);
+            => ClickAsync(selector, options?.Button ?? default, options?.ClickCount, options?.Delay, options?.Position, options?.Modifiers, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, ActionScrollBridge.FromScrollOption(options?.Scroll), null, options?.Strict);
 
         Task IPage.CloseAsync(PageCloseOptions options)
         {
@@ -1103,7 +1103,7 @@ namespace PlaywrightNative.Firefox
         Task<IReadOnlyList<IConsoleMessage>> IPage.ConsoleMessagesAsync(PageConsoleMessagesOptions options) => ConsoleMessagesAsync(options?.Filter ?? ConsoleMessagesFilter.SinceNavigation);
 
         Task IPage.DblClickAsync(string selector, PageDblClickOptions options)
-            => DblClickAsync(selector, options?.Button ?? default, options?.Delay, options?.Position, options?.Modifiers, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, default, options?.Strict);
+            => DblClickAsync(selector, options?.Button ?? default, options?.Delay, options?.Position, options?.Modifiers, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, ActionScrollBridge.FromScrollOption(options?.Scroll), options?.Strict);
 
         Task IPage.DispatchEventAsync(string selector, string type, object eventInit, PageDispatchEventOptions options) => Task.CompletedTask;
 
@@ -1118,7 +1118,7 @@ namespace PlaywrightNative.Firefox
                 options?.Timeout,
                 options?.Trial,
                 options?.Steps,
-                default,
+                ActionScrollBridge.FromScrollOption(options?.Scroll),
                 options?.Strict);
 
         Task IPage.EmulateMediaAsync(PageEmulateMediaOptions options) => Task.CompletedTask;
@@ -1160,7 +1160,7 @@ namespace PlaywrightNative.Firefox
             => FillAsync(selector, value, options?.NoWaitAfter, options?.Timeout, options?.Force, default, options?.Strict);
 
         Task IPage.FocusAsync(string selector, PageFocusOptions options)
-            => FocusAsync(selector, options?.Timeout, default, options?.Strict);
+            => FocusAsync(selector, options?.Timeout, (options as PlaywrightNative.Compat.LegacyPageFocusOptions)?.Scroll ?? default, options?.Strict);
 
         IFrame IPage.Frame(string name) => FrameLookup.ByName(Frames, name);
 
@@ -1270,7 +1270,7 @@ namespace PlaywrightNative.Firefox
         }
 
         Task IPage.HoverAsync(string selector, PageHoverOptions options)
-            => HoverAsync(selector, options?.Position, options?.Modifiers, options?.Force, options?.Timeout, options?.Trial, default, options?.Strict);
+            => HoverAsync(selector, options?.Position, options?.Modifiers, options?.Force, options?.Timeout, options?.Trial, ActionScrollBridge.FromScrollOption(options?.Scroll), options?.Strict);
 
         Task<string> IPage.InnerHTMLAsync(string selector, PageInnerHTMLOptions options)
             => InnerHTMLAsync(selector, options?.Timeout, options?.Strict);
@@ -1458,8 +1458,8 @@ namespace PlaywrightNative.Firefox
 
         Task IPage.SetCheckedAsync(string selector, bool checkedState, PageSetCheckedOptions options)
             => checkedState
-                ? CheckAsync(selector, options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, default, options?.Strict)
-                : UncheckAsync(selector, options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, default, options?.Strict);
+                ? CheckAsync(selector, options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, ActionScrollBridge.FromScrollOption(options?.Scroll), options?.Strict)
+                : UncheckAsync(selector, options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, ActionScrollBridge.FromScrollOption(options?.Scroll), options?.Strict);
 
         Task IPage.SetContentAsync(string html, PageSetContentOptions options)
             => SetContentAsync(html, options?.Timeout, options?.WaitUntil ?? default);
@@ -1498,7 +1498,7 @@ namespace PlaywrightNative.Firefox
                 options?.Force,
                 options?.Timeout,
                 options?.Trial,
-                default,
+                ActionScrollBridge.FromScrollOption(options?.Scroll),
                 options?.Strict);
 
         Task<string> IPage.TextContentAsync(string selector, PageTextContentOptions options) => TextContentAsync(selector, options?.Timeout, options?.Strict);
@@ -1507,7 +1507,7 @@ namespace PlaywrightNative.Firefox
             => TypeAsync(selector, text, options?.Delay, options?.NoWaitAfter, options?.Timeout, null, default, options?.Strict);
 
         Task IPage.UncheckAsync(string selector, PageUncheckOptions options)
-            => UncheckAsync(selector, options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, default, options?.Strict);
+            => UncheckAsync(selector, options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, ActionScrollBridge.FromScrollOption(options?.Scroll), options?.Strict);
 
         Task IPage.UnrouteAllAsync(PageUnrouteAllOptions options)
             => UnrouteAllAsync(UnrouteBehaviorBridge.FromOfficial(options?.Behavior));

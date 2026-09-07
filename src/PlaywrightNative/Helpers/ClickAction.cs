@@ -2187,7 +2187,7 @@ namespace PlaywrightNative.Helpers
                 throw new PlaywrightNativeException(NotAttachedMessage);
             }
 
-            if (result == "notvisible" || result == "notinviewport")
+            if (result == "notvisible")
             {
                 // visibility:hidden still has a layout box; force clicks use it.
                 // Some engines report empty client rects for hidden controls.
@@ -2197,11 +2197,11 @@ namespace PlaywrightNative.Helpers
                     return;
                 }
 
-                if (result == "notvisible")
-                {
-                    throw new PlaywrightNativeException(NotVisibleMessage);
-                }
+                throw new PlaywrightNativeException(NotVisibleMessage);
+            }
 
+            if (result == "notinviewport")
+            {
                 throw new PlaywrightNativeException(OutsideViewportMessage + "\nelement is outside of the viewport");
             }
         }

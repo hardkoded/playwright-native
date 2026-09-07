@@ -33,7 +33,7 @@ namespace PlaywrightNative
     /// Shared page that implements <see cref="IPage"/> and owns a browser-specific
     /// <see cref="IPageDelegate"/> (today <see cref="CRPage"/>), matching Node Playwright.
     /// </summary>
-    internal sealed partial class Page : IPage, IHasPageExtras, IHasDefaultTimeouts, IHasLastPageErrorLocation, IHasClientInitializedPage, IHasExposedFunctionNames, ISupportsVirtualAuthenticator, IAppliesMergedExtraHttpHeaders
+    internal sealed partial class Page : IPage, IHasScrollAwareActions, IHasPageExtras, IHasDefaultTimeouts, IHasLastPageErrorLocation, IHasClientInitializedPage, IHasExposedFunctionNames, ISupportsVirtualAuthenticator, IAppliesMergedExtraHttpHeaders
     {
         private readonly CRPage _crPage;
         private readonly IBrowserContext _context;
@@ -2296,10 +2296,10 @@ namespace PlaywrightNative
         Task IPage.CancelPickLocatorAsync() => Task.CompletedTask;
 
         Task IPage.CheckAsync(string selector, PageCheckOptions options)
-            => CheckAsync(selector, options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, default, options?.Strict);
+            => CheckAsync(selector, options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, ActionScrollBridge.FromScrollOption(options?.Scroll), options?.Strict);
 
         Task IPage.ClickAsync(string selector, PageClickOptions options)
-            => ClickAsync(selector, options?.Button ?? default, options?.ClickCount, options?.Delay, options?.Position, options?.Modifiers, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, default, null, options?.Strict);
+            => ClickAsync(selector, options?.Button ?? default, options?.ClickCount, options?.Delay, options?.Position, options?.Modifiers, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, ActionScrollBridge.FromScrollOption(options?.Scroll), null, options?.Strict);
 
         Task IPage.CloseAsync(PageCloseOptions options)
         {
@@ -2310,7 +2310,7 @@ namespace PlaywrightNative
             => ConsoleMessagesAsync(options?.Filter ?? ConsoleMessagesFilter.SinceNavigation);
 
         Task IPage.DblClickAsync(string selector, PageDblClickOptions options)
-            => DblClickAsync(selector, options?.Button ?? default, options?.Delay, options?.Position, options?.Modifiers, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, default, options?.Strict);
+            => DblClickAsync(selector, options?.Button ?? default, options?.Delay, options?.Position, options?.Modifiers, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, ActionScrollBridge.FromScrollOption(options?.Scroll), options?.Strict);
 
         Task IPage.DispatchEventAsync(string selector, string type, object eventInit, PageDispatchEventOptions options)
             => DispatchEventInternalAsync(selector, type, eventInit, options?.Timeout, options?.Strict);
@@ -2432,7 +2432,7 @@ namespace PlaywrightNative
             => FillAsync(selector, value, options?.NoWaitAfter, options?.Timeout, options?.Force, default, options?.Strict);
 
         Task IPage.FocusAsync(string selector, PageFocusOptions options)
-            => FocusAsync(selector, options?.Timeout, default, options?.Strict);
+            => FocusAsync(selector, options?.Timeout, (options as PlaywrightNative.Compat.LegacyPageFocusOptions)?.Scroll ?? default, options?.Strict);
 
         IFrame IPage.Frame(string name) => FrameLookup.ByName(Frames, name);
 
@@ -2542,7 +2542,7 @@ namespace PlaywrightNative
         }
 
         Task IPage.HoverAsync(string selector, PageHoverOptions options)
-            => HoverAsync(selector, options?.Position, options?.Modifiers, options?.Force, options?.Timeout, options?.Trial, default, options?.Strict);
+            => HoverAsync(selector, options?.Position, options?.Modifiers, options?.Force, options?.Timeout, options?.Trial, ActionScrollBridge.FromScrollOption(options?.Scroll), options?.Strict);
 
         Task<string> IPage.InnerHTMLAsync(string selector, PageInnerHTMLOptions options)
             => InnerHTMLAsync(selector, options?.Timeout, options?.Strict);
@@ -2765,8 +2765,8 @@ namespace PlaywrightNative
 
         Task IPage.SetCheckedAsync(string selector, bool checkedState, PageSetCheckedOptions options)
             => checkedState
-                ? CheckAsync(selector, options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, default, options?.Strict)
-                : UncheckAsync(selector, options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, default, options?.Strict);
+                ? CheckAsync(selector, options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, ActionScrollBridge.FromScrollOption(options?.Scroll), options?.Strict)
+                : UncheckAsync(selector, options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, ActionScrollBridge.FromScrollOption(options?.Scroll), options?.Strict);
 
         Task IPage.SetContentAsync(string html, PageSetContentOptions options)
             => SetContentAsync(html, options?.Timeout, options?.WaitUntil ?? default);
@@ -2814,7 +2814,7 @@ namespace PlaywrightNative
             => TypeAsync(selector, text, options?.Delay, options?.NoWaitAfter, options?.Timeout, null, default, options?.Strict);
 
         Task IPage.UncheckAsync(string selector, PageUncheckOptions options)
-            => UncheckAsync(selector, options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, default, options?.Strict);
+            => UncheckAsync(selector, options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, ActionScrollBridge.FromScrollOption(options?.Scroll), options?.Strict);
 
         Task IPage.UnrouteAllAsync(PageUnrouteAllOptions options)
             => UnrouteAllAsync(UnrouteBehaviorBridge.FromOfficial(options?.Behavior));

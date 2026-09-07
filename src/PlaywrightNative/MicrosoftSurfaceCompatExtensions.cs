@@ -163,6 +163,11 @@ namespace PlaywrightNative
                 throw new PlaywrightNativeException($"Failed to find element matching selector \"{selector}\"");
             }
 
+            if (scroll != ActionScroll.None)
+            {
+                await handle.EvaluateAsync<bool>(ElementStateScript.ScrollIntoViewIfNeededFunction).ConfigureAwait(false);
+            }
+
             await handle.SelectTextAsync(timeout, force, scroll).ConfigureAwait(false);
         }
 

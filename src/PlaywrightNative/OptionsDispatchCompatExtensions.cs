@@ -69,20 +69,12 @@ namespace PlaywrightNative
         /// <summary>Legacy focus with scroll option.</summary>
         [OverloadResolutionPriority(1)]
         public static Task FocusAsync(this IPage page, string selector, LegacyPageFocusOptions options)
-            => page.FocusAsync(selector, new Microsoft.Playwright.PageFocusOptions
-            {
-                Strict = options?.Strict,
-                Timeout = options?.Timeout,
-            });
+            => page.FocusAsync(selector, options?.Timeout, options == null ? default : options.Scroll, options?.Strict);
 
         /// <summary>Legacy frame focus with scroll option.</summary>
         [OverloadResolutionPriority(1)]
         public static Task FocusAsync(this IFrame frame, string selector, LegacyFrameFocusOptions options)
-            => frame.FocusAsync(selector, new Microsoft.Playwright.FrameFocusOptions
-            {
-                Strict = options?.Strict,
-                Timeout = options?.Timeout,
-            });
+            => frame.FocusAsync(selector, options?.Timeout, options == null ? default : options.Scroll, options?.Strict);
 
         /// <summary>Legacy wait-for-load-state options bag with embedded state.</summary>
         [OverloadResolutionPriority(1)]
