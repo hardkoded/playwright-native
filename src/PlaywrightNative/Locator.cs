@@ -1398,10 +1398,14 @@ namespace PlaywrightNative
             {
                 List<Step> next = CopySteps();
                 next.Add(CreateStep(selector));
-                return new Locator(_frame, next, _scope, _description, _anyFrame);
+
+                // Official describe() only labels the locator it was called on:
+                // the marker is the last selector part, so chaining past it
+                // drops the description.
+                return new Locator(_frame, next, _scope, description: null, _anyFrame);
             }
 
-            return (Locator)Inside(new Locator(_frame, selector));
+            return (Locator)new Locator(this, new Locator(_frame, selector), null, CombineKind.Inside, description: null);
         }
 
         /// <summary>

@@ -68,9 +68,11 @@ namespace PlaywrightNative.Tests
             byte[] bytes = await response.GetBodyAsync().ConfigureAwait(false);
             Assert.That(Encoding.UTF8.GetString(bytes), Is.EqualTo(expected));
             Assert.That(await response.BodyAsync().ConfigureAwait(false), Is.EqualTo(bytes));
+            // Official response.finished() resolves to null when the request
+            // succeeded; it only carries text for a failure.
             string finished = await response.GetFinishedAsync().ConfigureAwait(false);
-            Assert.That(finished, Is.Empty);
-            Assert.That(await response.FinishedAsync().ConfigureAwait(false), Is.Empty);
+            Assert.That(finished, Is.Null);
+            Assert.That(await response.FinishedAsync().ConfigureAwait(false), Is.Null);
         }
 
         [PlaywrightTest("page-network-request.spec.ts", "should parse json body")]
