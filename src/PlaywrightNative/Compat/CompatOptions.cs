@@ -154,6 +154,12 @@ namespace PlaywrightNative.Compat
     {
         /// <summary>Function argument.</summary>
         public object Arg { get; set; }
+
+        /// <summary>Abort signal (PlaywrightNative-only).</summary>
+        public AbortSignal Signal { get; set; }
+
+        /// <summary>Polling interval in milliseconds.</summary>
+        public float? PollingInterval { get; set; }
     }
 
     /// <summary>Legacy persistent-context launch options.</summary>

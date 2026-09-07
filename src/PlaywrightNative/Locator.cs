@@ -3316,7 +3316,8 @@ namespace PlaywrightNative
                 options?.Timeout,
                 options?.Trial,
                 ActionScrollBridge.FromScrollOption(options?.Scroll),
-                options?.Steps);
+                options?.Steps,
+                (options as PlaywrightNative.Compat.LegacyLocatorClickOptions)?.Signal);
 
         Task ILocator.DblClickAsync(LocatorDblClickOptions options)
             => DblClickAsync(
@@ -3583,7 +3584,11 @@ namespace PlaywrightNative
         Task ILocator.WaitForAsync(LocatorWaitForOptions options)
             => WaitForAsync(options?.State ?? WaitForSelectorState.Visible, options?.Timeout);
 
-        Task ILocator.WaitForFunctionAsync(string expression, object arg, LocatorWaitForFunctionOptions options) => Task.CompletedTask;
+        Task ILocator.WaitForFunctionAsync(string expression, object arg, LocatorWaitForFunctionOptions options)
+        {
+            PlaywrightNative.Compat.LegacyLocatorWaitForFunctionOptions legacy = options as PlaywrightNative.Compat.LegacyLocatorWaitForFunctionOptions;
+            return WaitForFunctionAsync(expression, arg ?? legacy?.Arg, legacy?.PollingInterval, options?.Timeout, legacy?.Signal);
+        }
 #pragma warning restore SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
 
         private sealed class HighlightLease : IAsyncDisposable

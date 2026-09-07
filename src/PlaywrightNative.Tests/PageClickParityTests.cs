@@ -1982,7 +1982,7 @@ document.querySelector('button').addEventListener('click', () => {
             {
                 await page.SetContentAsync("<button style=\"display:none\">click me</button>").ConfigureAwait(false);
                 AbortController controller = new AbortController();
-                Task click = page.Locator("button").ClickAsync(new() { Timeout = 0 });
+                Task click = page.Locator("button").ClickAsync(new LocatorClickOptions { Timeout = 0, Signal = controller.Signal });
                 await page.WaitForTimeoutAsync(500).ConfigureAwait(false);
                 Exception reason = new Exception("foo bar");
                 controller.Abort(reason);
@@ -2003,7 +2003,7 @@ document.querySelector('button').addEventListener('click', () => {
             {
                 await page.SetContentAsync("<button style=\"display:none\">click me</button>").ConfigureAwait(false);
                 AbortController controller = new AbortController();
-                Task click = page.Locator("button").ClickAsync(new() { Timeout = 0 });
+                Task click = page.Locator("button").ClickAsync(new LocatorClickOptions { Timeout = 0, Signal = controller.Signal });
                 controller.Abort("aborted by user");
                 Exception error = Assert.CatchAsync(() => click);
                 Assert.That(error, Is.InstanceOf<AbortError>());

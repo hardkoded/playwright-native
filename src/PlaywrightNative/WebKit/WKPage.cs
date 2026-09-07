@@ -8843,7 +8843,7 @@ namespace PlaywrightNative.WebKit
             => WaitForDownloadAsync(options?.Timeout);
 
         Task<IFileChooser> IPage.WaitForFileChooserAsync(PageWaitForFileChooserOptions options)
-            => WaitForFileChooserAsync(options?.Timeout);
+            => WaitForFileChooserAsync(options?.Timeout, (options as PlaywrightNative.Compat.LegacyPageWaitForFileChooserOptions)?.CancellationToken ?? default);
 
         Task<IJSHandle> IPage.WaitForFunctionAsync(string expression, object arg, PageWaitForFunctionOptions options)
             => WaitForFunctionAsync(expression, arg, options?.PollingInterval, options?.Timeout);

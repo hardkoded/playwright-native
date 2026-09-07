@@ -54,6 +54,12 @@ jobs:
       run: |
         choco install ffmpeg -y --no-progress
         ffmpeg -version
+    - name: Install ffmpeg (macOS)
+      if: startsWith(matrix.os, 'macos')
+      run: |
+        brew install ffmpeg
+        ffmpeg -version
+        ffprobe -version
     - name: Install system dependencies (Linux, Chromium)
       if: matrix.os == 'ubuntu-latest' && matrix.browser == 'chromium'
       run: |

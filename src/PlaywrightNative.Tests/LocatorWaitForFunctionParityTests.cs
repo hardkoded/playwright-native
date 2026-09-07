@@ -158,7 +158,7 @@ namespace PlaywrightNative.Tests
             {
                 await page.SetContentAsync("<div id=target>no</div>").ConfigureAwait(false);
                 AbortController controller = new AbortController();
-                Task wait = page.Locator("#target").WaitForFunctionAsync("element => element.textContent === 'yes'", options: new LocatorWaitForFunctionOptions { Arg = null, Timeout = 0 });
+                Task wait = page.Locator("#target").WaitForFunctionAsync("element => element.textContent === 'yes'", options: new LocatorWaitForFunctionOptions { Arg = null, Timeout = 0, Signal = controller.Signal });
                 await page.WaitForTimeoutAsync(100).ConfigureAwait(false);
                 Exception reason = new Exception("Aborted by user");
                 controller.Abort(reason);
@@ -179,7 +179,7 @@ namespace PlaywrightNative.Tests
                 AbortController controller = new AbortController();
                 controller.Abort("already aborted");
                 Exception error = Assert.CatchAsync(
-                    () => page.Locator("#target").WaitForFunctionAsync("() => true", new LocatorWaitForFunctionOptions { Arg = null }));
+                    () => page.Locator("#target").WaitForFunctionAsync("() => true", options: new LocatorWaitForFunctionOptions { Arg = null, Signal = controller.Signal }));
                 Assert.That(error, Is.InstanceOf<AbortError>());
                 Assert.That(((AbortError)error).Cause, Is.EqualTo("already aborted"));
             }).ConfigureAwait(false);

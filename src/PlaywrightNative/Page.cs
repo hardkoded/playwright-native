@@ -2844,7 +2844,7 @@ namespace PlaywrightNative
             => WaitForEventAsync(PageEvent.Download, options?.Predicate, options?.Timeout);
 
         Task<IFileChooser> IPage.WaitForFileChooserAsync(PageWaitForFileChooserOptions options)
-            => FileChooserWaitHelper.WaitAsync(this, options?.Predicate, options?.Timeout);
+            => FileChooserWaitHelper.WaitAsync(this, options?.Predicate, options?.Timeout, (options as PlaywrightNative.Compat.LegacyPageWaitForFileChooserOptions)?.CancellationToken ?? default);
 
         Task<IJSHandle> IPage.WaitForFunctionAsync(string expression, object arg, PageWaitForFunctionOptions options) => WaitForFunctionAsync(expression, arg, options?.PollingInterval, options?.Timeout);
 
