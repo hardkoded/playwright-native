@@ -87,6 +87,15 @@ namespace PlaywrightNative.Helpers
 
             TaskCompletionSource<T> tcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
+            // The predicate must not run on the transport's read loop: an official
+            // sync-predicate wait like page.waitForResponse(r => r.TextAsync().Result...)
+            // has to call back into the protocol to fetch the body, and that reply is
+            // read by the very loop this handler would otherwise be blocking. Chain
+            // matches() onto a background task per event, in arrival order, so events
+            // are still evaluated one at a time (preserving "predicate called once")
+            // without stalling the reader.
+            Task chain = Task.CompletedTask;
+
             void Handler(object sender, T payload)
             {
                 if (tcs.Task.IsCompleted)
@@ -94,13 +103,27 @@ namespace PlaywrightNative.Helpers
                     return;
                 }
 
-                if (!matches(payload))
-                {
-                    return;
-                }
+                chain = chain.ContinueWith(
+                    _ =>
+                    {
+                        try
+                        {
+                            if (tcs.Task.IsCompleted || !matches(payload))
+                            {
+                                return;
+                            }
 
-                removeHandler(Handler);
-                tcs.TrySetResult(payload);
+                            removeHandler(Handler);
+                            tcs.TrySetResult(payload);
+                        }
+                        catch (Exception ex)
+                        {
+                            tcs.TrySetException(ex);
+                        }
+                    },
+                    CancellationToken.None,
+                    TaskContinuationOptions.None,
+                    TaskScheduler.Default);
             }
 
             addHandler(Handler);

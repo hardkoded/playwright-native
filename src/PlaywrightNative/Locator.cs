@@ -1568,6 +1568,16 @@ namespace PlaywrightNative
             return true;
         }
 
+        /// <summary>
+        /// True when <paramref name="selector"/> is an xpath relative to a context
+        /// node (<c>.</c>, <c>./...</c>, <c>.//...</c>, <c>..</c>). Used by
+        /// <see cref="HasScopeStep"/> to route a child selector that needs a
+        /// context node through a per-ancestor rooted query instead of a query
+        /// with no context node to bind the relative path to.
+        /// </summary>
+        private static bool IsRelativeXPathSelector(string selector)
+            => TryParseXPathSelector(selector, out string xpath) && xpath.StartsWith('.');
+
         private static async Task<IReadOnlyList<IElementHandle>> QueryXPathAsync(
             IFrame frame,
             IElementHandle parent,
@@ -2727,10 +2737,12 @@ namespace PlaywrightNative
             IReadOnlyList<IElementHandle> ancestors = await _left.ResolveAllAsync().ConfigureAwait(false);
 
             // A :scope-anchored child selector (e.g. locator.locator(':scope.foo'))
-            // has nothing to bind :scope to when resolved on its own — :scope needs
-            // to be each ancestor in turn. Route only this case through the rooted
-            // per-ancestor query; every other selector keeps the existing
-            // resolve-then-filter-by-containment path below unchanged.
+            // or a relative xpath (e.g. locator.locator('xpath=./div')) has nothing
+            // to bind :scope / the relative path to when resolved on its own — both
+            // need to be evaluated with each ancestor in turn as the context node.
+            // Route only this case through the rooted per-ancestor query; every
+            // other selector keeps the existing resolve-then-filter-by-containment
+            // path below unchanged.
             if (_right._combine == CombineKind.None && _right.HasScopeStep())
             {
                 List<IElementHandle> scoped = new List<IElementHandle>();
@@ -2791,17 +2803,17 @@ namespace PlaywrightNative
         private Task<string> StrictResolvedMessageAsync(IReadOnlyList<IElementHandle> all)
             => StrictModeViolation.FormatAsync(ToString(), all);
 
-        /// <summary>
-        /// True when any step's selector references <c>:scope</c>. Used by
-        /// <see cref="FilterInsideAsync"/> to route a <c>:scope</c>-anchored child
-        /// selector through a per-ancestor rooted query instead of a query with
-        /// no scope to bind <c>:scope</c> to.
-        /// </summary>
         private bool HasScopeStep()
         {
             for (int i = 0; i < _steps.Count; i++)
             {
-                if (_steps[i].Selector != null && _steps[i].Selector.Contains(":scope", StringComparison.Ordinal))
+                string selector = _steps[i].Selector;
+                if (selector == null)
+                {
+                    continue;
+                }
+
+                if (selector.Contains(":scope", StringComparison.Ordinal) || IsRelativeXPathSelector(selector))
                 {
                     return true;
                 }
