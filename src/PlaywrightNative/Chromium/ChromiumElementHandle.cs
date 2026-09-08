@@ -459,6 +459,15 @@ namespace PlaywrightNative.Chromium
             await SetInputFilesPathHelper.ValidateAgainstInputAsync(target, resolved).ConfigureAwait(false);
             if (resolved.IsDirectory)
             {
+                // The official FilePayload has no WebkitRelativePath field, so
+                // routing this through it (like the non-directory path below)
+                // would drop the folder structure Resolve() just computed.
+                if (target is ChromiumElementHandle directoryTarget)
+                {
+                    await directoryTarget.SetInputFilesInternalAsync(resolved.Payloads, timeout, force).ConfigureAwait(false);
+                    return;
+                }
+
                 PlaywrightFilePayload[] payloads = resolved.Payloads;
                 FilePayload[] official = payloads == null
                     ? Array.Empty<FilePayload>()
@@ -497,7 +506,16 @@ namespace PlaywrightNative.Chromium
             }
         }
 
-        private async Task SetInputFilesInternalAsync(FilePayload[] files, float? timeout, bool? force = default, ActionScroll scroll = default)
+        private Task SetInputFilesInternalAsync(FilePayload[] files, float? timeout, bool? force = default, ActionScroll scroll = default)
+            => SetInputFilesInternalAsync(
+                files == null
+                    ? Array.Empty<PlaywrightFilePayload>()
+                    : Array.ConvertAll(files, file => PlaywrightFilePayload.FromOfficial(file)),
+                timeout,
+                force,
+                scroll);
+
+        private async Task SetInputFilesInternalAsync(PlaywrightFilePayload[] files, float? timeout, bool? force = default, ActionScroll scroll = default)
         {
             await WaitForElementStateHelper.WaitVisibleUnlessForcedAsync(this, force, timeout).ConfigureAwait(false);
             if (scroll != ActionScroll.None)
@@ -505,11 +523,7 @@ namespace PlaywrightNative.Chromium
                 await EvaluateAsync<bool>(ElementStateScript.ScrollIntoViewIfNeededFunction).ConfigureAwait(false);
             }
 
-            await _crElement.SetInputFilesAsync(
-                files == null
-                    ? Array.Empty<PlaywrightFilePayload>()
-                    : Array.ConvertAll(files, file => PlaywrightFilePayload.FromOfficial(file)))
-                .ConfigureAwait(false);
+            await _crElement.SetInputFilesAsync(files ?? Array.Empty<PlaywrightFilePayload>()).ConfigureAwait(false);
         }
 
         private async Task<IReadOnlyCollection<string>> SelectOptionFromHandlesAsync(IEnumerable<IElementHandle> handles, float? timeout = default, bool? force = default)
