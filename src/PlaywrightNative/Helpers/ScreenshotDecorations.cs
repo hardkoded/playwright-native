@@ -30,14 +30,6 @@ namespace PlaywrightNative.Helpers
     /// </summary>
     internal static class ScreenshotDecorations
     {
-        internal const string DisableAnimationsCss = @"*, *::before, *::after {
-  animation-delay: 0s !important;
-  animation-duration: 0s !important;
-  animation-play-state: paused !important;
-  transition-duration: 0s !important;
-  transition-delay: 0s !important;
-}";
-
         internal const string HideCaretCss = "* { caret-color: transparent !important; }";
 
         internal const string HideCaretJs = @"(function() {
@@ -149,19 +141,18 @@ namespace PlaywrightNative.Helpers
 
         /// <summary>
         /// Builds the stylesheet injected for the given screenshot options.
+        /// Animations are frozen via <see cref="FinishAnimationsJs"/> (matching
+        /// upstream), not CSS: forcing <c>animation-duration: 0s</c> here snaps
+        /// a running CSS animation to completion and drops it from
+        /// <c>getAnimations()</c> before that script can cancel/finish it,
+        /// which suppresses the finish/cancel events official tests assert on.
         /// </summary>
-        /// <param name="animations">The screenshot animations option.</param>
         /// <param name="caret">The screenshot caret option.</param>
         /// <param name="style">Optional caller stylesheet.</param>
         /// <returns>The combined CSS, or an empty string.</returns>
-        internal static string BuildCss(string animations, string caret, string style)
+        internal static string BuildCss(string caret, string style)
         {
             StringBuilder builder = new StringBuilder();
-            if (IsDisabled(animations))
-            {
-                builder.Append(DisableAnimationsCss);
-            }
-
             if (IsHideCaret(caret))
             {
                 builder.Append(HideCaretCss);
@@ -207,7 +198,7 @@ namespace PlaywrightNative.Helpers
 
             SemaphoreSlim gate = ScreenshotGates.GetOrAdd(page.GetHashCode(), _ => new SemaphoreSlim(1, 1));
             await gate.WaitAsync().ConfigureAwait(false);
-            string css = BuildCss(animations, caret, style);
+            string css = BuildCss(caret, style);
             List<IElementHandle> tags = new List<IElementHandle>();
             try
             {
