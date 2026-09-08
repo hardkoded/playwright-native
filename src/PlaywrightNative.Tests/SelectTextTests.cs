@@ -87,19 +87,18 @@ namespace PlaywrightNative.Tests
             Assert.That(await page.MainFrame.EvalOnSelectorAsync<int>("#n", "el => el.selectionEnd").ConfigureAwait(false), Is.EqualTo(5));
         }
 
-        [PlaywrightTest("elementhandle-select-text.spec.ts", "SelectTextAsync throws on a non-text element")]
+        [PlaywrightTest("elementhandle-select-text.spec.ts", "should select plain div")]
         [Test]
         [Timeout(30_000)]
-        public async Task ShouldThrowOnNonTextElement()
+        public async Task ShouldSelectPlainDiv()
         {
             await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
             await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
-            await page.SetContentAsync("<div id=\"d\">nope</div>").ConfigureAwait(false);
+            await page.SetContentAsync("<div class=\"plain\">Plain div</div>").ConfigureAwait(false);
 
-            PlaywrightNativeException ex = Assert.ThrowsAsync<PlaywrightNativeException>(
-                () => page.SelectTextAsync("#d"));
-            Assert.That(ex.Message, Does.Contain("not an <input>"));
+            await page.SelectTextAsync("div.plain").ConfigureAwait(false);
+            Assert.That(await page.EvaluateAsync<string>("window.getSelection().toString()").ConfigureAwait(false), Is.EqualTo("Plain div"));
         }
 
         [PlaywrightTest("elementhandle-select-text.spec.ts", "page SelectTextAsync times out while missing")]
