@@ -1578,7 +1578,7 @@ namespace PlaywrightNative.Chromium
             ApplyChromiumRefererConcatenation(request);
             if (pausedHeaders.Count > 0)
             {
-                request.SetRawRequestHeaders(pausedHeaders);
+                request.SetRawRequestHeaders(pausedHeaders, isFinal: true);
             }
         }
 
@@ -1631,7 +1631,7 @@ namespace PlaywrightNative.Chromium
         {
             request.ApplyInterceptedHeaders(request.Headers, EffectiveExtraHeaders());
             ApplyChromiumRefererConcatenation(request);
-            request.SetRawRequestHeaders(HeaderMap.Array(request.Headers));
+            request.SetRawRequestHeaders(HeaderMap.Array(request.Headers), isFinal: true);
 
             if (request.RedirectedFrom != null)
             {

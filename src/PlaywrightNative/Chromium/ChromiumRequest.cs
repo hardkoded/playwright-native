@@ -188,25 +188,32 @@ namespace PlaywrightNative.Chromium
 
             IReadOnlyList<NameValueEntry> raw = await _crRequest.WaitForRawHeadersAsync().ConfigureAwait(false);
 
-            // Service-worker and other requests may finish without responseReceived.
-            // Don't hang AllHeadersAsync waiting for a response that will never arrive.
-            // When the page closes mid-flight, propagate the target-closed error even if
-            // provisional/raw headers already resolved (official page-close.spec.ts).
-            Task responseTask = _crRequest.WaitForResponseAsync();
-            Task finishedTask = _crRequest.WaitUntilFinishedAsync();
-            if (!responseTask.IsCompleted)
+            // A paused/intercepted request's headers are already complete — waiting
+            // further would deadlock a route handler that reads them before calling
+            // route.continue(), since neither a response nor "finished" can happen
+            // until continue() runs.
+            if (!_crRequest.RawHeadersAreFinal)
             {
-                await Task.WhenAny(responseTask, finishedTask).ConfigureAwait(false);
-            }
+                // Service-worker and other requests may finish without responseReceived.
+                // Don't hang AllHeadersAsync waiting for a response that will never arrive.
+                // When the page closes mid-flight, propagate the target-closed error even if
+                // provisional/raw headers already resolved (official page-close.spec.ts).
+                Task responseTask = _crRequest.WaitForResponseAsync();
+                Task finishedTask = _crRequest.WaitUntilFinishedAsync();
+                if (!responseTask.IsCompleted)
+                {
+                    await Task.WhenAny(responseTask, finishedTask).ConfigureAwait(false);
+                }
 
-            if (responseTask.IsFaulted)
-            {
-                await responseTask.ConfigureAwait(false);
-            }
+                if (responseTask.IsFaulted)
+                {
+                    await responseTask.ConfigureAwait(false);
+                }
 
-            if (finishedTask.IsFaulted)
-            {
-                await finishedTask.ConfigureAwait(false);
+                if (finishedTask.IsFaulted)
+                {
+                    await finishedTask.ConfigureAwait(false);
+                }
             }
 
             Dictionary<string, string> map = RawNetworkHeaders.AllJoined(raw);
