@@ -651,6 +651,10 @@ namespace PlaywrightNative.Helpers
           const one = custom.query(root, parsed.body);
           hits = one ? [one] : [];
         }
+        for (let ci = 0; ci < hits.length; ci++) {
+          if (!hits[ci] || !('nodeName' in hits[ci]))
+            throw new Error('Expected a Node but got ' + Object.prototype.toString.call(hits[ci]));
+        }
       }
       else if (hasCustomPseudo(parsed.body))
         hits = queryCustomCss(root, parsed.body);
