@@ -8341,7 +8341,7 @@ namespace PlaywrightNative.WebKit
         Task IPage.ClickAsync(string selector, PageClickOptions options)
         {
             PageClickOptions o = options;
-            return ClickAsync(selector, o?.Button ?? default, o?.ClickCount, o?.Delay, o?.Position, o?.Modifiers, o?.Force, o?.NoWaitAfter, o?.Timeout, o?.Trial, ActionScrollBridge.FromScrollOption(o?.Scroll), null, o?.Strict);
+            return ClickAsync(selector, o?.Button ?? default, o?.ClickCount, o?.Delay, o?.Position, o?.Modifiers, o?.Force, o?.NoWaitAfter, o?.Timeout, o?.Trial, ActionScrollBridge.FromScrollOption(o?.Scroll), (o as PlaywrightNative.Compat.LegacyPageClickOptions)?.Steps, o?.Strict);
         }
 
         Task IPage.CloseAsync(PageCloseOptions options)

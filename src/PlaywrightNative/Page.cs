@@ -2299,7 +2299,7 @@ namespace PlaywrightNative
             => CheckAsync(selector, options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, ActionScrollBridge.FromScrollOption(options?.Scroll), options?.Strict);
 
         Task IPage.ClickAsync(string selector, PageClickOptions options)
-            => ClickAsync(selector, options?.Button ?? default, options?.ClickCount, options?.Delay, options?.Position, options?.Modifiers, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, ActionScrollBridge.FromScrollOption(options?.Scroll), null, options?.Strict);
+            => ClickAsync(selector, options?.Button ?? default, options?.ClickCount, options?.Delay, options?.Position, options?.Modifiers, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, ActionScrollBridge.FromScrollOption(options?.Scroll), (options as PlaywrightNative.Compat.LegacyPageClickOptions)?.Steps, options?.Strict);
 
         Task IPage.CloseAsync(PageCloseOptions options)
         {

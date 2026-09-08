@@ -605,7 +605,7 @@ namespace PlaywrightNative.Chromium
             => CheckAsync(selector, options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, ActionScrollBridge.FromScrollOption(options?.Scroll), options?.Strict);
 
         Task IFrame.ClickAsync(string selector, FrameClickOptions options)
-            => ClickAsync(selector, options?.Button ?? default, options?.ClickCount, options?.Delay, options?.Position, options?.Modifiers, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, ActionScrollBridge.FromScrollOption(options?.Scroll), null, options?.Strict);
+            => ClickAsync(selector, options?.Button ?? default, options?.ClickCount, options?.Delay, options?.Position, options?.Modifiers, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, ActionScrollBridge.FromScrollOption(options?.Scroll), (options as PlaywrightNative.Compat.LegacyFrameClickOptions)?.Steps, options?.Strict);
 
         Task IFrame.DblClickAsync(string selector, FrameDblClickOptions options)
             => DblClickAsync(selector, options?.Button ?? default, options?.Delay, options?.Position, options?.Modifiers, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, ActionScrollBridge.FromScrollOption(options?.Scroll), options?.Strict);
