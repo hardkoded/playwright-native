@@ -1066,7 +1066,7 @@ namespace PlaywrightNative.WebKit
                 return;
             }
 
-            request.SetRawRequestHeaders(HeaderMap.Array(request.Headers));
+            request.SetRawRequestHeaders(HeaderMap.Array(request.Headers), isFinal: true);
 
             if (request.WKRedirectedFrom != null)
             {

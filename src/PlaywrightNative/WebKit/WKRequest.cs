@@ -167,6 +167,16 @@ namespace PlaywrightNative.WebKit
         internal IDictionary<string, string> ContinuedHeaders { get; private set; }
 
         /// <summary>
+        /// True once <see cref="SetRawRequestHeaders"/> was called with headers
+        /// that will not change further (a paused/intercepted request). Lets
+        /// <see cref="AllHeadersAsync"/> skip waiting on the response for such
+        /// a request, since route handlers routinely read headers before
+        /// calling <c>route.continue()</c>, and neither a response nor
+        /// "finished" can happen until that runs.
+        /// </summary>
+        internal bool RawHeadersAreFinal { get; private set; }
+
+        /// <summary>
         /// URL last passed to <c>route.continue</c> / <c>route.fallback</c>.
         /// </summary>
         internal string ContinuedUrl { get; private set; }
@@ -319,7 +329,16 @@ namespace PlaywrightNative.WebKit
             }
 
             IReadOnlyList<NameValueEntry> raw = await WaitForRawHeadersAsync().ConfigureAwait(false);
-            await _responseReady.Task.ConfigureAwait(false);
+
+            // A paused/intercepted request's headers are already complete -
+            // waiting further would deadlock a route handler that reads them
+            // before calling route.continue(), since neither a response nor
+            // "finished" can happen until continue() runs.
+            if (!RawHeadersAreFinal)
+            {
+                await _responseReady.Task.ConfigureAwait(false);
+            }
+
             Dictionary<string, string> map = RawNetworkHeaders.AllJoined(raw);
             foreach (KeyValuePair<string, string> header in Headers)
             {
@@ -431,8 +450,17 @@ namespace PlaywrightNative.WebKit
         /// headers when <paramref name="headers"/> is <see langword="null"/>).
         /// </summary>
         /// <param name="headers">Raw headers, or <see langword="null"/> for provisional.</param>
-        internal void SetRawRequestHeaders(IReadOnlyList<NameValueEntry> headers)
+        /// <param name="isFinal">
+        /// True when <paramref name="headers"/> reflect a paused/intercepted
+        /// request and will not change further.
+        /// </param>
+        internal void SetRawRequestHeaders(IReadOnlyList<NameValueEntry> headers, bool isFinal = false)
         {
+            if (isFinal)
+            {
+                RawHeadersAreFinal = true;
+            }
+
             _rawHeaders.TrySetResult(headers ?? HeaderMap.Array(Headers));
         }
 
