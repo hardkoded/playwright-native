@@ -1578,6 +1578,18 @@ namespace PlaywrightNative
         private static bool IsRelativeXPathSelector(string selector)
             => TryParseXPathSelector(selector, out string xpath) && xpath.StartsWith('.');
 
+        /// <summary>
+        /// True for a bare <c>role=</c> / <c>internal:role=</c> selector. Role
+        /// queries walk <c>root.querySelectorAll('*')</c>, which never returns
+        /// the root itself, so routing them through the per-ancestor rooted
+        /// query (like :scope) naturally excludes a chained getByRole() that
+        /// also matches the ancestor - global-resolve-then-containment-filter
+        /// would otherwise treat the ancestor as "inside itself".
+        /// </summary>
+        private static bool IsRoleSelector(string selector)
+            => selector.StartsWith("role=", StringComparison.Ordinal)
+                || selector.StartsWith("internal:role=", StringComparison.Ordinal);
+
         private static async Task<IReadOnlyList<IElementHandle>> QueryXPathAsync(
             IFrame frame,
             IElementHandle parent,
@@ -2813,7 +2825,9 @@ namespace PlaywrightNative
                     continue;
                 }
 
-                if (selector.Contains(":scope", StringComparison.Ordinal) || IsRelativeXPathSelector(selector))
+                if (selector.Contains(":scope", StringComparison.Ordinal)
+                    || IsRelativeXPathSelector(selector)
+                    || IsRoleSelector(selector))
                 {
                     return true;
                 }
