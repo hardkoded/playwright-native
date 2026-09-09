@@ -1930,8 +1930,14 @@ namespace PlaywrightNative.Chromium
             CRExecutionContext context = await WaitForFrameExecutionContextAsync(frame).ConfigureAwait(false);
             if (CustomSelectors.TryResolve(selector, out CustomSelectorCall call))
             {
-                JsonElement? customArray = await context.EvaluateHandleAsync(call.DocumentQueryAllExpression).ConfigureAwait(false);
-                return await UnwrapElementArrayAsync(context, customArray).ConfigureAwait(false);
+                CRExecutionContext evalContext = context;
+                if (CustomSelectors.ShouldQueryInIsolatedWorld(selector))
+                {
+                    evalContext = await GetUtilityWorldAsync(frame).ConfigureAwait(false) ?? context;
+                }
+
+                JsonElement? customArray = await evalContext.EvaluateHandleAsync(call.DocumentQueryAllExpression).ConfigureAwait(false);
+                return await UnwrapElementArrayAsync(evalContext, customArray).ConfigureAwait(false);
             }
 
             JsonElement? arrayRemote = await context.EvaluateFunctionHandleAsync(
