@@ -186,7 +186,12 @@ namespace PlaywrightNative.WebKit
         public async Task<IReadOnlyList<Header>> HeadersArrayAsync()
         {
             await WaitForExtraHeadersAsync().ConfigureAwait(false);
-            return EquatableHeader.FromEntries(HeaderMap.Array(Headers));
+
+            // Build from the raw pairs, not the Headers dictionary: Headers
+            // collapses repeated header names (e.g. multiple Set-Cookie) into
+            // one comma-joined value, which would merge what should be
+            // separate entries in the array form.
+            return EquatableHeader.FromEntries(_headerPairs);
         }
 
         /// <inheritdoc/>
