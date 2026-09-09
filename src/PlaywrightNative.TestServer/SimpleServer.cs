@@ -15,6 +15,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.FileProviders;
+using Microsoft.Extensions.Primitives;
 
 namespace PlaywrightNative.TestServer
 {
@@ -499,7 +500,18 @@ namespace PlaywrightNative.TestServer
             var taskCompletion = new TaskCompletionSource<T>();
             _requestWaits[path] = context =>
             {
-                taskCompletion.SetResult(selector(context.Request));
+                T result = selector(context.Request);
+
+                // Kestrel pools and resets the header dictionary once the
+                // connection serves its next request, so a live reference
+                // captured here would read back empty/wrong values by the
+                // time the caller awaits this task. Snapshot it now.
+                if (result is IHeaderDictionary headers)
+                {
+                    result = (T)(object)new HeaderDictionary(new Dictionary<string, StringValues>(headers));
+                }
+
+                taskCompletion.SetResult(result);
             };
 
             var request = await taskCompletion.Task;
