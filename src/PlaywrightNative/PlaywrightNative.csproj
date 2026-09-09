@@ -29,7 +29,7 @@
     <PackageReference Include="Esprima" Version="3.0.5" />
     <PackageReference Include="Microsoft.Extensions.Logging" Version="9.0.3" />
     <PackageReference Include="Macross.Json.Extensions" Version="3.0.0" />
-    <PackageReference Include="Microsoft.SourceLink.GitHub" Version="8.0.0" PrivateAssets="All" />
+    <PackageReference Include="Microsoft.SourceLink.GitHub" Version="10.0.401" PrivateAssets="All" />
     <!-- Binary-compatible public API surface (IPage, IBrowser, ...). Exclude Node driver
          build targets so .playwright/node is not copied into our (or consumers') output. -->
     <PackageReference Include="Microsoft.Playwright" Version="1.62.0">
