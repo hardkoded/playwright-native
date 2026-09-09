@@ -1208,6 +1208,7 @@ namespace PlaywrightNative.Chromium
             frame.ClearLifecycleEvents();
             frame.OnLifecycleEvent("commit");
 
+            long startTicks = Environment.TickCount64;
             string targetLifecycleEvent = WaitUntilMapping.ToLifecycleEvent(waitUntil);
 
             TaskCompletionSource<bool> lifecycleTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -1302,6 +1303,12 @@ namespace PlaywrightNative.Chromium
                         return;
                     }
 
+                    if (timeout != System.Threading.Timeout.Infinite
+                        && Environment.TickCount64 - startTicks >= timeout)
+                    {
+                        break;
+                    }
+
                     try
                     {
                         string ready;
@@ -1350,7 +1357,16 @@ namespace PlaywrightNative.Chromium
                 // Static document.write HTML is complete once the write evaluate
                 // returns. Prefer synthesizing the common lifecycle targets over
                 // hanging until the navigation timeout when CDP load events are
-                // lost after the utility-world context swap.
+                // lost after the utility-world context swap. But a caller who asked
+                // for a short timeout to detect a genuinely stuck load (e.g. a
+                // pending subresource) must still see it: only synthesize while the
+                // requested deadline has not already passed.
+                if (timeout != System.Threading.Timeout.Infinite
+                    && Environment.TickCount64 - startTicks >= timeout)
+                {
+                    throw new TimeoutException($"SetContentAsync timed out waiting for '{targetLifecycleEvent}' after {timeout}ms");
+                }
+
                 if (!string.Equals(targetLifecycleEvent, "networkidle", StringComparison.Ordinal))
                 {
                     frame.OnLifecycleEvent("DOMContentLoaded");
