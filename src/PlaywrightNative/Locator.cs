@@ -1590,6 +1590,19 @@ namespace PlaywrightNative
             => selector.StartsWith("role=", StringComparison.Ordinal)
                 || selector.StartsWith("internal:role=", StringComparison.Ordinal);
 
+        /// <summary>
+        /// True when a CSS selector opens with a bare combinator (<c>&gt;span</c>,
+        /// <c>+span</c>, <c>~span</c>) - shorthand for "combinator applied to
+        /// <c>:scope</c>". Resolved with no root, <c>:scope</c> falls back to
+        /// <c>document</c>, so it can never match; it needs the same
+        /// per-ancestor rooted query as an explicit <c>:scope</c> selector.
+        /// </summary>
+        private static bool HasLeadingCombinator(string selector)
+        {
+            string trimmed = selector.TrimStart();
+            return trimmed.Length > 0 && (trimmed[0] == '>' || trimmed[0] == '+' || trimmed[0] == '~');
+        }
+
         private static async Task<IReadOnlyList<IElementHandle>> QueryXPathAsync(
             IFrame frame,
             IElementHandle parent,
@@ -2827,7 +2840,8 @@ namespace PlaywrightNative
 
                 if (selector.Contains(":scope", StringComparison.Ordinal)
                     || IsRelativeXPathSelector(selector)
-                    || IsRoleSelector(selector))
+                    || IsRoleSelector(selector)
+                    || HasLeadingCombinator(selector))
                 {
                     return true;
                 }
