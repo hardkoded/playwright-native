@@ -963,8 +963,21 @@ namespace PlaywrightNative.Chromium
 
             string requestId = RequestKey(session, rawId);
             string holdType = GetString(p, "type");
+
+            // A CORS preflight's own requestWillBeSent reports type "Other", not
+            // "Fetch"/"XHR" -- but it still gets its own Fetch.requestPaused, paired
+            // by requestId the same way. Without buffering it here too, its paused
+            // event finds nothing under its own id and falls back to matching by
+            // URL, where it collides with the real request's buffered entry (both
+            // target the identical URL by definition). That steals the real
+            // request's pairing and leaves its own paused event -- and the whole
+            // connection -- waiting on a reply that never comes.
+            bool isPreflightWillBeSent = p.TryGetProperty("initiator", out JsonElement wbsInitiator)
+                && string.Equals(GetString(wbsInitiator, "type"), "preflight", StringComparison.OrdinalIgnoreCase);
             if (!force
-                && (string.Equals(holdType, "Fetch", StringComparison.Ordinal) || string.Equals(holdType, "XHR", StringComparison.Ordinal))
+                && (string.Equals(holdType, "Fetch", StringComparison.Ordinal)
+                    || string.Equals(holdType, "XHR", StringComparison.Ordinal)
+                    || isPreflightWillBeSent)
                 && !_networkIdToFetchRequestPaused.ContainsKey(rawId)
                 && !_networkIdToFetchRequestPaused.ContainsKey(requestId)
                 && HasUserRoutes())
