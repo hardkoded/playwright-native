@@ -1423,6 +1423,8 @@ namespace PlaywrightNative
                 throw new PlaywrightNativeException("Locators must belong to the same frame.");
             }
 
+            inner = ApplyCommonFramePrefix(inner);
+
             if (_scope == null && !_anyFrame)
             {
                 return (Locator)Inside(inner);
