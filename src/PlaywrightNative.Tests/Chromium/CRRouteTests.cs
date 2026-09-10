@@ -51,7 +51,6 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(intercepted, Is.True);
         }
 
-        [PlaywrightTest("page-route.spec.ts", "should receive fetch events")]
         [Test, Timeout(15_000)]
         public async Task ShouldReceiveFetchEvents()
         {
@@ -101,7 +100,6 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(received, Is.True, $"Fetch.requestPaused not received. Events: [{fetchEventsStr}]");
         }
 
-        [PlaywrightTest("page-route.spec.ts", "should fulfill with custom response")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldFulfillWithCustomResponse()
         {
@@ -116,7 +114,7 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(body, Is.EqualTo("custom body"));
         }
 
-        [PlaywrightTest("page-route.spec.ts", "should abort request")]
+        [PlaywrightTest("page-route.spec.ts", "should fail navigation when aborting main resource")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldAbortRequest()
         {
@@ -156,7 +154,7 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(failedRequests, Has.Count.GreaterThanOrEqualTo(1));
         }
 
-        [PlaywrightTest("page-route.spec.ts", "should continue with modified headers")]
+        [PlaywrightTest("page-request-continue.spec.ts", "should amend HTTP headers")]
         [Test, Timeout(30_000)]
         public async Task ShouldContinueWithModifiedHeaders()
         {
@@ -182,7 +180,7 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(body, Is.EqualTo("injected-value"));
         }
 
-        [PlaywrightTest("page-route.spec.ts", "should fulfill with custom status")]
+        [PlaywrightTest("page-request-fulfill.spec.ts", "should work with status code 422")]
         [Test, Timeout(30_000)]
         public async Task ShouldFulfillWithCustomStatus()
         {
@@ -207,7 +205,6 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(interceptedResponse.Status, Is.EqualTo(404));
         }
 
-        [PlaywrightTest("page-route.spec.ts", "should not intercept non matching urls")]
         [Test, Timeout(30_000)]
         public async Task ShouldNotInterceptNonMatchingUrls()
         {
@@ -241,7 +238,7 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(intercepted, Is.True, "handler should fire for matching URL");
         }
 
-        [PlaywrightTest("page-route.spec.ts", "should fulfill with json body")]
+        [PlaywrightTest("page-request-fulfill.spec.ts", "should fulfill json")]
         [Test, Timeout(30_000)]
         public async Task ShouldFulfillWithJsonBody()
         {
@@ -260,7 +257,6 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(json, Is.EqualTo("{\"key\":\"value\"}"));
         }
 
-        [PlaywrightTest("page-route.spec.ts", "should intercept at context level")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldInterceptAtContextLevel()
         {
@@ -278,7 +274,7 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(content, Is.EqualTo("context-fulfilled"));
         }
 
-        [PlaywrightTest("page-route.spec.ts", "Context route should apply to new pages")]
+        [PlaywrightTest("browsercontext-route.spec.ts", "should intercept")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ContextRouteShouldApplyToNewPages()
         {

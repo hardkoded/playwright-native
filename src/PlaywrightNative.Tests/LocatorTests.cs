@@ -27,7 +27,7 @@ namespace PlaywrightNative.Tests
     [TestFixture]
     public class LocatorTests : PageTestEx
     {
-        [PlaywrightTest("locator-query.spec.ts", "Locator clicks a unique match")]
+        [PlaywrightTest("locator-click.spec.ts", "should work @smoke")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldClickAUniqueMatch()
@@ -43,7 +43,7 @@ namespace PlaywrightNative.Tests
             Assert.That(id, Is.EqualTo("only"));
         }
 
-        [PlaywrightTest("locator-query.spec.ts", "Locator click is strict")]
+        [PlaywrightTest("locator-query.spec.ts", "should throw on due to strictness")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldThrowWhenLocatorMatchesTwoNodes()
@@ -61,7 +61,6 @@ namespace PlaywrightNative.Tests
             Assert.That(ex.Message, Does.Contain("2 elements"));
         }
 
-        [PlaywrightTest("locator-query.spec.ts", "First and Nth narrow a locator")]
         [Test]
         [Timeout(30_000)]
         public async Task FirstAndNthShouldNarrowTheMatch()
@@ -85,7 +84,6 @@ namespace PlaywrightNative.Tests
             Assert.That(last, Is.EqualTo("c"));
         }
 
-        [PlaywrightTest("locator-query.spec.ts", "Nested locator queries descendants")]
         [Test]
         [Timeout(30_000)]
         public async Task NestedLocatorShouldQueryDescendants()
@@ -103,7 +101,6 @@ namespace PlaywrightNative.Tests
             Assert.That(id, Is.EqualTo("b"));
         }
 
-        [PlaywrightTest("locator-query.spec.ts", "Count and All do not wait")]
         [Test]
         [Timeout(30_000)]
         public async Task CountAndAllShouldNotWait()
@@ -119,7 +116,6 @@ namespace PlaywrightNative.Tests
             Assert.That(await page.Locator("section").CountAsync().ConfigureAwait(false), Is.EqualTo(0));
         }
 
-        [PlaywrightTest("locator-query.spec.ts", "Fill and TextContent")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldFillAndReadText()
@@ -137,7 +133,7 @@ namespace PlaywrightNative.Tests
             Assert.That(text, Is.EqualTo("Hello"));
         }
 
-        [PlaywrightTest("locator-query.spec.ts", "Locator re-queries after the DOM changes")]
+        [PlaywrightTest("locator-misc-2.spec.ts", "should waitFor")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldRequeryAfterDomChange()
@@ -158,7 +154,6 @@ namespace PlaywrightNative.Tests
             Assert.That(id, Is.EqualTo("late"));
         }
 
-        [PlaywrightTest("locator-query.spec.ts", "Frame.Locator clicks inside a child frame")]
         [Test]
         [Timeout(30_000)]
         public async Task FrameLocatorShouldClickInsideChildFrame()
@@ -177,7 +172,6 @@ namespace PlaywrightNative.Tests
             Assert.That(id, Is.EqualTo("inner"));
         }
 
-        [PlaywrightTest("locator-query.spec.ts", "ElementHandleAsync waits for a match")]
         [Test]
         [Timeout(30_000)]
         public async Task ElementHandleShouldWaitForAMatch()

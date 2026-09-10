@@ -27,7 +27,7 @@ namespace PlaywrightNative.Tests
     [TestFixture]
     public class PageDragAndDropTests : PageTestEx
     {
-        [PlaywrightTest("page-drag.spec.ts", "DragAndDrop moves the mouse from source to target")]
+        [PlaywrightTest("page-drag.spec.ts", "should work with the helper method")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldDragFromSourceToTarget()
@@ -51,7 +51,6 @@ namespace PlaywrightNative.Tests
             Assert.That(text, Is.EqualTo("dropped"));
         }
 
-        [PlaywrightTest("page-drag.spec.ts", "frame DragAndDrop moves the mouse from source to target")]
         [Test]
         [Timeout(30_000)]
         public async Task FrameShouldDragFromSourceToTarget()
@@ -75,7 +74,6 @@ namespace PlaywrightNative.Tests
             Assert.That(text, Is.EqualTo("dropped"));
         }
 
-        [PlaywrightTest("page-drag.spec.ts", "DragAndDrop times out while hidden")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldTimeoutWhileHidden()
@@ -93,7 +91,6 @@ namespace PlaywrightNative.Tests
             Assert.That(ex.Message, Does.Contain("Timeout"));
         }
 
-        [PlaywrightTest("page-drag.spec.ts", "DragAndDrop force drags while hidden")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldHonorForce()
@@ -122,7 +119,6 @@ namespace PlaywrightNative.Tests
             Assert.That(text, Is.EqualTo("dropped"));
         }
 
-        [PlaywrightTest("page-drag.spec.ts", "DragAndDrop trial does not drop")]
         [Test]
         [Timeout(30_000)]
         public async Task TrialShouldNotDispatchTheDrop()
@@ -146,7 +142,7 @@ namespace PlaywrightNative.Tests
             Assert.That(text, Is.EqualTo("dst"));
         }
 
-        [PlaywrightTest("page-drag.spec.ts", "DragAndDrop steps interpolates the mouse path")]
+        [PlaywrightTest("page-drag.spec.ts", "should dragAndDrop with tweened mouse movement")]
         [Test]
         [Timeout(30_000)]
         public async Task StepsShouldInterpolateTheMousePath()
@@ -167,7 +163,6 @@ namespace PlaywrightNative.Tests
             Assert.That(count, Is.GreaterThanOrEqualTo(20));
         }
 
-        [PlaywrightTest("page-drag.spec.ts", "DragAndDrop Auto scrolls the target into view")]
         [Test]
         [Timeout(30_000)]
         public async Task AutoShouldScrollTheTargetIntoView()
@@ -199,7 +194,6 @@ namespace PlaywrightNative.Tests
             Assert.That(text, Is.EqualTo("dropped"));
         }
 
-        [PlaywrightTest("page-drag.spec.ts", "DragAndDrop scroll None does not scroll")]
         [Test]
         [Timeout(30_000)]
         public async Task ScrollNoneShouldNotScrollThePage()

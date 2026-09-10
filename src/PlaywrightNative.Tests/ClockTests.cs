@@ -26,7 +26,6 @@ namespace PlaywrightNative.Tests
     [TestFixture]
     public class ClockTests : PageTestEx
     {
-        [PlaywrightTest("page-clock.spec.ts", "SetFixedTime pins Date.now")]
         [Test]
         [Timeout(30_000)]
         public async Task SetFixedTimeShouldPinDateNow()
@@ -43,7 +42,6 @@ namespace PlaywrightNative.Tests
             Assert.That(now, Is.EqualTo(frozen));
         }
 
-        [PlaywrightTest("page-clock.spec.ts", "SetFixedTime pins new Date")]
         [Test]
         [Timeout(30_000)]
         public async Task SetFixedTimeShouldPinNewDate()
@@ -61,7 +59,6 @@ namespace PlaywrightNative.Tests
             Assert.That(page.Clock, Is.SameAs(context.Clock));
         }
 
-        [PlaywrightTest("page-clock.spec.ts", "SetFixedTime survives navigation")]
         [Test]
         [Timeout(30_000)]
         public async Task SetFixedTimeShouldSurviveNavigation()
@@ -78,7 +75,6 @@ namespace PlaywrightNative.Tests
             Assert.That(now, Is.EqualTo(frozen));
         }
 
-        [PlaywrightTest("page-clock.spec.ts", "Install freezes Date.now")]
         [Test]
         [Timeout(30_000)]
         public async Task InstallShouldFreezeDateNow()
@@ -95,7 +91,6 @@ namespace PlaywrightNative.Tests
             Assert.That(now, Is.EqualTo(frozen));
         }
 
-        [PlaywrightTest("page-clock.spec.ts", "FastForward fires setTimeout")]
         [Test]
         [Timeout(30_000)]
         public async Task FastForwardShouldFireSetTimeout()
@@ -115,7 +110,6 @@ namespace PlaywrightNative.Tests
             Assert.That(await page.EvaluateAsync<long>("Date.now()").ConfigureAwait(false), Is.EqualTo(frozen + 1000));
         }
 
-        [PlaywrightTest("page-clock.spec.ts", "RunFor accepts mm:ss")]
         [Test]
         [Timeout(30_000)]
         public async Task RunForShouldAcceptMinuteSecondString()
@@ -132,7 +126,7 @@ namespace PlaywrightNative.Tests
             Assert.That(await page.EvaluateAsync<long>("Date.now()").ConfigureAwait(false), Is.EqualTo(frozen + 2000));
         }
 
-        [PlaywrightTest("page-clock.spec.ts", "PauseAt jumps and stays frozen")]
+        [PlaywrightTest("page-clock.spec.ts", "should pause")]
         [Test]
         [Timeout(30_000)]
         public async Task PauseAtShouldJumpAndStayFrozen()
@@ -151,7 +145,6 @@ namespace PlaywrightNative.Tests
             Assert.That(await page.EvaluateAsync<long>("Date.now()").ConfigureAwait(false), Is.EqualTo(frozen + 5_000));
         }
 
-        [PlaywrightTest("page-clock.spec.ts", "Resume lets Date.now progress")]
         [Test]
         [Timeout(30_000)]
         public async Task ResumeShouldLetDateNowProgress()
@@ -170,7 +163,6 @@ namespace PlaywrightNative.Tests
             Assert.That(now, Is.GreaterThan(frozen));
         }
 
-        [PlaywrightTest("page-clock.spec.ts", "SetSystemTime progresses from the origin")]
         [Test]
         [Timeout(30_000)]
         public async Task SetSystemTimeShouldProgressFromOrigin()

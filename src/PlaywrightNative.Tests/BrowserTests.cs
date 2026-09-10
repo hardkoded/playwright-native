@@ -28,7 +28,7 @@ namespace PlaywrightNative.Tests
     [TestFixture]
     public class BrowserTests : PageTestEx
     {
-        [PlaywrightTest("browser.spec.ts", "contexts should include created context")]
+        [PlaywrightTest("browsercontext-basic.spec.ts", "should create new context @smoke")]
         [Test]
         [Timeout(30_000)]
         public async Task ContextsShouldIncludeCreatedContext()
@@ -40,7 +40,6 @@ namespace PlaywrightNative.Tests
             Assert.That(browser.Contexts, Does.Contain(context));
         }
 
-        [PlaywrightTest("browser.spec.ts", "new context options bag")]
         [Test]
         [Timeout(30_000)]
         public async Task NewContextOptionsBagShouldReturnUsableContext()
@@ -53,7 +52,7 @@ namespace PlaywrightNative.Tests
             Assert.That(await page.EvaluateAsync<int>("1 + 1").ConfigureAwait(false), Is.EqualTo(2));
         }
 
-        [PlaywrightTest("browser.spec.ts", "browser new page")]
+        [PlaywrightTest("browser.spec.ts", "should create new page @smoke")]
         [Test]
         [Timeout(30_000)]
         public async Task BrowserNewPageShouldReturnUsablePage()
@@ -67,7 +66,7 @@ namespace PlaywrightNative.Tests
             Assert.That(await page.EvaluateAsync<int>("2 + 2").ConfigureAwait(false), Is.EqualTo(4));
         }
 
-        [PlaywrightTest("browser.spec.ts", "disconnected after close")]
+        [PlaywrightTest("browsertype-connect.spec.ts", "disconnected event should have browser as argument")]
         [Test]
         [Timeout(30_000)]
         public async Task DisconnectedShouldFireOnClose()
@@ -86,7 +85,6 @@ namespace PlaywrightNative.Tests
             Assert.That(browser.IsConnected, Is.False);
         }
 
-        [PlaywrightTest("browser.spec.ts", "CloseAsync reason is surfaced on later page errors")]
         [Test]
         [Timeout(30_000)]
         public async Task CloseReasonShouldSurfaceOnLaterPageErrors()
@@ -103,7 +101,6 @@ namespace PlaywrightNative.Tests
             Assert.That(ex.CloseReason, Is.EqualTo("wave-377-reason"));
         }
 
-        [PlaywrightTest("browser.spec.ts", "WaitForDisconnectedAsync after close")]
         [Test]
         [Timeout(30_000)]
         public async Task WaitForDisconnectedShouldResolveOnClose()
@@ -116,7 +113,6 @@ namespace PlaywrightNative.Tests
             Assert.That(browser.IsConnected, Is.False);
         }
 
-        [PlaywrightTest("browser.spec.ts", "WaitForDisconnectedAsync times out")]
         [Test]
         [Timeout(30_000)]
         public async Task WaitForDisconnectedShouldTimeout()
@@ -129,7 +125,7 @@ namespace PlaywrightNative.Tests
             Assert.That(ex.Message, Does.Contain("Timeout 200ms exceeded."));
         }
 
-        [PlaywrightTest("browser.spec.ts", "BrowserType reports the launched engine")]
+        [PlaywrightTest("browsertype-basic.spec.ts", "browserType.name should work")]
         [Test]
         [Timeout(30_000)]
         public async Task BrowserTypeShouldReportLaunchedEngine()

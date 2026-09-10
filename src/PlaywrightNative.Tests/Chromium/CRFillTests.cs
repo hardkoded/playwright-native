@@ -27,7 +27,7 @@ namespace PlaywrightNative.Tests.Chromium
     [TestFixture]
     public class CRFillTests : CRTestBase
     {
-        [PlaywrightTest("page-fill.spec.ts", "should fill text input")]
+        [PlaywrightTest("page-fill.spec.ts", "should fill input")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldFillTextInput()
         {
@@ -40,7 +40,7 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(value, Is.EqualTo("hello"));
         }
 
-        [PlaywrightTest("page-fill.spec.ts", "should replace existing value")]
+        [PlaywrightTest("page-fill.spec.ts", "should fill elements with existing value and selection")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldReplaceExistingValue()
         {
@@ -53,7 +53,7 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(value, Is.EqualTo("new"));
         }
 
-        [PlaywrightTest("page-fill.spec.ts", "should clear with empty string")]
+        [PlaywrightTest("page-fill.spec.ts", "should be able to clear using fill()")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldClearWithEmptyString()
         {
@@ -79,7 +79,6 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(value, Is.EqualTo("multi\nline"));
         }
 
-        [PlaywrightTest("page-fill.spec.ts", "should fill email input")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldFillEmailInput()
         {
@@ -92,7 +91,7 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(value, Is.EqualTo("a@b.com"));
         }
 
-        [PlaywrightTest("page-fill.spec.ts", "should fill number input")]
+        [PlaywrightTest("page-fill.spec.ts", "should be able to fill the input[type=number]")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldFillNumberInput()
         {
@@ -105,7 +104,6 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(value, Is.EqualTo("42"));
         }
 
-        [PlaywrightTest("page-fill.spec.ts", "should fire input event on fill")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldFireInputEventOnFill()
         {
@@ -122,7 +120,6 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(count, Is.GreaterThanOrEqualTo(1));
         }
 
-        [PlaywrightTest("page-fill.spec.ts", "should focus element during fill")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldFocusElementDuringFill()
         {
@@ -135,7 +132,7 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(activeId, Is.EqualTo("t"));
         }
 
-        [PlaywrightTest("page-fill.spec.ts", "should throw when element is not fillable")]
+        [PlaywrightTest("page-fill.spec.ts", "should throw nice error without injected script stack when element is not an <input>")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldThrowWhenElementIsNotFillable()
         {
@@ -147,7 +144,6 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(ex.Message, Does.Contain("input").Or.Contain("textarea"));
         }
 
-        [PlaywrightTest("page-fill.spec.ts", "should fill unicode text")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldFillUnicodeText()
         {
