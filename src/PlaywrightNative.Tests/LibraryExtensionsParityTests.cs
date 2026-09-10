@@ -305,6 +305,14 @@ namespace PlaywrightNative.Tests
                 return false;
             }
 
+            // "Google Chrome for Testing.app" (the macOS Playwright-downloaded
+            // build) contains "Google Chrome" too, but is not the real
+            // installed browser this check exists to detect.
+            if (path.IndexOf("for Testing", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return false;
+            }
+
             return path.IndexOf("/opt/google/chrome", StringComparison.OrdinalIgnoreCase) >= 0
                 || path.IndexOf("Google Chrome", StringComparison.OrdinalIgnoreCase) >= 0;
         }
