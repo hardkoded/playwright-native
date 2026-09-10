@@ -30,7 +30,7 @@ namespace PlaywrightNative.Tests
     [TestFixture]
     public class ElementHandleReadTests : PageTestEx
     {
-        [PlaywrightTest("elementhandle-convenience.spec.ts", "Query selector should return handle for match")]
+        [PlaywrightTest("elementhandle-query-selector.spec.ts", "should query existing element")]
         [Test]
         [Timeout(30_000)]
         public async Task QuerySelectorShouldReturnHandleForMatch()
@@ -46,7 +46,7 @@ namespace PlaywrightNative.Tests
             Assert.That(handle, Is.Not.Null);
         }
 
-        [PlaywrightTest("elementhandle-convenience.spec.ts", "Query selector should return null for no match")]
+        [PlaywrightTest("elementhandle-query-selector.spec.ts", "should return null for non-existing element")]
         [Test]
         [Timeout(30_000)]
         public async Task QuerySelectorShouldReturnNullForNoMatch()
@@ -62,7 +62,7 @@ namespace PlaywrightNative.Tests
             Assert.That(handle, Is.Null);
         }
 
-        [PlaywrightTest("elementhandle-convenience.spec.ts", "Text content should return inner text")]
+        [PlaywrightTest("elementhandle-convenience.spec.ts", "textContent should work")]
         [Test]
         [Timeout(30_000)]
         public async Task TextContentShouldReturnInnerText()
@@ -79,7 +79,7 @@ namespace PlaywrightNative.Tests
             Assert.That(text, Is.EqualTo("hello-world"));
         }
 
-        [PlaywrightTest("elementhandle-convenience.spec.ts", "Get attribute should return attribute value")]
+        [PlaywrightTest("elementhandle-convenience.spec.ts", "getAttribute should work")]
         [Test]
         [Timeout(30_000)]
         public async Task GetAttributeShouldReturnAttributeValue()
@@ -96,7 +96,7 @@ namespace PlaywrightNative.Tests
             Assert.That(kind, Is.EqualTo("primary"));
         }
 
-        [PlaywrightTest("elementhandle-convenience.spec.ts", "Is visible should return true for visible element")]
+        [PlaywrightTest("elementhandle-convenience.spec.ts", "isVisible and isHidden should work")]
         [Test]
         [Timeout(30_000)]
         public async Task IsVisibleShouldReturnTrueForVisibleElement()
@@ -113,7 +113,7 @@ namespace PlaywrightNative.Tests
             Assert.That(visible, Is.True);
         }
 
-        [PlaywrightTest("elementhandle-convenience.spec.ts", "Is visible should return false for hidden element")]
+        [PlaywrightTest("elementhandle-convenience.spec.ts", "isVisible and isHidden should work")]
         [Test]
         [Timeout(30_000)]
         public async Task IsVisibleShouldReturnFalseForHiddenElement()
@@ -130,7 +130,7 @@ namespace PlaywrightNative.Tests
             Assert.That(visible, Is.False);
         }
 
-        [PlaywrightTest("elementhandle-convenience.spec.ts", "Bounding box should return geometry for positioned element")]
+        [PlaywrightTest("elementhandle-bounding-box.spec.ts", "should work")]
         [Test]
         [Timeout(30_000)]
         public async Task BoundingBoxShouldReturnGeometryForPositionedElement()

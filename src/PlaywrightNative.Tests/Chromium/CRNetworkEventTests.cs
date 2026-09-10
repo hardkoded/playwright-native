@@ -27,7 +27,7 @@ namespace PlaywrightNative.Tests.Chromium
     [TestFixture]
     public class CRNetworkEventTests : CRTestBase
     {
-        [PlaywrightTest("page-event-network.spec.ts", "should fire request and response events")]
+        [PlaywrightTest("page-event-network.spec.ts", "Page.Events.Request @smoke")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldFireRequestAndResponseEvents()
         {
@@ -54,7 +54,7 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(matchingResponse.Url, Does.Contain("/network-event-test.html"));
         }
 
-        [PlaywrightTest("page-event-network.spec.ts", "should fire request finished event")]
+        [PlaywrightTest("page-event-network.spec.ts", "Page.Events.RequestFinished @smoke")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldFireRequestFinishedEvent()
         {
@@ -76,7 +76,7 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(matchingRequest.Url, Does.Contain("/finished-test.html"));
         }
 
-        [PlaywrightTest("page-event-network.spec.ts", "should fire request failed event")]
+        [PlaywrightTest("page-event-network.spec.ts", "Page.Events.RequestFailed @smoke")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldFireRequestFailedEvent()
         {
@@ -107,7 +107,7 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(failedRequest.FailureText, Is.Not.Null.And.Not.Empty);
         }
 
-        [PlaywrightTest("page-event-network.spec.ts", "should link response to request")]
+        [PlaywrightTest("page-event-network.spec.ts", "Page.Events.Response @smoke")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldLinkResponseToRequest()
         {
@@ -130,7 +130,7 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(matchingResponse.Request.Response, Is.SameAs(matchingResponse), "Request.Response should reference the same response instance");
         }
 
-        [PlaywrightTest("page-event-network.spec.ts", "should handle redirects")]
+        [PlaywrightTest("page-event-network.spec.ts", "should support redirects")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldHandleRedirects()
         {
@@ -154,7 +154,6 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(targetRequest.RedirectedFrom.Url, Does.Contain("/redirect-source"));
         }
 
-        [PlaywrightTest("page-event-network.spec.ts", "should capture multiple requests")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldCaptureMultipleRequests()
         {
@@ -193,7 +192,6 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(nonFaviconRequests, Has.Count.GreaterThanOrEqualTo(3), "Expected at least 3 requests: HTML + 2 scripts");
         }
 
-        [PlaywrightTest("page-event-network.spec.ts", "Go to should wait for network idle")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task GoToShouldWaitForNetworkIdle()
         {

@@ -27,7 +27,7 @@ namespace PlaywrightNative.Tests
     [TestFixture]
     public class ScrollIntoViewTests : PageTestEx
     {
-        [PlaywrightTest("elementhandle-scroll-into-view.spec.ts", "ScrollIntoViewIfNeededAsync brings an offscreen element into view")]
+        [PlaywrightTest("elementhandle-scroll-into-view.spec.ts", "should work @smoke")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldBringOffscreenElementIntoView()
@@ -51,7 +51,6 @@ namespace PlaywrightNative.Tests
             Assert.That(after.Y, Is.LessThan(400f));
         }
 
-        [PlaywrightTest("elementhandle-scroll-into-view.spec.ts", "page ScrollIntoViewIfNeededAsync")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldScrollFromPageSelector()
@@ -69,7 +68,6 @@ namespace PlaywrightNative.Tests
             Assert.That(after.Y, Is.LessThan(400f));
         }
 
-        [PlaywrightTest("elementhandle-scroll-into-view.spec.ts", "frame ScrollIntoViewIfNeededAsync")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldScrollFromMainFrameSelector()
@@ -87,7 +85,6 @@ namespace PlaywrightNative.Tests
             Assert.That(after.Y, Is.LessThan(400f));
         }
 
-        [PlaywrightTest("elementhandle-scroll-into-view.spec.ts", "page ScrollIntoViewIfNeededAsync times out while missing")]
         [Test]
         [Timeout(30_000)]
         public async Task PageScrollIntoViewIfNeededAsyncShouldTimeoutWhileMissing()
@@ -102,7 +99,6 @@ namespace PlaywrightNative.Tests
             Assert.That(ex.Message, Does.Contain("Timeout"));
         }
 
-        [PlaywrightTest("elementhandle-scroll-into-view.spec.ts", "page ScrollIntoViewIfNeededAsync waits until attached")]
         [Test]
         [Timeout(30_000)]
         public async Task PageScrollIntoViewIfNeededAsyncShouldWaitUntilAttached()
@@ -126,7 +122,7 @@ namespace PlaywrightNative.Tests
             Assert.That(after.Y, Is.LessThan(400f));
         }
 
-        [PlaywrightTest("elementhandle-scroll-into-view.spec.ts", "ScrollIntoViewIfNeededAsync times out while hidden")]
+        [PlaywrightTest("elementhandle-scroll-into-view.spec.ts", "should timeout waiting for visible")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldTimeoutWhileHidden()
@@ -142,7 +138,7 @@ namespace PlaywrightNative.Tests
             Assert.That(ex.Message, Does.Contain("Timeout"));
         }
 
-        [PlaywrightTest("elementhandle-scroll-into-view.spec.ts", "ScrollIntoViewIfNeededAsync waits until visible")]
+        [PlaywrightTest("elementhandle-scroll-into-view.spec.ts", "should wait for display:none to become visible")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldWaitUntilVisible()

@@ -28,7 +28,7 @@ namespace PlaywrightNative.Tests.Chromium
     [TestFixture]
     public class CRCheckboxTests : CRTestBase
     {
-        [PlaywrightTest("page-check.spec.ts", "Is checked should return false for unchecked box")]
+        [PlaywrightTest("elementhandle-convenience.spec.ts", "isChecked should work")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task IsCheckedShouldReturnFalseForUncheckedBox()
         {
@@ -40,7 +40,7 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(isChecked, Is.False);
         }
 
-        [PlaywrightTest("page-check.spec.ts", "Is checked should return true for checked box")]
+        [PlaywrightTest("elementhandle-convenience.spec.ts", "isChecked should work")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task IsCheckedShouldReturnTrueForCheckedBox()
         {
@@ -52,7 +52,7 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(isChecked, Is.True);
         }
 
-        [PlaywrightTest("page-check.spec.ts", "Check should check an unchecked box")]
+        [PlaywrightTest("page-check.spec.ts", "should check the box @smoke")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task CheckShouldCheckAnUncheckedBox()
         {
@@ -65,7 +65,7 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(isChecked, Is.True);
         }
 
-        [PlaywrightTest("page-check.spec.ts", "Check should be no op for already checked box")]
+        [PlaywrightTest("page-check.spec.ts", "should not check the checked box")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task CheckShouldBeNoOpForAlreadyCheckedBox()
         {
@@ -82,7 +82,7 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(clicks, Is.EqualTo(0));
         }
 
-        [PlaywrightTest("page-check.spec.ts", "Uncheck should uncheck a checked box")]
+        [PlaywrightTest("page-check.spec.ts", "should uncheck the box")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task UncheckShouldUncheckACheckedBox()
         {
@@ -95,7 +95,7 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(isChecked, Is.False);
         }
 
-        [PlaywrightTest("page-check.spec.ts", "Uncheck should throw for radio button")]
+        [PlaywrightTest("page-check.spec.ts", "should throw when trying to uncheck radio button")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task UncheckShouldThrowForRadioButton()
         {
@@ -107,7 +107,7 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(ex.Message, Does.Contain("radio").IgnoreCase);
         }
 
-        [PlaywrightTest("page-check.spec.ts", "Is checked should throw for non checkbox")]
+        [PlaywrightTest("elementhandle-convenience.spec.ts", "isChecked should work")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task IsCheckedShouldThrowForNonCheckbox()
         {

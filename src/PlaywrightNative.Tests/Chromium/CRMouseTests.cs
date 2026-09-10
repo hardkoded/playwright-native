@@ -41,7 +41,6 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(count, Is.EqualTo(1));
         }
 
-        [PlaywrightTest("page-mouse.spec.ts", "should report coordinates")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldReportCoordinates()
         {
@@ -58,7 +57,7 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(y, Is.EqualTo(45));
         }
 
-        [PlaywrightTest("page-mouse.spec.ts", "should trigger hover on move")]
+        [PlaywrightTest("page-mouse.spec.ts", "should trigger hover state")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldTriggerHoverOnMove()
         {
@@ -74,7 +73,7 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(hovered, Is.True);
         }
 
-        [PlaywrightTest("page-mouse.spec.ts", "should dispatch double click")]
+        [PlaywrightTest("page-mouse.spec.ts", "should dblclick the div")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldDispatchDoubleClick()
         {
@@ -89,7 +88,7 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(count, Is.EqualTo(1));
         }
 
-        [PlaywrightTest("page-mouse.spec.ts", "should dispatch right click via context menu")]
+        [PlaywrightTest("page-click.spec.ts", "should fire contextmenu event on right click")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldDispatchRightClickViaContextMenu()
         {
@@ -104,7 +103,6 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(count, Is.EqualTo(1));
         }
 
-        [PlaywrightTest("page-mouse.spec.ts", "should dispatch mouse down and up separately")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldDispatchMouseDownAndUpSeparately()
         {
@@ -122,7 +120,7 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(json, Is.EqualTo("[\"down\",\"up\"]"));
         }
 
-        [PlaywrightTest("page-mouse.spec.ts", "should scroll with wheel")]
+        [PlaywrightTest("wheel.spec.ts", "should scroll when nobody is listening")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldScrollWithWheel()
         {
@@ -138,7 +136,7 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(scrollY, Is.GreaterThan(0));
         }
 
-        [PlaywrightTest("page-mouse.spec.ts", "should interpolate move with steps")]
+        [PlaywrightTest("page-mouse.spec.ts", "should tween mouse movement")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldInterpolateMoveWithSteps()
         {

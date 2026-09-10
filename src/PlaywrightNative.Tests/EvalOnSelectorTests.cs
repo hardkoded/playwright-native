@@ -27,7 +27,7 @@ namespace PlaywrightNative.Tests
     [TestFixture]
     public class EvalOnSelectorTests : PageTestEx
     {
-        [PlaywrightTest("eval-on-selector.spec.ts", "EvalOnSelectorAsync returns the function result")]
+        [PlaywrightTest("eval-on-selector.spec.ts", "should auto-detect css selector")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldEvaluateOnMatchingElement()
@@ -41,7 +41,7 @@ namespace PlaywrightNative.Tests
             Assert.That(text, Is.EqualTo("hello"));
         }
 
-        [PlaywrightTest("eval-on-selector.spec.ts", "EvalOnSelectorAsync passes an argument")]
+        [PlaywrightTest("eval-on-selector.spec.ts", "should accept arguments")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldPassArgumentToFunction()
@@ -57,7 +57,7 @@ namespace PlaywrightNative.Tests
             Assert.That(text, Is.EqualTo("hi!"));
         }
 
-        [PlaywrightTest("eval-on-selector.spec.ts", "EvalOnSelectorAsync throws when nothing matches")]
+        [PlaywrightTest("eval-on-selector.spec.ts", "should throw error if no element is found")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldThrowWhenNothingMatches()
@@ -72,7 +72,7 @@ namespace PlaywrightNative.Tests
             Assert.That(ex.Message, Does.Contain("No node found for selector"));
         }
 
-        [PlaywrightTest("eval-on-selector.spec.ts", "EvalOnSelectorAllAsync evaluates the matching array")]
+        [PlaywrightTest("eval-on-selector-all.spec.ts", "should auto-detect css selector")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldEvaluateOnMatchingArray()
@@ -91,7 +91,6 @@ namespace PlaywrightNative.Tests
             Assert.That(texts, Is.EqualTo(new[] { "a-x", "b-x" }));
         }
 
-        [PlaywrightTest("eval-on-selector.spec.ts", "EvalOnSelectorAllAsync allows an empty match")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldAllowEmptyMatchOnAll()
@@ -105,7 +104,6 @@ namespace PlaywrightNative.Tests
             Assert.That(count, Is.EqualTo(0));
         }
 
-        [PlaywrightTest("eval-on-selector.spec.ts", "frame EvalOnSelectorAsync")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldEvaluateOnMainFrame()
@@ -122,7 +120,7 @@ namespace PlaywrightNative.Tests
             Assert.That(count, Is.EqualTo(2));
         }
 
-        [PlaywrightTest("eval-on-selector.spec.ts", "element EvalOnSelectorAsync is scoped")]
+        [PlaywrightTest("elementhandle-eval-on-selector.spec.ts", "should retrieve content from subtree")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldEvaluateOnElementHandleScope()
