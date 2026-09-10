@@ -4090,6 +4090,15 @@ namespace PlaywrightNative.Chromium
                     // Nested-worker auto-attach is best-effort on older Chrome.
                 }
 
+                // Official: below Chromium 143 there is no Inspector.workerScriptLoaded
+                // event, so evaluate() only ever waited on the execution context.
+                // From 143 on, CRWorker's own message handler resolves once both
+                // the context exists and this event has fired.
+                if (ChromiumMajorVersion() < 143)
+                {
+                    worker.MarkScriptLoadedImmediately();
+                }
+
                 // Official adds the worker before resume so page.console listeners
                 // are attached before the worker script runs.
                 WorkerCreated?.Invoke(this, worker);
@@ -4100,6 +4109,19 @@ namespace PlaywrightNative.Chromium
                 // The worker may close before domains are enabled.
                 WorkerCreated?.Invoke(this, worker);
             }
+        }
+
+        private int ChromiumMajorVersion()
+        {
+            string version = _browser.Version;
+            if (string.IsNullOrEmpty(version))
+            {
+                return int.MaxValue;
+            }
+
+            int dot = version.IndexOf('.', StringComparison.Ordinal);
+            string major = dot >= 0 ? version.Substring(0, dot) : version;
+            return int.TryParse(major, out int value) ? value : int.MaxValue;
         }
 
         private void OnDetachedFromTarget(JsonElement? parameters)
