@@ -31,7 +31,7 @@ namespace PlaywrightNative.Tests
     [TestFixture]
     public class PageContentAndMediaTests : PageTestEx
     {
-        [PlaywrightTest("page-set-content.spec.ts", "SetContentAsyncShouldRoundTripHtml")]
+        [PlaywrightTest("page-set-content.spec.ts", "should work @smoke")]
         [Test]
         [Timeout(30_000)]
         public async Task SetContentAsyncShouldRoundTripHtml()
@@ -47,7 +47,6 @@ namespace PlaywrightNative.Tests
             Assert.That(text, Is.EqualTo("hello"));
         }
 
-        [PlaywrightTest("page-set-content.spec.ts", "SetContentAsync honors timeout")]
         [Test]
         [Timeout(30_000)]
         public async Task SetContentAsyncShouldHonorTimeout()
@@ -61,7 +60,7 @@ namespace PlaywrightNative.Tests
             Assert.That(text, Is.EqualTo("timeout"));
         }
 
-        [PlaywrightTest("page-set-content.spec.ts", "SetContentAsync honors waitUntil")]
+        [PlaywrightTest("page-set-content.spec.ts", "should work with domcontentloaded")]
         [Test]
         [Timeout(30_000)]
         public async Task SetContentAsyncShouldHonorWaitUntil()
@@ -77,7 +76,7 @@ namespace PlaywrightNative.Tests
             Assert.That(state, Is.EqualTo("interactive").Or.EqualTo("complete"));
         }
 
-        [PlaywrightTest("page-set-content.spec.ts", "ContentAsyncShouldReturnDocTypeAndDocument")]
+        [PlaywrightTest("page-set-content.spec.ts", "should work with doctype")]
         [Test]
         [Timeout(30_000)]
         public async Task ContentAsyncShouldReturnDocTypeAndDocument()
@@ -93,7 +92,7 @@ namespace PlaywrightNative.Tests
             Assert.That(content, Does.Contain("<span>abc</span>"));
         }
 
-        [PlaywrightTest("page-set-content.spec.ts", "ScreenshotAsyncShouldReturnPngBytes")]
+        [PlaywrightTest("page-screenshot.spec.ts", "should work @smoke")]
         [Test]
         [Timeout(30_000)]
         public async Task ScreenshotAsyncShouldReturnPngBytes()
@@ -118,7 +117,6 @@ namespace PlaywrightNative.Tests
             Assert.That(bytes[7], Is.EqualTo(0x0A));
         }
 
-        [PlaywrightTest("page-screenshot.spec.ts", "ScreenshotAsync honors timeout")]
         [Test]
         [Timeout(30_000)]
         public async Task ScreenshotAsyncShouldHonorTimeout()
@@ -138,7 +136,7 @@ namespace PlaywrightNative.Tests
             Assert.That(bytes[3], Is.EqualTo(0x47));
         }
 
-        [PlaywrightTest("page-set-content.spec.ts", "ScreenshotAsyncOmitBackgroundShouldReturnPng")]
+        [PlaywrightTest("page-screenshot.spec.ts", "should allow transparency")]
         [Test]
         [Timeout(30_000)]
         public async Task ScreenshotAsyncOmitBackgroundShouldReturnPng()
@@ -158,7 +156,7 @@ namespace PlaywrightNative.Tests
             Assert.That(bytes[3], Is.EqualTo(0x47));
         }
 
-        [PlaywrightTest("page-set-content.spec.ts", "ScreenshotAsyncWithFullPageShouldReturnLargerBytes")]
+        [PlaywrightTest("page-screenshot.spec.ts", "should take fullPage screenshots")]
         [Test]
         [Timeout(30_000)]
         public async Task ScreenshotAsyncWithFullPageShouldReturnLargerBytes()
@@ -177,7 +175,7 @@ namespace PlaywrightNative.Tests
             Assert.That(fullPageBytes.Length, Is.GreaterThan(viewportBytes.Length));
         }
 
-        [PlaywrightTest("page-set-content.spec.ts", "ScreenshotAsyncClipShouldReturnPng")]
+        [PlaywrightTest("page-screenshot.spec.ts", "should clip rect")]
         [Test]
         [Timeout(30_000)]
         public async Task ScreenshotAsyncClipShouldReturnPng()
@@ -197,7 +195,7 @@ namespace PlaywrightNative.Tests
             Assert.That(bytes[3], Is.EqualTo(0x47));
         }
 
-        [PlaywrightTest("page-set-content.spec.ts", "PdfAsyncShouldReturnPdfBytes")]
+        [PlaywrightTest("pdf.spec.ts", "should be able to save file")]
         [Test]
         [Timeout(30_000)]
         public async Task PdfAsyncShouldReturnPdfBytes()
@@ -216,7 +214,7 @@ namespace PlaywrightNative.Tests
             Assert.That(prefix, Is.EqualTo("%PDF-"));
         }
 
-        [PlaywrightTest("page-set-content.spec.ts", "SetViewportSizeAsyncShouldChangeInnerDimensions")]
+        [PlaywrightTest("browsercontext-viewport.spec.ts", "should set the proper viewport size")]
         [Test]
         [Timeout(30_000)]
         public async Task SetViewportSizeAsyncShouldChangeInnerDimensions()
@@ -234,7 +232,7 @@ namespace PlaywrightNative.Tests
             Assert.That(height, Is.EqualTo(480));
         }
 
-        [PlaywrightTest("page-set-content.spec.ts", "AddInitScriptAsyncShouldFireOnNextNavigation")]
+        [PlaywrightTest("page-add-init-script.spec.ts", "should work with content @smoke")]
         [Test]
         [Timeout(30_000)]
         public async Task AddInitScriptAsyncShouldFireOnNextNavigation()
@@ -250,7 +248,6 @@ namespace PlaywrightNative.Tests
             Assert.That(marker, Is.EqualTo(42));
         }
 
-        [PlaywrightTest("page-set-content.spec.ts", "AddInitScriptAsync passes arg")]
         [Test]
         [Timeout(30_000)]
         public async Task AddInitScriptAsyncShouldPassArg()

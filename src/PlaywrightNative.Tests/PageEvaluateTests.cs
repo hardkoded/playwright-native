@@ -46,7 +46,6 @@ namespace PlaywrightNative.Tests
             Assert.That(result, Is.EqualTo(56));
         }
 
-        [PlaywrightTest("page-evaluate.spec.ts", "should await asynchronously resolved promise")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldAwaitAsynchronouslyResolvedPromise()
@@ -63,7 +62,6 @@ namespace PlaywrightNative.Tests
             Assert.That(result, Is.EqualTo(7));
         }
 
-        [PlaywrightTest("page-evaluate.spec.ts", "should return non-promise values unchanged")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldReturnNonPromiseValuesUnchanged()
@@ -78,7 +76,6 @@ namespace PlaywrightNative.Tests
             Assert.That(sum, Is.EqualTo(3));
         }
 
-        [PlaywrightTest("page-evaluate.spec.ts", "should work with argument")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldEvaluateFunctionWithArgument()
@@ -93,7 +90,7 @@ namespace PlaywrightNative.Tests
             Assert.That(result, Is.EqualTo(14));
         }
 
-        [PlaywrightTest("page-evaluate.spec.ts", "should return a handle")]
+        [PlaywrightTest("jshandle-as-element.spec.ts", "should work @smoke")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldReturnHandleForDocumentBody()
@@ -109,7 +106,6 @@ namespace PlaywrightNative.Tests
             await handle.DisposeAsync().ConfigureAwait(false);
         }
 
-        [PlaywrightTest("page-evaluate.spec.ts", "nested handle AsElement returns an element")]
         [Test]
         [Timeout(30_000)]
         public async Task NestedHandleAsElementShouldReturnAnElement()
@@ -131,7 +127,7 @@ namespace PlaywrightNative.Tests
             await document.DisposeAsync().ConfigureAwait(false);
         }
 
-        [PlaywrightTest("page-evaluate.spec.ts", "should work with jsonValue")]
+        [PlaywrightTest("jshandle-json-value.spec.ts", "should work @smoke")]
         [Test]
         [Timeout(30_000)]
         public async Task JsonValueShouldReturnSerializedHandle()
@@ -147,7 +143,6 @@ namespace PlaywrightNative.Tests
             await handle.DisposeAsync().ConfigureAwait(false);
         }
 
-        [PlaywrightTest("page-evaluate.spec.ts", "JsonAsync aliases JsonValueAsync")]
         [Test]
         [Timeout(30_000)]
         public async Task JsonAsyncShouldAliasJsonValueAsync()
@@ -164,7 +159,6 @@ namespace PlaywrightNative.Tests
             await handle.DisposeAsync().ConfigureAwait(false);
         }
 
-        [PlaywrightTest("page-evaluate.spec.ts", "should evaluate on handle with argument")]
         [Test]
         [Timeout(30_000)]
         public async Task HandleEvaluateShouldAcceptArgument()
@@ -180,7 +174,6 @@ namespace PlaywrightNative.Tests
             await handle.DisposeAsync().ConfigureAwait(false);
         }
 
-        [PlaywrightTest("jshandle-properties.spec.ts", "should work")]
         [PlaywrightTest("jshandle-properties.spec.ts", "should work @smoke")]
         [Test]
         [Timeout(30_000)]
@@ -200,7 +193,6 @@ namespace PlaywrightNative.Tests
             await handle.DisposeAsync().ConfigureAwait(false);
         }
 
-        [PlaywrightTest("jshandle-properties.spec.ts", "PropertyAsync aliases GetPropertyAsync")]
         [Test]
         [Timeout(30_000)]
         public async Task PropertyAsyncShouldAliasGetPropertyAsync()
@@ -219,7 +211,7 @@ namespace PlaywrightNative.Tests
             await handle.DisposeAsync().ConfigureAwait(false);
         }
 
-        [PlaywrightTest("jshandle-properties.spec.ts", "should return map with property names")]
+        [PlaywrightTest("jshandle-properties.spec.ts", "getProperties should work")]
         [Test]
         [Timeout(30_000)]
         public async Task GetPropertiesAsyncShouldReturnNamedHandles()
@@ -243,7 +235,6 @@ namespace PlaywrightNative.Tests
             await handle.DisposeAsync().ConfigureAwait(false);
         }
 
-        [PlaywrightTest("jshandle-properties.spec.ts", "PropertiesAsync aliases GetPropertiesAsync")]
         [Test]
         [Timeout(30_000)]
         public async Task PropertiesAsyncShouldAliasGetPropertiesAsync()
@@ -273,7 +264,6 @@ namespace PlaywrightNative.Tests
             await handle.DisposeAsync().ConfigureAwait(false);
         }
 
-        [PlaywrightTest("jshandle-evaluate.spec.ts", "should return handle from handle evaluate")]
         [Test]
         [Timeout(30_000)]
         public async Task EvaluateHandleAsyncOnHandleShouldReturnObject()

@@ -62,7 +62,7 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(result, Is.EqualTo("Clicked"));
         }
 
-        [PlaywrightTest("page-click.spec.ts", "should record shift key on click")]
+        [PlaywrightTest("page-click.spec.ts", "should update modifiers correctly")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldRecordShiftKeyOnClick()
         {
@@ -77,7 +77,7 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(shiftPressed, Is.True);
         }
 
-        [PlaywrightTest("page-click.spec.ts", "should fire context menu on right click")]
+        [PlaywrightTest("page-click.spec.ts", "should fire contextmenu event on right click")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldFireContextMenuOnRightClick()
         {
@@ -92,7 +92,6 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(fired, Is.True);
         }
 
-        [PlaywrightTest("page-click.spec.ts", "should click twice consecutively")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldClickTwiceConsecutively()
         {
@@ -107,7 +106,6 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(count, Is.EqualTo(2));
         }
 
-        [PlaywrightTest("page-click.spec.ts", "should not click when coordinates are off button")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldNotClickWhenCoordinatesAreOffButton()
         {
@@ -119,7 +117,6 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(result, Is.EqualTo("Was not clicked"));
         }
 
-        [PlaywrightTest("page-click.spec.ts", "should trigger hover over button")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldTriggerHoverOverButton()
         {
@@ -133,7 +130,7 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(hovered, Is.True);
         }
 
-        [PlaywrightTest("page-click.spec.ts", "should dispatch click with ctrl modifier")]
+        [PlaywrightTest("page-mouse.spec.ts", "should set modifier keys on click")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldDispatchClickWithCtrlModifier()
         {
@@ -152,7 +149,6 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(ctrl, Is.True);
         }
 
-        [PlaywrightTest("page-click.spec.ts", "should report click coordinates")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldReportClickCoordinates()
         {
@@ -167,7 +163,6 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(pageY, Is.InRange(y - 2, y + 2));
         }
 
-        [PlaywrightTest("page-click.spec.ts", "should click the button after reload")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldClickTheButtonAfterReload()
         {
@@ -181,7 +176,6 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(result, Is.EqualTo("Clicked"));
         }
 
-        [PlaywrightTest("page-click.spec.ts", "should click inside scrollable content")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldClickInsideScrollableContent()
         {
@@ -200,7 +194,7 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(hit, Is.True);
         }
 
-        [PlaywrightTest("page-click.spec.ts", "Double click should fire double click event")]
+        [PlaywrightTest("page-mouse.spec.ts", "should dblclick the div")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task DoubleClickShouldFireDoubleClickEvent()
         {
@@ -218,7 +212,7 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(count, Is.EqualTo(1));
         }
 
-        [PlaywrightTest("page-click.spec.ts", "should click middle button")]
+        [PlaywrightTest("page-mouse.spec.ts", "should pointerdown the div with a custom button")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldClickMiddleButton()
         {
@@ -236,7 +230,6 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(button, Is.EqualTo(1));
         }
 
-        [PlaywrightTest("page-click.spec.ts", "should release pressed button after click")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldReleasePressedButtonAfterClick()
         {
@@ -256,7 +249,6 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(ups, Is.EqualTo(1));
         }
 
-        [PlaywrightTest("page-click.spec.ts", "should support delay between down and up")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldSupportDelayBetweenDownAndUp()
         {

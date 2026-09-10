@@ -30,7 +30,7 @@ namespace PlaywrightNative.Tests
     [TestFixture]
     public class WaitForPageLifecycleTests : PageTestEx
     {
-        [PlaywrightTest("page-event-load.spec.ts", "WaitForLoadAsync resolves on navigation")]
+        [PlaywrightTest("page-basic.spec.ts", "should fire load when expected")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldWaitForLoadOnNavigation()
@@ -45,7 +45,6 @@ namespace PlaywrightNative.Tests
             Assert.That(loaded, Is.SameAs(page));
         }
 
-        [PlaywrightTest("page-event-load.spec.ts", "WaitForLoadAsync times out")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldTimeoutWaitingForLoad()
@@ -60,7 +59,7 @@ namespace PlaywrightNative.Tests
             Assert.That(ex.Message, Does.Contain("Timeout 200ms exceeded."));
         }
 
-        [PlaywrightTest("page-wait-for-load-state.spec.ts", "WaitForDOMContentLoadedAsync resolves on navigation")]
+        [PlaywrightTest("page-basic.spec.ts", "should fire domcontentloaded when expected")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldWaitForDOMContentLoadedOnNavigation()
@@ -75,7 +74,6 @@ namespace PlaywrightNative.Tests
             Assert.That(loaded, Is.SameAs(page));
         }
 
-        [PlaywrightTest("page-wait-for-load-state.spec.ts", "WaitForDOMContentLoadedAsync times out")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldTimeoutWaitingForDOMContentLoaded()
@@ -90,7 +88,7 @@ namespace PlaywrightNative.Tests
             Assert.That(ex.Message, Does.Contain("Timeout 200ms exceeded."));
         }
 
-        [PlaywrightTest("page-event-pageerror.spec.ts", "WaitForPageErrorAsync resolves on uncaught exception")]
+        [PlaywrightTest("page-event-pageerror.spec.ts", "should fire")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldWaitForPageError()
@@ -105,7 +103,6 @@ namespace PlaywrightNative.Tests
             Assert.That(error, Does.Contain("wave188-boom"));
         }
 
-        [PlaywrightTest("page-event-pageerror.spec.ts", "WaitForPageErrorAsync times out")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldTimeoutWaitingForPageError()
@@ -120,7 +117,7 @@ namespace PlaywrightNative.Tests
             Assert.That(ex.Message, Does.Contain("Timeout 200ms exceeded."));
         }
 
-        [PlaywrightTest("page-event-pageerror.spec.ts", "PageErrorsAsync returns recorded errors")]
+        [PlaywrightTest("page-event-pageerror.spec.ts", "pageErrors should work")]
         [Test]
         [Timeout(30_000)]
         public async Task PageErrorsAsyncShouldReturnRecordedErrors()
@@ -138,7 +135,7 @@ namespace PlaywrightNative.Tests
             Assert.That(string.Join("\n", errors), Does.Contain("wave341-boom"));
         }
 
-        [PlaywrightTest("frame-hierarchy.spec.ts", "WaitForFrameNavigatedAsync resolves on GoTo")]
+        [PlaywrightTest("browsercontext-events.spec.ts", "framenavigated event should work @smoke")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldWaitForFrameNavigated()
@@ -155,7 +152,6 @@ namespace PlaywrightNative.Tests
             Assert.That(frame.Url, Does.Contain("wave189"));
         }
 
-        [PlaywrightTest("frame-hierarchy.spec.ts", "WaitForFrameNavigatedAsync times out")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldTimeoutWaitingForFrameNavigated()
@@ -170,7 +166,7 @@ namespace PlaywrightNative.Tests
             Assert.That(ex.Message, Does.Contain("Timeout 200ms exceeded."));
         }
 
-        [PlaywrightTest("frame-hierarchy.spec.ts", "WaitForFrameDetachedAsync resolves when an iframe is removed")]
+        [PlaywrightTest("browsercontext-events.spec.ts", "framedetached event should work @smoke")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldWaitForFrameDetached()
@@ -189,7 +185,6 @@ namespace PlaywrightNative.Tests
             Assert.That(gone.IsDetached, Is.True);
         }
 
-        [PlaywrightTest("frame-hierarchy.spec.ts", "WaitForFrameDetachedAsync times out")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldTimeoutWaitingForFrameDetached()
@@ -204,7 +199,7 @@ namespace PlaywrightNative.Tests
             Assert.That(ex.Message, Does.Contain("Timeout 200ms exceeded."));
         }
 
-        [PlaywrightTest("frame-hierarchy.spec.ts", "WaitForFrameAttachedAsync resolves when an iframe is added")]
+        [PlaywrightTest("browsercontext-events.spec.ts", "frameattached event should work @smoke")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldWaitForFrameAttached()
@@ -227,7 +222,6 @@ namespace PlaywrightNative.Tests
             Assert.That(page.Frames.Count, Is.GreaterThan(1));
         }
 
-        [PlaywrightTest("frame-hierarchy.spec.ts", "WaitForFrameAttachedAsync times out")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldTimeoutWaitingForFrameAttached()

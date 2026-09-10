@@ -76,7 +76,6 @@ namespace PlaywrightNative.Tests
             }
         }
 
-        [PlaywrightTest("locator-query.spec.ts", "should build the same locators the getBy* factories build")]
         [Test]
         [Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldBuildTheSameLocatorsTheGetByFactoriesBuild()
@@ -94,7 +93,6 @@ namespace PlaywrightNative.Tests
             Assert.That(page.Get(By.Title("Title")).ToString(), Is.EqualTo(page.GetByTitle("Title").ToString()));
         }
 
-        [PlaywrightTest("locator-query.spec.ts", "should chain the same way locators chain")]
         [Test]
         [Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldChainTheSameWayLocatorsChain()
@@ -109,7 +107,6 @@ namespace PlaywrightNative.Tests
                 Is.EqualTo(chained.ToString()));
         }
 
-        [PlaywrightTest("locator-query.spec.ts", "should compose get() the same way as chaining")]
         [Test]
         [Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldComposeGetTheSameWayAsChaining()
@@ -125,7 +122,6 @@ namespace PlaywrightNative.Tests
                 Is.EqualTo(page.Get(By.TestId("list").Get(row).Get(label)).ToString()));
         }
 
-        [PlaywrightTest("locator-query.spec.ts", "should accept a selector in get()")]
         [Test]
         [Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldAcceptASelectorInGet()
@@ -145,7 +141,6 @@ namespace PlaywrightNative.Tests
             await Assertions.Expect(page.Get(By.Text("World").Get(".."))).ToHaveIdAsync("outer").ConfigureAwait(false);
         }
 
-        [PlaywrightTest("locator-query.spec.ts", "should work on page, frame and locator")]
         [Test]
         [Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldWorkOnPageFrameAndLocator()
@@ -161,7 +156,6 @@ namespace PlaywrightNative.Tests
             await Assertions.Expect(page.Locator("#outer").Get(hello)).ToHaveTextAsync("Hello world").ConfigureAwait(false);
         }
 
-        [PlaywrightTest("locator-query.spec.ts", "should work inside a frame locator")]
         [Test]
         [Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldWorkInsideAFrameLocator()
@@ -173,7 +167,6 @@ namespace PlaywrightNative.Tests
             await Assertions.Expect(page.FrameLocator("iframe").Get(By.Get("div"))).ToHaveTextAsync("Hi, I'm frame").ConfigureAwait(false);
         }
 
-        [PlaywrightTest("locator-query.spec.ts", "should resolve the test id attribute when bound, not when built")]
         [Test]
         [Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldResolveTheTestIdAttributeWhenBoundNotWhenBuilt()
@@ -194,7 +187,6 @@ namespace PlaywrightNative.Tests
             }
         }
 
-        [PlaywrightTest("locator-query.spec.ts", "should resolve the test id attribute in nested and filter positions")]
         [Test]
         [Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldResolveTheTestIdAttributeInNestedAndFilterPositions()
@@ -220,7 +212,6 @@ namespace PlaywrightNative.Tests
             }
         }
 
-        [PlaywrightTest("locator-query.spec.ts", "should filter by has, hasNot, hasText, hasNotText and visible")]
         [Test]
         [Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldFilterByHasHasNotHasTextHasNotTextAndVisible()
@@ -240,7 +231,6 @@ namespace PlaywrightNative.Tests
             await Assertions.Expect(page.Get(By.Get(".item").Filter(visible: true))).ToHaveCountAsync(2).ConfigureAwait(false);
         }
 
-        [PlaywrightTest("locator-query.spec.ts", "should support and, or, nth, first and last")]
         [Test]
         [Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldSupportAndOrNthFirstAndLast()
@@ -260,7 +250,6 @@ namespace PlaywrightNative.Tests
             await Assertions.Expect(page.Get(By.Role("button").Last)).ToHaveTextAsync("three").ConfigureAwait(false);
         }
 
-        [PlaywrightTest("locator-query.spec.ts", "should describe the locator")]
         [Test]
         [Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldDescribeTheLocator()
@@ -274,7 +263,6 @@ namespace PlaywrightNative.Tests
             Assert.That(saveButton.Description, Is.EqualTo("save button"));
         }
 
-        [PlaywrightTest("locator-query.spec.ts", "should be reusable and never mutated by chaining")]
         [Test]
         [Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldBeReusableAndNeverMutatedByChaining()
@@ -289,7 +277,6 @@ namespace PlaywrightNative.Tests
             await Assertions.Expect(page.Get(list)).ToHaveTextAsync("AB").ConfigureAwait(false);
         }
 
-        [PlaywrightTest("locator-query.spec.ts", "should throw for an empty by")]
         [Test]
         [Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldThrowForAnEmptyBy()

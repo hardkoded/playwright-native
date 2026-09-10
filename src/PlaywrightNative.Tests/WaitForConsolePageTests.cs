@@ -30,7 +30,6 @@ namespace PlaywrightNative.Tests
     [TestFixture]
     public class WaitForConsolePageTests : PageTestEx
     {
-        [PlaywrightTest("page-event-console.spec.ts", "WaitForConsoleMessage resolves on console.log")]
         [Test]
         [Timeout(30_000)]
         public async Task WaitForConsoleMessageShouldResolveOnLog()
@@ -48,7 +47,6 @@ namespace PlaywrightNative.Tests
             Assert.That(received.Text, Does.Contain("wave116"));
         }
 
-        [PlaywrightTest("page-event-console.spec.ts", "Console message Args are populated")]
         [Test]
         [Timeout(30_000)]
         public async Task ConsoleMessageArgsShouldBePopulated()
@@ -69,7 +67,6 @@ namespace PlaywrightNative.Tests
             Assert.That(value, Does.Contain("hello-args"));
         }
 
-        [PlaywrightTest("page-event-console.spec.ts", "Console message Timestamp is populated")]
         [Test]
         [Timeout(30_000)]
         public async Task ConsoleMessageTimestampShouldBePopulated()
@@ -86,7 +83,6 @@ namespace PlaywrightNative.Tests
             Assert.That(received.Timestamp, Is.GreaterThan(0));
         }
 
-        [PlaywrightTest("page-event-console.spec.ts", "RunAndWaitForConsoleMessageAsync waits for console.log")]
         [Test]
         [Timeout(30_000)]
         public async Task RunAndWaitForConsoleMessageAsyncShouldReturnTheMessage()
@@ -103,7 +99,6 @@ namespace PlaywrightNative.Tests
             Assert.That(received.Text, Does.Contain("run-wait-console"));
         }
 
-        [PlaywrightTest("page-event-console.spec.ts", "BrowserContext Console forwards page logs")]
         [Test]
         [Timeout(30_000)]
         public async Task BrowserContextConsoleShouldForwardPageLogs()
@@ -123,7 +118,6 @@ namespace PlaywrightNative.Tests
             Assert.That(received.Page, Is.SameAs(page));
         }
 
-        [PlaywrightTest("page-event-console.spec.ts", "WaitForConsoleMessageAsync on context")]
         [Test]
         [Timeout(30_000)]
         public async Task BrowserContextWaitForConsoleMessageShouldResolveOnLog()
@@ -141,7 +135,6 @@ namespace PlaywrightNative.Tests
             Assert.That(received.Text, Does.Contain("context-wait-console"));
         }
 
-        [PlaywrightTest("page-event-console.spec.ts", "RunAndWaitForConsoleMessageAsync on context")]
         [Test]
         [Timeout(30_000)]
         public async Task BrowserContextRunAndWaitForConsoleMessageShouldReturnTheMessage()
@@ -158,7 +151,6 @@ namespace PlaywrightNative.Tests
             Assert.That(received.Text, Does.Contain("context-run-wait"));
         }
 
-        [PlaywrightTest("page-event-console.spec.ts", "WaitForConsoleMessage honors predicate")]
         [Test]
         [Timeout(30_000)]
         public async Task WaitForConsoleMessageShouldHonorPredicate()
@@ -177,7 +169,6 @@ namespace PlaywrightNative.Tests
             Assert.That(received.Text, Does.Contain("keep-me"));
         }
 
-        [PlaywrightTest("page-event-console.spec.ts", "WaitForPage resolves on NewPageAsync")]
         [Test]
         [Timeout(30_000)]
         public async Task WaitForPageShouldResolveOnNewPage()
@@ -192,7 +183,6 @@ namespace PlaywrightNative.Tests
             Assert.That(fromWait, Is.SameAs(page));
         }
 
-        [PlaywrightTest("page-event-console.spec.ts", "RunAndWaitForPageAsync waits for NewPageAsync")]
         [Test]
         [Timeout(30_000)]
         public async Task RunAndWaitForPageAsyncShouldReturnThePage()
@@ -207,7 +197,6 @@ namespace PlaywrightNative.Tests
             Assert.That(context.Pages, Does.Contain(page));
         }
 
-        [PlaywrightTest("page-event-console.spec.ts", "WaitForPage resolves on window.open")]
         [Test]
         [Timeout(30_000)]
         public async Task WaitForPageShouldResolveOnWindowOpen()
@@ -226,7 +215,6 @@ namespace PlaywrightNative.Tests
             Assert.That(context.Pages, Does.Contain(popup));
         }
 
-        [PlaywrightTest("page-event-console.spec.ts", "ConsoleMessagesAsync returns recorded logs")]
         [Test]
         [Timeout(30_000)]
         public async Task ConsoleMessagesAsyncShouldReturnRecordedLogs()
