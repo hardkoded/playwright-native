@@ -484,7 +484,7 @@ namespace PlaywrightNative.Tests
             Assert.That(error.Message, Does.Contain("<iframe> was expected"));
         }
 
-        [PlaywrightTest("selectors-frame.spec.ts", "should pierce frames into a single descendant frame")]
+        [PlaywrightTest("selectors-frame.spec.ts", "should match in a descendant frame")]
         [Test]
         [Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldPierceFramesIntoASingleDescendantFrame()
@@ -500,7 +500,7 @@ namespace PlaywrightNative.Tests
             Assert.That(await div.InnerHTMLAsync().ConfigureAwait(false), Does.Contain("<button>Hello iframe</button>"));
         }
 
-        [PlaywrightTest("selectors-frame.spec.ts", "should pierce through multiple frames")]
+        [PlaywrightTest("selectors-frame.spec.ts", "should match in a deeply nested frame")]
         [Test]
         [Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldPierceThroughMultipleFrames()
@@ -516,7 +516,6 @@ namespace PlaywrightNative.Tests
             Assert.That(await button.TextContentAsync().ConfigureAwait(false), Is.EqualTo("Hello nested iframe"));
         }
 
-        [PlaywrightTest("selectors-frame.spec.ts", "should pierce multiple times")]
         [Test]
         [Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldPierceMultipleTimes()
@@ -549,7 +548,7 @@ namespace PlaywrightNative.Tests
             Assert.That(texts, Is.EqualTo(new[] { "two", "three" }));
         }
 
-        [PlaywrightTest("selectors-frame.spec.ts", "should throw when piercing frames matches multiple frames")]
+        [PlaywrightTest("selectors-frame.spec.ts", "should throw when matching elements in multiple frames")]
         [Test]
         [Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldThrowWhenPiercingFramesMatchesMultipleFrames()
@@ -581,7 +580,7 @@ namespace PlaywrightNative.Tests
             Assert.That(error.Message, Does.Contain("Pierce-frame mode matched elements from multiple frames"));
         }
 
-        [PlaywrightTest("selectors-frame.spec.ts", "should not allow pierce-frames in the middle of a selector")]
+        [PlaywrightTest("selectors-frame.spec.ts", "should not allow any-frame in the middle of a selector")]
         [Test]
         [Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldNotAllowPierceFramesInTheMiddleOfASelector()
@@ -595,7 +594,7 @@ namespace PlaywrightNative.Tests
             Assert.That(error.Message, Does.Contain("\"pierce-frames\" is only allowed as the first selector token"));
         }
 
-        [PlaywrightTest("selectors-frame.spec.ts", "should allow entering frames while piercing")]
+        [PlaywrightTest("selectors-frame.spec.ts", "should allow entering frames from any frame")]
         [Test]
         [Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldAllowEnteringFramesWhilePiercing()
@@ -610,7 +609,7 @@ namespace PlaywrightNative.Tests
             Assert.That(await button.InnerTextAsync().ConfigureAwait(false), Is.EqualTo("Hello nested iframe"));
         }
 
-        [PlaywrightTest("selectors-frame.spec.ts", "should not allow pierce-frames after entering a frame")]
+        [PlaywrightTest("selectors-frame.spec.ts", "should not allow any-frame after entering a frame")]
         [Test]
         [Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldNotAllowPierceFramesAfterEnteringAFrame()
@@ -622,7 +621,7 @@ namespace PlaywrightNative.Tests
             Assert.That(error.Message, Does.Contain("\"pierce-frames\" is only allowed as the first selector token"));
         }
 
-        [PlaywrightTest("selectors-frame.spec.ts", "should not allow dangling enter-frame while piercing")]
+        [PlaywrightTest("selectors-frame.spec.ts", "should not allow dangling enter-frame after any-frame")]
         [Test]
         [Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldNotAllowDanglingEnterFrameWhilePiercing()

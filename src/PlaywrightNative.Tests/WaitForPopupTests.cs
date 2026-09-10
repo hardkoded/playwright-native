@@ -30,7 +30,6 @@ namespace PlaywrightNative.Tests
     {
         private static SimpleServer Server => TestServerSetup.Server;
 
-        [PlaywrightTest("page-event-popup.spec.ts", "WaitForPopup resolves on window.open")]
         [Test]
         [Timeout(30_000)]
         public async Task WaitForPopupShouldResolveOnWindowOpen()
@@ -49,7 +48,6 @@ namespace PlaywrightNative.Tests
             Assert.That(context.Pages, Does.Contain(popup));
         }
 
-        [PlaywrightTest("page-event-popup.spec.ts", "RunAndWaitForPopupAsync waits for window.open")]
         [Test]
         [Timeout(30_000)]
         public async Task RunAndWaitForPopupAsyncShouldReturnThePopup()
@@ -67,7 +65,6 @@ namespace PlaywrightNative.Tests
             Assert.That(context.Pages, Does.Contain(popup));
         }
 
-        [PlaywrightTest("page-event-popup.spec.ts", "WaitForDialog resolves on alert")]
         [Test]
         [Timeout(30_000)]
         public async Task WaitForDialogShouldResolveOnAlert()
@@ -85,7 +82,6 @@ namespace PlaywrightNative.Tests
             await dialog.AcceptAsync(null).ConfigureAwait(false);
         }
 
-        [PlaywrightTest("page-event-popup.spec.ts", "RunAndWaitForDialogAsync waits for alert")]
         [Test]
         [Timeout(30_000)]
         public async Task RunAndWaitForDialogAsyncShouldReturnTheDialog()
@@ -103,7 +99,6 @@ namespace PlaywrightNative.Tests
             await dialog.AcceptAsync(null).ConfigureAwait(false);
         }
 
-        [PlaywrightTest("page-event-popup.spec.ts", "WaitForWorker resolves on Worker")]
         [Test]
         [Timeout(30_000)]
         public async Task WaitForWorkerShouldResolveOnDedicatedWorker()
@@ -123,7 +118,6 @@ namespace PlaywrightNative.Tests
             Assert.That(page.Workers, Does.Contain(worker));
         }
 
-        [PlaywrightTest("page-event-popup.spec.ts", "RunAndWaitForWorkerAsync waits for Worker")]
         [Test]
         [Timeout(30_000)]
         public async Task RunAndWaitForWorkerAsyncShouldReturnTheWorker()
@@ -141,7 +135,6 @@ namespace PlaywrightNative.Tests
             Assert.That(page.Workers, Does.Contain(worker));
         }
 
-        [PlaywrightTest("page-event-popup.spec.ts", "WaitForWebSocket resolves on WebSocket")]
         [Test]
         [Timeout(30_000)]
         public async Task WaitForWebSocketShouldResolveOnConnect()
@@ -167,7 +160,6 @@ namespace PlaywrightNative.Tests
             Assert.That(socket.Url, Does.Contain("/ws"));
         }
 
-        [PlaywrightTest("page-event-popup.spec.ts", "RunAndWaitForWebSocketAsync waits for WebSocket")]
         [Test]
         [Timeout(30_000)]
         public async Task RunAndWaitForWebSocketAsyncShouldReturnTheSocket()

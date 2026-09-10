@@ -27,7 +27,7 @@ namespace PlaywrightNative.Tests
     [TestFixture]
     public class PageEmulateMediaFeaturesTests : PageTestEx
     {
-        [PlaywrightTest("page-emulate-media.spec.ts", "prefers-reduced-motion: reduce")]
+        [PlaywrightTest("page-emulate-media.spec.ts", "should emulate reduced motion")]
         [Test]
         [Timeout(30_000)]
         public async Task ReducedMotionReduceMatches()
@@ -44,7 +44,7 @@ namespace PlaywrightNative.Tests
             Assert.That(reduce, Is.True);
         }
 
-        [PlaywrightTest("page-emulate-media.spec.ts", "prefers-reduced-motion: no-preference")]
+        [PlaywrightTest("page-emulate-media.spec.ts", "should emulate reduced motion")]
         [Test]
         [Timeout(30_000)]
         public async Task ReducedMotionNoPreferenceMatches()
@@ -65,7 +65,7 @@ namespace PlaywrightNative.Tests
             Assert.That(noPreference, Is.True);
         }
 
-        [PlaywrightTest("page-emulate-media.spec.ts", "forced-colors: active")]
+        [PlaywrightTest("page-emulate-media.spec.ts", "should emulate forcedColors ")]
         [Test]
         [Timeout(30_000)]
         public async Task ForcedColorsActiveMatches()
@@ -88,7 +88,6 @@ namespace PlaywrightNative.Tests
             Assert.That(active, Is.True);
         }
 
-        [PlaywrightTest("page-emulate-media.spec.ts", "color-scheme is kept when reduced-motion is set")]
         [Test]
         [Timeout(30_000)]
         public async Task ReducedMotionDoesNotClearColorScheme()
@@ -109,7 +108,7 @@ namespace PlaywrightNative.Tests
             Assert.That(reduce, Is.True);
         }
 
-        [PlaywrightTest("page-emulate-media.spec.ts", "prefers-contrast: more")]
+        [PlaywrightTest("page-emulate-media.spec.ts", "should emulate contrast ")]
         [Test]
         [Timeout(30_000)]
         public async Task ContrastMoreMatches()
@@ -132,7 +131,6 @@ namespace PlaywrightNative.Tests
             Assert.That(more, Is.True);
         }
 
-        [PlaywrightTest("page-emulate-media.spec.ts", "context reducedMotion applies to new pages")]
         [Test]
         [Timeout(30_000)]
         public async Task ContextReducedMotionAppliesToNewPages()
@@ -147,7 +145,6 @@ namespace PlaywrightNative.Tests
             Assert.That(reduce, Is.True);
         }
 
-        [PlaywrightTest("page-emulate-media.spec.ts", "context forcedColors applies to new pages")]
         [Test]
         [Timeout(30_000)]
         public async Task ContextForcedColorsAppliesToNewPages()
@@ -168,7 +165,6 @@ namespace PlaywrightNative.Tests
             Assert.That(active, Is.True);
         }
 
-        [PlaywrightTest("page-emulate-media.spec.ts", "context contrast applies to new pages")]
         [Test]
         [Timeout(30_000)]
         public async Task ContextContrastAppliesToNewPages()

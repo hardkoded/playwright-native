@@ -30,7 +30,6 @@ namespace PlaywrightNative.Tests
     [TestFixture]
     public class ElementScreenshotTests : PageTestEx
     {
-        [PlaywrightTest("elementhandle-screenshot.spec.ts", "ScreenshotAsync clips to the element")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldClipToTheElement()
@@ -57,7 +56,7 @@ namespace PlaywrightNative.Tests
             Assert.That(image.Height, Is.GreaterThan(0));
         }
 
-        [PlaywrightTest("elementhandle-screenshot.spec.ts", "ScreenshotAsync writes a PNG path")]
+        [PlaywrightTest("elementhandle-screenshot.spec.ts", "path option should create subdirectories")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldWritePngPath()
@@ -87,7 +86,7 @@ namespace PlaywrightNative.Tests
             }
         }
 
-        [PlaywrightTest("elementhandle-screenshot.spec.ts", "ScreenshotAsync times out while hidden")]
+        [PlaywrightTest("elementhandle-screenshot.spec.ts", "should timeout waiting for visible")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldTimeoutWhileHidden()
@@ -103,7 +102,7 @@ namespace PlaywrightNative.Tests
             Assert.That(ex.Message, Does.Contain("Timeout"));
         }
 
-        [PlaywrightTest("elementhandle-screenshot.spec.ts", "ScreenshotAsync waits until visible")]
+        [PlaywrightTest("elementhandle-screenshot.spec.ts", "should wait for visible")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldWaitUntilVisible()
@@ -122,7 +121,6 @@ namespace PlaywrightNative.Tests
             Assert.That(bytes.Length, Is.GreaterThan(20));
         }
 
-        [PlaywrightTest("elementhandle-screenshot.spec.ts", "ScreenshotAsync honors css scale")]
         [Test]
         [Timeout(30_000)]
         public async Task ScreenshotAsyncShouldHonorCssScale()
@@ -147,7 +145,7 @@ namespace PlaywrightNative.Tests
             Assert.That(deviceImage.Width, Is.GreaterThan(cssImage.Width));
         }
 
-        [PlaywrightTest("elementhandle-screenshot.spec.ts", "ScreenshotAsync disables animations")]
+        [PlaywrightTest("page-screenshot.spec.ts", "should not capture infinite css animation")]
         [Test]
         [Timeout(30_000)]
         public async Task ScreenshotAsyncShouldDisableAnimations()
@@ -169,7 +167,7 @@ namespace PlaywrightNative.Tests
             Assert.That(first, Is.EqualTo(second));
         }
 
-        [PlaywrightTest("elementhandle-screenshot.spec.ts", "ScreenshotAsync hides caret")]
+        [PlaywrightTest("page-screenshot.spec.ts", "should capture blinking caret in shadow dom")]
         [Test]
         [Timeout(30_000)]
         public async Task ScreenshotAsyncShouldHideCaret()
@@ -190,7 +188,6 @@ namespace PlaywrightNative.Tests
             Assert.That(hidden, Is.EqualTo(unfocused));
         }
 
-        [PlaywrightTest("elementhandle-screenshot.spec.ts", "ScreenshotAsync applies style")]
         [Test]
         [Timeout(30_000)]
         public async Task ScreenshotAsyncShouldApplyStyle()

@@ -28,7 +28,7 @@ namespace PlaywrightNative.Tests
     [TestFixture]
     public class DispatchEventTests : PageTestEx
     {
-        [PlaywrightTest("page-dispatchevent.spec.ts", "page DispatchEventAsync fires click")]
+        [PlaywrightTest("page-dispatchevent.spec.ts", "should dispatch click event @smoke")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldDispatchClickOnPage()
@@ -42,7 +42,7 @@ namespace PlaywrightNative.Tests
             Assert.That(await page.EvaluateAsync<bool>("window.clicked === true").ConfigureAwait(false), Is.True);
         }
 
-        [PlaywrightTest("page-dispatchevent.spec.ts", "element DispatchEventAsync fires click")]
+        [PlaywrightTest("page-dispatchevent.spec.ts", "should dispatch click event via ElementHandles")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldDispatchClickOnElement()
@@ -57,7 +57,6 @@ namespace PlaywrightNative.Tests
             Assert.That(await page.EvaluateAsync<bool>("window.clicked === true").ConfigureAwait(false), Is.True);
         }
 
-        [PlaywrightTest("page-dispatchevent.spec.ts", "DispatchEventAsync passes CustomEvent detail")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldDispatchCustomEventWithDetail()
@@ -76,7 +75,6 @@ namespace PlaywrightNative.Tests
             Assert.That(await page.EvaluateAsync<int>("window.detail").ConfigureAwait(false), Is.EqualTo(42));
         }
 
-        [PlaywrightTest("page-dispatchevent.spec.ts", "frame DispatchEventAsync fires click")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldDispatchClickOnMainFrame()
@@ -90,7 +88,6 @@ namespace PlaywrightNative.Tests
             Assert.That(await page.MainFrame.EvaluateAsync<bool>("window.clicked === true").ConfigureAwait(false), Is.True);
         }
 
-        [PlaywrightTest("page-dispatchevent.spec.ts", "page DispatchEventAsync times out while missing")]
         [Test]
         [Timeout(30_000)]
         public async Task PageDispatchEventAsyncShouldTimeoutWhileMissing()
@@ -105,7 +102,6 @@ namespace PlaywrightNative.Tests
             Assert.That(ex.Message, Does.Contain("Timeout"));
         }
 
-        [PlaywrightTest("page-dispatchevent.spec.ts", "page DispatchEventAsync waits until attached")]
         [Test]
         [Timeout(30_000)]
         public async Task PageDispatchEventAsyncShouldWaitUntilAttached()
@@ -124,7 +120,6 @@ namespace PlaywrightNative.Tests
             Assert.That(await page.EvaluateAsync<bool>("window.clicked === true").ConfigureAwait(false), Is.True);
         }
 
-        [PlaywrightTest("page-dispatchevent.spec.ts", "DispatchEventAsync times out while hidden")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldTimeoutWhileHidden()
@@ -140,7 +135,6 @@ namespace PlaywrightNative.Tests
             Assert.That(ex.Message, Does.Contain("Timeout"));
         }
 
-        [PlaywrightTest("page-dispatchevent.spec.ts", "DispatchEventAsync waits until visible")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldWaitUntilVisible()

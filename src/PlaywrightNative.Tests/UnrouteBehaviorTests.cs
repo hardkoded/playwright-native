@@ -37,7 +37,6 @@ namespace PlaywrightNative.Tests
             return http.Response.WriteAsync("<html><body>from-server</body></html>");
         }
 
-        [PlaywrightTest("unroute-behavior.spec.ts", "UnrouteBehavior exposes official values")]
         [Test]
         public void UnrouteBehaviorShouldExposeOfficialValues()
         {
@@ -48,7 +47,7 @@ namespace PlaywrightNative.Tests
             Assert.That(UnrouteBehavior.Default, Is.Not.EqualTo(UnrouteBehavior.IgnoreErrors));
         }
 
-        [PlaywrightTest("unroute-behavior.spec.ts", "page UnrouteAllAsync wait waits for pending handlers")]
+        [PlaywrightTest("unroute-behavior.spec.ts", "page.unrouteAll should wait for pending handlers to complete")]
         [Test]
         [Timeout(30_000)]
         public async Task PageUnrouteAllWaitShouldWaitForPendingHandlers()
@@ -89,7 +88,6 @@ namespace PlaywrightNative.Tests
             Assert.That(body, Is.EqualTo("from-wait"));
         }
 
-        [PlaywrightTest("unroute-behavior.spec.ts", "page UnrouteAllAsync default does not wait")]
         [Test]
         [Timeout(30_000)]
         public async Task PageUnrouteAllDefaultShouldNotWaitForPendingHandlers()
@@ -126,7 +124,7 @@ namespace PlaywrightNative.Tests
             await navigation.ConfigureAwait(false);
         }
 
-        [PlaywrightTest("unroute-behavior.spec.ts", "page UnrouteAllAsync ignoreErrors does not wait")]
+        [PlaywrightTest("unroute-behavior.spec.ts", "page.unrouteAll should not wait for pending handlers to complete if behavior is ignoreErrors")]
         [Test]
         [Timeout(30_000)]
         public async Task PageUnrouteAllIgnoreErrorsShouldNotWaitAndSwallow()
@@ -171,7 +169,6 @@ namespace PlaywrightNative.Tests
             }
         }
 
-        [PlaywrightTest("unroute-behavior.spec.ts", "page UnrouteAsync wait waits for pending handlers")]
         [Test]
         [Timeout(30_000)]
         public async Task PageUnrouteWaitShouldWaitForPendingHandlers()
@@ -210,7 +207,7 @@ namespace PlaywrightNative.Tests
             await navigation.ConfigureAwait(false);
         }
 
-        [PlaywrightTest("unroute-behavior.spec.ts", "context UnrouteAllAsync wait waits for pending handlers")]
+        [PlaywrightTest("unroute-behavior.spec.ts", "context.unrouteAll should wait for pending handlers to complete")]
         [Test]
         [Timeout(30_000)]
         public async Task ContextUnrouteAllWaitShouldWaitForPendingHandlers()
@@ -251,7 +248,6 @@ namespace PlaywrightNative.Tests
             Assert.That(body, Is.EqualTo("from-ctx-wait"));
         }
 
-        [PlaywrightTest("unroute-behavior.spec.ts", "context UnrouteAllAsync default does not wait")]
         [Test]
         [Timeout(30_000)]
         public async Task ContextUnrouteAllDefaultShouldNotWaitForPendingHandlers()
@@ -288,7 +284,6 @@ namespace PlaywrightNative.Tests
             await navigation.ConfigureAwait(false);
         }
 
-        [PlaywrightTest("unroute-behavior.spec.ts", "context UnrouteAsync wait waits for pending handlers")]
         [Test]
         [Timeout(30_000)]
         public async Task ContextUnrouteWaitShouldWaitForPendingHandlers()
