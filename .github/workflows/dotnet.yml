@@ -27,7 +27,7 @@ env:
 
 jobs:
   build:
-    name: ${{ matrix.browser }}-${{ matrix.mode }}-${{ matrix.os }}
+    name: ${{ matrix.browser }}-${{ matrix.mode }}-${{ matrix.os }}${{ matrix.shardTotal && format('-shard{0}of{1}', matrix.shardIndex, matrix.shardTotal) || '' }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -36,11 +36,25 @@ jobs:
           # Chromium — full coverage on Linux + Windows, headless + headful.
           - { os: ubuntu-latest,  browser: chromium, mode: headless }
           - { os: ubuntu-latest,  browser: chromium, mode: headful  }
-          - { os: windows-latest, browser: chromium, mode: headless }
-          - { os: windows-latest, browser: chromium, mode: headful  }
+          # Windows runs much slower per-test than Linux and never reaches
+          # the end of the suite before the org's CI timeout kills the job
+          # (observed: ~40% done at the ~2h cutoff). Split into shards by
+          # test class so each one finishes with headroom to spare.
+          - { os: windows-latest, browser: chromium, mode: headless, shardIndex: 1, shardTotal: 4 }
+          - { os: windows-latest, browser: chromium, mode: headless, shardIndex: 2, shardTotal: 4 }
+          - { os: windows-latest, browser: chromium, mode: headless, shardIndex: 3, shardTotal: 4 }
+          - { os: windows-latest, browser: chromium, mode: headless, shardIndex: 4, shardTotal: 4 }
+          - { os: windows-latest, browser: chromium, mode: headful,  shardIndex: 1, shardTotal: 4 }
+          - { os: windows-latest, browser: chromium, mode: headful,  shardIndex: 2, shardTotal: 4 }
+          - { os: windows-latest, browser: chromium, mode: headful,  shardIndex: 3, shardTotal: 4 }
+          - { os: windows-latest, browser: chromium, mode: headful,  shardIndex: 4, shardTotal: 4 }
           # WebKit — full test suite against the protocol stack.
           # macOS + Linux headless. Expect failures until WebKit catches up.
-          - { os: macos-14,       browser: webkit,   mode: headless }
+          # macOS also hits the CI timeout (observed: ~92% done at cutoff),
+          # so it gets a lighter 3-way shard too.
+          - { os: macos-14,       browser: webkit,   mode: headless, shardIndex: 1, shardTotal: 3 }
+          - { os: macos-14,       browser: webkit,   mode: headless, shardIndex: 2, shardTotal: 3 }
+          - { os: macos-14,       browser: webkit,   mode: headless, shardIndex: 3, shardTotal: 3 }
           - { os: ubuntu-latest,  browser: webkit,   mode: headless }
     steps:
     - uses: actions/checkout@v4
@@ -124,6 +138,26 @@ jobs:
         ./.github/workflows/no-puppeteer.sh
     - name: Build
       run: dotnet build ./src/PlaywrightNative.sln -c Release
+    - name: Compute test shard filter
+      if: matrix.shardTotal
+      shell: bash
+      run: |
+        # List every test's fully-qualified name straight from the built
+        # assembly (dotnet test --list-tests only prints the bare method
+        # name, which collides across classes and isn't safe to filter on).
+        dotnet vstest src/PlaywrightNative.Tests/bin/Release/net10.0/PlaywrightNative.Tests.dll \
+          /ListFullyQualifiedTests /ListTestsTargetPath:/tmp/all_tests.txt
+        # Drop the trailing ".MethodName" (and any TestCase "(...)" suffix)
+        # to get one entry per test class, then assign classes to shards by
+        # position in a stable sort -- deterministic across the shardTotal
+        # jobs of a single run without the shards needing to coordinate.
+        sed -E 's/\.[A-Za-z0-9_]+(\([^)]*\))?$//' /tmp/all_tests.txt | sort -u > /tmp/all_classes.txt
+        echo "Discovered $(wc -l < /tmp/all_classes.txt) test classes"
+        awk -v shard="${{ matrix.shardIndex }}" -v total="${{ matrix.shardTotal }}" \
+          'NR % total == (shard - 1) { print }' /tmp/all_classes.txt > /tmp/shard_classes.txt
+        echo "Shard ${{ matrix.shardIndex }}/${{ matrix.shardTotal }}: $(wc -l < /tmp/shard_classes.txt) classes"
+        filter=$(awk '{ printf "%sFullyQualifiedName~%s.", (NR > 1 ? "|" : ""), $0 }' /tmp/shard_classes.txt)
+        echo "TEST_FILTER=$filter" >> "$GITHUB_ENV"
     - name: Disable AppArmor (Linux)
       if: matrix.os == 'ubuntu-latest'
       run: echo 0 | sudo tee /proc/sys/kernel/apparmor_restrict_unprivileged_userns || true
@@ -143,13 +177,15 @@ jobs:
           dotnet test ./src/PlaywrightNative.Tests/PlaywrightNative.Tests.csproj --no-build -c Release -f net10.0 -s src/PlaywrightNative.Tests/test.runsettings
     - name: Test (Chromium, Windows)
       if: ${{ matrix.browser == 'chromium' && matrix.os == 'windows-latest' }}
+      shell: bash
       env:
         PRODUCT: CHROMIUM
         HEADLESS: ${{ matrix.mode == 'headless' && 'true' || 'false' }}
       run: |
-        dotnet test ./src/PlaywrightNative.Tests/PlaywrightNative.Tests.csproj --no-build -c Release -f net10.0 -s src/PlaywrightNative.Tests/test.runsettings
+        dotnet test ./src/PlaywrightNative.Tests/PlaywrightNative.Tests.csproj --no-build -c Release -f net10.0 -s src/PlaywrightNative.Tests/test.runsettings ${TEST_FILTER:+--filter "$TEST_FILTER"}
     - name: Test (WebKit)
       if: matrix.browser == 'webkit'
+      shell: bash
       env:
         PRODUCT: WEBKIT
       run: |
@@ -163,4 +199,4 @@ jobs:
         # AddScriptTag/AddStyleTag, EmulateMedia, PDF, screenshots, SetContent,
         # SetViewportSize) and the macOS-14 inner-target hang. Retire entries
         # as the underlying work lands.
-        dotnet test ./src/PlaywrightNative.Tests/PlaywrightNative.Tests.csproj --no-build -c Release -f net10.0 -s src/PlaywrightNative.Tests/test.runsettings
+        dotnet test ./src/PlaywrightNative.Tests/PlaywrightNative.Tests.csproj --no-build -c Release -f net10.0 -s src/PlaywrightNative.Tests/test.runsettings ${TEST_FILTER:+--filter "$TEST_FILTER"}
