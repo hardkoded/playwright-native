@@ -33,7 +33,7 @@ namespace PlaywrightNative.Tests
     {
         private static SimpleServer Server => TestServerSetup.Server;
 
-        [PlaywrightTest("browsercontext-cookies.spec.ts", "addCookies and getCookies roundtrip")]
+        [PlaywrightTest("browsercontext-add-cookies.spec.ts", "should set cookie with reasonable defaults")]
         [Test]
         [Timeout(30_000)]
         public async Task AddCookiesShouldRoundTripThroughGetCookies()
@@ -67,7 +67,6 @@ namespace PlaywrightNative.Tests
             Assert.That(found.Domain, Does.Contain("localhost"));
         }
 
-        [PlaywrightTest("browsercontext-cookies.spec.ts", "CookiesAsync aliases GetCookiesAsync")]
         [Test]
         [Timeout(30_000)]
         public async Task CookiesAsyncShouldAliasGetCookiesAsync()
@@ -102,7 +101,7 @@ namespace PlaywrightNative.Tests
             Assert.That(viaUrl.Any(c => c.Name == "wave228"), Is.True);
         }
 
-        [PlaywrightTest("browsercontext-cookies.spec.ts", "addCookies are visible to the page")]
+        [PlaywrightTest("browsercontext-add-cookies.spec.ts", "should work @smoke")]
         [Test]
         [Timeout(30_000)]
         public async Task AddCookiesShouldBeVisibleToDocumentCookie()
@@ -133,7 +132,7 @@ namespace PlaywrightNative.Tests
             Assert.That(documentCookie, Does.Contain("fromctx=yes"));
         }
 
-        [PlaywrightTest("browsercontext-cookies.spec.ts", "clearCookies removes cookies")]
+        [PlaywrightTest("browsercontext-clearcookies.spec.ts", "should clear cookies")]
         [Test]
         [Timeout(30_000)]
         public async Task ClearCookiesShouldRemoveAddedCookies()
@@ -169,7 +168,7 @@ namespace PlaywrightNative.Tests
             Assert.That(documentCookie, Does.Not.Contain("gone=soon"));
         }
 
-        [PlaywrightTest("browsercontext-cookies.spec.ts", "clearCookies can filter by name")]
+        [PlaywrightTest("browsercontext-clearcookies.spec.ts", "should remove cookies by name")]
         [Test]
         [Timeout(30_000)]
         public async Task ClearCookiesShouldRemoveMatchingNameOnly()
@@ -198,7 +197,7 @@ namespace PlaywrightNative.Tests
             Assert.That(cookies.Any(c => c.Name == "wave343-keep" && c.Value == "yes"), Is.True);
         }
 
-        [PlaywrightTest("browsercontext-cookies.spec.ts", "clearCookies can filter by name regex")]
+        [PlaywrightTest("browsercontext-clearcookies.spec.ts", "should remove cookies by name regex")]
         [Test]
         [Timeout(30_000)]
         public async Task ClearCookiesShouldRemoveMatchingNameRegex()
@@ -227,7 +226,7 @@ namespace PlaywrightNative.Tests
             Assert.That(cookies.Any(c => c.Name == "wave407-keep" && c.Value == "yes"), Is.True);
         }
 
-        [PlaywrightTest("browsercontext-cookies.spec.ts", "clearCookies can filter by domain regex")]
+        [PlaywrightTest("browsercontext-clearcookies.spec.ts", "should remove cookies by domain")]
         [Test]
         [Timeout(30_000)]
         public async Task ClearCookiesShouldRemoveMatchingDomainRegex()
@@ -256,7 +255,7 @@ namespace PlaywrightNative.Tests
             Assert.That(cookies.Any(c => c.Name == "wave426-keep" && c.Value == "yes"), Is.True);
         }
 
-        [PlaywrightTest("browsercontext-cookies.spec.ts", "clearCookies can filter by path regex")]
+        [PlaywrightTest("browsercontext-clearcookies.spec.ts", "should remove cookies by path")]
         [Test]
         [Timeout(30_000)]
         public async Task ClearCookiesShouldRemoveMatchingPathRegex()
@@ -285,7 +284,6 @@ namespace PlaywrightNative.Tests
             Assert.That(cookies.Any(c => c.Name == "wave427-keep" && c.Value == "yes"), Is.True);
         }
 
-        [PlaywrightTest("browsercontext-cookies.spec.ts", "clearCookies can filter by url")]
         [Test]
         [Timeout(30_000)]
         public async Task ClearCookiesShouldRemoveMatchingUrl()
@@ -314,7 +312,7 @@ namespace PlaywrightNative.Tests
             Assert.That(cookies.Any(c => c.Name == "wave433-keep" && c.Value == "yes"), Is.True);
         }
 
-        [PlaywrightTest("browsercontext-cookies.spec.ts", "addCookies honors partitionKey")]
+        [PlaywrightTest("browsercontext-cookies-third-party.spec.ts", "add 'Partitioned;' cookie via API")]
         [Test]
         [Timeout(30_000)]
         public async Task AddCookiesShouldHonorPartitionKey()

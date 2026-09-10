@@ -29,7 +29,7 @@ namespace PlaywrightNative.Tests
     [TestFixture]
     public class ConsoleOpenerFrameTests : PageTestEx
     {
-        [PlaywrightTest("page-event-console.spec.ts", "should work")]
+        [PlaywrightTest("page-event-console.spec.ts", "should work @smoke")]
         [Test]
         [Timeout(30_000)]
         public async Task ConsoleEventShouldFireForLog()
@@ -75,7 +75,7 @@ namespace PlaywrightNative.Tests
             Assert.That(received, Does.Contain("boom-wave-42"));
         }
 
-        [PlaywrightTest("page-event-popup.spec.ts", "should return opener page")]
+        [PlaywrightTest("page-basic.spec.ts", "should provide access to the opener page")]
         [Test]
         [Timeout(30_000)]
         public async Task OpenerAsyncShouldReturnOpeningPage()
@@ -101,7 +101,6 @@ namespace PlaywrightNative.Tests
             Assert.That(opener, Is.SameAs(page));
         }
 
-        [PlaywrightTest("page-keyboard.spec.ts", "should accept keyboard setter")]
         [Test]
         [Timeout(30_000)]
         public async Task KeyboardMouseTouchscreenSettersShouldRoundTrip()
@@ -119,7 +118,6 @@ namespace PlaywrightNative.Tests
             Assert.That(page.Touchscreen, Is.Not.Null);
         }
 
-        [PlaywrightTest("frame-hierarchy.spec.ts", "should report main frame and child frames")]
         [Test]
         [Timeout(30_000)]
         public async Task FramesShouldIncludeMainAndIframe()
@@ -144,7 +142,7 @@ namespace PlaywrightNative.Tests
             Assert.That(child.ParentFrame, Is.SameAs(page.MainFrame));
         }
 
-        [PlaywrightTest("page-network-request.spec.ts", "response frame should be main frame")]
+        [PlaywrightTest("page-network-request.spec.ts", "should work for main frame navigation request")]
         [Test]
         [Timeout(30_000)]
         public async Task ResponseFrameShouldBeMainFrame()
@@ -168,7 +166,6 @@ namespace PlaywrightNative.Tests
             Assert.That(response.Request.Frame, Is.SameAs(page.MainFrame));
         }
 
-        [PlaywrightTest("frame-hierarchy.spec.ts", "should fire attached and detached")]
         [Test]
         [Timeout(30_000)]
         public async Task FrameAttachedAndDetachedShouldFire()
@@ -210,7 +207,6 @@ namespace PlaywrightNative.Tests
             Assert.That(gone.IsDetached, Is.True);
         }
 
-        [PlaywrightTest("frame-hierarchy.spec.ts", "should fire navigated")]
         [Test]
         [Timeout(30_000)]
         public async Task FrameNavigatedShouldFireForMainFrame()
@@ -243,7 +239,7 @@ namespace PlaywrightNative.Tests
             Assert.That(page.MainFrame.Url, Is.EqualTo(TestConstants.EmptyPage));
         }
 
-        [PlaywrightTest("frame-hierarchy.spec.ts", "should find frame by url")]
+        [PlaywrightTest("page-basic.spec.ts", "page.frame should respect url")]
         [Test]
         [Timeout(30_000)]
         public async Task FrameByUrlShouldFindMainAndChild()
@@ -292,7 +288,7 @@ namespace PlaywrightNative.Tests
             Assert.That(page.FrameByUrl(new Regex("grid\\.html$", RegexOptions.CultureInvariant)), Is.SameAs(child));
         }
 
-        [PlaywrightTest("frame-hierarchy.spec.ts", "should find frame by name")]
+        [PlaywrightTest("page-basic.spec.ts", "page.frame should respect name")]
         [Test]
         [Timeout(30_000)]
         public async Task FrameShouldFindChildByName()
@@ -336,7 +332,6 @@ namespace PlaywrightNative.Tests
             Assert.That(child.Name, Is.EqualTo("child-wave167"));
         }
 
-        [PlaywrightTest("frame-evaluate.spec.ts", "should evaluate in main and child frames")]
         [Test]
         [Timeout(30_000)]
         public async Task FrameEvaluateShouldRunInOwnWorld()

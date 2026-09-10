@@ -27,7 +27,7 @@ namespace PlaywrightNative.Tests
     [TestFixture]
     public class SelectTextTests : PageTestEx
     {
-        [PlaywrightTest("elementhandle-select-text.spec.ts", "SelectTextAsync selects input text")]
+        [PlaywrightTest("elementhandle-select-text.spec.ts", "should select input")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldSelectInputText()
@@ -44,7 +44,7 @@ namespace PlaywrightNative.Tests
             Assert.That(await input.EvaluateAsync<int>("el => el.selectionEnd").ConfigureAwait(false), Is.EqualTo(5));
         }
 
-        [PlaywrightTest("elementhandle-select-text.spec.ts", "page SelectTextAsync selects textarea text")]
+        [PlaywrightTest("elementhandle-select-text.spec.ts", "should select textarea")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldSelectTextareaFromPage()
@@ -59,7 +59,6 @@ namespace PlaywrightNative.Tests
             Assert.That(await page.EvalOnSelectorAsync<int>("#t", "el => el.selectionEnd").ConfigureAwait(false), Is.EqualTo(5));
         }
 
-        [PlaywrightTest("elementhandle-select-text.spec.ts", "SelectTextAsync selects contenteditable text")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldSelectContentEditableText()
@@ -73,7 +72,7 @@ namespace PlaywrightNative.Tests
             Assert.That(await page.EvaluateAsync<string>("window.getSelection().toString()").ConfigureAwait(false), Is.EqualTo("xyz"));
         }
 
-        [PlaywrightTest("elementhandle-select-text.spec.ts", "frame SelectTextAsync")]
+        [PlaywrightTest("elementhandle-select-text.spec.ts", "should select input")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldSelectTextOnMainFrame()
@@ -87,7 +86,6 @@ namespace PlaywrightNative.Tests
             Assert.That(await page.MainFrame.EvalOnSelectorAsync<int>("#n", "el => el.selectionEnd").ConfigureAwait(false), Is.EqualTo(5));
         }
 
-        [PlaywrightTest("elementhandle-select-text.spec.ts", "SelectTextAsync throws on a non-text element")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldThrowOnNonTextElement()
@@ -102,7 +100,6 @@ namespace PlaywrightNative.Tests
             Assert.That(ex.Message, Does.Contain("not an <input>"));
         }
 
-        [PlaywrightTest("elementhandle-select-text.spec.ts", "page SelectTextAsync times out while missing")]
         [Test]
         [Timeout(30_000)]
         public async Task PageSelectTextAsyncShouldTimeoutWhileMissing()
@@ -117,7 +114,6 @@ namespace PlaywrightNative.Tests
             Assert.That(ex.Message, Does.Contain("Timeout"));
         }
 
-        [PlaywrightTest("elementhandle-select-text.spec.ts", "page SelectTextAsync waits until attached")]
         [Test]
         [Timeout(30_000)]
         public async Task PageSelectTextAsyncShouldWaitUntilAttached()
@@ -138,7 +134,7 @@ namespace PlaywrightNative.Tests
             Assert.That(end, Is.EqualTo(5));
         }
 
-        [PlaywrightTest("elementhandle-select-text.spec.ts", "SelectTextAsync times out while hidden")]
+        [PlaywrightTest("elementhandle-select-text.spec.ts", "should timeout waiting for invisible element")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldTimeoutWhileHidden()
@@ -154,7 +150,6 @@ namespace PlaywrightNative.Tests
             Assert.That(ex.Message, Does.Contain("Timeout"));
         }
 
-        [PlaywrightTest("elementhandle-select-text.spec.ts", "SelectTextAsync force selects hidden input")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldHonorForceOnHiddenInput()
@@ -169,7 +164,7 @@ namespace PlaywrightNative.Tests
             Assert.That(await input.EvaluateAsync<int>("el => el.selectionEnd").ConfigureAwait(false), Is.EqualTo(5));
         }
 
-        [PlaywrightTest("elementhandle-select-text.spec.ts", "SelectTextAsync waits until visible")]
+        [PlaywrightTest("elementhandle-select-text.spec.ts", "should wait for visible")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldWaitUntilVisible()

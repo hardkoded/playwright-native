@@ -32,7 +32,7 @@ namespace PlaywrightNative.Tests
     {
         private static SimpleServer Server => TestServerSetup.Server;
 
-        [PlaywrightTest("browsercontext-credentials.spec.ts", "httpCredentials is applied")]
+        [PlaywrightTest("browsercontext-credentials.spec.ts", "should work with correct credentials @smoke")]
         [Test]
         [Timeout(30_000)]
         public async Task NewContextHttpCredentialsShouldApplyToPage()
@@ -55,7 +55,6 @@ namespace PlaywrightNative.Tests
             Assert.That(response.Status, Is.EqualTo(200));
         }
 
-        [PlaywrightTest("browsercontext-credentials.spec.ts", "options bag httpCredentials")]
         [Test]
         [Timeout(30_000)]
         public async Task NewContextOptionsBagShouldApplyHttpCredentials()
@@ -81,7 +80,7 @@ namespace PlaywrightNative.Tests
             Assert.That(response.Status, Is.EqualTo(200));
         }
 
-        [PlaywrightTest("browsercontext-credentials.spec.ts", "SetHttpCredentialsAsync after NewContext")]
+        [PlaywrightTest("browsercontext-credentials.spec.ts", "should work with setHTTPCredentials")]
         [Test]
         [Timeout(30_000)]
         public async Task SetHttpCredentialsShouldApplyToExistingPage()
@@ -110,7 +109,6 @@ namespace PlaywrightNative.Tests
             Assert.That(allowed.Status, Is.EqualTo(200));
         }
 
-        [PlaywrightTest("browsercontext-credentials.spec.ts", "SetHttpCredentialsAsync clears credentials")]
         [Test]
         [Timeout(30_000)]
         public async Task SetHttpCredentialsNullShouldStopSendingAuthorization()
@@ -151,7 +149,6 @@ namespace PlaywrightNative.Tests
             }
         }
 
-        [PlaywrightTest("browsercontext-credentials.spec.ts", "Chromium answers a Digest challenge")]
         [Test]
         [Timeout(30_000)]
         public async Task ChromiumShouldAnswerServerDigestChallenge()
@@ -201,7 +198,6 @@ namespace PlaywrightNative.Tests
             Assert.That(authorizations, Has.Some.StartsWith("Digest "));
         }
 
-        [PlaywrightTest("browsercontext-credentials.spec.ts", "Chromium answers a server Basic challenge")]
         [Test]
         [Timeout(30_000)]
         public async Task ChromiumShouldAnswerServerBasicChallengeWithoutPreemptiveHeader()
@@ -243,7 +239,6 @@ namespace PlaywrightNative.Tests
             Assert.That(authorizations[authorizations.Count - 1], Does.StartWith("Basic "));
         }
 
-        [PlaywrightTest("browsercontext-credentials.spec.ts", "httpCredentials send Always is preemptive")]
         [Test]
         [Timeout(30_000)]
         public async Task HttpCredentialsSendAlwaysShouldSendAuthorizationOnTheFirstRequest()
@@ -286,7 +281,7 @@ namespace PlaywrightNative.Tests
             Assert.That(authorizations[0], Does.StartWith("Basic "));
         }
 
-        [PlaywrightTest("browsercontext-credentials.spec.ts", "wrong credentials cancel the challenge")]
+        [PlaywrightTest("browsercontext-credentials.spec.ts", "should fail with wrong credentials")]
         [Test]
         [Timeout(30_000)]
         public async Task ChromiumShouldCancelChallengeWhenCredentialsAreWrong()
@@ -326,7 +321,7 @@ namespace PlaywrightNative.Tests
             }
         }
 
-        [PlaywrightTest("browsercontext-credentials.spec.ts", "httpCredentials origin matches")]
+        [PlaywrightTest("browsercontext-credentials.spec.ts", "should work with correct credentials and matching origin")]
         [Test]
         [Timeout(30_000)]
         public async Task HttpCredentialsOriginShouldApplyWhenRequestMatches()
@@ -357,7 +352,7 @@ namespace PlaywrightNative.Tests
             Assert.That(response.Status, Is.EqualTo(200));
         }
 
-        [PlaywrightTest("browsercontext-credentials.spec.ts", "httpCredentials origin mismatch")]
+        [PlaywrightTest("browsercontext-credentials.spec.ts", "should fail with correct credentials and mismatching hostname")]
         [Test]
         [Timeout(30_000)]
         public async Task HttpCredentialsOriginShouldNotApplyToOtherOrigins()

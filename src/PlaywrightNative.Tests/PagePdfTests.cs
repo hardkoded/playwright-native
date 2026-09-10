@@ -28,7 +28,6 @@ namespace PlaywrightNative.Tests
     [TestFixture]
     public class PagePdfTests : PageTestEx
     {
-        [PlaywrightTest("pdf.spec.ts", "PdfAsync honors scale")]
         [Test]
         [Timeout(30_000)]
         public async Task PdfAsyncShouldHonorScale()
@@ -52,7 +51,6 @@ namespace PlaywrightNative.Tests
             Assert.That(half, Is.Not.EqualTo(full));
         }
 
-        [PlaywrightTest("pdf.spec.ts", "PdfAsync honors width and height")]
         [Test]
         [Timeout(30_000)]
         public async Task PdfAsyncShouldHonorWidthAndHeight()
@@ -75,7 +73,6 @@ namespace PlaywrightNative.Tests
             Assert.That(small, Is.Not.EqualTo(letter));
         }
 
-        [PlaywrightTest("pdf.spec.ts", "PdfAsync honors format")]
         [Test]
         [Timeout(30_000)]
         public async Task PdfAsyncShouldHonorFormat()
@@ -98,7 +95,6 @@ namespace PlaywrightNative.Tests
             Assert.That(a4, Is.Not.EqualTo(letter));
         }
 
-        [PlaywrightTest("pdf.spec.ts", "PdfAsync honors margin")]
         [Test]
         [Timeout(30_000)]
         public async Task PdfAsyncShouldHonorMargin()
@@ -130,7 +126,6 @@ namespace PlaywrightNative.Tests
             Assert.That(inset, Is.Not.EqualTo(none));
         }
 
-        [PlaywrightTest("pdf.spec.ts", "PdfAsync honors pageRanges")]
         [Test]
         [Timeout(30_000)]
         public async Task PdfAsyncShouldHonorPageRanges()
@@ -153,7 +148,6 @@ namespace PlaywrightNative.Tests
             Assert.That(first, Is.Not.EqualTo(all));
         }
 
-        [PlaywrightTest("pdf.spec.ts", "PdfAsync honors displayHeaderFooter")]
         [Test]
         [Timeout(30_000)]
         public async Task PdfAsyncShouldHonorDisplayHeaderFooter()
@@ -176,7 +170,6 @@ namespace PlaywrightNative.Tests
             Assert.That(shown, Is.Not.EqualTo(none));
         }
 
-        [PlaywrightTest("pdf.spec.ts", "PdfAsync honors header and footer templates")]
         [Test]
         [Timeout(30_000)]
         public async Task PdfAsyncShouldHonorHeaderFooterTemplates()
@@ -199,7 +192,6 @@ namespace PlaywrightNative.Tests
             Assert.That(beta, Is.Not.EqualTo(alpha));
         }
 
-        [PlaywrightTest("pdf.spec.ts", "PdfAsync honors preferCSSPageSize")]
         [Test]
         [Timeout(30_000)]
         public async Task PdfAsyncShouldHonorPreferCSSPageSize()
@@ -223,7 +215,6 @@ namespace PlaywrightNative.Tests
             Assert.That(css, Is.Not.EqualTo(paper));
         }
 
-        [PlaywrightTest("pdf.spec.ts", "PdfAsync honors tagged")]
         [Test]
         [Timeout(30_000)]
         public async Task PdfAsyncShouldHonorTagged()
@@ -247,7 +238,7 @@ namespace PlaywrightNative.Tests
             Assert.That(Encoding.ASCII.GetString(tagged), Does.Contain("MarkInfo").Or.Contain("StructTreeRoot"));
         }
 
-        [PlaywrightTest("pdf.spec.ts", "PdfAsync honors outline")]
+        [PlaywrightTest("pdf.spec.ts", "should be able to generate outline")]
         [Test]
         [Timeout(30_000)]
         public async Task PdfAsyncShouldHonorOutline()

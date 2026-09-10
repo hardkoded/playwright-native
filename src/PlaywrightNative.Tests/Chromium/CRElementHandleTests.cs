@@ -29,7 +29,7 @@ namespace PlaywrightNative.Tests.Chromium
     [TestFixture]
     public class CRElementHandleTests : CRTestBase
     {
-        [PlaywrightTest("locator-element-handle.spec.ts", "Query selector should return element")]
+        [PlaywrightTest("elementhandle-query-selector.spec.ts", "should query existing element")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task QuerySelectorShouldReturnElement()
         {
@@ -40,7 +40,7 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(handle, Is.Not.Null);
         }
 
-        [PlaywrightTest("locator-element-handle.spec.ts", "Query selector should return null when no match")]
+        [PlaywrightTest("elementhandle-query-selector.spec.ts", "should return null for non-existing element")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task QuerySelectorShouldReturnNullWhenNoMatch()
         {
@@ -51,7 +51,7 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(handle, Is.Null);
         }
 
-        [PlaywrightTest("locator-element-handle.spec.ts", "Focus should make element active")]
+        [PlaywrightTest("elementhandle-misc.spec.ts", "should focus a button")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task FocusShouldMakeElementActive()
         {
@@ -64,7 +64,7 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(activeId, Is.EqualTo("t"));
         }
 
-        [PlaywrightTest("locator-element-handle.spec.ts", "Bounding box should return element geometry")]
+        [PlaywrightTest("elementhandle-bounding-box.spec.ts", "should work")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task BoundingBoxShouldReturnElementGeometry()
         {
@@ -81,7 +81,7 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(b.Height, Is.EqualTo(50.0));
         }
 
-        [PlaywrightTest("locator-element-handle.spec.ts", "Bounding box should return null for display none")]
+        [PlaywrightTest("elementhandle-bounding-box.spec.ts", "should return null for invisible elements")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task BoundingBoxShouldReturnNullForDisplayNone()
         {
@@ -93,7 +93,7 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(box, Is.Null);
         }
 
-        [PlaywrightTest("locator-element-handle.spec.ts", "Click should fire event on element")]
+        [PlaywrightTest("elementhandle-click.spec.ts", "should work @smoke")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ClickShouldFireEventOnElement()
         {
@@ -108,7 +108,7 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(clicked, Is.True);
         }
 
-        [PlaywrightTest("locator-element-handle.spec.ts", "Click should throw for invisible element")]
+        [PlaywrightTest("elementhandle-click.spec.ts", "should throw for hidden nodes with force")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ClickShouldThrowForInvisibleElement()
         {
@@ -122,7 +122,7 @@ namespace PlaywrightNative.Tests.Chromium
             await handle.DisposeAsync().ConfigureAwait(false);
         }
 
-        [PlaywrightTest("locator-element-handle.spec.ts", "Dispose should release handle")]
+        [PlaywrightTest("page-evaluate.spec.ts", "should throw if underlying element was disposed")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task DisposeShouldReleaseHandle()
         {
@@ -137,7 +137,7 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(ex.Message, Does.Contain("disposed"));
         }
 
-        [PlaywrightTest("locator-element-handle.spec.ts", "Dispose should be idempotent")]
+        [PlaywrightTest("elementhandle-misc.spec.ts", "should allow disposing twice")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task DisposeShouldBeIdempotent()
         {
@@ -148,7 +148,7 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.DoesNotThrowAsync(() => handle.DisposeAsync().AsTask());
         }
 
-        [PlaywrightTest("locator-element-handle.spec.ts", "Evaluate function should receive handle as argument")]
+        [PlaywrightTest("page-evaluate.spec.ts", "should accept element handle as an argument")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task EvaluateFunctionShouldReceiveHandleAsArgument()
         {
