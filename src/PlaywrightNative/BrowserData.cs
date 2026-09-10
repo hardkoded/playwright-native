@@ -34,8 +34,8 @@ namespace PlaywrightNative
         // uses ChromiumRevision (chromium-1234).
         internal const string ChromiumRevision = "1234";
         internal const string ChromiumBrowserVersion = "151.0.7922.34";
-        internal const string FirefoxRevision = "1515";
-        internal const string WebkitRevision = "2276";
+        internal const string FirefoxRevision = "1538";
+        internal const string WebkitRevision = "2336";
 
         internal static readonly string[] CdnMirrors =
         [
