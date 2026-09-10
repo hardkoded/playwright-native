@@ -28,7 +28,6 @@ namespace PlaywrightNative.Tests
     [TestFixture]
     public class ContextNetworkEventTests : PageTestEx
     {
-        [PlaywrightTest("browsercontext-network-event.spec.ts", "WaitForEvent Request on navigation")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldFireRequestOnNavigation()
@@ -53,7 +52,6 @@ namespace PlaywrightNative.Tests
             Assert.That(request.Url, Does.Contain("empty.html"));
         }
 
-        [PlaywrightTest("browsercontext-network-event.spec.ts", "WaitForRequestAsync matches a glob")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldWaitForMatchingRequest()
@@ -69,7 +67,6 @@ namespace PlaywrightNative.Tests
             Assert.That(request.Url, Does.StartWith("data:text/html"));
         }
 
-        [PlaywrightTest("browsercontext-network-event.spec.ts", "RunAndWaitForRequestAsync returns the request")]
         [Test]
         [Timeout(30_000)]
         public async Task RunAndWaitForRequestAsyncShouldReturnTheRequest()
@@ -86,7 +83,6 @@ namespace PlaywrightNative.Tests
             Assert.That(request.Url, Does.StartWith("data:text/html"));
         }
 
-        [PlaywrightTest("browsercontext-network-event.spec.ts", "WaitForRequestAsync times out")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldTimeoutWaitingForRequest()
@@ -99,7 +95,6 @@ namespace PlaywrightNative.Tests
             Assert.That(ex.Message, Does.Contain("Timeout 200ms exceeded."));
         }
 
-        [PlaywrightTest("browsercontext-network-event.spec.ts", "WaitForEvent Response on navigation")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldFireResponseOnNavigation()
@@ -125,7 +120,6 @@ namespace PlaywrightNative.Tests
             Assert.That(response.Status, Is.EqualTo(200));
         }
 
-        [PlaywrightTest("browsercontext-network-event.spec.ts", "WaitForResponseAsync matches a glob")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldWaitForMatchingResponse()
@@ -142,7 +136,6 @@ namespace PlaywrightNative.Tests
             Assert.That(response.Ok, Is.True);
         }
 
-        [PlaywrightTest("browsercontext-network-event.spec.ts", "RunAndWaitForResponseAsync returns the response")]
         [Test]
         [Timeout(30_000)]
         public async Task RunAndWaitForResponseAsyncShouldReturnTheResponse()
@@ -160,7 +153,6 @@ namespace PlaywrightNative.Tests
             Assert.That(response.Ok, Is.True);
         }
 
-        [PlaywrightTest("browsercontext-network-event.spec.ts", "WaitForResponseAsync times out")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldTimeoutWaitingForResponse()
@@ -173,7 +165,6 @@ namespace PlaywrightNative.Tests
             Assert.That(ex.Message, Does.Contain("Timeout 200ms exceeded."));
         }
 
-        [PlaywrightTest("browsercontext-network-event.spec.ts", "WaitForEvent RequestFinished on navigation")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldFireRequestFinishedOnNavigation()
@@ -198,7 +189,6 @@ namespace PlaywrightNative.Tests
             Assert.That(request.Url, Does.Contain("empty.html"));
         }
 
-        [PlaywrightTest("browsercontext-network-event.spec.ts", "WaitForRequestFinishedAsync matches a glob")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldWaitForMatchingFinishedRequest()
@@ -215,7 +205,6 @@ namespace PlaywrightNative.Tests
             Assert.That(request.Method, Is.EqualTo("GET"));
         }
 
-        [PlaywrightTest("browsercontext-network-event.spec.ts", "RunAndWaitForRequestFinishedAsync returns the request")]
         [Test]
         [Timeout(30_000)]
         public async Task RunAndWaitForRequestFinishedAsyncShouldReturnTheRequest()
@@ -233,7 +222,6 @@ namespace PlaywrightNative.Tests
             Assert.That(request.Method, Is.EqualTo("GET"));
         }
 
-        [PlaywrightTest("browsercontext-network-event.spec.ts", "WaitForRequestFinishedAsync matches a regex")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldWaitForFinishedRequestRegex()
@@ -248,7 +236,6 @@ namespace PlaywrightNative.Tests
             Assert.That(request.Url, Does.Contain("wave205"));
         }
 
-        [PlaywrightTest("browsercontext-network-event.spec.ts", "WaitForRequestFinishedAsync matches a predicate")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldWaitForFinishedRequestPredicate()
@@ -264,7 +251,6 @@ namespace PlaywrightNative.Tests
             Assert.That(request.Url, Does.Contain("wave205-pred"));
         }
 
-        [PlaywrightTest("browsercontext-network-event.spec.ts", "WaitForRequestFinishedAsync times out")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldTimeoutWaitingForFinishedRequest()
@@ -278,7 +264,6 @@ namespace PlaywrightNative.Tests
             Assert.That(ex.Message, Does.Contain("Timeout 200ms exceeded."));
         }
 
-        [PlaywrightTest("browsercontext-network-event.spec.ts", "WaitForRequestFailedAsync matches a glob")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldWaitForMatchingFailedRequest()
@@ -297,7 +282,6 @@ namespace PlaywrightNative.Tests
             Assert.That(request.Failure, Is.Not.Null.And.Not.Empty);
         }
 
-        [PlaywrightTest("browsercontext-network-event.spec.ts", "RunAndWaitForRequestFailedAsync returns the request")]
         [Test]
         [Timeout(30_000)]
         public async Task RunAndWaitForRequestFailedAsyncShouldReturnTheRequest()
@@ -316,7 +300,6 @@ namespace PlaywrightNative.Tests
             Assert.That(request.Failure, Is.Not.Null.And.Not.Empty);
         }
 
-        [PlaywrightTest("browsercontext-network-event.spec.ts", "WaitForRequestFailedAsync matches a regex")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldWaitForFailedRequestRegex()
@@ -333,7 +316,6 @@ namespace PlaywrightNative.Tests
             Assert.That(request.Url, Does.Contain("nonexistent.invalid"));
         }
 
-        [PlaywrightTest("browsercontext-network-event.spec.ts", "WaitForRequestFailedAsync matches a predicate")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldWaitForFailedRequestPredicate()
@@ -351,7 +333,6 @@ namespace PlaywrightNative.Tests
             Assert.That(request.Url, Does.Contain("nonexistent.invalid"));
         }
 
-        [PlaywrightTest("browsercontext-network-event.spec.ts", "WaitForRequestFailedAsync times out")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldTimeoutWaitingForFailedRequest()

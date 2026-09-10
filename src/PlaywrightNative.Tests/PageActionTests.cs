@@ -29,7 +29,7 @@ namespace PlaywrightNative.Tests
     [TestFixture]
     public class PageActionTests : PageTestEx
     {
-        [PlaywrightTest("page-click.spec.ts", "should click the button")]
+        [PlaywrightTest("page-click.spec.ts", "should click the button @smoke")]
         [Test]
         [Timeout(30_000)]
         public async Task ClickShouldFireDomHandler()
@@ -43,7 +43,7 @@ namespace PlaywrightNative.Tests
             Assert.That(await page.EvaluateAsync<bool>("window.clicked === true").ConfigureAwait(false), Is.True);
         }
 
-        [PlaywrightTest("page-click.spec.ts", "page ClickAsync trial does not click")]
+        [PlaywrightTest("page-click.spec.ts", "trial run should not click")]
         [Test]
         [Timeout(30_000)]
         public async Task ClickTrialShouldNotDispatchTheClick()
@@ -59,7 +59,6 @@ namespace PlaywrightNative.Tests
             Assert.That(await page.EvaluateAsync<bool>("window.clicked === true").ConfigureAwait(false), Is.True);
         }
 
-        [PlaywrightTest("page-click.spec.ts", "page ClickAsync times out while missing")]
         [Test]
         [Timeout(30_000)]
         public async Task PageClickAsyncShouldTimeoutWhileMissing()
@@ -74,7 +73,6 @@ namespace PlaywrightNative.Tests
             Assert.That(ex.Message, Does.Contain("Timeout"));
         }
 
-        [PlaywrightTest("page-click.spec.ts", "page ClickAsync waits until attached")]
         [Test]
         [Timeout(30_000)]
         public async Task PageClickAsyncShouldWaitUntilAttached()
@@ -107,7 +105,6 @@ namespace PlaywrightNative.Tests
             Assert.That(await page.EvaluateAsync<string>("document.querySelector('#n').value").ConfigureAwait(false), Is.EqualTo("Ada"));
         }
 
-        [PlaywrightTest("page-fill.spec.ts", "page FillAsync times out while missing")]
         [Test]
         [Timeout(30_000)]
         public async Task PageFillAsyncShouldTimeoutWhileMissing()
@@ -122,7 +119,6 @@ namespace PlaywrightNative.Tests
             Assert.That(ex.Message, Does.Contain("Timeout"));
         }
 
-        [PlaywrightTest("page-fill.spec.ts", "page FillAsync waits until attached")]
         [Test]
         [Timeout(30_000)]
         public async Task PageFillAsyncShouldWaitUntilAttached()
@@ -141,7 +137,6 @@ namespace PlaywrightNative.Tests
             Assert.That(await page.EvaluateAsync<string>("document.querySelector('#n').value").ConfigureAwait(false), Is.EqualTo("Ada"));
         }
 
-        [PlaywrightTest("elementhandle-press.spec.ts", "page PressAsync times out while missing")]
         [Test]
         [Timeout(30_000)]
         public async Task PagePressAsyncShouldTimeoutWhileMissing()
@@ -156,7 +151,6 @@ namespace PlaywrightNative.Tests
             Assert.That(ex.Message, Does.Contain("Timeout"));
         }
 
-        [PlaywrightTest("elementhandle-press.spec.ts", "page PressAsync waits until attached")]
         [Test]
         [Timeout(30_000)]
         public async Task PagePressAsyncShouldWaitUntilAttached()
@@ -177,7 +171,6 @@ namespace PlaywrightNative.Tests
             Assert.That(await page.EvaluateAsync<bool>("window.hit === true").ConfigureAwait(false), Is.True);
         }
 
-        [PlaywrightTest("elementhandle-type.spec.ts", "page TypeAsync times out while missing")]
         [Test]
         [Timeout(30_000)]
         public async Task PageTypeAsyncShouldTimeoutWhileMissing()
@@ -192,7 +185,6 @@ namespace PlaywrightNative.Tests
             Assert.That(ex.Message, Does.Contain("Timeout"));
         }
 
-        [PlaywrightTest("elementhandle-type.spec.ts", "page TypeAsync waits until attached")]
         [Test]
         [Timeout(30_000)]
         public async Task PageTypeAsyncShouldWaitUntilAttached()
@@ -211,7 +203,7 @@ namespace PlaywrightNative.Tests
             Assert.That(await page.EvaluateAsync<string>("document.querySelector('#n').value").ConfigureAwait(false), Is.EqualTo("hi"));
         }
 
-        [PlaywrightTest("page-basic.spec.ts", "InputValueAsync reads the input value")]
+        [PlaywrightTest("elementhandle-convenience.spec.ts", "inputValue should work")]
         [Test]
         [Timeout(30_000)]
         public async Task InputValueShouldReadTheFilledValue()
@@ -225,7 +217,6 @@ namespace PlaywrightNative.Tests
             Assert.That(await page.InputValueAsync("#n").ConfigureAwait(false), Is.EqualTo("wave163"));
         }
 
-        [PlaywrightTest("elementhandle-convenience.spec.ts", "page InputValueAsync times out while missing")]
         [Test]
         [Timeout(30_000)]
         public async Task PageInputValueAsyncShouldTimeoutWhileMissing()
@@ -240,7 +231,6 @@ namespace PlaywrightNative.Tests
             Assert.That(ex.Message, Does.Contain("Timeout"));
         }
 
-        [PlaywrightTest("elementhandle-convenience.spec.ts", "page InputValueAsync waits until attached")]
         [Test]
         [Timeout(30_000)]
         public async Task PageInputValueAsyncShouldWaitUntilAttached()
@@ -258,7 +248,7 @@ namespace PlaywrightNative.Tests
             Assert.That(await valueTask.ConfigureAwait(false), Is.EqualTo("ok"));
         }
 
-        [PlaywrightTest("page-focus.spec.ts", "should focus")]
+        [PlaywrightTest("page-focus.spec.ts", "should work @smoke")]
         [Test]
         [Timeout(30_000)]
         public async Task FocusShouldMoveActiveElement()
@@ -272,7 +262,6 @@ namespace PlaywrightNative.Tests
             Assert.That(await page.EvaluateAsync<string>("document.activeElement.id").ConfigureAwait(false), Is.EqualTo("n"));
         }
 
-        [PlaywrightTest("page-focus.spec.ts", "page FocusAsync times out while hidden")]
         [Test]
         [Timeout(30_000)]
         public async Task PageFocusAsyncShouldTimeoutWhileHidden()
@@ -288,7 +277,6 @@ namespace PlaywrightNative.Tests
             Assert.That(ex.Message, Does.Contain("Timeout"));
         }
 
-        [PlaywrightTest("page-focus.spec.ts", "page FocusAsync waits until visible")]
         [Test]
         [Timeout(30_000)]
         public async Task PageFocusAsyncShouldWaitUntilVisible()
@@ -308,7 +296,6 @@ namespace PlaywrightNative.Tests
                 Is.EqualTo("i"));
         }
 
-        [PlaywrightTest("page-focus.spec.ts", "page FocusAsync times out while missing")]
         [Test]
         [Timeout(30_000)]
         public async Task PageFocusAsyncShouldTimeoutWhileMissing()
@@ -323,7 +310,6 @@ namespace PlaywrightNative.Tests
             Assert.That(ex.Message, Does.Contain("Timeout"));
         }
 
-        [PlaywrightTest("page-focus.spec.ts", "page FocusAsync waits until attached")]
         [Test]
         [Timeout(30_000)]
         public async Task PageFocusAsyncShouldWaitUntilAttached()
@@ -344,7 +330,7 @@ namespace PlaywrightNative.Tests
                 Is.EqualTo("i"));
         }
 
-        [PlaywrightTest("page-basic.spec.ts", "should return the page title")]
+        [PlaywrightTest("page-basic.spec.ts", "page.title should return the page title")]
         [Test]
         [Timeout(30_000)]
         public async Task TitleShouldReturnDocumentTitle()
@@ -357,7 +343,6 @@ namespace PlaywrightNative.Tests
             Assert.That(await page.TitleAsync().ConfigureAwait(false), Is.EqualTo("Hello Wave"));
         }
 
-        [PlaywrightTest("page-check.spec.ts", "should check and uncheck the box")]
         [Test]
         [Timeout(30_000)]
         public async Task CheckAndUncheckShouldToggleCheckbox()
@@ -373,7 +358,6 @@ namespace PlaywrightNative.Tests
             Assert.That(await page.IsCheckedAsync("#c").ConfigureAwait(false), Is.False);
         }
 
-        [PlaywrightTest("page-check.spec.ts", "page CheckAsync times out while missing")]
         [Test]
         [Timeout(30_000)]
         public async Task PageCheckAsyncShouldTimeoutWhileMissing()
@@ -388,7 +372,7 @@ namespace PlaywrightNative.Tests
             Assert.That(ex.Message, Does.Contain("Timeout"));
         }
 
-        [PlaywrightTest("page-check.spec.ts", "page CheckAsync trial does not check")]
+        [PlaywrightTest("page-check.spec.ts", "trial run should not check")]
         [Test]
         [Timeout(30_000)]
         public async Task CheckTrialShouldNotCheckTheBox()
@@ -404,7 +388,6 @@ namespace PlaywrightNative.Tests
             Assert.That(await page.IsCheckedAsync("#c").ConfigureAwait(false), Is.True);
         }
 
-        [PlaywrightTest("page-check.spec.ts", "page CheckAsync waits until attached")]
         [Test]
         [Timeout(30_000)]
         public async Task PageCheckAsyncShouldWaitUntilAttached()
@@ -423,7 +406,6 @@ namespace PlaywrightNative.Tests
             Assert.That(await page.IsCheckedAsync("#c").ConfigureAwait(false), Is.True);
         }
 
-        [PlaywrightTest("page-check.spec.ts", "page UncheckAsync times out while missing")]
         [Test]
         [Timeout(30_000)]
         public async Task PageUncheckAsyncShouldTimeoutWhileMissing()
@@ -438,7 +420,7 @@ namespace PlaywrightNative.Tests
             Assert.That(ex.Message, Does.Contain("Timeout"));
         }
 
-        [PlaywrightTest("page-check.spec.ts", "page UncheckAsync trial does not uncheck")]
+        [PlaywrightTest("page-check.spec.ts", "trial run should not uncheck")]
         [Test]
         [Timeout(30_000)]
         public async Task UncheckTrialShouldNotUncheckTheBox()
@@ -454,7 +436,6 @@ namespace PlaywrightNative.Tests
             Assert.That(await page.IsCheckedAsync("#c").ConfigureAwait(false), Is.False);
         }
 
-        [PlaywrightTest("page-check.spec.ts", "page UncheckAsync waits until attached")]
         [Test]
         [Timeout(30_000)]
         public async Task PageUncheckAsyncShouldWaitUntilAttached()
@@ -487,7 +468,7 @@ namespace PlaywrightNative.Tests
             Assert.That(await page.EvaluateAsync<bool>("window.dbl === true").ConfigureAwait(false), Is.True);
         }
 
-        [PlaywrightTest("page-click.spec.ts", "page DblClickAsync trial does not click")]
+        [PlaywrightTest("page-click.spec.ts", "trial run should not double click")]
         [Test]
         [Timeout(30_000)]
         public async Task DblClickTrialShouldNotDispatchTheClick()
@@ -503,7 +484,6 @@ namespace PlaywrightNative.Tests
             Assert.That(await page.EvaluateAsync<bool>("window.dbl === true").ConfigureAwait(false), Is.True);
         }
 
-        [PlaywrightTest("page-click.spec.ts", "page DblClickAsync times out while missing")]
         [Test]
         [Timeout(30_000)]
         public async Task PageDblClickAsyncShouldTimeoutWhileMissing()
@@ -518,7 +498,6 @@ namespace PlaywrightNative.Tests
             Assert.That(ex.Message, Does.Contain("Timeout"));
         }
 
-        [PlaywrightTest("page-click.spec.ts", "page DblClickAsync waits until attached")]
         [Test]
         [Timeout(30_000)]
         public async Task PageDblClickAsyncShouldWaitUntilAttached()
@@ -537,7 +516,6 @@ namespace PlaywrightNative.Tests
             Assert.That(await page.EvaluateAsync<bool>("window.dbl === true").ConfigureAwait(false), Is.True);
         }
 
-        [PlaywrightTest("page-click.spec.ts", "page HoverAsync times out while missing")]
         [Test]
         [Timeout(30_000)]
         public async Task PageHoverAsyncShouldTimeoutWhileMissing()
@@ -552,7 +530,6 @@ namespace PlaywrightNative.Tests
             Assert.That(ex.Message, Does.Contain("Timeout"));
         }
 
-        [PlaywrightTest("page-click.spec.ts", "page HoverAsync trial does not hover")]
         [Test]
         [Timeout(30_000)]
         public async Task HoverTrialShouldNotDispatchTheHover()
@@ -568,7 +545,6 @@ namespace PlaywrightNative.Tests
             Assert.That(await page.EvaluateAsync<bool>("window.hov === true").ConfigureAwait(false), Is.True);
         }
 
-        [PlaywrightTest("page-click.spec.ts", "page HoverAsync waits until attached")]
         [Test]
         [Timeout(30_000)]
         public async Task PageHoverAsyncShouldWaitUntilAttached()
@@ -589,7 +565,6 @@ namespace PlaywrightNative.Tests
             Assert.That(await page.EvaluateAsync<bool>("window.hovered === true").ConfigureAwait(false), Is.True);
         }
 
-        [PlaywrightTest("tap.spec.ts", "page TapAsync times out while missing")]
         [Test]
         [Timeout(30_000)]
         public async Task PageTapAsyncShouldTimeoutWhileMissing()
@@ -604,7 +579,7 @@ namespace PlaywrightNative.Tests
             Assert.That(ex.Message, Does.Contain("Timeout"));
         }
 
-        [PlaywrightTest("tap.spec.ts", "page TapAsync trial does not tap")]
+        [PlaywrightTest("tap.spec.ts", "trial run should not tap")]
         [Test]
         [Timeout(30_000)]
         public async Task TapTrialShouldNotDispatchTheTap()
@@ -620,7 +595,6 @@ namespace PlaywrightNative.Tests
             Assert.That(await page.EvaluateAsync<bool>("window.tapped === true").ConfigureAwait(false), Is.True);
         }
 
-        [PlaywrightTest("tap.spec.ts", "page TapAsync waits until attached")]
         [Test]
         [Timeout(30_000)]
         public async Task PageTapAsyncShouldWaitUntilAttached()
@@ -641,7 +615,7 @@ namespace PlaywrightNative.Tests
             Assert.That(await page.EvaluateAsync<bool>("window.tapped === true").ConfigureAwait(false), Is.True);
         }
 
-        [PlaywrightTest("page-select-option.spec.ts", "should select the option")]
+        [PlaywrightTest("page-select-option.spec.ts", "should select single option @smoke")]
         [Test]
         [Timeout(30_000)]
         public async Task SelectOptionShouldSelectByValue()
@@ -656,7 +630,6 @@ namespace PlaywrightNative.Tests
             Assert.That(await page.EvaluateAsync<string>("document.querySelector('#s').value").ConfigureAwait(false), Is.EqualTo("b"));
         }
 
-        [PlaywrightTest("page-select-option.spec.ts", "page SelectOptionAsync times out while missing")]
         [Test]
         [Timeout(30_000)]
         public async Task PageSelectOptionAsyncShouldTimeoutWhileMissing()
@@ -671,7 +644,6 @@ namespace PlaywrightNative.Tests
             Assert.That(ex.Message, Does.Contain("Timeout"));
         }
 
-        [PlaywrightTest("page-select-option.spec.ts", "page SelectOptionAsync waits until attached")]
         [Test]
         [Timeout(30_000)]
         public async Task PageSelectOptionAsyncShouldWaitUntilAttached()
@@ -690,7 +662,6 @@ namespace PlaywrightNative.Tests
             Assert.That(selected, Is.EqualTo(new[] { "b" }));
         }
 
-        [PlaywrightTest("page-select-option.spec.ts", "page SelectOptionAsync params waits until attached")]
         [Test]
         [Timeout(30_000)]
         public async Task PageSelectOptionAsyncParamsShouldWaitUntilAttached()
@@ -709,7 +680,6 @@ namespace PlaywrightNative.Tests
             Assert.That(selected, Is.EquivalentTo(new[] { "a", "b" }));
         }
 
-        [PlaywrightTest("page-select-option.spec.ts", "page SelectOptionAsync SelectOptionValue params waits until attached")]
         [Test]
         [Timeout(30_000)]
         public async Task PageSelectOptionAsyncValueParamsShouldWaitUntilAttached()
@@ -731,7 +701,7 @@ namespace PlaywrightNative.Tests
             Assert.That(selected, Is.EquivalentTo(new[] { "a", "c" }));
         }
 
-        [PlaywrightTest("page-set-input-files.spec.ts", "should set input files")]
+        [PlaywrightTest("page-set-input-files.spec.ts", "should set from memory")]
         [Test]
         [Timeout(30_000)]
         public async Task SetInputFilesShouldAssignFilePayload()
@@ -751,7 +721,6 @@ namespace PlaywrightNative.Tests
             Assert.That(await page.EvaluateAsync<int>("document.querySelector('#f').files[0].size").ConfigureAwait(false), Is.EqualTo(5));
         }
 
-        [PlaywrightTest("page-set-input-files.spec.ts", "page SetInputFilesAsync times out while missing")]
         [Test]
         [Timeout(30_000)]
         public async Task PageSetInputFilesAsyncShouldTimeoutWhileMissing()
@@ -771,7 +740,6 @@ namespace PlaywrightNative.Tests
             Assert.That(ex.Message, Does.Contain("Timeout"));
         }
 
-        [PlaywrightTest("page-set-input-files.spec.ts", "page SetInputFilesAsync waits until attached")]
         [Test]
         [Timeout(30_000)]
         public async Task PageSetInputFilesAsyncShouldWaitUntilAttached()
@@ -795,7 +763,7 @@ namespace PlaywrightNative.Tests
             Assert.That(await page.EvaluateAsync<string>("document.querySelector('#f').files[0].name").ConfigureAwait(false), Is.EqualTo("wave.txt"));
         }
 
-        [PlaywrightTest("browsercontext-viewport.spec.ts", "should report viewport size")]
+        [PlaywrightTest("browsercontext-viewport.spec.ts", "should set the proper viewport size")]
         [Test]
         [Timeout(30_000)]
         public async Task ViewportSizeShouldMatchSetViewportSize()
@@ -809,7 +777,6 @@ namespace PlaywrightNative.Tests
             Assert.That(page.ViewportSize.Height, Is.EqualTo(384));
         }
 
-        [PlaywrightTest("page-basic.spec.ts", "should store default timeout")]
         [Test]
         [Timeout(30_000)]
         public async Task DefaultTimeoutShouldRoundTrip()

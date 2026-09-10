@@ -47,7 +47,7 @@ namespace PlaywrightNative.Tests
             await http.Response.Body.WriteAsync(buffer.ToArray()).ConfigureAwait(false);
         }
 
-        [PlaywrightTest("global-fetch.spec.ts", "context APIRequest GET returns the body")]
+        [PlaywrightTest("browsercontext-fetch.spec.ts", "get should work @smoke")]
         [Test]
         [Timeout(30_000)]
         public async Task ContextGetShouldReturnTheBody()
@@ -74,7 +74,6 @@ namespace PlaywrightNative.Tests
             Assert.That(await response.TextAsync().ConfigureAwait(false), Is.EqualTo("hello-api"));
         }
 
-        [PlaywrightTest("global-fetch.spec.ts", "page APIRequest shares the context client")]
         [Test]
         [Timeout(30_000)]
         public async Task PageApiRequestShouldBeTheContextClient()
@@ -86,7 +85,7 @@ namespace PlaywrightNative.Tests
             Assert.That(page.APIRequest, Is.SameAs(context.APIRequest));
         }
 
-        [PlaywrightTest("global-fetch.spec.ts", "APIRequest POST sends the body")]
+        [PlaywrightTest("browsercontext-fetch.spec.ts", "post should support post data")]
         [Test]
         [Timeout(30_000)]
         public async Task PostShouldSendTheBody()
@@ -115,7 +114,7 @@ namespace PlaywrightNative.Tests
             Assert.That(await response.TextAsync().ConfigureAwait(false), Is.EqualTo("echo:wave-128"));
         }
 
-        [PlaywrightTest("global-fetch.spec.ts", "APIRequest GET sends context cookies")]
+        [PlaywrightTest("browsercontext-fetch.spec.ts", "should add session cookies to request")]
         [Test]
         [Timeout(30_000)]
         public async Task GetShouldSendContextCookies()
@@ -151,7 +150,7 @@ namespace PlaywrightNative.Tests
             Assert.That(await response.TextAsync().ConfigureAwait(false), Does.Contain("wave128=from-context"));
         }
 
-        [PlaywrightTest("global-fetch.spec.ts", "APIRequest HEAD returns OK")]
+        [PlaywrightTest("global-fetch.spec.ts", "head should work @smoke")]
         [Test]
         [Timeout(30_000)]
         public async Task HeadShouldReturnOk()
@@ -177,7 +176,6 @@ namespace PlaywrightNative.Tests
             Assert.That(response.Status, Is.EqualTo(200));
         }
 
-        [PlaywrightTest("global-fetch.spec.ts", "APIRequest PUT and DELETE send the method")]
         [Test]
         [Timeout(30_000)]
         public async Task PutAndDeleteShouldSendTheMethod()
@@ -209,7 +207,7 @@ namespace PlaywrightNative.Tests
             Assert.That(await delete.TextAsync().ConfigureAwait(false), Does.StartWith("DELETE:"));
         }
 
-        [PlaywrightTest("global-fetch.spec.ts", "APIRequest GET sends extra headers")]
+        [PlaywrightTest("browsercontext-fetch.spec.ts", "should propagate custom headers with redirects")]
         [Test]
         [Timeout(30_000)]
         public async Task GetShouldSendExtraHeaders()
@@ -237,7 +235,7 @@ namespace PlaywrightNative.Tests
             Assert.That(await response.TextAsync().ConfigureAwait(false), Is.EqualTo("129"));
         }
 
-        [PlaywrightTest("global-fetch.spec.ts", "APIRequest StorageState matches the context")]
+        [PlaywrightTest("browsercontext-fetch.spec.ts", "context request should export same storage state as context")]
         [Test]
         [Timeout(30_000)]
         public async Task StorageStateShouldMatchTheContext()
@@ -267,7 +265,7 @@ namespace PlaywrightNative.Tests
             Assert.That(fromRequest, Is.EqualTo(fromContext));
         }
 
-        [PlaywrightTest("global-fetch.spec.ts", "APIResponse HeadersArray includes content-type")]
+        [PlaywrightTest("browsercontext-fetch.spec.ts", "get should work @smoke")]
         [Test]
         [Timeout(30_000)]
         public async Task HeadersArrayShouldIncludeContentType()
@@ -297,7 +295,7 @@ namespace PlaywrightNative.Tests
                 Is.True);
         }
 
-        [PlaywrightTest("global-fetch.spec.ts", "APIRequest returns 404 without failOnStatusCode")]
+        [PlaywrightTest("global-fetch.spec.ts", "should return body for failing requests")]
         [Test]
         [Timeout(30_000)]
         public async Task GetShouldReturnNotFoundWithoutFailOnStatusCode()
@@ -324,7 +322,7 @@ namespace PlaywrightNative.Tests
             Assert.That(await response.TextAsync().ConfigureAwait(false), Is.EqualTo("nope"));
         }
 
-        [PlaywrightTest("global-fetch.spec.ts", "APIRequest failOnStatusCode throws on 404")]
+        [PlaywrightTest("browsercontext-fetch.spec.ts", "get should support failOnStatusCode")]
         [Test]
         [Timeout(30_000)]
         public async Task GetShouldThrowWhenFailOnStatusCode()
@@ -352,7 +350,7 @@ namespace PlaywrightNative.Tests
             Assert.That(ex.Message, Does.Contain("404"));
         }
 
-        [PlaywrightTest("global-fetch.spec.ts", "APIRequest GET sends context extra HTTP headers")]
+        [PlaywrightTest("browsercontext-fetch.spec.ts", "should propagate extra http headers with redirects")]
         [Test]
         [Timeout(30_000)]
         public async Task GetShouldSendContextExtraHttpHeaders()
@@ -379,7 +377,6 @@ namespace PlaywrightNative.Tests
             Assert.That(await response.TextAsync().ConfigureAwait(false), Is.EqualTo("132"));
         }
 
-        [PlaywrightTest("global-fetch.spec.ts", "APIRequest per-request headers override context extra headers")]
         [Test]
         [Timeout(30_000)]
         public async Task GetShouldLetPerRequestHeadersOverrideContext()
@@ -407,7 +404,7 @@ namespace PlaywrightNative.Tests
             Assert.That(await response.TextAsync().ConfigureAwait(false), Is.EqualTo("request"));
         }
 
-        [PlaywrightTest("global-fetch.spec.ts", "APIRequest timeout throws when the server is slow")]
+        [PlaywrightTest("browsercontext-fetch.spec.ts", "should support timeout option")]
         [Test]
         [Timeout(30_000)]
         public async Task GetShouldThrowWhenTimeoutExceeded()
@@ -437,7 +434,6 @@ namespace PlaywrightNative.Tests
             Assert.That(ex.Message, Does.Contain("300"));
         }
 
-        [PlaywrightTest("global-fetch.spec.ts", "APIRequest succeeds when timeout is long enough")]
         [Test]
         [Timeout(30_000)]
         public async Task GetShouldSucceedWhenTimeoutIsLongEnough()
@@ -463,7 +459,7 @@ namespace PlaywrightNative.Tests
             Assert.That(await response.TextAsync().ConfigureAwait(false), Is.EqualTo("soon"));
         }
 
-        [PlaywrightTest("global-fetch.spec.ts", "APIRequest follows redirects by default")]
+        [PlaywrightTest("browsercontext-fetch.spec.ts", "should follow redirects")]
         [Test]
         [Timeout(30_000)]
         public async Task GetShouldFollowRedirectsByDefault()
@@ -490,7 +486,7 @@ namespace PlaywrightNative.Tests
             Assert.That(await response.TextAsync().ConfigureAwait(false), Is.EqualTo("redirected"));
         }
 
-        [PlaywrightTest("global-fetch.spec.ts", "APIRequest maxRedirects 0 returns the redirect")]
+        [PlaywrightTest("global-fetch.spec.ts", "should not follow redirects when maxRedirects is set to 0")]
         [Test]
         [Timeout(30_000)]
         public async Task GetShouldReturnRedirectWhenMaxRedirectsIsZero()
@@ -517,7 +513,7 @@ namespace PlaywrightNative.Tests
             Assert.That(await response.TextAsync().ConfigureAwait(false), Is.Not.EqualTo("should-not-follow"));
         }
 
-        [PlaywrightTest("global-fetch.spec.ts", "APIRequest maxRedirects throws when the chain is longer")]
+        [PlaywrightTest("global-fetch.spec.ts", "should throw an error when maxRedirects is exceeded")]
         [Test]
         [Timeout(30_000)]
         public async Task GetShouldThrowWhenMaxRedirectsExceeded()
@@ -547,7 +543,7 @@ namespace PlaywrightNative.Tests
             Assert.That(ex.Message, Does.Contain("maxRedirects"));
         }
 
-        [PlaywrightTest("global-fetch.spec.ts", "APIRequest GET uses context ignoreHTTPSErrors")]
+        [PlaywrightTest("browsercontext-fetch.spec.ts", "should inherit ignoreHTTPSErrors from context")]
         [Test]
         [Timeout(30_000)]
         public async Task GetShouldFetchHttpsWhenContextIgnoresErrors()
@@ -574,7 +570,7 @@ namespace PlaywrightNative.Tests
             Assert.That(await response.TextAsync().ConfigureAwait(false), Is.EqualTo("secure-context"));
         }
 
-        [PlaywrightTest("global-fetch.spec.ts", "APIRequest GET uses per-request ignoreHTTPSErrors")]
+        [PlaywrightTest("browsercontext-fetch.spec.ts", "getshould support ignoreHTTPSErrors option")]
         [Test]
         [Timeout(30_000)]
         public async Task GetShouldFetchHttpsWhenRequestIgnoresErrors()
@@ -600,7 +596,7 @@ namespace PlaywrightNative.Tests
             Assert.That(await response.TextAsync().ConfigureAwait(false), Is.EqualTo("secure-request"));
         }
 
-        [PlaywrightTest("global-fetch.spec.ts", "APIResponse DisposeAsync blocks body reads")]
+        [PlaywrightTest("browsercontext-fetch.spec.ts", "should dispose")]
         [Test]
         [Timeout(30_000)]
         public async Task ResponseDisposeShouldBlockBodyReads()
@@ -633,7 +629,7 @@ namespace PlaywrightNative.Tests
             Assert.That(ex.Message, Does.Contain("disposed"));
         }
 
-        [PlaywrightTest("global-fetch.spec.ts", "APIRequest DisposeAsync blocks further fetches")]
+        [PlaywrightTest("browsercontext-fetch.spec.ts", "should not work after dispose")]
         [Test]
         [Timeout(30_000)]
         public async Task RequestDisposeShouldBlockFurtherFetches()
@@ -669,7 +665,7 @@ namespace PlaywrightNative.Tests
             Assert.That(await response.TextAsync().ConfigureAwait(false), Is.EqualTo("ok"));
         }
 
-        [PlaywrightTest("global-fetch.spec.ts", "APIRequest POST sends a JSON body")]
+        [PlaywrightTest("browsercontext-fetch.spec.ts", "should encode to application/json by default")]
         [Test]
         [Timeout(30_000)]
         public async Task PostShouldSendJsonBody()
@@ -698,7 +694,6 @@ namespace PlaywrightNative.Tests
             Assert.That(text, Does.Contain("\"wave\":137"));
         }
 
-        [PlaywrightTest("global-fetch.spec.ts", "APIRequest POST rejects data and json together")]
         [Test]
         [Timeout(30_000)]
         public async Task PostShouldRejectDataAndJsonTogether()
@@ -713,7 +708,7 @@ namespace PlaywrightNative.Tests
             Assert.That(ex.Message, Does.Contain("data").And.Contain("json"));
         }
 
-        [PlaywrightTest("global-fetch.spec.ts", "APIRequest POST sends a form body")]
+        [PlaywrightTest("browsercontext-fetch.spec.ts", "should support application/x-www-form-urlencoded")]
         [Test]
         [Timeout(30_000)]
         public async Task PostShouldSendFormBody()
@@ -746,7 +741,6 @@ namespace PlaywrightNative.Tests
             Assert.That(text, Does.Contain("ok=yes"));
         }
 
-        [PlaywrightTest("global-fetch.spec.ts", "APIRequest POST rejects json and form together")]
         [Test]
         [Timeout(30_000)]
         public async Task PostShouldRejectJsonAndFormTogether()
@@ -764,7 +758,6 @@ namespace PlaywrightNative.Tests
             Assert.That(ex.Message, Does.Contain("form"));
         }
 
-        [PlaywrightTest("global-fetch.spec.ts", "APIRequest POST sends multipart when form has a file")]
         [Test]
         [Timeout(30_000)]
         public async Task PostShouldSendMultipartWhenFormHasAFile()
@@ -805,7 +798,7 @@ namespace PlaywrightNative.Tests
             Assert.That(text, Does.Contain("hello-wave-139"));
         }
 
-        [PlaywrightTest("global-fetch.spec.ts", "APIRequest POST form Append keeps duplicate names")]
+        [PlaywrightTest("browsercontext-fetch.spec.ts", "should support application/x-www-form-urlencoded with param lists")]
         [Test]
         [Timeout(30_000)]
         public async Task PostFormAppendShouldKeepDuplicateNames()
@@ -839,7 +832,6 @@ namespace PlaywrightNative.Tests
             Assert.That(text, Does.Contain("tag=b"));
         }
 
-        [PlaywrightTest("global-fetch.spec.ts", "APIRequest POST form Set replaces appended names")]
         [Test]
         [Timeout(30_000)]
         public async Task PostFormSetShouldReplaceAppendedNames()
@@ -872,7 +864,6 @@ namespace PlaywrightNative.Tests
             Assert.That(text, Does.Not.Contain("tag=b"));
         }
 
-        [PlaywrightTest("global-fetch.spec.ts", "APIRequest POST form Append file sends multipart")]
         [Test]
         [Timeout(30_000)]
         public async Task PostFormAppendFileShouldSendMultipart()
@@ -913,7 +904,6 @@ namespace PlaywrightNative.Tests
             Assert.That(text, Does.Contain("hello-wave-140"));
         }
 
-        [PlaywrightTest("global-fetch.spec.ts", "APIRequest POST form Set bool and int")]
         [Test]
         [Timeout(30_000)]
         public async Task PostFormSetShouldSendBoolAndInt()
@@ -947,7 +937,6 @@ namespace PlaywrightNative.Tests
             Assert.That(text, Does.Contain("off=false"));
         }
 
-        [PlaywrightTest("global-fetch.spec.ts", "APIRequest POST form Append bool and int")]
         [Test]
         [Timeout(30_000)]
         public async Task PostFormAppendShouldSendBoolAndInt()
@@ -980,7 +969,7 @@ namespace PlaywrightNative.Tests
             Assert.That(text, Does.Contain("flag=true"));
         }
 
-        [PlaywrightTest("global-fetch.spec.ts", "APIRequest POST multipart sends form-data without files")]
+        [PlaywrightTest("browsercontext-fetch.spec.ts", "should support multipart/form-data and keep the order")]
         [Test]
         [Timeout(30_000)]
         public async Task PostMultipartShouldSendFormDataWithoutFiles()
@@ -1016,7 +1005,6 @@ namespace PlaywrightNative.Tests
             Assert.That(text, Does.Contain("true"));
         }
 
-        [PlaywrightTest("global-fetch.spec.ts", "APIRequest POST rejects form and multipart together")]
         [Test]
         [Timeout(30_000)]
         public async Task PostShouldRejectFormAndMultipartTogether()
@@ -1036,7 +1024,7 @@ namespace PlaywrightNative.Tests
             Assert.That(ex.Message, Does.Contain("multipart"));
         }
 
-        [PlaywrightTest("global-fetch.spec.ts", "APIRequest GET sends queryParams")]
+        [PlaywrightTest("browsercontext-fetch.spec.ts", "get should support params passed as object")]
         [Test]
         [Timeout(30_000)]
         public async Task GetShouldSendQueryParams()
@@ -1069,7 +1057,7 @@ namespace PlaywrightNative.Tests
             Assert.That(response.Url, Does.Contain("wave=143"));
         }
 
-        [PlaywrightTest("global-fetch.spec.ts", "APIRequest GET queryParams keep existing and duplicates")]
+        [PlaywrightTest("browsercontext-fetch.spec.ts", "get should support params passed as URLSearchParams")]
         [Test]
         [Timeout(30_000)]
         public async Task GetQueryParamsShouldKeepExistingAndDuplicates()
@@ -1103,7 +1091,7 @@ namespace PlaywrightNative.Tests
             Assert.That(response.Url, Does.Contain("keep=1"));
         }
 
-        [PlaywrightTest("global-fetch.spec.ts", "APIRequest maxRetries recovers after connection reset")]
+        [PlaywrightTest("browsercontext-fetch.spec.ts", "should retry on ECONNRESET")]
         [Test]
         [Timeout(30_000)]
         public async Task GetShouldRetryConnectionReset()
@@ -1137,7 +1125,7 @@ namespace PlaywrightNative.Tests
             Assert.That(hits, Is.GreaterThanOrEqualTo(3));
         }
 
-        [PlaywrightTest("global-fetch.spec.ts", "APIRequest maxRetries 0 does not retry")]
+        [PlaywrightTest("global-fetch.spec.ts", "should append node error code to the message")]
         [Test]
         [Timeout(30_000)]
         public async Task GetShouldNotRetryWhenMaxRetriesIsZero()
@@ -1169,7 +1157,6 @@ namespace PlaywrightNative.Tests
             Assert.That(hits, Is.EqualTo(1));
         }
 
-        [PlaywrightTest("global-fetch.spec.ts", "APIRequest maxRetries rejects a negative value")]
         [Test]
         [Timeout(30_000)]
         public async Task GetShouldRejectNegativeMaxRetries()
@@ -1184,7 +1171,7 @@ namespace PlaywrightNative.Tests
             Assert.That(ex.ParamName, Is.EqualTo("maxRetries"));
         }
 
-        [PlaywrightTest("global-fetch.spec.ts", "Playwright.APIRequest GET works without a browser")]
+        [PlaywrightTest("global-fetch.spec.ts", "get should work @smoke")]
         [Test]
         [Timeout(30_000)]
         public async Task StandaloneGetShouldWorkWithoutABrowser()
@@ -1209,7 +1196,7 @@ namespace PlaywrightNative.Tests
             Assert.That(await response.TextAsync().ConfigureAwait(false), Is.EqualTo("no-browser"));
         }
 
-        [PlaywrightTest("global-fetch.spec.ts", "Playwright.APIRequest sends extraHTTPHeaders")]
+        [PlaywrightTest("global-fetch.spec.ts", "should propagate extra http headers with redirects")]
         [Test]
         [Timeout(30_000)]
         public async Task StandaloneShouldSendExtraHttpHeaders()
@@ -1234,7 +1221,7 @@ namespace PlaywrightNative.Tests
             Assert.That(await response.TextAsync().ConfigureAwait(false), Is.EqualTo("145"));
         }
 
-        [PlaywrightTest("global-fetch.spec.ts", "Playwright.APIRequest StorageState is empty")]
+        [PlaywrightTest("global-fetch-cookie.spec.ts", "should work with empty storage state")]
         [Test]
         [Timeout(30_000)]
         public async Task StandaloneStorageStateShouldBeEmpty()
@@ -1246,7 +1233,7 @@ namespace PlaywrightNative.Tests
             Assert.That(json, Does.Contain("[]"));
         }
 
-        [PlaywrightTest("global-fetch.spec.ts", "Playwright.APIRequest DisposeAsync blocks further fetches")]
+        [PlaywrightTest("global-fetch.spec.ts", "should throw after dispose")]
         [Test]
         [Timeout(30_000)]
         public async Task StandaloneDisposeShouldBlockFurtherFetches()
@@ -1261,7 +1248,7 @@ namespace PlaywrightNative.Tests
             Assert.That(ex.Message, Does.Contain("disposed"));
         }
 
-        [PlaywrightTest("global-fetch.spec.ts", "Playwright.APIRequest ignoreHTTPSErrors accepts untrusted TLS")]
+        [PlaywrightTest("global-fetch.spec.ts", "should support global ignoreHTTPSErrors option")]
         [Test]
         [Timeout(30_000)]
         public async Task StandaloneShouldFetchHttpsWhenIgnoringErrors()
@@ -1286,7 +1273,7 @@ namespace PlaywrightNative.Tests
             Assert.That(await response.TextAsync().ConfigureAwait(false), Is.EqualTo("secure-standalone"));
         }
 
-        [PlaywrightTest("global-fetch.spec.ts", "Playwright.APIRequest baseURL resolves a relative URL")]
+        [PlaywrightTest("global-fetch.spec.ts", "should resolve url relative to global baseURL option")]
         [Test]
         [Timeout(30_000)]
         public async Task StandaloneBaseUrlShouldResolveARelativeUrl()
@@ -1310,7 +1297,7 @@ namespace PlaywrightNative.Tests
             Assert.That(response.Url, Does.Contain("/api-base"));
         }
 
-        [PlaywrightTest("global-fetch.spec.ts", "Playwright.APIRequest userAgent is sent")]
+        [PlaywrightTest("global-fetch.spec.ts", "should support global userAgent option")]
         [Test]
         [Timeout(30_000)]
         public async Task StandaloneUserAgentShouldBeSent()
@@ -1335,7 +1322,7 @@ namespace PlaywrightNative.Tests
             Assert.That(await response.TextAsync().ConfigureAwait(false), Is.EqualTo("PlaywrightNative-Wave-147"));
         }
 
-        [PlaywrightTest("global-fetch.spec.ts", "Playwright.APIRequest timeout applies to every request")]
+        [PlaywrightTest("global-fetch.spec.ts", "should support global timeout option")]
         [Test]
         [Timeout(30_000)]
         public async Task StandaloneTimeoutShouldApplyToEveryRequest()
@@ -1363,7 +1350,7 @@ namespace PlaywrightNative.Tests
             Assert.That(ex.Message, Does.Contain("300"));
         }
 
-        [PlaywrightTest("global-fetch.spec.ts", "Playwright.APIRequest failOnStatusCode throws on 404")]
+        [PlaywrightTest("global-fetch.spec.ts", "should throw when failOnStatusCode is set to true inside APIRequest context options")]
         [Test]
         [Timeout(30_000)]
         public async Task StandaloneFailOnStatusCodeShouldThrow()
@@ -1390,7 +1377,7 @@ namespace PlaywrightNative.Tests
             Assert.That(ex.Message, Does.Contain("404"));
         }
 
-        [PlaywrightTest("global-fetch.spec.ts", "Playwright.APIRequest maxRedirects throws when the chain is longer")]
+        [PlaywrightTest("global-fetch.spec.ts", "should follow redirects up to maxRedirects limit set in newContext")]
         [Test]
         [Timeout(30_000)]
         public async Task StandaloneMaxRedirectsShouldThrowWhenExceeded()
@@ -1418,7 +1405,7 @@ namespace PlaywrightNative.Tests
             Assert.That(ex.Message, Does.Contain("maxRedirects"));
         }
 
-        [PlaywrightTest("global-fetch.spec.ts", "Playwright.APIRequest storageState sends cookies")]
+        [PlaywrightTest("global-fetch-cookie.spec.ts", "should send cookies from storage state")]
         [Test]
         [Timeout(30_000)]
         public async Task StandaloneStorageStateShouldSendCookies()
@@ -1445,7 +1432,6 @@ namespace PlaywrightNative.Tests
             Assert.That(await response.TextAsync().ConfigureAwait(false), Does.Contain("wave151=from-state"));
         }
 
-        [PlaywrightTest("global-fetch.spec.ts", "Playwright.APIRequest storageStatePath sends cookies")]
         [Test]
         [Timeout(30_000)]
         public async Task StandaloneStorageStatePathShouldSendCookies()
@@ -1481,7 +1467,7 @@ namespace PlaywrightNative.Tests
             }
         }
 
-        [PlaywrightTest("global-fetch.spec.ts", "Playwright.APIRequest httpCredentials sends Basic auth")]
+        [PlaywrightTest("global-fetch.spec.ts", "should support global httpCredentials option")]
         [Test]
         [Timeout(30_000)]
         public async Task StandaloneHttpCredentialsShouldSendBasicAuth()
@@ -1507,7 +1493,7 @@ namespace PlaywrightNative.Tests
             Assert.That(await response.TextAsync().ConfigureAwait(false), Is.EqualTo("ok"));
         }
 
-        [PlaywrightTest("global-fetch.spec.ts", "Playwright.APIRequest httpCredentials origin matches")]
+        [PlaywrightTest("global-fetch.spec.ts", "should work with correct credentials and matching origin")]
         [Test]
         [Timeout(30_000)]
         public async Task StandaloneHttpCredentialsOriginShouldApplyWhenRequestMatches()
@@ -1541,7 +1527,7 @@ namespace PlaywrightNative.Tests
             Assert.That(await response.TextAsync().ConfigureAwait(false), Is.EqualTo("ok"));
         }
 
-        [PlaywrightTest("global-fetch.spec.ts", "Playwright.APIRequest httpCredentials origin mismatch")]
+        [PlaywrightTest("global-fetch.spec.ts", "should return error with correct credentials and mismatching hostname")]
         [Test]
         [Timeout(30_000)]
         public async Task StandaloneHttpCredentialsOriginShouldNotApplyToOtherOrigins()
@@ -1574,7 +1560,6 @@ namespace PlaywrightNative.Tests
             Assert.That(response.Status, Is.EqualTo(401));
         }
 
-        [PlaywrightTest("global-fetch.spec.ts", "Playwright.APIRequest proxy is used for fetches")]
         [Test]
         [Timeout(30_000)]
         public async Task StandaloneProxyShouldBeUsedForFetches()
@@ -1591,7 +1576,6 @@ namespace PlaywrightNative.Tests
             Assert.That(ex, Is.Not.Null);
         }
 
-        [PlaywrightTest("global-fetch.spec.ts", "APIRequest JsonAsync T deserializes the body")]
         [Test]
         [Timeout(30_000)]
         public async Task JsonAsyncShouldDeserializeToType()
@@ -1617,7 +1601,6 @@ namespace PlaywrightNative.Tests
             Assert.That(body["n"], Is.EqualTo(157));
         }
 
-        [PlaywrightTest("global-fetch.spec.ts", "APIRequest PostAsync dataBytes sends a binary body")]
         [Test]
         [Timeout(30_000)]
         public async Task PostShouldSendDataBytes()
@@ -1643,7 +1626,6 @@ namespace PlaywrightNative.Tests
             Assert.That(await response.BodyAsync().ConfigureAwait(false), Is.EqualTo(payload));
         }
 
-        [PlaywrightTest("global-fetch.spec.ts", "APIRequest POST form Set and Append long")]
         [Test]
         [Timeout(30_000)]
         public async Task PostFormShouldSendLong()
@@ -1673,7 +1655,6 @@ namespace PlaywrightNative.Tests
             Assert.That(text, Does.Contain("extra=159"));
         }
 
-        [PlaywrightTest("global-fetch.spec.ts", "APIRequest POST form Set and Append double")]
         [Test]
         [Timeout(30_000)]
         public async Task PostFormShouldSendDouble()
@@ -1703,7 +1684,6 @@ namespace PlaywrightNative.Tests
             Assert.That(text, Does.Contain("extra=1.25"));
         }
 
-        [PlaywrightTest("global-fetch.spec.ts", "APIRequest POST form Set and Append decimal")]
         [Test]
         [Timeout(30_000)]
         public async Task PostFormShouldSendDecimal()
@@ -1733,7 +1713,6 @@ namespace PlaywrightNative.Tests
             Assert.That(text, Does.Contain("extra=2.5"));
         }
 
-        [PlaywrightTest("global-fetch.spec.ts", "APIRequest POST form Set and Append float")]
         [Test]
         [Timeout(30_000)]
         public async Task PostFormShouldSendFloat()
@@ -1763,7 +1742,6 @@ namespace PlaywrightNative.Tests
             Assert.That(text, Does.Contain("extra=1.25"));
         }
 
-        [PlaywrightTest("global-fetch.spec.ts", "APIRequest Put Patch Delete dataBytes send a binary body")]
         [Test]
         [Timeout(30_000)]
         public async Task PutPatchDeleteShouldSendDataBytes()

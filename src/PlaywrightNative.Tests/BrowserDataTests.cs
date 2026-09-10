@@ -14,7 +14,6 @@ namespace PlaywrightNative.Tests
     [TestFixture]
     public class BrowserDataTests
     {
-        [PlaywrightTest("browser.spec.ts", "Default revision returns pinned build")]
         [Test]
         public void DefaultRevisionReturnsPinnedBuild()
         {
@@ -23,7 +22,6 @@ namespace PlaywrightNative.Tests
             Assert.That(BrowserData.DefaultRevision(SupportedBrowser.Webkit), Is.EqualTo(BrowserData.WebkitRevision));
         }
 
-        [PlaywrightTest("browser.spec.ts", "Short platform key maps every non unknown platform")]
         [Test]
         public void ShortPlatformKeyMapsEveryNonUnknownPlatform()
         {
@@ -34,7 +32,6 @@ namespace PlaywrightNative.Tests
             Assert.That(BrowserData.ShortPlatformKey(Platform.Win64), Is.EqualTo("win-x64"));
         }
 
-        [PlaywrightTest("browser.spec.ts", "Playwright platform key for chromium uses short format")]
         [Test]
         public void PlaywrightPlatformKeyForChromiumUsesShortFormat()
         {
@@ -43,7 +40,6 @@ namespace PlaywrightNative.Tests
             Assert.That(BrowserData.PlaywrightPlatformKey(SupportedBrowser.Chromium, Platform.Win64), Is.EqualTo("win64"));
         }
 
-        [PlaywrightTest("browser.spec.ts", "Playwright platform key for firefox on linux uses ubuntu versioned key")]
         [Test]
         public void PlaywrightPlatformKeyForFirefoxOnLinuxUsesUbuntuVersionedKey()
         {
@@ -54,7 +50,6 @@ namespace PlaywrightNative.Tests
             Assert.That(arm, Does.Match("^ubuntu(22|24)\\.04-arm64$"));
         }
 
-        [PlaywrightTest("browser.spec.ts", "Playwright platform key for webkit on mac includes major version")]
         [Test]
         public void PlaywrightPlatformKeyForWebkitOnMacIncludesMajorVersion()
         {
@@ -65,7 +60,6 @@ namespace PlaywrightNative.Tests
             Assert.That(key, Does.EndWith("-arm64"));
         }
 
-        [PlaywrightTest("browser.spec.ts", "Download urls uses provided hosts over mirrors")]
         [Test]
         public void DownloadUrlsUsesProvidedHostsOverMirrors()
         {
@@ -75,7 +69,6 @@ namespace PlaywrightNative.Tests
             Assert.That(urls[0], Is.EqualTo("https://example.test/playwright/builds/chromium/1219/chromium-mac-arm64.zip"));
         }
 
-        [PlaywrightTest("browser.spec.ts", "Download urls falls back to cdn mirrors")]
         [Test]
         public void DownloadUrlsFallsBackToCdnMirrors()
         {
@@ -86,7 +79,6 @@ namespace PlaywrightNative.Tests
             Assert.That(urls[0], Does.EndWith("chromium-mac-arm64.zip"));
         }
 
-        [PlaywrightTest("browser.spec.ts", "Download urls throws for unsupported platform key")]
         [Test]
         public void DownloadUrlsThrowsForUnsupportedPlatformKey()
         {
@@ -94,7 +86,6 @@ namespace PlaywrightNative.Tests
                 BrowserData.DownloadUrls(SupportedBrowser.Chromium, "platform-that-does-not-exist", "1219", null));
         }
 
-        [PlaywrightTest("browser.spec.ts", "Executable path on mac arm64chromium goes into app bundle")]
         [Test]
         public void ExecutablePathOnMacArm64ChromiumGoesIntoAppBundle()
         {
@@ -103,7 +94,6 @@ namespace PlaywrightNative.Tests
             Assert.That(path, Is.EqualTo(Path.Combine(installDir, "chrome-mac-arm64", "Google Chrome for Testing.app", "Contents", "MacOS", "Google Chrome for Testing")));
         }
 
-        [PlaywrightTest("browser.spec.ts", "Executable path on windows firefox uses exe")]
         [Test]
         public void ExecutablePathOnWindowsFirefoxUsesExe()
         {
@@ -112,7 +102,6 @@ namespace PlaywrightNative.Tests
             Assert.That(path, Is.EqualTo(Path.Combine(installDir, "firefox", "firefox.exe")));
         }
 
-        [PlaywrightTest("browser.spec.ts", "Resolve revision prefers explicit argument")]
         [Test]
         public void ResolveRevisionPrefersExplicitArgument()
         {
@@ -120,7 +109,6 @@ namespace PlaywrightNative.Tests
             Assert.That(r, Is.EqualTo("999"));
         }
 
-        [PlaywrightTest("browser.spec.ts", "Resolve revision applies webkit mac14override")]
         [Test]
         public void ResolveRevisionAppliesWebkitMac14Override()
         {
@@ -128,7 +116,6 @@ namespace PlaywrightNative.Tests
             Assert.That(r, Is.EqualTo("2251"));
         }
 
-        [PlaywrightTest("browser.spec.ts", "Resolve revision falls back to default")]
         [Test]
         public void ResolveRevisionFallsBackToDefault()
         {
@@ -136,7 +123,6 @@ namespace PlaywrightNative.Tests
             Assert.That(r, Is.EqualTo(BrowserData.WebkitRevision));
         }
 
-        [PlaywrightTest("browser.spec.ts", "Installation dir combines cache browser build id")]
         [Test]
         public void InstallationDirCombinesCacheBrowserBuildId()
         {

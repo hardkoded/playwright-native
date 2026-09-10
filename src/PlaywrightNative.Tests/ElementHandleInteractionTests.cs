@@ -30,7 +30,7 @@ namespace PlaywrightNative.Tests
     [TestFixture]
     public class ElementHandleInteractionTests : PageTestEx
     {
-        [PlaywrightTest("elementhandle-click.spec.ts", "ClickAsync fires click event")]
+        [PlaywrightTest("elementhandle-click.spec.ts", "should work @smoke")]
         [Test]
         [Timeout(30_000)]
         public async Task ClickAsyncFiresClickEvent()
@@ -48,7 +48,7 @@ namespace PlaywrightNative.Tests
             Assert.That(clicked, Is.True);
         }
 
-        [PlaywrightTest("elementhandle-click.spec.ts", "ClickAsync times out while hidden")]
+        [PlaywrightTest("page-click-timeout-2.spec.ts", "should timeout waiting for display:none to be gone")]
         [Test]
         [Timeout(30_000)]
         public async Task ClickAsyncShouldTimeoutWhileHidden()
@@ -64,7 +64,7 @@ namespace PlaywrightNative.Tests
             Assert.That(ex.Message, Does.Contain("Timeout"));
         }
 
-        [PlaywrightTest("elementhandle-click.spec.ts", "ClickAsync waits until visible")]
+        [PlaywrightTest("page-click.spec.ts", "should waitFor display:none to be gone")]
         [Test]
         [Timeout(30_000)]
         public async Task ClickAsyncShouldWaitUntilVisible()
@@ -83,7 +83,6 @@ namespace PlaywrightNative.Tests
             Assert.That(clicked, Is.True);
         }
 
-        [PlaywrightTest("elementhandle-click.spec.ts", "ClickAsync force clicks while hidden")]
         [Test]
         [Timeout(30_000)]
         public async Task ClickAsyncShouldHonorForce()
@@ -107,7 +106,7 @@ namespace PlaywrightNative.Tests
             Assert.That(hit, Is.True);
         }
 
-        [PlaywrightTest("elementhandle-click.spec.ts", "ClickAsync honors modifiers")]
+        [PlaywrightTest("page-click.spec.ts", "should update modifiers correctly")]
         [Test]
         [Timeout(30_000)]
         public async Task ClickAsyncShouldHonorModifiers()
@@ -126,7 +125,6 @@ namespace PlaywrightNative.Tests
             Assert.That(shift, Is.True);
         }
 
-        [PlaywrightTest("elementhandle-click.spec.ts", "DblClickAsync honors modifiers")]
         [Test]
         [Timeout(30_000)]
         public async Task DblClickAsyncShouldHonorModifiers()
@@ -145,7 +143,6 @@ namespace PlaywrightNative.Tests
             Assert.That(shift, Is.True);
         }
 
-        [PlaywrightTest("elementhandle-click.spec.ts", "HoverAsync honors modifiers")]
         [Test]
         [Timeout(30_000)]
         public async Task HoverAsyncShouldHonorModifiers()
@@ -166,7 +163,7 @@ namespace PlaywrightNative.Tests
             Assert.That(shift, Is.True);
         }
 
-        [PlaywrightTest("tap.spec.ts", "TapAsync honors modifiers")]
+        [PlaywrightTest("tap.spec.ts", "should work with modifiers")]
         [Test]
         [Timeout(30_000)]
         public async Task TapAsyncShouldHonorModifiers()
@@ -187,7 +184,6 @@ namespace PlaywrightNative.Tests
             Assert.That(shift, Is.True);
         }
 
-        [PlaywrightTest("elementhandle-click.spec.ts", "ClickAsync honors Position")]
         [Test]
         [Timeout(30_000)]
         public async Task ClickAsyncShouldHonorPosition()
@@ -212,7 +208,6 @@ namespace PlaywrightNative.Tests
             Assert.That(y, Is.EqualTo(18).Within(2));
         }
 
-        [PlaywrightTest("elementhandle-click.spec.ts", "page ClickAsync honors Position")]
         [Test]
         [Timeout(30_000)]
         public async Task PageClickAsyncShouldHonorPosition()
@@ -236,7 +231,7 @@ namespace PlaywrightNative.Tests
             Assert.That(y, Is.EqualTo(22).Within(2));
         }
 
-        [PlaywrightTest("page-fill.spec.ts", "FillAsync sets input value")]
+        [PlaywrightTest("page-fill.spec.ts", "should fill input")]
         [Test]
         [Timeout(30_000)]
         public async Task FillAsyncSetsInputValue()
@@ -254,7 +249,6 @@ namespace PlaywrightNative.Tests
             Assert.That(value, Is.EqualTo("hello world"));
         }
 
-        [PlaywrightTest("page-fill.spec.ts", "FillAsync times out while hidden")]
         [Test]
         [Timeout(30_000)]
         public async Task FillAsyncShouldTimeoutWhileHidden()
@@ -270,7 +264,7 @@ namespace PlaywrightNative.Tests
             Assert.That(ex.Message, Does.Contain("Timeout"));
         }
 
-        [PlaywrightTest("page-fill.spec.ts", "FillAsync waits until visible")]
+        [PlaywrightTest("page-fill.spec.ts", "should retry on invisible element")]
         [Test]
         [Timeout(30_000)]
         public async Task FillAsyncShouldWaitUntilVisible()
@@ -289,7 +283,6 @@ namespace PlaywrightNative.Tests
             Assert.That(value, Is.EqualTo("wave199"));
         }
 
-        [PlaywrightTest("page-fill.spec.ts", "FillAsync force fills while hidden")]
         [Test]
         [Timeout(30_000)]
         public async Task FillAsyncShouldHonorForce()
@@ -305,7 +298,7 @@ namespace PlaywrightNative.Tests
             Assert.That(value, Is.EqualTo("forced"));
         }
 
-        [PlaywrightTest("page-focus.spec.ts", "FocusAsync sets active element")]
+        [PlaywrightTest("page-focus.spec.ts", "should work @smoke")]
         [Test]
         [Timeout(30_000)]
         public async Task FocusAsyncSetsActiveElement()
@@ -323,7 +316,6 @@ namespace PlaywrightNative.Tests
             Assert.That(activeId, Is.EqualTo("i"));
         }
 
-        [PlaywrightTest("page-focus.spec.ts", "FocusAsync times out while hidden")]
         [Test]
         [Timeout(30_000)]
         public async Task FocusAsyncShouldTimeoutWhileHidden()
@@ -340,7 +332,6 @@ namespace PlaywrightNative.Tests
             Assert.That(ex.Message, Does.Contain("Timeout"));
         }
 
-        [PlaywrightTest("page-focus.spec.ts", "FocusAsync waits until visible")]
         [Test]
         [Timeout(30_000)]
         public async Task FocusAsyncShouldWaitUntilVisible()
@@ -361,7 +352,7 @@ namespace PlaywrightNative.Tests
                 Is.EqualTo("i"));
         }
 
-        [PlaywrightTest("elementhandle-type.spec.ts", "TypeAsync produces text")]
+        [PlaywrightTest("elementhandle-type.spec.ts", "should work")]
         [Test]
         [Timeout(30_000)]
         public async Task TypeAsyncProducesText()
@@ -379,7 +370,6 @@ namespace PlaywrightNative.Tests
             Assert.That(value, Is.EqualTo("hello"));
         }
 
-        [PlaywrightTest("elementhandle-type.spec.ts", "TypeAsync times out while hidden")]
         [Test]
         [Timeout(30_000)]
         public async Task TypeAsyncShouldTimeoutWhileHidden()
@@ -395,7 +385,6 @@ namespace PlaywrightNative.Tests
             Assert.That(ex.Message, Does.Contain("Timeout"));
         }
 
-        [PlaywrightTest("elementhandle-type.spec.ts", "TypeAsync waits until visible")]
         [Test]
         [Timeout(30_000)]
         public async Task TypeAsyncShouldWaitUntilVisible()
@@ -414,7 +403,6 @@ namespace PlaywrightNative.Tests
             Assert.That(value, Is.EqualTo("wave212"));
         }
 
-        [PlaywrightTest("elementhandle-type.spec.ts", "TypeAsync force types while hidden")]
         [Test]
         [Timeout(30_000)]
         public async Task TypeAsyncShouldHonorForce()
@@ -428,7 +416,7 @@ namespace PlaywrightNative.Tests
             await hidden.TypeAsync("forced", force: true, timeout: 200).ConfigureAwait(false);
         }
 
-        [PlaywrightTest("elementhandle-press.spec.ts", "PressAsync dispatches key")]
+        [PlaywrightTest("elementhandle-press.spec.ts", "should work")]
         [Test]
         [Timeout(30_000)]
         public async Task PressAsyncDispatchesKey()
@@ -447,7 +435,6 @@ namespace PlaywrightNative.Tests
             Assert.That(lastKey, Is.EqualTo("Enter"));
         }
 
-        [PlaywrightTest("elementhandle-press.spec.ts", "PressAsync times out while hidden")]
         [Test]
         [Timeout(30_000)]
         public async Task PressAsyncShouldTimeoutWhileHidden()
@@ -463,7 +450,6 @@ namespace PlaywrightNative.Tests
             Assert.That(ex.Message, Does.Contain("Timeout"));
         }
 
-        [PlaywrightTest("elementhandle-press.spec.ts", "PressAsync waits until visible")]
         [Test]
         [Timeout(30_000)]
         public async Task PressAsyncShouldWaitUntilVisible()
@@ -485,7 +471,6 @@ namespace PlaywrightNative.Tests
             Assert.That(lastKey, Is.EqualTo("Enter"));
         }
 
-        [PlaywrightTest("elementhandle-press.spec.ts", "PressAsync force presses while hidden")]
         [Test]
         [Timeout(30_000)]
         public async Task PressAsyncShouldHonorForce()
@@ -499,7 +484,7 @@ namespace PlaywrightNative.Tests
             await hidden.PressAsync("Enter", force: true, timeout: 200).ConfigureAwait(false);
         }
 
-        [PlaywrightTest("elementhandle-click.spec.ts", "HoverAsync triggers mouseover")]
+        [PlaywrightTest("page-mouse.spec.ts", "should trigger hover state")]
         [Test]
         [Timeout(30_000)]
         public async Task HoverAsyncTriggersMouseover()
@@ -518,7 +503,6 @@ namespace PlaywrightNative.Tests
             Assert.That(hovered, Is.True);
         }
 
-        [PlaywrightTest("elementhandle-click.spec.ts", "HoverAsync times out while hidden")]
         [Test]
         [Timeout(30_000)]
         public async Task HoverAsyncShouldTimeoutWhileHidden()
@@ -534,7 +518,6 @@ namespace PlaywrightNative.Tests
             Assert.That(ex.Message, Does.Contain("Timeout"));
         }
 
-        [PlaywrightTest("elementhandle-click.spec.ts", "HoverAsync waits until visible")]
         [Test]
         [Timeout(30_000)]
         public async Task HoverAsyncShouldWaitUntilVisible()
@@ -556,7 +539,6 @@ namespace PlaywrightNative.Tests
             Assert.That(hovered, Is.True);
         }
 
-        [PlaywrightTest("elementhandle-click.spec.ts", "HoverAsync force hovers while hidden")]
         [Test]
         [Timeout(30_000)]
         public async Task HoverAsyncShouldHonorForce()
@@ -580,7 +562,6 @@ namespace PlaywrightNative.Tests
             Assert.That(hit, Is.True);
         }
 
-        [PlaywrightTest("elementhandle-click.spec.ts", "HoverAsync honors Position")]
         [Test]
         [Timeout(30_000)]
         public async Task HoverAsyncShouldHonorPosition()
@@ -605,7 +586,6 @@ namespace PlaywrightNative.Tests
             Assert.That(y, Is.EqualTo(18).Within(2));
         }
 
-        [PlaywrightTest("elementhandle-click.spec.ts", "page HoverAsync honors Position")]
         [Test]
         [Timeout(30_000)]
         public async Task PageHoverAsyncShouldHonorPosition()
@@ -629,7 +609,6 @@ namespace PlaywrightNative.Tests
             Assert.That(y, Is.EqualTo(22).Within(2));
         }
 
-        [PlaywrightTest("tap.spec.ts", "TapAsync honors Position")]
         [Test]
         [Timeout(30_000)]
         public async Task TapAsyncShouldHonorPosition()
@@ -659,7 +638,6 @@ namespace PlaywrightNative.Tests
             Assert.That(y, Is.EqualTo(18).Within(2));
         }
 
-        [PlaywrightTest("tap.spec.ts", "page TapAsync honors Position")]
         [Test]
         [Timeout(30_000)]
         public async Task PageTapAsyncShouldHonorPosition()
@@ -688,7 +666,6 @@ namespace PlaywrightNative.Tests
             Assert.That(y, Is.EqualTo(22).Within(2));
         }
 
-        [PlaywrightTest("tap.spec.ts", "TapAsync times out while hidden")]
         [Test]
         [Timeout(30_000)]
         public async Task TapAsyncShouldTimeoutWhileHidden()
@@ -704,7 +681,7 @@ namespace PlaywrightNative.Tests
             Assert.That(ex.Message, Does.Contain("Timeout"));
         }
 
-        [PlaywrightTest("tap.spec.ts", "TapAsync waits until visible")]
+        [PlaywrightTest("tap.spec.ts", "should wait until an element is visible to tap it")]
         [Test]
         [Timeout(30_000)]
         public async Task TapAsyncShouldWaitUntilVisible()
@@ -726,7 +703,6 @@ namespace PlaywrightNative.Tests
             Assert.That(tapped, Is.True);
         }
 
-        [PlaywrightTest("tap.spec.ts", "TapAsync force taps while hidden")]
         [Test]
         [Timeout(30_000)]
         public async Task TapAsyncShouldHonorForce()
@@ -751,7 +727,7 @@ namespace PlaywrightNative.Tests
             Assert.That(hit, Is.True);
         }
 
-        [PlaywrightTest("page-check.spec.ts", "CheckAsync checks box")]
+        [PlaywrightTest("page-check.spec.ts", "should check the box @smoke")]
         [Test]
         [Timeout(30_000)]
         public async Task CheckAsyncChecksBox()
@@ -769,7 +745,6 @@ namespace PlaywrightNative.Tests
             Assert.That(isChecked, Is.True);
         }
 
-        [PlaywrightTest("page-check.spec.ts", "CheckAsync times out while hidden")]
         [Test]
         [Timeout(30_000)]
         public async Task CheckAsyncShouldTimeoutWhileHidden()
@@ -785,7 +760,6 @@ namespace PlaywrightNative.Tests
             Assert.That(ex.Message, Does.Contain("Timeout"));
         }
 
-        [PlaywrightTest("page-check.spec.ts", "CheckAsync waits until visible")]
         [Test]
         [Timeout(30_000)]
         public async Task CheckAsyncShouldWaitUntilVisible()
@@ -803,7 +777,6 @@ namespace PlaywrightNative.Tests
             Assert.That(await box.IsCheckedAsync().ConfigureAwait(false), Is.True);
         }
 
-        [PlaywrightTest("page-check.spec.ts", "CheckAsync force clicks while hidden")]
         [Test]
         [Timeout(30_000)]
         public async Task CheckAsyncShouldHonorForce()
@@ -834,7 +807,6 @@ namespace PlaywrightNative.Tests
             Assert.That(hit, Is.True);
         }
 
-        [PlaywrightTest("page-check.spec.ts", "CheckAsync honors Position")]
         [Test]
         [Timeout(30_000)]
         public async Task CheckAsyncShouldHonorPosition()
@@ -860,7 +832,6 @@ namespace PlaywrightNative.Tests
             Assert.That(y, Is.EqualTo(18).Within(2));
         }
 
-        [PlaywrightTest("page-check.spec.ts", "page CheckAsync honors Position")]
         [Test]
         [Timeout(30_000)]
         public async Task PageCheckAsyncShouldHonorPosition()
@@ -885,7 +856,6 @@ namespace PlaywrightNative.Tests
             Assert.That(y, Is.EqualTo(22).Within(2));
         }
 
-        [PlaywrightTest("page-check.spec.ts", "SetCheckedAsync honors Position")]
         [Test]
         [Timeout(30_000)]
         public async Task SetCheckedAsyncShouldHonorPosition()
@@ -911,7 +881,6 @@ namespace PlaywrightNative.Tests
             Assert.That(y, Is.EqualTo(18).Within(2));
         }
 
-        [PlaywrightTest("page-check.spec.ts", "page SetCheckedAsync honors Position")]
         [Test]
         [Timeout(30_000)]
         public async Task PageSetCheckedAsyncShouldHonorPosition()
@@ -936,7 +905,7 @@ namespace PlaywrightNative.Tests
             Assert.That(y, Is.EqualTo(22).Within(2));
         }
 
-        [PlaywrightTest("page-check.spec.ts", "UncheckAsync unchecks box")]
+        [PlaywrightTest("page-check.spec.ts", "should uncheck the box")]
         [Test]
         [Timeout(30_000)]
         public async Task UncheckAsyncUnchecksBox()
@@ -954,7 +923,6 @@ namespace PlaywrightNative.Tests
             Assert.That(isChecked, Is.False);
         }
 
-        [PlaywrightTest("page-check.spec.ts", "UncheckAsync times out while hidden")]
         [Test]
         [Timeout(30_000)]
         public async Task UncheckAsyncShouldTimeoutWhileHidden()
@@ -970,7 +938,6 @@ namespace PlaywrightNative.Tests
             Assert.That(ex.Message, Does.Contain("Timeout"));
         }
 
-        [PlaywrightTest("page-check.spec.ts", "UncheckAsync waits until visible")]
         [Test]
         [Timeout(30_000)]
         public async Task UncheckAsyncShouldWaitUntilVisible()
@@ -988,7 +955,6 @@ namespace PlaywrightNative.Tests
             Assert.That(await box.IsCheckedAsync().ConfigureAwait(false), Is.False);
         }
 
-        [PlaywrightTest("page-check.spec.ts", "UncheckAsync force clicks while hidden")]
         [Test]
         [Timeout(30_000)]
         public async Task UncheckAsyncShouldHonorForce()
@@ -1019,7 +985,6 @@ namespace PlaywrightNative.Tests
             Assert.That(hit, Is.True);
         }
 
-        [PlaywrightTest("page-check.spec.ts", "UncheckAsync honors Position")]
         [Test]
         [Timeout(30_000)]
         public async Task UncheckAsyncShouldHonorPosition()
@@ -1045,7 +1010,6 @@ namespace PlaywrightNative.Tests
             Assert.That(y, Is.EqualTo(18).Within(2));
         }
 
-        [PlaywrightTest("page-check.spec.ts", "page UncheckAsync honors Position")]
         [Test]
         [Timeout(30_000)]
         public async Task PageUncheckAsyncShouldHonorPosition()
@@ -1070,7 +1034,7 @@ namespace PlaywrightNative.Tests
             Assert.That(y, Is.EqualTo(22).Within(2));
         }
 
-        [PlaywrightTest("page-select-option.spec.ts", "SelectOptionAsync selects by value")]
+        [PlaywrightTest("page-select-option.spec.ts", "should select single option by value")]
         [Test]
         [Timeout(30_000)]
         public async Task SelectOptionAsyncSelectsByValue()
@@ -1093,7 +1057,6 @@ namespace PlaywrightNative.Tests
             Assert.That(value, Is.EqualTo("b"));
         }
 
-        [PlaywrightTest("page-select-option.spec.ts", "SelectOptionAsync times out while hidden")]
         [Test]
         [Timeout(30_000)]
         public async Task SelectOptionAsyncShouldTimeoutWhileHidden()
@@ -1111,7 +1074,6 @@ namespace PlaywrightNative.Tests
             Assert.That(ex.Message, Does.Contain("Timeout"));
         }
 
-        [PlaywrightTest("page-select-option.spec.ts", "SelectOptionAsync force selects while hidden")]
         [Test]
         [Timeout(30_000)]
         public async Task SelectOptionAsyncShouldHonorForce()
@@ -1129,7 +1091,6 @@ namespace PlaywrightNative.Tests
             Assert.That(await page.EvaluateAsync<string>("document.querySelector('#s').value").ConfigureAwait(false), Is.EqualTo("b"));
         }
 
-        [PlaywrightTest("page-select-option.spec.ts", "SelectOptionAsync waits until visible")]
         [Test]
         [Timeout(30_000)]
         public async Task SelectOptionAsyncShouldWaitUntilVisible()
@@ -1149,7 +1110,6 @@ namespace PlaywrightNative.Tests
             Assert.That(result, Is.EqualTo(new[] { "b" }));
         }
 
-        [PlaywrightTest("page-set-input-files.spec.ts", "SetInputFilesAsync times out while hidden")]
         [Test]
         [Timeout(30_000)]
         public async Task SetInputFilesAsyncShouldTimeoutWhileHidden()
@@ -1171,7 +1131,6 @@ namespace PlaywrightNative.Tests
             Assert.That(ex.Message, Does.Contain("Timeout"));
         }
 
-        [PlaywrightTest("page-set-input-files.spec.ts", "SetInputFilesAsync waits until visible")]
         [Test]
         [Timeout(30_000)]
         public async Task SetInputFilesAsyncShouldWaitUntilVisible()
@@ -1197,7 +1156,6 @@ namespace PlaywrightNative.Tests
                 Is.EqualTo("wave.txt"));
         }
 
-        [PlaywrightTest("page-set-input-files.spec.ts", "SetInputFilesAsync force sets while hidden")]
         [Test]
         [Timeout(30_000)]
         public async Task SetInputFilesAsyncShouldHonorForce()
@@ -1223,7 +1181,7 @@ namespace PlaywrightNative.Tests
                 Is.EqualTo("wave.txt"));
         }
 
-        [PlaywrightTest("elementhandle-click.spec.ts", "DblClickAsync fires dbl click")]
+        [PlaywrightTest("elementhandle-click.spec.ts", "should double click the button")]
         [Test]
         [Timeout(30_000)]
         public async Task DblClickAsyncFiresDblClick()
@@ -1242,7 +1200,6 @@ namespace PlaywrightNative.Tests
             Assert.That(count, Is.EqualTo(1));
         }
 
-        [PlaywrightTest("elementhandle-click.spec.ts", "DblClickAsync times out while hidden")]
         [Test]
         [Timeout(30_000)]
         public async Task DblClickAsyncShouldTimeoutWhileHidden()
@@ -1258,7 +1215,6 @@ namespace PlaywrightNative.Tests
             Assert.That(ex.Message, Does.Contain("Timeout"));
         }
 
-        [PlaywrightTest("elementhandle-click.spec.ts", "DblClickAsync waits until visible")]
         [Test]
         [Timeout(30_000)]
         public async Task DblClickAsyncShouldWaitUntilVisible()
@@ -1280,7 +1236,6 @@ namespace PlaywrightNative.Tests
             Assert.That(count, Is.EqualTo(1));
         }
 
-        [PlaywrightTest("elementhandle-click.spec.ts", "DblClickAsync force clicks while hidden")]
         [Test]
         [Timeout(30_000)]
         public async Task DblClickAsyncShouldHonorForce()
@@ -1304,7 +1259,7 @@ namespace PlaywrightNative.Tests
             Assert.That(hit, Is.True);
         }
 
-        [PlaywrightTest("elementhandle-convenience.spec.ts", "InputValueAsync reads the input value")]
+        [PlaywrightTest("elementhandle-convenience.spec.ts", "inputValue should work")]
         [Test]
         [Timeout(30_000)]
         public async Task InputValueAsyncShouldReadTheValue()
@@ -1320,7 +1275,6 @@ namespace PlaywrightNative.Tests
             Assert.That(await handle.InputValueAsync().ConfigureAwait(false), Is.EqualTo("wave162"));
         }
 
-        [PlaywrightTest("elementhandle-convenience.spec.ts", "InputValueAsync times out while hidden")]
         [Test]
         [Timeout(30_000)]
         public async Task InputValueAsyncShouldTimeoutWhileHidden()
@@ -1336,7 +1290,6 @@ namespace PlaywrightNative.Tests
             Assert.That(ex.Message, Does.Contain("Timeout"));
         }
 
-        [PlaywrightTest("elementhandle-convenience.spec.ts", "InputValueAsync waits until visible")]
         [Test]
         [Timeout(30_000)]
         public async Task InputValueAsyncShouldWaitUntilVisible()

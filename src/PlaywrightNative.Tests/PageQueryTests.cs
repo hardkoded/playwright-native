@@ -28,7 +28,6 @@ namespace PlaywrightNative.Tests
     [TestFixture]
     public class PageQueryTests : PageTestEx
     {
-        [PlaywrightTest("elementhandle-convenience.spec.ts", "should get attribute and text")]
         [Test]
         [Timeout(30_000)]
         public async Task GetAttributeInnerTextAndTextContentShouldWork()
@@ -44,7 +43,6 @@ namespace PlaywrightNative.Tests
             Assert.That(await page.InnerHTMLAsync("#box").ConfigureAwait(false), Does.Contain("hello world"));
         }
 
-        [PlaywrightTest("elementhandle-convenience.spec.ts", "page GetAttributeAsync times out while missing")]
         [Test]
         [Timeout(30_000)]
         public async Task PageGetAttributeAsyncShouldTimeoutWhileMissing()
@@ -59,7 +57,6 @@ namespace PlaywrightNative.Tests
             Assert.That(ex.Message, Does.Contain("Timeout"));
         }
 
-        [PlaywrightTest("elementhandle-convenience.spec.ts", "page GetAttributeAsync waits until attached")]
         [Test]
         [Timeout(30_000)]
         public async Task PageGetAttributeAsyncShouldWaitUntilAttached()
@@ -77,7 +74,6 @@ namespace PlaywrightNative.Tests
             Assert.That(await attrTask.ConfigureAwait(false), Is.EqualTo("ok"));
         }
 
-        [PlaywrightTest("elementhandle-convenience.spec.ts", "page InnerTextAsync times out while missing")]
         [Test]
         [Timeout(30_000)]
         public async Task PageInnerTextAsyncShouldTimeoutWhileMissing()
@@ -92,7 +88,6 @@ namespace PlaywrightNative.Tests
             Assert.That(ex.Message, Does.Contain("Timeout"));
         }
 
-        [PlaywrightTest("elementhandle-convenience.spec.ts", "page InnerTextAsync waits until attached")]
         [Test]
         [Timeout(30_000)]
         public async Task PageInnerTextAsyncShouldWaitUntilAttached()
@@ -110,7 +105,6 @@ namespace PlaywrightNative.Tests
             Assert.That(await textTask.ConfigureAwait(false), Is.EqualTo("hello"));
         }
 
-        [PlaywrightTest("elementhandle-convenience.spec.ts", "page InnerHTMLAsync times out while missing")]
         [Test]
         [Timeout(30_000)]
         public async Task PageInnerHTMLAsyncShouldTimeoutWhileMissing()
@@ -125,7 +119,6 @@ namespace PlaywrightNative.Tests
             Assert.That(ex.Message, Does.Contain("Timeout"));
         }
 
-        [PlaywrightTest("elementhandle-convenience.spec.ts", "page InnerHTMLAsync waits until attached")]
         [Test]
         [Timeout(30_000)]
         public async Task PageInnerHTMLAsyncShouldWaitUntilAttached()
@@ -143,7 +136,6 @@ namespace PlaywrightNative.Tests
             Assert.That(await htmlTask.ConfigureAwait(false), Does.Contain("<b>ok</b>"));
         }
 
-        [PlaywrightTest("elementhandle-convenience.spec.ts", "page TextContentAsync times out while missing")]
         [Test]
         [Timeout(30_000)]
         public async Task PageTextContentAsyncShouldTimeoutWhileMissing()
@@ -158,7 +150,6 @@ namespace PlaywrightNative.Tests
             Assert.That(ex.Message, Does.Contain("Timeout"));
         }
 
-        [PlaywrightTest("elementhandle-convenience.spec.ts", "page TextContentAsync waits until attached")]
         [Test]
         [Timeout(30_000)]
         public async Task PageTextContentAsyncShouldWaitUntilAttached()
@@ -176,7 +167,7 @@ namespace PlaywrightNative.Tests
             Assert.That(await textTask.ConfigureAwait(false), Is.EqualTo("hello"));
         }
 
-        [PlaywrightTest("elementhandle-convenience.spec.ts", "should check enabled and disabled")]
+        [PlaywrightTest("elementhandle-convenience.spec.ts", "isEnabled and isDisabled should work")]
         [Test]
         [Timeout(30_000)]
         public async Task IsEnabledAndIsDisabledShouldWork()
@@ -192,7 +183,6 @@ namespace PlaywrightNative.Tests
             Assert.That(await page.IsDisabledAsync("#off").ConfigureAwait(false), Is.True);
         }
 
-        [PlaywrightTest("elementhandle-convenience.spec.ts", "should check checked and editable")]
         [Test]
         [Timeout(30_000)]
         public async Task IsCheckedAndIsEditableShouldWork()
@@ -208,7 +198,6 @@ namespace PlaywrightNative.Tests
             Assert.That(await page.IsEditableAsync("#ro").ConfigureAwait(false), Is.False);
         }
 
-        [PlaywrightTest("page-check.spec.ts", "page IsCheckedAsync times out while missing")]
         [Test]
         [Timeout(30_000)]
         public async Task PageIsCheckedAsyncShouldTimeoutWhileMissing()
@@ -223,7 +212,6 @@ namespace PlaywrightNative.Tests
             Assert.That(ex.Message, Does.Contain("Timeout"));
         }
 
-        [PlaywrightTest("page-check.spec.ts", "page IsCheckedAsync waits until attached")]
         [Test]
         [Timeout(30_000)]
         public async Task PageIsCheckedAsyncShouldWaitUntilAttached()
@@ -241,7 +229,6 @@ namespace PlaywrightNative.Tests
             Assert.That(await checkedTask.ConfigureAwait(false), Is.True);
         }
 
-        [PlaywrightTest("elementhandle-convenience.spec.ts", "page IsDisabledAsync times out while missing")]
         [Test]
         [Timeout(30_000)]
         public async Task PageIsDisabledAsyncShouldTimeoutWhileMissing()
@@ -256,7 +243,6 @@ namespace PlaywrightNative.Tests
             Assert.That(ex.Message, Does.Contain("Timeout"));
         }
 
-        [PlaywrightTest("elementhandle-convenience.spec.ts", "page IsDisabledAsync waits until attached")]
         [Test]
         [Timeout(30_000)]
         public async Task PageIsDisabledAsyncShouldWaitUntilAttached()
@@ -274,7 +260,6 @@ namespace PlaywrightNative.Tests
             Assert.That(await disabledTask.ConfigureAwait(false), Is.True);
         }
 
-        [PlaywrightTest("elementhandle-convenience.spec.ts", "page IsEditableAsync times out while missing")]
         [Test]
         [Timeout(30_000)]
         public async Task PageIsEditableAsyncShouldTimeoutWhileMissing()
@@ -289,7 +274,6 @@ namespace PlaywrightNative.Tests
             Assert.That(ex.Message, Does.Contain("Timeout"));
         }
 
-        [PlaywrightTest("elementhandle-convenience.spec.ts", "page IsEditableAsync waits until attached")]
         [Test]
         [Timeout(30_000)]
         public async Task PageIsEditableAsyncShouldWaitUntilAttached()
@@ -307,7 +291,6 @@ namespace PlaywrightNative.Tests
             Assert.That(await editableTask.ConfigureAwait(false), Is.True);
         }
 
-        [PlaywrightTest("elementhandle-convenience.spec.ts", "page IsEnabledAsync times out while missing")]
         [Test]
         [Timeout(30_000)]
         public async Task PageIsEnabledAsyncShouldTimeoutWhileMissing()
@@ -322,7 +305,6 @@ namespace PlaywrightNative.Tests
             Assert.That(ex.Message, Does.Contain("Timeout"));
         }
 
-        [PlaywrightTest("elementhandle-convenience.spec.ts", "page IsEnabledAsync waits until attached")]
         [Test]
         [Timeout(30_000)]
         public async Task PageIsEnabledAsyncShouldWaitUntilAttached()

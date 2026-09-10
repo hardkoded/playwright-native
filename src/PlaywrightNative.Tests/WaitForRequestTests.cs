@@ -51,7 +51,7 @@ namespace PlaywrightNative.Tests
             Assert.That(request.Method, Is.EqualTo("GET"));
         }
 
-        [PlaywrightTest("page-wait-for-request.spec.ts", "RequestsAsync returns recorded requests")]
+        [PlaywrightTest("page-event-request.spec.ts", "should return last requests")]
         [Test]
         [Timeout(30_000)]
         public async Task RequestsAsyncShouldReturnRecordedRequests()
@@ -67,7 +67,6 @@ namespace PlaywrightNative.Tests
             Assert.That(requests.Select(item => item.Url), Has.Some.StartWith("data:text/html"));
         }
 
-        [PlaywrightTest("page-wait-for-request.spec.ts", "RunAndWaitForRequestAsync waits for GoTo")]
         [Test]
         [Timeout(30_000)]
         public async Task RunAndWaitForRequestAsyncShouldReturnTheRequest()
@@ -83,7 +82,7 @@ namespace PlaywrightNative.Tests
             Assert.That(request.Url, Does.StartWith("data:text/html"));
         }
 
-        [PlaywrightTest("page-wait-for-request.spec.ts", "RunAndWaitForRequestFinishedAsync waits for GoTo")]
+        [PlaywrightTest("page-event-network.spec.ts", "Page.Events.RequestFinished @smoke")]
         [Test]
         [Timeout(30_000)]
         public async Task RunAndWaitForRequestFinishedAsyncShouldReturnTheRequest()
@@ -131,7 +130,6 @@ namespace PlaywrightNative.Tests
             Assert.That(response.Ok, Is.True);
         }
 
-        [PlaywrightTest("page-wait-for-response.spec.ts", "RunAndWaitForResponseAsync waits for GoTo")]
         [Test]
         [Timeout(30_000)]
         public async Task RunAndWaitForResponseAsyncShouldReturnTheResponse()
@@ -148,7 +146,7 @@ namespace PlaywrightNative.Tests
             Assert.That(response.Ok, Is.True);
         }
 
-        [PlaywrightTest("page-wait-for-request.spec.ts", "should timeout")]
+        [PlaywrightTest("page-wait-for-request.spec.ts", "should respect timeout")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldTimeoutWaitingForRequest()
@@ -163,7 +161,7 @@ namespace PlaywrightNative.Tests
             Assert.That(ex.Message, Does.Contain("Timeout 200ms exceeded."));
         }
 
-        [PlaywrightTest("page-wait-for-response.spec.ts", "should timeout")]
+        [PlaywrightTest("page-wait-for-response.spec.ts", "should respect timeout")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldTimeoutWaitingForResponse()
@@ -178,7 +176,6 @@ namespace PlaywrightNative.Tests
             Assert.That(ex.Message, Does.Contain("Timeout 200ms exceeded."));
         }
 
-        [PlaywrightTest("page-event-request.spec.ts", "should work")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldWaitForMatchingFinishedRequest()
@@ -195,7 +192,6 @@ namespace PlaywrightNative.Tests
             Assert.That(request.Method, Is.EqualTo("GET"));
         }
 
-        [PlaywrightTest("page-event-request.spec.ts", "should work with regex")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldWaitForFinishedRequestRegex()
@@ -210,7 +206,6 @@ namespace PlaywrightNative.Tests
             Assert.That(request.Url, Does.Contain("wait-for-req-fin-re"));
         }
 
-        [PlaywrightTest("page-event-request.spec.ts", "should work with predicate")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldWaitForFinishedRequestPredicate()
@@ -226,7 +221,6 @@ namespace PlaywrightNative.Tests
             Assert.That(request.Url, Does.Contain("wait-for-req-fin-pred"));
         }
 
-        [PlaywrightTest("page-event-request.spec.ts", "should timeout")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldTimeoutWaitingForFinishedRequest()
@@ -241,7 +235,6 @@ namespace PlaywrightNative.Tests
             Assert.That(ex.Message, Does.Contain("Timeout 200ms exceeded."));
         }
 
-        [PlaywrightTest("page-event-request.spec.ts", "should work")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldWaitForMatchingFailedRequest()
@@ -260,7 +253,6 @@ namespace PlaywrightNative.Tests
             Assert.That(request.Failure, Is.Not.Null.And.Not.Empty);
         }
 
-        [PlaywrightTest("page-event-request.spec.ts", "RunAndWaitForRequestFailedAsync waits for fetch")]
         [Test]
         [Timeout(30_000)]
         public async Task RunAndWaitForRequestFailedAsyncShouldReturnTheRequest()
@@ -278,7 +270,6 @@ namespace PlaywrightNative.Tests
             Assert.That(request.Url, Does.Contain("nonexistent.invalid"));
         }
 
-        [PlaywrightTest("page-event-request.spec.ts", "should work with regex")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldWaitForFailedRequestRegex()
@@ -295,7 +286,6 @@ namespace PlaywrightNative.Tests
             Assert.That(request.Url, Does.Contain("nonexistent.invalid"));
         }
 
-        [PlaywrightTest("page-event-request.spec.ts", "should work with predicate")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldWaitForFailedRequestPredicate()
@@ -313,7 +303,6 @@ namespace PlaywrightNative.Tests
             Assert.That(request.Url, Does.Contain("nonexistent.invalid"));
         }
 
-        [PlaywrightTest("page-event-request.spec.ts", "should timeout")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldTimeoutWaitingForFailedRequest()

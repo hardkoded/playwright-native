@@ -41,7 +41,6 @@ namespace PlaywrightNative.Tests
             Server?.SendOnWebSocketConnection("incoming");
         }
 
-        [PlaywrightTest("page-route.spec.ts", "page RouteWebSocket mocks a reply")]
         [Test]
         [Timeout(30_000)]
         public async Task PageShouldMockAReply()
@@ -79,7 +78,6 @@ namespace PlaywrightNative.Tests
             Assert.That(text, Is.EqualTo("response"));
         }
 
-        [PlaywrightTest("page-route.spec.ts", "page RouteWebSocket matches a regex")]
         [Test]
         [Timeout(30_000)]
         public async Task PageShouldMockAReplyMatchingRegex()
@@ -117,7 +115,6 @@ namespace PlaywrightNative.Tests
             Assert.That(text, Is.EqualTo("regex-response"));
         }
 
-        [PlaywrightTest("page-route.spec.ts", "page RouteWebSocket matches a predicate")]
         [Test]
         [Timeout(30_000)]
         public async Task PageShouldMockAReplyMatchingPredicate()
@@ -157,7 +154,6 @@ namespace PlaywrightNative.Tests
             Assert.That(text, Is.EqualTo("pred-response"));
         }
 
-        [PlaywrightTest("page-route.spec.ts", "page RouteWebSocket can push a message")]
         [Test]
         [Timeout(30_000)]
         public async Task PageShouldPushAMessage()
@@ -189,7 +185,6 @@ namespace PlaywrightNative.Tests
             Assert.That(await received.ConfigureAwait(false), Is.EqualTo("hello-from-route"));
         }
 
-        [PlaywrightTest("page-route.spec.ts", "context RouteWebSocket mocks a reply")]
         [Test]
         [Timeout(30_000)]
         public async Task ContextShouldMockAReply()
@@ -221,7 +216,6 @@ namespace PlaywrightNative.Tests
             Assert.That(text, Is.EqualTo("from-context:ping"));
         }
 
-        [PlaywrightTest("page-route.spec.ts", "context RouteWebSocket matches a regex")]
         [Test]
         [Timeout(30_000)]
         public async Task ContextShouldMockAReplyMatchingRegex()
@@ -259,7 +253,6 @@ namespace PlaywrightNative.Tests
             Assert.That(text, Is.EqualTo("context-regex-response"));
         }
 
-        [PlaywrightTest("page-route.spec.ts", "context RouteWebSocket matches a predicate")]
         [Test]
         [Timeout(30_000)]
         public async Task ContextShouldMockAReplyMatchingPredicate()
@@ -299,7 +292,6 @@ namespace PlaywrightNative.Tests
             Assert.That(text, Is.EqualTo("context-pred-response"));
         }
 
-        [PlaywrightTest("page-route.spec.ts", "non-matching RouteWebSocket uses the server")]
         [Test]
         [Timeout(30_000)]
         public async Task NonMatchingRouteShouldUseTheServer()
@@ -327,7 +319,6 @@ namespace PlaywrightNative.Tests
             Assert.That(text, Is.EqualTo("incoming"));
         }
 
-        [PlaywrightTest("page-route.spec.ts", "context UnrouteWebSocket removes a regex route")]
         [Test]
         [Timeout(30_000)]
         public async Task ContextUnrouteWebSocketRegexShouldUseTheServer()
@@ -357,7 +348,6 @@ namespace PlaywrightNative.Tests
             Assert.That(text, Is.EqualTo("incoming"));
         }
 
-        [PlaywrightTest("page-route.spec.ts", "context UnrouteWebSocket removes a predicate route")]
         [Test]
         [Timeout(30_000)]
         public async Task ContextUnrouteWebSocketPredicateShouldUseTheServer()
@@ -387,7 +377,6 @@ namespace PlaywrightNative.Tests
             Assert.That(text, Is.EqualTo("incoming"));
         }
 
-        [PlaywrightTest("page-route.spec.ts", "ConnectToServer forwards the server greeting")]
         [Test]
         [Timeout(30_000)]
         public async Task ConnectToServerShouldForwardServerFrames()
@@ -418,7 +407,6 @@ namespace PlaywrightNative.Tests
             Assert.That(text, Is.EqualTo("incoming"));
         }
 
-        [PlaywrightTest("page-route.spec.ts", "ConnectToServer can rewrite server frames")]
         [Test]
         [Timeout(30_000)]
         public async Task ConnectToServerShouldRewriteServerFrames()
@@ -460,7 +448,6 @@ namespace PlaywrightNative.Tests
             Assert.That(text, Is.EqualTo("rewritten"));
         }
 
-        [PlaywrightTest("page-route.spec.ts", "RouteWebSocket exposes constructor protocols")]
         [Test]
         [Timeout(30_000)]
         public async Task RouteShouldExposeConstructorProtocols()
@@ -495,7 +482,6 @@ namespace PlaywrightNative.Tests
             Assert.That(protocols, Is.EqualTo(new[] { "chat", "superchat" }));
         }
 
-        [PlaywrightTest("page-route.spec.ts", "page UnrouteWebSocket stops intercepting")]
         [Test]
         [Timeout(30_000)]
         public async Task PageUnrouteWebSocketShouldStopIntercepting()
@@ -527,7 +513,6 @@ namespace PlaywrightNative.Tests
             Assert.That(text, Is.EqualTo("incoming"));
         }
 
-        [PlaywrightTest("page-route.spec.ts", "page UnrouteWebSocket removes only the given handler")]
         [Test]
         [Timeout(30_000)]
         public async Task PageUnrouteWebSocketShouldRemoveOnlyTheGivenHandler()
@@ -561,7 +546,6 @@ namespace PlaywrightNative.Tests
             Assert.That(text, Is.EqualTo("keep:hi"));
         }
 
-        [PlaywrightTest("page-route.spec.ts", "context UnrouteWebSocket stops intercepting")]
         [Test]
         [Timeout(30_000)]
         public async Task ContextUnrouteWebSocketShouldStopIntercepting()
@@ -593,7 +577,6 @@ namespace PlaywrightNative.Tests
             Assert.That(text, Is.EqualTo("incoming"));
         }
 
-        [PlaywrightTest("page-route.spec.ts", "page UnrouteAllAsync stops WebSocket intercepting")]
         [Test]
         [Timeout(30_000)]
         public async Task PageUnrouteAllShouldStopWebSocketIntercepting()
@@ -625,7 +608,6 @@ namespace PlaywrightNative.Tests
             Assert.That(text, Is.EqualTo("incoming"));
         }
 
-        [PlaywrightTest("page-route.spec.ts", "context UnrouteAllAsync stops WebSocket intercepting")]
         [Test]
         [Timeout(30_000)]
         public async Task ContextUnrouteAllShouldStopWebSocketIntercepting()

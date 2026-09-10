@@ -27,7 +27,6 @@ namespace PlaywrightNative.Tests
             Environment.SetEnvironmentVariable("PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT", null);
         }
 
-        [PlaywrightTest("browsers-path.spec.ts", "Defaults to chromium and current platform")]
         [Test]
         public void DefaultsToChromiumAndCurrentPlatform()
         {
@@ -36,7 +35,6 @@ namespace PlaywrightNative.Tests
             Assert.That(fetcher.Platform, Is.EqualTo(BrowserData.CurrentPlatform()));
         }
 
-        [PlaywrightTest("browsers-path.spec.ts", "Options browser overrides default")]
         [Test]
         public void OptionsBrowserOverridesDefault()
         {
@@ -44,7 +42,6 @@ namespace PlaywrightNative.Tests
             Assert.That(fetcher.Browser, Is.EqualTo(SupportedBrowser.Firefox));
         }
 
-        [PlaywrightTest("browsers-path.spec.ts", "Options platform overrides auto detect")]
         [Test]
         public void OptionsPlatformOverridesAutoDetect()
         {
@@ -52,7 +49,6 @@ namespace PlaywrightNative.Tests
             Assert.That(fetcher.Platform, Is.EqualTo(Platform.Win64));
         }
 
-        [PlaywrightTest("browsers-path.spec.ts", "Cache dir prefers environment variable over options")]
         [Test]
         public void CacheDirPrefersEnvironmentVariableOverOptions()
         {
@@ -61,7 +57,6 @@ namespace PlaywrightNative.Tests
             Assert.That(fetcher.CacheDir, Is.EqualTo("/env/cache"));
         }
 
-        [PlaywrightTest("browsers-path.spec.ts", "Cache dir environment zero resolves to assembly directory")]
         [Test]
         public void CacheDirEnvironmentZeroResolvesToAssemblyDirectory()
         {
@@ -71,7 +66,6 @@ namespace PlaywrightNative.Tests
             Assert.That(fetcher.CacheDir, Is.EqualTo(expected));
         }
 
-        [PlaywrightTest("browsers-path.spec.ts", "Cache dir falls back to options then default")]
         [Test]
         public void CacheDirFallsBackToOptionsThenDefault()
         {
@@ -82,7 +76,6 @@ namespace PlaywrightNative.Tests
             Assert.That(fromDefault.CacheDir, Is.EqualTo(BrowserData.DefaultCacheDir()));
         }
 
-        [PlaywrightTest("browsers-path.spec.ts", "Base url prefers environment variable over options")]
         [Test]
         public void BaseUrlPrefersEnvironmentVariableOverOptions()
         {
@@ -91,7 +84,6 @@ namespace PlaywrightNative.Tests
             Assert.That(fetcher.BaseUrl, Is.EqualTo("https://env.test"));
         }
 
-        [PlaywrightTest("browsers-path.spec.ts", "Base url falls back to options then null")]
         [Test]
         public void BaseUrlFallsBackToOptionsThenNull()
         {
@@ -102,7 +94,6 @@ namespace PlaywrightNative.Tests
             Assert.That(fromDefault.BaseUrl, Is.Null);
         }
 
-        [PlaywrightTest("browsers-path.spec.ts", "Setters override initial values")]
         [Test]
         public void SettersOverrideInitialValues()
         {
@@ -117,7 +108,6 @@ namespace PlaywrightNative.Tests
             Assert.That(fetcher.BaseUrl, Is.EqualTo("https://new.test"));
         }
 
-        [PlaywrightTest("browsers-path.spec.ts", "Get executable path builds path in cache dir")]
         [Test]
         public void GetExecutablePathBuildsPathInCacheDir()
         {
@@ -126,7 +116,6 @@ namespace PlaywrightNative.Tests
             Assert.That(actual, Is.EqualTo(Path.Combine("/tmp/cache", "chromium-9999", "chrome-linux", "chrome")));
         }
 
-        [PlaywrightTest("browsers-path.spec.ts", "Get installed browsers returns empty when cache missing")]
         [Test]
         public void GetInstalledBrowsersReturnsEmptyWhenCacheMissing()
         {
@@ -135,7 +124,6 @@ namespace PlaywrightNative.Tests
             Assert.That(fetcher.GetInstalledBrowsers(), Is.Empty);
         }
 
-        [PlaywrightTest("browsers-path.spec.ts", "Get installed browsers lists completed builds only")]
         [Test]
         public void GetInstalledBrowsersListsCompletedBuildsOnly()
         {
@@ -164,7 +152,6 @@ namespace PlaywrightNative.Tests
             }
         }
 
-        [PlaywrightTest("browsers-path.spec.ts", "Uninstall removes build directory when present")]
         [Test]
         public void UninstallRemovesBuildDirectoryWhenPresent()
         {
@@ -190,7 +177,6 @@ namespace PlaywrightNative.Tests
             }
         }
 
-        [PlaywrightTest("browsers-path.spec.ts", "Uninstall is no op when build missing")]
         [Test]
         public void UninstallIsNoOpWhenBuildMissing()
         {
@@ -199,7 +185,6 @@ namespace PlaywrightNative.Tests
             Assert.DoesNotThrow(() => fetcher.Uninstall("does-not-exist"));
         }
 
-        [PlaywrightTest("browsers-path.spec.ts", "DownloadAsync no arg delegates to default build")]
         [Test]
         public void DownloadAsyncNoArgDelegatesToDefaultBuild()
         {
