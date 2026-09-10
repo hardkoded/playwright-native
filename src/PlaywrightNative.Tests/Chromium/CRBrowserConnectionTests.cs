@@ -25,7 +25,7 @@ namespace PlaywrightNative.Tests.Chromium
         [OneTimeSetUp]
         public Task EnsureChromiumAsync() => BrowserExecutable.EnsureAsync("chromium");
 
-        [PlaywrightTest("connect-over-cdp.spec.ts", "should connect and get version")]
+        [PlaywrightTest("browser.spec.ts", "version should work")]
         [Test, Timeout(30_000)]
         public async Task ShouldConnectAndGetVersion()
         {
@@ -46,7 +46,6 @@ namespace PlaywrightNative.Tests.Chromium
             TestContext.Out.WriteLine($"Browser version: {browser.Version}");
         }
 
-        [PlaywrightTest("connect-over-cdp.spec.ts", "should close gracefully")]
         [Test, Timeout(30_000)]
         public async Task ShouldCloseGracefully()
         {
@@ -67,7 +66,6 @@ namespace PlaywrightNative.Tests.Chromium
             await browser.DisposeAsync().ConfigureAwait(false);
         }
 
-        [PlaywrightTest("connect-over-cdp.spec.ts", "should send cdp command via session")]
         [Test, Timeout(30_000)]
         public async Task ShouldSendCDPCommandViaSession()
         {
@@ -92,7 +90,6 @@ namespace PlaywrightNative.Tests.Chromium
             TestContext.Out.WriteLine($"Full version info: {result.Value}");
         }
 
-        [PlaywrightTest("connect-over-cdp.spec.ts", "should create context and page")]
         [Test, Timeout(30_000)]
         public async Task ShouldCreateContextAndPage()
         {
@@ -119,7 +116,6 @@ namespace PlaywrightNative.Tests.Chromium
             TestContext.Out.WriteLine($"Context: {context.BrowserContextId}, Page target: {page.TargetId}");
         }
 
-        [PlaywrightTest("connect-over-cdp.spec.ts", "should close page and context")]
         [Test, Timeout(30_000)]
         public async Task ShouldClosePageAndContext()
         {
@@ -150,7 +146,6 @@ namespace PlaywrightNative.Tests.Chromium
             await context.CloseAsync().ConfigureAwait(false);
         }
 
-        [PlaywrightTest("connect-over-cdp.spec.ts", "should evaluate java script")]
         [Test, Timeout(30_000)]
         public async Task ShouldEvaluateJavaScript()
         {
@@ -183,7 +178,6 @@ namespace PlaywrightNative.Tests.Chromium
             await context.CloseAsync().ConfigureAwait(false);
         }
 
-        [PlaywrightTest("connect-over-cdp.spec.ts", "should navigate to url")]
         [Test, Timeout(30_000)]
         public async Task ShouldNavigateToUrl()
         {
@@ -212,7 +206,7 @@ namespace PlaywrightNative.Tests.Chromium
             await context.CloseAsync().ConfigureAwait(false);
         }
 
-        [PlaywrightTest("connect-over-cdp.spec.ts", "should create multiple pages")]
+        [PlaywrightTest("browsercontext-basic.spec.ts", "should return all of the pages")]
         [Test, Timeout(30_000)]
         public async Task ShouldCreateMultiplePages()
         {

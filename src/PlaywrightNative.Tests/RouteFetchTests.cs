@@ -34,7 +34,7 @@ namespace PlaywrightNative.Tests
     {
         private static SimpleServer Server => TestServerSetup.Server;
 
-        [PlaywrightTest("page-route.spec.ts", "FetchAsync then FulfillAsync")]
+        [PlaywrightTest("page-request-intercept.spec.ts", "should fulfill intercepted response using alias")]
         [Test]
         [Order(1)]
         [Timeout(30_000)]
@@ -68,7 +68,6 @@ namespace PlaywrightNative.Tests
             Assert.That(body, Does.Contain("wave-107-from-server"));
         }
 
-        [PlaywrightTest("page-route.spec.ts", "FetchAsync then modify body")]
         [Test]
         [Order(1)]
         [Timeout(30_000)]
@@ -105,7 +104,7 @@ namespace PlaywrightNative.Tests
             Assert.That(body, Does.Not.Contain("original"));
         }
 
-        [PlaywrightTest("page-route.spec.ts", "FetchAsync maxRedirects 0 returns the redirect")]
+        [PlaywrightTest("page-request-intercept.spec.ts", "should not follow redirects when maxRedirects is set to 0 in route.fetch")]
         [Test]
         [Order(1)]
         [Timeout(30_000)]
@@ -143,7 +142,6 @@ namespace PlaywrightNative.Tests
             Assert.That(body, Does.Contain("redirect-status-302"));
         }
 
-        [PlaywrightTest("page-route.spec.ts", "FetchAsync maxRedirects throws when the chain is longer")]
         [Test]
         [Order(1)]
         [Timeout(30_000)]
@@ -188,7 +186,6 @@ namespace PlaywrightNative.Tests
             Assert.That(caught.Message, Does.Contain("maxRedirects"));
         }
 
-        [PlaywrightTest("page-route.spec.ts", "FetchAsync maxRetries recovers after connection reset")]
         [Test]
         [Order(10)]
         [Timeout(30_000)]
@@ -231,7 +228,6 @@ namespace PlaywrightNative.Tests
             Assert.That(hits, Is.GreaterThanOrEqualTo(3));
         }
 
-        [PlaywrightTest("page-route.spec.ts", "FetchAsync maxRetries 0 does not retry")]
         [Test]
         [Order(11)]
         [Timeout(30_000)]
@@ -280,7 +276,6 @@ namespace PlaywrightNative.Tests
             Assert.That(hits, Is.EqualTo(1));
         }
 
-        [PlaywrightTest("page-route.spec.ts", "FetchAsync maxRetries rejects a negative value")]
         [Test]
         [Order(2)]
         [Timeout(30_000)]

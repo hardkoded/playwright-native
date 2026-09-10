@@ -34,7 +34,7 @@ namespace PlaywrightNative.Tests
     {
         private static SimpleServer Server => TestServerSetup.Server;
 
-        [PlaywrightTest("browsercontext-har.spec.ts", "recordHarPath writes entries on close")]
+        [PlaywrightTest("har.spec.ts", "should have version and creator")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldWriteHarEntriesOnContextClose()
@@ -70,7 +70,7 @@ namespace PlaywrightNative.Tests
             }
         }
 
-        [PlaywrightTest("browsercontext-har.spec.ts", "recordHarPath includes response text")]
+        [PlaywrightTest("har.spec.ts", "should include content @smoke")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldIncludeResponseContentByDefault()
@@ -104,7 +104,7 @@ namespace PlaywrightNative.Tests
             }
         }
 
-        [PlaywrightTest("browsercontext-har.spec.ts", "recordHarOmitContent skips response text")]
+        [PlaywrightTest("har.spec.ts", "should omit content legacy")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldOmitResponseContentWhenRequested()
@@ -137,7 +137,6 @@ namespace PlaywrightNative.Tests
             }
         }
 
-        [PlaywrightTest("browsercontext-har.spec.ts", "recordHarMode Minimal skips response text")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldOmitResponseContentWhenModeIsMinimal()
@@ -170,7 +169,6 @@ namespace PlaywrightNative.Tests
             }
         }
 
-        [PlaywrightTest("browsercontext-har.spec.ts", "options bag recordHarPath")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldWriteHarFromOptionsBag()
@@ -206,7 +204,7 @@ namespace PlaywrightNative.Tests
             }
         }
 
-        [PlaywrightTest("browsercontext-har.spec.ts", "recordHarUrl filters recorded entries")]
+        [PlaywrightTest("har.spec.ts", "should filter by glob")]
         [Test]
         [Timeout(30_000)]
         public async Task RecordHarUrlShouldFilterEntries()
@@ -250,7 +248,7 @@ namespace PlaywrightNative.Tests
             }
         }
 
-        [PlaywrightTest("browsercontext-har.spec.ts", "recordHarUrlRegex filters recorded entries")]
+        [PlaywrightTest("har.spec.ts", "should filter by regexp")]
         [Test]
         [Timeout(30_000)]
         public async Task RecordHarUrlRegexShouldFilterEntries()
@@ -294,7 +292,7 @@ namespace PlaywrightNative.Tests
             }
         }
 
-        [PlaywrightTest("browsercontext-har.spec.ts", "recordHarContent Attach writes sidecar files")]
+        [PlaywrightTest("har.spec.ts", "should attach content")]
         [Test]
         [Timeout(30_000)]
         public async Task RecordHarContentAttachShouldWriteSidecarFiles()

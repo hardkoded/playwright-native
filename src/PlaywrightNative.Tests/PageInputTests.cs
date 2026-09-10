@@ -26,7 +26,7 @@ namespace PlaywrightNative.Tests
     [TestFixture]
     public class PageInputTests : PageTestEx
     {
-        [PlaywrightTest("page-keyboard.spec.ts", "MouseClickAsyncFiresEvent")]
+        [PlaywrightTest("page-mouse.spec.ts", "should click the document @smoke")]
         [Test]
         [Timeout(30_000)]
         public async Task MouseClickAsyncFiresEvent()
@@ -43,7 +43,7 @@ namespace PlaywrightNative.Tests
             Assert.That(clicked, Is.True);
         }
 
-        [PlaywrightTest("page-keyboard.spec.ts", "KeyboardTypeAsyncSetsTextareaValue")]
+        [PlaywrightTest("page-keyboard.spec.ts", "should type into a textarea @smoke")]
         [Test]
         [Timeout(30_000)]
         public async Task KeyboardTypeAsyncSetsTextareaValue()
@@ -62,7 +62,7 @@ namespace PlaywrightNative.Tests
             Assert.That(value, Is.EqualTo("hello"));
         }
 
-        [PlaywrightTest("page-keyboard.spec.ts", "KeyboardPressEnterInsertsNewline")]
+        [PlaywrightTest("page-keyboard.spec.ts", "should press Enter")]
         [Test]
         [Timeout(30_000)]
         public async Task KeyboardPressEnterInsertsNewline()
@@ -83,7 +83,7 @@ namespace PlaywrightNative.Tests
             Assert.That(value, Is.EqualTo("a\nb"));
         }
 
-        [PlaywrightTest("page-keyboard.spec.ts", "MouseDblClickFiresDblClick")]
+        [PlaywrightTest("page-mouse.spec.ts", "should dblclick the div")]
         [Test]
         [Timeout(30_000)]
         public async Task MouseDblClickFiresDblClick()
@@ -104,7 +104,7 @@ namespace PlaywrightNative.Tests
             Assert.That(count, Is.EqualTo(1));
         }
 
-        [PlaywrightTest("page-keyboard.spec.ts", "TouchscreenTapFiresEvent")]
+        [PlaywrightTest("tap.spec.ts", "should send well formed touch points")]
         [Test]
         [Timeout(30_000)]
         public async Task TouchscreenTapFiresEvent()
@@ -125,7 +125,7 @@ namespace PlaywrightNative.Tests
             Assert.That(tapped, Is.True);
         }
 
-        [PlaywrightTest("page-keyboard.spec.ts", "MouseMoveUpdatesCoordinates")]
+        [PlaywrightTest("page-mouse.spec.ts", "down and up should generate click")]
         [Test]
         [Timeout(30_000)]
         public async Task MouseMoveUpdatesCoordinates()
@@ -150,7 +150,7 @@ namespace PlaywrightNative.Tests
             Assert.That(y, Is.EqualTo(50));
         }
 
-        [PlaywrightTest("page-keyboard.spec.ts", "MouseWheelAsyncDispatchesWheel")]
+        [PlaywrightTest("wheel.spec.ts", "should scroll when nobody is listening")]
         [Test]
         [Timeout(30_000)]
         public async Task MouseWheelAsyncDispatchesWheel()

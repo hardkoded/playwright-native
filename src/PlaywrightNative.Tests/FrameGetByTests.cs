@@ -27,7 +27,7 @@ namespace PlaywrightNative.Tests
     [TestFixture]
     public class FrameGetByTests : PageTestEx
     {
-        [PlaywrightTest("selectors-get-by.spec.ts", "GetByRole finds a button inside a child frame")]
+        [PlaywrightTest("locator-frame.spec.ts", "getBy coverage")]
         [Test]
         [Timeout(30_000)]
         public async Task GetByRoleShouldFindButtonInChildFrame()
@@ -43,7 +43,7 @@ namespace PlaywrightNative.Tests
             Assert.That(await handle.TextContentAsync().ConfigureAwait(false), Is.EqualTo("Inside"));
         }
 
-        [PlaywrightTest("selectors-get-by.spec.ts", "GetByText finds text inside a child frame")]
+        [PlaywrightTest("locator-frame.spec.ts", "getBy coverage")]
         [Test]
         [Timeout(30_000)]
         public async Task GetByTextShouldFindInnermostMatchInChildFrame()
@@ -59,7 +59,7 @@ namespace PlaywrightNative.Tests
             Assert.That(await handle.TextContentAsync().ConfigureAwait(false), Does.Contain("unique frame text"));
         }
 
-        [PlaywrightTest("selectors-get-by.spec.ts", "GetByLabel finds a control inside a child frame")]
+        [PlaywrightTest("locator-frame.spec.ts", "getBy coverage")]
         [Test]
         [Timeout(30_000)]
         public async Task GetByLabelShouldFindControlInChildFrame()
@@ -75,7 +75,7 @@ namespace PlaywrightNative.Tests
             Assert.That(await handle.GetAttributeAsync("id").ConfigureAwait(false), Is.EqualTo("pw"));
         }
 
-        [PlaywrightTest("selectors-get-by.spec.ts", "GetByPlaceholder finds an input inside a child frame")]
+        [PlaywrightTest("locator-frame.spec.ts", "getBy coverage")]
         [Test]
         [Timeout(30_000)]
         public async Task GetByPlaceholderShouldFindInputInChildFrame()
@@ -91,7 +91,7 @@ namespace PlaywrightNative.Tests
             Assert.That(await handle.GetAttributeAsync("placeholder").ConfigureAwait(false), Is.EqualTo("Email address"));
         }
 
-        [PlaywrightTest("selectors-get-by.spec.ts", "GetByAltText finds an image inside a child frame")]
+        [PlaywrightTest("locator-frame.spec.ts", "getBy coverage")]
         [Test]
         [Timeout(30_000)]
         public async Task GetByAltTextShouldFindImageInChildFrame()
@@ -107,7 +107,7 @@ namespace PlaywrightNative.Tests
             Assert.That(await handle.GetAttributeAsync("alt").ConfigureAwait(false), Is.EqualTo("Playwright logo"));
         }
 
-        [PlaywrightTest("selectors-get-by.spec.ts", "GetByTitle finds an element inside a child frame")]
+        [PlaywrightTest("locator-frame.spec.ts", "getBy coverage")]
         [Test]
         [Timeout(30_000)]
         public async Task GetByTitleShouldFindElementInChildFrame()
@@ -123,7 +123,7 @@ namespace PlaywrightNative.Tests
             Assert.That(await handle.TextContentAsync().ConfigureAwait(false), Is.EqualTo("25 issues"));
         }
 
-        [PlaywrightTest("selectors-get-by.spec.ts", "GetByTestId finds an element inside a child frame")]
+        [PlaywrightTest("locator-frame.spec.ts", "getBy coverage")]
         [Test]
         [Timeout(30_000)]
         public async Task GetByTestIdShouldFindElementInChildFrame()

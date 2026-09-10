@@ -41,7 +41,7 @@ namespace PlaywrightNative.Tests.Chromium
             <option value='c'>Cherry</option>
         </select>";
 
-        [PlaywrightTest("page-select-option.spec.ts", "should select by value")]
+        [PlaywrightTest("page-select-option.spec.ts", "should select single option by value")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldSelectByValue()
         {
@@ -55,7 +55,7 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(value, Is.EqualTo("b"));
         }
 
-        [PlaywrightTest("page-select-option.spec.ts", "should select by label")]
+        [PlaywrightTest("page-select-option.spec.ts", "should select single option by label")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldSelectByLabel()
         {
@@ -68,7 +68,7 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(result, Is.EqualTo(new[] { "c" }));
         }
 
-        [PlaywrightTest("page-select-option.spec.ts", "should select by index")]
+        [PlaywrightTest("page-select-option.spec.ts", "should select single option by index")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldSelectByIndex()
         {
@@ -81,7 +81,7 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(result, Is.EqualTo(new[] { "a" }));
         }
 
-        [PlaywrightTest("page-select-option.spec.ts", "should select multiple options in multi select")]
+        [PlaywrightTest("page-select-option.spec.ts", "should select multiple options")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldSelectMultipleOptionsInMultiSelect()
         {
@@ -93,7 +93,7 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(result, Is.EquivalentTo(new[] { "a", "c" }));
         }
 
-        [PlaywrightTest("page-select-option.spec.ts", "should only select first match in single select")]
+        [PlaywrightTest("page-select-option.spec.ts", "should select only first option")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldOnlySelectFirstMatchInSingleSelect()
         {
@@ -105,7 +105,6 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(result, Is.EqualTo(new[] { "a" }));
         }
 
-        [PlaywrightTest("page-select-option.spec.ts", "should fire change and input events")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldFireChangeAndInputEvents()
         {
@@ -127,7 +126,6 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(json, Is.EqualTo("[\"input\",\"change\"]"));
         }
 
-        [PlaywrightTest("page-select-option.spec.ts", "should return empty array when no match")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldReturnEmptyArrayWhenNoMatch()
         {
@@ -139,7 +137,7 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(result, Is.Empty);
         }
 
-        [PlaywrightTest("page-select-option.spec.ts", "should throw when element is not select")]
+        [PlaywrightTest("page-select-option.spec.ts", "should throw when element is not a <select>")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldThrowWhenElementIsNotSelect()
         {
