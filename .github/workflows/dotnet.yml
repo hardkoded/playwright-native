@@ -141,22 +141,31 @@ jobs:
     - name: Compute test shard filter
       if: matrix.shardTotal
       shell: bash
+      env:
+        # Git Bash's MSYS layer auto-converts any argument that looks like a
+        # POSIX path (e.g. "/ListFullyQualifiedTests") into a bogus Windows
+        # path before exec'ing a native tool. Disable that for this step.
+        MSYS_NO_PATHCONV: "1"
       run: |
         # List every test's fully-qualified name straight from the built
         # assembly (dotnet test --list-tests only prints the bare method
         # name, which collides across classes and isn't safe to filter on).
+        # $RUNNER_TEMP (not /tmp) so the path is already OS-native on Windows.
+        all_tests="$RUNNER_TEMP/all_tests.txt"
         dotnet vstest src/PlaywrightNative.Tests/bin/Release/net10.0/PlaywrightNative.Tests.dll \
-          /ListFullyQualifiedTests /ListTestsTargetPath:/tmp/all_tests.txt
+          /ListFullyQualifiedTests "/ListTestsTargetPath:$all_tests"
         # Drop the trailing ".MethodName" (and any TestCase "(...)" suffix)
         # to get one entry per test class, then assign classes to shards by
         # position in a stable sort -- deterministic across the shardTotal
         # jobs of a single run without the shards needing to coordinate.
-        sed -E 's/\.[A-Za-z0-9_]+(\([^)]*\))?$//' /tmp/all_tests.txt | sort -u > /tmp/all_classes.txt
-        echo "Discovered $(wc -l < /tmp/all_classes.txt) test classes"
+        all_classes="$RUNNER_TEMP/all_classes.txt"
+        sed -E 's/\.[A-Za-z0-9_]+(\([^)]*\))?$//' "$all_tests" | sort -u > "$all_classes"
+        echo "Discovered $(wc -l < "$all_classes") test classes"
+        shard_classes="$RUNNER_TEMP/shard_classes.txt"
         awk -v shard="${{ matrix.shardIndex }}" -v total="${{ matrix.shardTotal }}" \
-          'NR % total == (shard - 1) { print }' /tmp/all_classes.txt > /tmp/shard_classes.txt
-        echo "Shard ${{ matrix.shardIndex }}/${{ matrix.shardTotal }}: $(wc -l < /tmp/shard_classes.txt) classes"
-        filter=$(awk '{ printf "%sFullyQualifiedName~%s.", (NR > 1 ? "|" : ""), $0 }' /tmp/shard_classes.txt)
+          'NR % total == (shard - 1) { print }' "$all_classes" > "$shard_classes"
+        echo "Shard ${{ matrix.shardIndex }}/${{ matrix.shardTotal }}: $(wc -l < "$shard_classes") classes"
+        filter=$(awk '{ printf "%sFullyQualifiedName~%s.", (NR > 1 ? "|" : ""), $0 }' "$shard_classes")
         echo "TEST_FILTER=$filter" >> "$GITHUB_ENV"
     - name: Disable AppArmor (Linux)
       if: matrix.os == 'ubuntu-latest'
