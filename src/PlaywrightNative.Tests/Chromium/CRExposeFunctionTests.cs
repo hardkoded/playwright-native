@@ -27,7 +27,6 @@ namespace PlaywrightNative.Tests.Chromium
     [TestFixture]
     public class CRExposeFunctionTests : CRTestBase
     {
-        [PlaywrightTest("page-expose-function.spec.ts", "should call exposed function with no args")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldCallExposedFunctionWithNoArgs()
         {
@@ -37,7 +36,7 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(result, Is.EqualTo(42));
         }
 
-        [PlaywrightTest("page-expose-function.spec.ts", "should call exposed function with arguments")]
+        [PlaywrightTest("page-expose-function.spec.ts", "should work")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldCallExposedFunctionWithArguments()
         {
@@ -52,7 +51,7 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(result, Is.EqualTo(7));
         }
 
-        [PlaywrightTest("page-expose-function.spec.ts", "should return complex objects")]
+        [PlaywrightTest("page-expose-function.spec.ts", "should work with complex objects")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldReturnComplexObjects()
         {
@@ -67,7 +66,7 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(result.GetProperty("a").GetInt32(), Is.EqualTo(30));
         }
 
-        [PlaywrightTest("page-expose-function.spec.ts", "should support async handler")]
+        [PlaywrightTest("page-expose-function.spec.ts", "should await returned promise")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldSupportAsyncHandler()
         {
@@ -81,7 +80,6 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(result, Is.EqualTo(10));
         }
 
-        [PlaywrightTest("page-expose-function.spec.ts", "should support multiple exposed functions")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldSupportMultipleExposedFunctions()
         {
