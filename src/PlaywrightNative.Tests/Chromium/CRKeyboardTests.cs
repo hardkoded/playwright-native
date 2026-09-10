@@ -28,7 +28,7 @@ namespace PlaywrightNative.Tests.Chromium
     [TestFixture]
     public class CRKeyboardTests : CRTestBase
     {
-        [PlaywrightTest("page-keyboard.spec.ts", "should type into textarea")]
+        [PlaywrightTest("page-keyboard.spec.ts", "should type into a textarea @smoke")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldTypeIntoTextarea()
         {
@@ -41,7 +41,6 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(value, Is.EqualTo("hello"));
         }
 
-        [PlaywrightTest("page-keyboard.spec.ts", "should press single key")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldPressSingleKey()
         {
@@ -54,7 +53,6 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(value, Is.EqualTo("a"));
         }
 
-        [PlaywrightTest("page-keyboard.spec.ts", "should press shift key for uppercase")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldPressShiftKeyForUppercase()
         {
@@ -67,7 +65,6 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(value, Is.EqualTo("A"));
         }
 
-        [PlaywrightTest("page-keyboard.spec.ts", "should type uppercase mixed")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldTypeUppercaseMixed()
         {
@@ -80,7 +77,7 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(value, Is.EqualTo("Hello World"));
         }
 
-        [PlaywrightTest("page-keyboard.spec.ts", "should insert text bypassing layout")]
+        [PlaywrightTest("page-keyboard.spec.ts", "should send a character with insertText")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldInsertTextBypassingLayout()
         {
@@ -93,7 +90,7 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(value, Is.EqualTo("日本語"));
         }
 
-        [PlaywrightTest("page-keyboard.spec.ts", "should emit enter as newline")]
+        [PlaywrightTest("page-keyboard.spec.ts", "should press Enter")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldEmitEnterAsNewline()
         {
@@ -108,7 +105,6 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(value, Is.EqualTo("line1\nline2"));
         }
 
-        [PlaywrightTest("page-keyboard.spec.ts", "should dispatch keydown keypress keyup")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldDispatchKeydownKeypressKeyup()
         {
@@ -121,7 +117,7 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(log, Does.Contain("Keyup:"));
         }
 
-        [PlaywrightTest("page-keyboard.spec.ts", "should report shift modifier in key event")]
+        [PlaywrightTest("page-keyboard.spec.ts", "should report shiftKey")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldReportShiftModifierInKeyEvent()
         {
@@ -133,7 +129,6 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(log, Does.Contain("Shift"));
         }
 
-        [PlaywrightTest("page-keyboard.spec.ts", "should down and up keeps modifier held")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldDownAndUpKeepsModifierHeld()
         {
@@ -147,7 +142,7 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(value, Is.EqualTo("A"));
         }
 
-        [PlaywrightTest("page-keyboard.spec.ts", "should handle arrow keys")]
+        [PlaywrightTest("page-keyboard.spec.ts", "should move with the arrow keys")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldHandleArrowKeys()
         {
@@ -162,7 +157,6 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(value, Is.EqualTo("abc"));
         }
 
-        [PlaywrightTest("page-keyboard.spec.ts", "should backspace delete previous character")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldBackspaceDeletePreviousCharacter()
         {

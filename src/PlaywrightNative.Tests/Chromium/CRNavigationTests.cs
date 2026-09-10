@@ -28,7 +28,7 @@ namespace PlaywrightNative.Tests.Chromium
     [TestFixture]
     public class CRNavigationTests : CRTestBase
     {
-        [PlaywrightTest("page-navigation.spec.ts", "Go to should work")]
+        [PlaywrightTest("page-goto.spec.ts", "should work @smoke")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task GoToShouldWork()
         {
@@ -36,7 +36,6 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(Page.FrameManager.MainFrame.Url, Is.EqualTo(TestConstants.EmptyPage));
         }
 
-        [PlaywrightTest("page-navigation.spec.ts", "Go to should work with data url")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task GoToShouldWorkWithDataUrl()
         {
@@ -46,7 +45,6 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(text, Is.EqualTo("Hello"));
         }
 
-        [PlaywrightTest("page-navigation.spec.ts", "Go to should wait for dom content loaded")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task GoToShouldWaitForDomContentLoaded()
         {
@@ -54,7 +52,6 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(Page.FrameManager.MainFrame.LifecycleEvents, Does.Contain("DOMContentLoaded"));
         }
 
-        [PlaywrightTest("page-navigation.spec.ts", "Go to should wait for load")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task GoToShouldWaitForLoad()
         {
@@ -62,7 +59,6 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(Page.FrameManager.MainFrame.LifecycleEvents, Does.Contain("load"));
         }
 
-        [PlaywrightTest("page-navigation.spec.ts", "Go to should update main frame url")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task GoToShouldUpdateMainFrameUrl()
         {
@@ -73,7 +69,6 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(Page.FrameManager.MainFrame.Url, Does.StartWith("data:text/html"));
         }
 
-        [PlaywrightTest("page-navigation.spec.ts", "Go to should update document id")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task GoToShouldUpdateDocumentId()
         {
@@ -87,7 +82,6 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(secondDocId, Is.Not.EqualTo(firstDocId));
         }
 
-        [PlaywrightTest("page-navigation.spec.ts", "Go to should allow evaluation after navigation")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task GoToShouldAllowEvaluationAfterNavigation()
         {
@@ -97,7 +91,6 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(content, Is.EqualTo("content"));
         }
 
-        [PlaywrightTest("page-navigation.spec.ts", "Go to should clear lifecycle on new navigation")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task GoToShouldClearLifecycleOnNewNavigation()
         {
@@ -110,7 +103,6 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(Page.FrameManager.MainFrame.LifecycleEvents, Does.Contain("load"));
         }
 
-        [PlaywrightTest("page-navigation.spec.ts", "Go to should throw on navigation error")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public void GoToShouldThrowOnNavigationError()
         {
@@ -119,7 +111,6 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(ex.Message, Does.Contain("Navigation failed"));
         }
 
-        [PlaywrightTest("page-navigation.spec.ts", "Go to should handle multiple navigations sequentially")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task GoToShouldHandleMultipleNavigationsSequentially()
         {
@@ -136,7 +127,6 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(third, Is.EqualTo("3"));
         }
 
-        [PlaywrightTest("page-navigation.spec.ts", "should navigate to test server page")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldNavigateToTestServerPage()
         {

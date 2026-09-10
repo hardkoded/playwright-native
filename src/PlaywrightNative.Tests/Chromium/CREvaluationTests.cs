@@ -28,7 +28,7 @@ namespace PlaywrightNative.Tests.Chromium
     [TestFixture]
     public class CREvaluationTests : CRTestBase
     {
-        [PlaywrightTest("page-evaluate.spec.ts", "should evaluate expression")]
+        [PlaywrightTest("page-evaluate.spec.ts", "should accept a string")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldEvaluateExpression()
         {
@@ -36,7 +36,6 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(result, Is.EqualTo(3));
         }
 
-        [PlaywrightTest("page-evaluate.spec.ts", "should evaluate string expression")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldEvaluateStringExpression()
         {
@@ -44,7 +43,6 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(result, Is.EqualTo("hello world"));
         }
 
-        [PlaywrightTest("page-evaluate.spec.ts", "should evaluate arrow function with arguments")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldEvaluateArrowFunctionWithArguments()
         {
@@ -52,7 +50,6 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(result, Is.EqualTo(7));
         }
 
-        [PlaywrightTest("page-evaluate.spec.ts", "should evaluate function with string argument")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldEvaluateFunctionWithStringArgument()
         {
@@ -60,7 +57,6 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(result, Is.EqualTo("HELLO"));
         }
 
-        [PlaywrightTest("page-evaluate.spec.ts", "should evaluate function with mixed arguments")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldEvaluateFunctionWithMixedArguments()
         {
@@ -69,7 +65,6 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(result, Is.EqualTo("Alice is 30"));
         }
 
-        [PlaywrightTest("page-evaluate.spec.ts", "should evaluate function with boolean argument")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldEvaluateFunctionWithBooleanArgument()
         {
@@ -77,7 +72,6 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(result, Is.False);
         }
 
-        [PlaywrightTest("page-evaluate.spec.ts", "should evaluate function with no arguments")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldEvaluateFunctionWithNoArguments()
         {
@@ -93,7 +87,6 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(result, Is.EqualTo(8));
         }
 
-        [PlaywrightTest("page-evaluate.spec.ts", "should await promise from function")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldAwaitPromiseFromFunction()
         {
@@ -102,7 +95,6 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(result, Is.EqualTo(10));
         }
 
-        [PlaywrightTest("page-evaluate.spec.ts", "should throw on evaluation error")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldThrowOnEvaluationError()
         {
@@ -111,7 +103,6 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(ex.Message, Does.Contain("test error"));
         }
 
-        [PlaywrightTest("page-evaluate.spec.ts", "should evaluate after navigation")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldEvaluateAfterNavigation()
         {
@@ -121,7 +112,6 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(text, Is.EqualTo("test"));
         }
 
-        [PlaywrightTest("page-evaluate.spec.ts", "should evaluate function with null argument")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldEvaluateFunctionWithNullArgument()
         {
@@ -129,7 +119,6 @@ namespace PlaywrightNative.Tests.Chromium
             Assert.That(result, Is.True);
         }
 
-        [PlaywrightTest("page-evaluate.spec.ts", "should evaluate function with double argument")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldEvaluateFunctionWithDoubleArgument()
         {

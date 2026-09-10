@@ -28,7 +28,7 @@ namespace PlaywrightNative.Tests
     [TestFixture]
     public class SetCheckedTests : PageTestEx
     {
-        [PlaywrightTest("page-check.spec.ts", "SetCheckedAsync checks an unchecked box")]
+        [PlaywrightTest("elementhandle-misc.spec.ts", "should check the box using setChecked")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldCheckAnUncheckedBox()
@@ -43,7 +43,7 @@ namespace PlaywrightNative.Tests
             Assert.That(await box.IsCheckedAsync().ConfigureAwait(false), Is.True);
         }
 
-        [PlaywrightTest("page-check.spec.ts", "SetCheckedAsync unchecks a checked box")]
+        [PlaywrightTest("elementhandle-misc.spec.ts", "should check the box using setChecked")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldUncheckACheckedBox()
@@ -58,7 +58,6 @@ namespace PlaywrightNative.Tests
             Assert.That(await box.IsCheckedAsync().ConfigureAwait(false), Is.False);
         }
 
-        [PlaywrightTest("page-check.spec.ts", "SetCheckedAsync is a no-op when already matching")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldNoOpWhenAlreadyMatching()
@@ -72,7 +71,7 @@ namespace PlaywrightNative.Tests
             Assert.That(await page.IsCheckedAsync("#c").ConfigureAwait(false), Is.True);
         }
 
-        [PlaywrightTest("page-check.spec.ts", "page SetCheckedAsync checks by selector")]
+        [PlaywrightTest("page-check.spec.ts", "should check the box using setChecked")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldCheckFromPageSelector()
@@ -89,7 +88,6 @@ namespace PlaywrightNative.Tests
             Assert.That(await page.IsCheckedAsync("#c").ConfigureAwait(false), Is.False);
         }
 
-        [PlaywrightTest("page-check.spec.ts", "frame SetCheckedAsync")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldCheckFromMainFrame()
@@ -103,7 +101,6 @@ namespace PlaywrightNative.Tests
             Assert.That(await page.MainFrame.IsCheckedAsync("#c").ConfigureAwait(false), Is.True);
         }
 
-        [PlaywrightTest("page-check.spec.ts", "SetCheckedAsync times out while missing")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldTimeoutWhileMissing()
@@ -118,7 +115,6 @@ namespace PlaywrightNative.Tests
             Assert.That(ex.Message, Does.Contain("Timeout"));
         }
 
-        [PlaywrightTest("page-check.spec.ts", "SetCheckedAsync waits until attached")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldWaitUntilAttached()
@@ -137,7 +133,6 @@ namespace PlaywrightNative.Tests
             Assert.That(await page.IsCheckedAsync("#c").ConfigureAwait(false), Is.True);
         }
 
-        [PlaywrightTest("page-check.spec.ts", "SetCheckedAsync times out while hidden")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldTimeoutWhileHidden()
@@ -153,7 +148,6 @@ namespace PlaywrightNative.Tests
             Assert.That(ex.Message, Does.Contain("Timeout"));
         }
 
-        [PlaywrightTest("page-check.spec.ts", "SetCheckedAsync waits until visible")]
         [Test]
         [Timeout(30_000)]
         public async Task ShouldWaitUntilVisible()
@@ -171,7 +165,6 @@ namespace PlaywrightNative.Tests
             Assert.That(await box.IsCheckedAsync().ConfigureAwait(false), Is.True);
         }
 
-        [PlaywrightTest("page-check.spec.ts", "SetCheckedAsync honors force")]
         [Test]
         [Timeout(30_000)]
         public async Task SetCheckedAsyncShouldHonorForce()
@@ -186,7 +179,6 @@ namespace PlaywrightNative.Tests
             Assert.That(await box.IsCheckedAsync().ConfigureAwait(false), Is.True);
         }
 
-        [PlaywrightTest("page-check.spec.ts", "SetCheckedAsync trial does not check")]
         [Test]
         [Timeout(30_000)]
         public async Task SetCheckedTrialShouldNotChangeTheBox()

@@ -45,7 +45,7 @@ namespace PlaywrightNative.Tests
             }
         }
 
-        [PlaywrightTest("page-route.spec.ts", "RouteAsync intercepts request and fulfills")]
+        [PlaywrightTest("page-request-fulfill.spec.ts", "should work")]
         [Test]
         [Timeout(30_000)]
         public async Task RouteAsyncInterceptsRequestAndFulfills()
@@ -79,7 +79,7 @@ namespace PlaywrightNative.Tests
             Assert.That(body, Is.EqualTo("intercepted-body"));
         }
 
-        [PlaywrightTest("page-route.spec.ts", "RouteAsync resume allows server response")]
+        [PlaywrightTest("page-request-continue.spec.ts", "should work")]
         [Test]
         [Timeout(30_000)]
         public async Task RouteAsyncResumeAllowsServerResponse()
@@ -115,7 +115,7 @@ namespace PlaywrightNative.Tests
             Assert.That(invocations, Is.GreaterThanOrEqualTo(1));
         }
 
-        [PlaywrightTest("page-route.spec.ts", "ContinueAsync aliases ResumeAsync")]
+        [PlaywrightTest("page-request-continue.spec.ts", "should work")]
         [Test]
         [Timeout(30_000)]
         public async Task ContinueAsyncShouldAllowServerResponse()
@@ -148,7 +148,7 @@ namespace PlaywrightNative.Tests
             Assert.That(body, Is.EqualTo("from-continue"));
         }
 
-        [PlaywrightTest("page-route.spec.ts", "RouteAsync abort fails navigation")]
+        [PlaywrightTest("page-route.spec.ts", "should fail navigation when aborting main resource")]
         [Test]
         [Timeout(30_000)]
         public async Task RouteAsyncAbortFailsNavigation()
@@ -192,7 +192,7 @@ namespace PlaywrightNative.Tests
             Assert.That(navigationFailed, Is.True, "Aborted request should cause navigation to fail.");
         }
 
-        [PlaywrightTest("page-route.spec.ts", "Context route applies to newly created page")]
+        [PlaywrightTest("browsercontext-route.spec.ts", "should intercept")]
         [Test]
         [Timeout(30_000)]
         public async Task ContextRouteAppliesToNewlyCreatedPage()
@@ -221,7 +221,7 @@ namespace PlaywrightNative.Tests
             Assert.That(body, Is.EqualTo("context-fulfilled"));
         }
 
-        [PlaywrightTest("page-route.spec.ts", "Route request url is accessible inside handler")]
+        [PlaywrightTest("page-route.spec.ts", "should intercept @smoke")]
         [Test]
         [Timeout(30_000)]
         public async Task RouteRequestUrlIsAccessibleInsideHandler()
@@ -256,7 +256,7 @@ namespace PlaywrightNative.Tests
             Assert.That(capturedMethod, Is.EqualTo("GET"));
         }
 
-        [PlaywrightTest("page-route.spec.ts", "RouteAsync matches regex pattern")]
+        [PlaywrightTest("interception.spec.ts", "should intercept every request matching a global regexp")]
         [Test]
         [Timeout(30_000)]
         public async Task RouteAsyncMatchesRegexPattern()
@@ -283,7 +283,6 @@ namespace PlaywrightNative.Tests
             Assert.That(body, Is.EqualTo("regex-ok"));
         }
 
-        [PlaywrightTest("page-route.spec.ts", "RouteAsync matches predicate")]
         [Test]
         [Timeout(30_000)]
         public async Task RouteAsyncMatchesPredicate()
@@ -310,7 +309,7 @@ namespace PlaywrightNative.Tests
             Assert.That(body, Is.EqualTo("func-ok"));
         }
 
-        [PlaywrightTest("page-route.spec.ts", "UnrouteAsync stops intercepting")]
+        [PlaywrightTest("page-route.spec.ts", "should unroute")]
         [Test]
         [Timeout(30_000)]
         public async Task UnrouteAsyncStopsIntercepting()
@@ -345,7 +344,7 @@ namespace PlaywrightNative.Tests
             Assert.That(body, Is.EqualTo("from-server"));
         }
 
-        [PlaywrightTest("page-route.spec.ts", "RouteAsync fulfills from path")]
+        [PlaywrightTest("page-request-fulfill.spec.ts", "should work with file path")]
         [Test]
         [Timeout(30_000)]
         public async Task RouteAsyncFulfillsFromPath()
@@ -383,7 +382,7 @@ namespace PlaywrightNative.Tests
             }
         }
 
-        [PlaywrightTest("page-route.spec.ts", "FulfillAsync json serializes the body")]
+        [PlaywrightTest("page-request-fulfill.spec.ts", "should fulfill json")]
         [Test]
         [Timeout(30_000)]
         public async Task FulfillAsyncJsonShouldSerializeTheBody()

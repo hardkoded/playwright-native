@@ -31,7 +31,7 @@ namespace PlaywrightNative.Tests
     [TestFixture]
     public class GetByTests : PageTestEx
     {
-        [PlaywrightTest("selectors-text.spec.ts", "should work")]
+        [PlaywrightTest("selectors-get-by.spec.ts", "getByText should work")]
         [PlaywrightTest("selectors-text.spec.ts", "should work @smoke")]
         [Test]
         [Timeout(30_000)]
@@ -47,7 +47,7 @@ namespace PlaywrightNative.Tests
             Assert.That(await handle.TextContentAsync().ConfigureAwait(false), Does.Contain("unique text"));
         }
 
-        [PlaywrightTest("selectors-text.spec.ts", "should work with exact")]
+        [PlaywrightTest("selectors-get-by.spec.ts", "getByText should work")]
         [Test]
         [Timeout(30_000)]
         public async Task GetByTextExactShouldMatchFullText()
@@ -62,7 +62,6 @@ namespace PlaywrightNative.Tests
             Assert.That(await handle.TextContentAsync().ConfigureAwait(false), Is.EqualTo("Click me"));
         }
 
-        [PlaywrightTest("selectors-role.spec.ts", "should work")]
         [Test]
         [Timeout(30_000)]
         public async Task GetByRoleShouldFindButton()
@@ -77,7 +76,7 @@ namespace PlaywrightNative.Tests
             Assert.That(await handle.TextContentAsync().ConfigureAwait(false), Is.EqualTo("Click me"));
         }
 
-        [PlaywrightTest("selectors-get-by.spec.ts", "getByRole should work")]
+        [PlaywrightTest("selectors-role.spec.ts", "should support name")]
         [Test]
         [Timeout(30_000)]
         public async Task GetByRoleShouldFilterByAccessibleName()
@@ -187,7 +186,7 @@ namespace PlaywrightNative.Tests
             Assert.That(await handle.TextContentAsync().ConfigureAwait(false), Is.EqualTo("North"));
         }
 
-        [PlaywrightTest("selectors-get-by.spec.ts", "getByRole checked should work")]
+        [PlaywrightTest("selectors-role.spec.ts", "should support checked")]
         [Test]
         [Timeout(30_000)]
         public async Task GetByRoleShouldFilterByCheckedState()
@@ -203,7 +202,7 @@ namespace PlaywrightNative.Tests
             Assert.That(await off.GetAttributeAsync("id").ConfigureAwait(false), Is.EqualTo("off"));
         }
 
-        [PlaywrightTest("selectors-get-by.spec.ts", "getByRole disabled should work")]
+        [PlaywrightTest("selectors-role.spec.ts", "should support disabled")]
         [Test]
         [Timeout(30_000)]
         public async Task GetByRoleShouldFilterByDisabledState()
@@ -219,7 +218,7 @@ namespace PlaywrightNative.Tests
             Assert.That(await enabled.GetAttributeAsync("id").ConfigureAwait(false), Is.EqualTo("go"));
         }
 
-        [PlaywrightTest("selectors-get-by.spec.ts", "getByRole expanded should work")]
+        [PlaywrightTest("selectors-role.spec.ts", "should support expanded")]
         [Test]
         [Timeout(30_000)]
         public async Task GetByRoleShouldFilterByExpandedState()
@@ -235,7 +234,7 @@ namespace PlaywrightNative.Tests
             Assert.That(await closed.GetAttributeAsync("id").ConfigureAwait(false), Is.EqualTo("closed"));
         }
 
-        [PlaywrightTest("selectors-get-by.spec.ts", "getByRole includeHidden should work")]
+        [PlaywrightTest("selectors-role.spec.ts", "should filter hidden, unless explicitly asked for")]
         [Test]
         [Timeout(30_000)]
         public async Task GetByRoleShouldSkipHiddenWhenRequested()
@@ -251,7 +250,7 @@ namespace PlaywrightNative.Tests
             Assert.That(await visible.GetAttributeAsync("id").ConfigureAwait(false), Is.EqualTo("vis"));
         }
 
-        [PlaywrightTest("selectors-get-by.spec.ts", "getByRole level should work")]
+        [PlaywrightTest("selectors-role.spec.ts", "should support level")]
         [Test]
         [Timeout(30_000)]
         public async Task GetByRoleShouldFilterByHeadingLevel()
@@ -267,7 +266,7 @@ namespace PlaywrightNative.Tests
             Assert.That(await second.GetAttributeAsync("id").ConfigureAwait(false), Is.EqualTo("two"));
         }
 
-        [PlaywrightTest("selectors-get-by.spec.ts", "getByRole pressed should work")]
+        [PlaywrightTest("selectors-role.spec.ts", "should support pressed")]
         [Test]
         [Timeout(30_000)]
         public async Task GetByRoleShouldFilterByPressedState()
@@ -283,7 +282,7 @@ namespace PlaywrightNative.Tests
             Assert.That(await up.GetAttributeAsync("id").ConfigureAwait(false), Is.EqualTo("up"));
         }
 
-        [PlaywrightTest("selectors-get-by.spec.ts", "getByRole selected should work")]
+        [PlaywrightTest("selectors-role.spec.ts", "should support selected")]
         [Test]
         [Timeout(30_000)]
         public async Task GetByRoleShouldFilterBySelectedState()
