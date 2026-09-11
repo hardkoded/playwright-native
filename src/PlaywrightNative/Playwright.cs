@@ -338,6 +338,12 @@ namespace PlaywrightNative
                     webkitCertsProxy = null;
                 }
 
+                // Unlike Chromium's Target.setAutoAttach round-trip, WebKit's page-proxy-created
+                // event for the browser's own initial page can still be in flight when the
+                // launch call above resolves, so context.Pages can observe zero pages here.
+                // Official waits for the initial Page event (loadDefaultContext); mirror that.
+                await WaitForInitialPageAsync(context).ConfigureAwait(false);
+
                 await ApplyPersistentEmulationAsync(context, options).ConfigureAwait(false);
                 return context;
             }
@@ -364,6 +370,31 @@ namespace PlaywrightNative
                 persistent.IgnoreHTTPSErrors == true,
                 options.Proxy);
             return proxy.BrowserProxy;
+        }
+
+        private static async Task WaitForInitialPageAsync(IBrowserContext context)
+        {
+            if (context.Pages.Count > 0)
+            {
+                return;
+            }
+
+            TaskCompletionSource<bool> firstPageTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            void OnFirstPage(object sender, IPage page) => firstPageTcs.TrySetResult(true);
+            context.Page += OnFirstPage;
+            try
+            {
+                if (context.Pages.Count > 0)
+                {
+                    return;
+                }
+
+                await Task.WhenAny(firstPageTcs.Task, Task.Delay(TimeSpan.FromSeconds(30))).ConfigureAwait(false);
+            }
+            finally
+            {
+                context.Page -= OnFirstPage;
+            }
         }
 
         private static async Task ApplyPersistentEmulationAsync(IBrowserContext context, BrowserTypeLaunchOptions options)
