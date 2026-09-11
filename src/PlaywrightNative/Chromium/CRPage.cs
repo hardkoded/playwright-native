@@ -2507,12 +2507,18 @@ namespace PlaywrightNative.Chromium
                     new TargetClosedException(DriverMessages.BrowserOrContextClosedExceptionMessage));
             }
 
+            void OnCrashed(object sender, EventArgs e)
+            {
+                lifecycleTcs.TrySetException(new PlaywrightNativeException($"{apiName}: Page crashed"));
+            }
+
             // Subscribe before Page.navigate so about:blank -> about:blank cannot
             // lose load between navigate returning and the wait starting.
             frame.LifecycleChanged += OnLifecycle;
             _frameManager.FrameDetached += OnDetached;
             _frameManager.FrameNavigated += OnNavigated;
             Closed += OnClosed;
+            Crashed += OnCrashed;
 
             // Race Page.navigate with the navigation timeout. A hanging server
             // can keep the CDP command outstanding; official progress.race
@@ -2588,6 +2594,7 @@ namespace PlaywrightNative.Chromium
             }
             finally
             {
+                Crashed -= OnCrashed;
                 Closed -= OnClosed;
                 frame.LifecycleChanged -= OnLifecycle;
                 _frameManager.FrameDetached -= OnDetached;
@@ -3992,6 +3999,7 @@ namespace PlaywrightNative.Chromium
             }
 
             _crashed = true;
+            _client.MarkCrashed();
             Crashed?.Invoke(this, EventArgs.Empty);
         }
 

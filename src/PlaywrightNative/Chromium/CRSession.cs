@@ -76,13 +76,9 @@ namespace PlaywrightNative.Chromium
         internal bool IsClosed => _closed;
 
         /// <summary>
-        /// Gets or sets a value indicating whether this session has crashed.
+        /// Gets a value indicating whether this session has crashed.
         /// </summary>
-        internal bool IsCrashed
-        {
-            get => _crashed;
-            set => _crashed = value;
-        }
+        internal bool IsCrashed => _crashed;
 
         /// <summary>
         /// Gets or sets the reason recorded when the owning page was closed.
@@ -115,12 +111,39 @@ namespace PlaywrightNative.Chromium
         }
 
         /// <summary>
+        /// Marks the session as crashed and rejects any commands still awaiting a
+        /// response. Unlike <see cref="Dispose"/>, the session is not removed from
+        /// the connection: the transport is still alive, only this target's renderer
+        /// died (<c>Inspector.targetCrashed</c>). Subsequent <see cref="SendAsync"/>
+        /// calls fail fast instead of hanging forever waiting for a reply that will
+        /// never arrive.
+        /// </summary>
+        internal void MarkCrashed()
+        {
+            if (_crashed)
+            {
+                return;
+            }
+
+            _crashed = true;
+
+            foreach (KeyValuePair<int, PendingCallback> kvp in _callbacks)
+            {
+                kvp.Value.Completion.TrySetException(
+                    new PlaywrightNativeException($"Protocol error ({kvp.Value.Method}): Target crashed."));
+            }
+
+            _callbacks.Clear();
+        }
+
+        /// <summary>
         /// Sends a CDP command and waits for the response.
         /// </summary>
         /// <param name="method">The CDP method name (e.g. "Page.navigate").</param>
         /// <param name="parameters">Optional method parameters, serialized to <see cref="JsonElement"/>.</param>
         /// <returns>A task that resolves with the result of the CDP command.</returns>
-        /// <exception cref="TargetClosedException">Thrown when the session has been closed or crashed.</exception>
+        /// <exception cref="TargetClosedException">Thrown when the session has been closed.</exception>
+        /// <exception cref="PlaywrightNativeException">Thrown when the target has crashed.</exception>
         internal Task<JsonElement?> SendAsync(string method, object parameters = null)
         {
             if (_closed)
@@ -131,7 +154,7 @@ namespace PlaywrightNative.Chromium
 
             if (_crashed)
             {
-                throw new TargetClosedException($"Protocol error ({method}): Session crashed.");
+                throw new PlaywrightNativeException($"Protocol error ({method}): Session crashed.");
             }
 
             JsonElement? jsonParams = null;
