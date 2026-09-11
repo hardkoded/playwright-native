@@ -17,6 +17,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Threading.Tasks;
 using PlaywrightNative.Helpers;
 using PlaywrightNative.Transport.Protocol;
@@ -36,6 +37,15 @@ namespace PlaywrightNative.WebKit
         // method instead of hanging until the caller's (much longer) timeout. Above real
         // latency, below typical navigation/test timeouts.
         private const int CommandTimeoutMs = 20_000;
+
+        // WIP command parameters are C# nullable value types for "not set"; several
+        // WIP argument validators (e.g. Page.snapshotRect's integer "quality") reject
+        // an explicit JSON null for an optional field with "can't be processed" rather
+        // than treating it the same as an omitted field, so omit nulls entirely.
+        private static readonly JsonSerializerOptions ParametersSerializerOptions = new()
+        {
+            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        };
 
         private readonly WKConnection _connection;
         private readonly string _sessionId;
@@ -147,7 +157,7 @@ namespace PlaywrightNative.WebKit
             JsonElement? paramsElement = null;
             if (parameters != null)
             {
-                string json = JsonSerializer.Serialize(parameters);
+                string json = JsonSerializer.Serialize(parameters, ParametersSerializerOptions);
                 paramsElement = JsonDocument.Parse(json).RootElement;
             }
 

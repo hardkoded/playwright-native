@@ -17,6 +17,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Threading.Tasks;
 using PlaywrightNative.Helpers;
 using PlaywrightNative.Transport.Protocol;
@@ -37,6 +38,15 @@ namespace PlaywrightNative.WebKit
     /// </remarks>
     internal class WKTargetSession : IDisposable
     {
+        // WIP argument validators (e.g. Page.snapshotRect's integer "quality") reject
+        // an explicit JSON null for an optional field with "can't be processed" rather
+        // than treating it the same as an omitted field, so omit nulls anywhere in the
+        // params object, not just when the whole object is absent.
+        private static readonly JsonSerializerOptions InnerMessageSerializerOptions = new()
+        {
+            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        };
+
         private readonly WKSession _parentSession;
         private readonly WKConnection _connection;
         private readonly string _targetId;
@@ -187,12 +197,14 @@ namespace PlaywrightNative.WebKit
             => SerializeInnerMessage(id, method, parameters);
 
         private static string SerializeInnerMessage(int id, string method, object parameters)
-            => JsonSerializer.Serialize(new InnerMessage
-            {
-                Id = id,
-                Method = method,
-                Params = parameters,
-            });
+            => JsonSerializer.Serialize(
+                new InnerMessage
+                {
+                    Id = id,
+                    Method = method,
+                    Params = parameters,
+                },
+                InnerMessageSerializerOptions);
 
         private TargetClosedException ClosedSessionException()
             => ClosedTarget.Exception(DriverMessages.BrowserOrContextClosedExceptionMessage, _closeReason);
