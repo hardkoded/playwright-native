@@ -34,11 +34,11 @@ namespace PlaywrightNative.Tests
             await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
             await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
-            await page.SetContentAsync("<button data-testid=\"go\" id=\"b\">Go</button>").ConfigureAwait(false);
+            await page.SetContentAsync("<button data-testid=\"go\" id=\"b\" onclick=\"window.lastClickedId = this.id\">Go</button>").ConfigureAwait(false);
 
             await page.GetByTestId("go").ClickAsync().ConfigureAwait(false);
 
-            string id = await page.EvaluateAsync<string>("document.activeElement && document.activeElement.id").ConfigureAwait(false);
+            string id = await page.EvaluateAsync<string>("window.lastClickedId").ConfigureAwait(false);
             Assert.That(id, Is.EqualTo("b"));
         }
 
@@ -50,10 +50,10 @@ namespace PlaywrightNative.Tests
             await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
             await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
-            await page.SetContentAsync("<button id=\"b\">Save</button><p>Hello world</p>").ConfigureAwait(false);
+            await page.SetContentAsync("<button id=\"b\" onclick=\"window.lastClickedId = this.id\">Save</button><p>Hello world</p>").ConfigureAwait(false);
 
             await page.GetByRole("button", name: "Save").ClickAsync().ConfigureAwait(false);
-            string id = await page.EvaluateAsync<string>("document.activeElement && document.activeElement.id").ConfigureAwait(false);
+            string id = await page.EvaluateAsync<string>("window.lastClickedId").ConfigureAwait(false);
             string text = await page.GetByText("Hello world").TextContentAsync().ConfigureAwait(false);
 
             Assert.That(id, Is.EqualTo("b"));
@@ -128,9 +128,9 @@ namespace PlaywrightNative.Tests
             }
 
             Assert.That(child, Is.Not.Null);
-            await child.SetContentAsync("<button data-testid=\"inner\" id=\"b\">Go</button>").ConfigureAwait(false);
+            await child.SetContentAsync("<button data-testid=\"inner\" id=\"b\" onclick=\"window.lastClickedId = this.id\">Go</button>").ConfigureAwait(false);
             await child.GetByTestId("inner").ClickAsync().ConfigureAwait(false);
-            string id = await child.EvaluateAsync<string>("document.activeElement && document.activeElement.id").ConfigureAwait(false);
+            string id = await child.EvaluateAsync<string>("window.lastClickedId").ConfigureAwait(false);
             Assert.That(id, Is.EqualTo("b"));
         }
     }

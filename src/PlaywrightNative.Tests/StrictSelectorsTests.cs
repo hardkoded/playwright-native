@@ -59,11 +59,11 @@ namespace PlaywrightNative.Tests
                 StrictSelectors = true,
             }).ConfigureAwait(false);
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
-            await page.SetContentAsync("<div><button id=\"only\">one</button><button>two</button></div>").ConfigureAwait(false);
+            await page.SetContentAsync("<div><button id=\"only\" onclick=\"window.lastClickedId = this.id\">one</button><button>two</button></div>").ConfigureAwait(false);
 
             await page.ClickAsync("#only").ConfigureAwait(false);
 
-            string id = await page.EvaluateAsync<string>("document.activeElement && document.activeElement.id").ConfigureAwait(false);
+            string id = await page.EvaluateAsync<string>("window.lastClickedId").ConfigureAwait(false);
             Assert.That(id, Is.EqualTo("only"));
         }
 
@@ -118,11 +118,11 @@ namespace PlaywrightNative.Tests
             await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
             await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
-            await page.SetContentAsync("<div><button id=\"first\">one</button><button>two</button></div>").ConfigureAwait(false);
+            await page.SetContentAsync("<div><button id=\"first\" onclick=\"window.lastClickedId = this.id\">one</button><button>two</button></div>").ConfigureAwait(false);
 
             await page.ClickAsync("button").ConfigureAwait(false);
 
-            string id = await page.EvaluateAsync<string>("document.activeElement && document.activeElement.id").ConfigureAwait(false);
+            string id = await page.EvaluateAsync<string>("window.lastClickedId").ConfigureAwait(false);
             Assert.That(context.StrictSelectors, Is.False);
             Assert.That(id, Is.EqualTo("first"));
         }

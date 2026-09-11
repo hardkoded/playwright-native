@@ -35,11 +35,11 @@ namespace PlaywrightNative.Tests
             await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
             await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
-            await page.SetContentAsync("<button id=\"only\">Go</button>").ConfigureAwait(false);
+            await page.SetContentAsync("<button id=\"only\" onclick=\"window.lastClickedId = this.id\">Go</button>").ConfigureAwait(false);
 
             await page.Locator("button").ClickAsync().ConfigureAwait(false);
 
-            string id = await page.EvaluateAsync<string>("document.activeElement && document.activeElement.id").ConfigureAwait(false);
+            string id = await page.EvaluateAsync<string>("window.lastClickedId").ConfigureAwait(false);
             Assert.That(id, Is.EqualTo("only"));
         }
 
@@ -69,16 +69,19 @@ namespace PlaywrightNative.Tests
             await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
             await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
-            await page.SetContentAsync("<button id=\"a\">A</button><button id=\"b\">B</button><button id=\"c\">C</button>").ConfigureAwait(false);
+            await page.SetContentAsync(
+                "<button id=\"a\" onclick=\"window.lastClickedId = this.id\">A</button>" +
+                "<button id=\"b\" onclick=\"window.lastClickedId = this.id\">B</button>" +
+                "<button id=\"c\" onclick=\"window.lastClickedId = this.id\">C</button>").ConfigureAwait(false);
 
             await page.Locator("button").Nth(1).ClickAsync().ConfigureAwait(false);
-            string second = await page.EvaluateAsync<string>("document.activeElement && document.activeElement.id").ConfigureAwait(false);
+            string second = await page.EvaluateAsync<string>("window.lastClickedId").ConfigureAwait(false);
 
             await page.Locator("button").First.ClickAsync().ConfigureAwait(false);
-            string first = await page.EvaluateAsync<string>("document.activeElement && document.activeElement.id").ConfigureAwait(false);
+            string first = await page.EvaluateAsync<string>("window.lastClickedId").ConfigureAwait(false);
 
             await page.Locator("button").Last.ClickAsync().ConfigureAwait(false);
-            string last = await page.EvaluateAsync<string>("document.activeElement && document.activeElement.id").ConfigureAwait(false);
+            string last = await page.EvaluateAsync<string>("window.lastClickedId").ConfigureAwait(false);
 
             Assert.That(second, Is.EqualTo("b"));
             Assert.That(first, Is.EqualTo("a"));
@@ -94,12 +97,12 @@ namespace PlaywrightNative.Tests
             await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
             await page.SetContentAsync(
-                "<div class=\"card\"><button id=\"a\">A</button></div>" +
-                "<div class=\"card\"><button id=\"b\">B</button></div>").ConfigureAwait(false);
+                "<div class=\"card\"><button id=\"a\" onclick=\"window.lastClickedId = this.id\">A</button></div>" +
+                "<div class=\"card\"><button id=\"b\" onclick=\"window.lastClickedId = this.id\">B</button></div>").ConfigureAwait(false);
 
             await page.Locator(".card").Nth(1).Locator("button").ClickAsync().ConfigureAwait(false);
 
-            string id = await page.EvaluateAsync<string>("document.activeElement && document.activeElement.id").ConfigureAwait(false);
+            string id = await page.EvaluateAsync<string>("window.lastClickedId").ConfigureAwait(false);
             Assert.That(id, Is.EqualTo("b"));
         }
 
@@ -151,10 +154,10 @@ namespace PlaywrightNative.Tests
             Assert.That(await button.CountAsync().ConfigureAwait(false), Is.EqualTo(0));
 
             await page.EvaluateAsync<object>(
-                "document.getElementById('host').innerHTML = '<button id=\"late\">Go</button>'").ConfigureAwait(false);
+                "document.getElementById('host').innerHTML = '<button id=\"late\" onclick=\"window.lastClickedId = this.id\">Go</button>'").ConfigureAwait(false);
 
             await button.ClickAsync().ConfigureAwait(false);
-            string id = await page.EvaluateAsync<string>("document.activeElement && document.activeElement.id").ConfigureAwait(false);
+            string id = await page.EvaluateAsync<string>("window.lastClickedId").ConfigureAwait(false);
             Assert.That(id, Is.EqualTo("late"));
         }
 
@@ -167,11 +170,11 @@ namespace PlaywrightNative.Tests
             await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
             IFrame child = await AttachBlankChildFrameAsync(page).ConfigureAwait(false);
-            await child.SetContentAsync("<button id=\"inner\">Go</button>").ConfigureAwait(false);
+            await child.SetContentAsync("<button id=\"inner\" onclick=\"window.lastClickedId = this.id\">Go</button>").ConfigureAwait(false);
 
             await child.Locator("button").ClickAsync().ConfigureAwait(false);
 
-            string id = await child.EvaluateAsync<string>("document.activeElement && document.activeElement.id").ConfigureAwait(false);
+            string id = await child.EvaluateAsync<string>("window.lastClickedId").ConfigureAwait(false);
             Assert.That(child.Locator("button").Page, Is.SameAs(page));
             Assert.That(child.Locator("button").Frame, Is.SameAs(child));
             Assert.That(id, Is.EqualTo("inner"));
