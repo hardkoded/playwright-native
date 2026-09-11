@@ -256,7 +256,7 @@ namespace PlaywrightNative.Helpers
             {
                 if (options?.Path != null)
                 {
-                    await StopAsync(options.Path).ConfigureAwait(false);
+                    throw new PlaywrightNativeException("Must start tracing before stopping");
                 }
 
                 return;
