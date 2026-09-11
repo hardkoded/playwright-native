@@ -716,21 +716,11 @@ namespace PlaywrightNative.Helpers
                 yield break;
             }
 
-            string separator = ResponseHeaders.WebKitSetCookieSeparator;
-            if (value.Contains(separator, StringComparison.Ordinal))
-            {
-                foreach (string part in value.Split(separator))
-                {
-                    string trimmed = part.Trim();
-                    if (trimmed.Length > 0)
-                    {
-                        yield return trimmed;
-                    }
-                }
-
-                yield break;
-            }
-
+            // Official builds response.cookies directly from the already-normalized headers
+            // array (one entry per real Set-Cookie), with no further splitting here. The
+            // WebKit comma separator is only for turning a raw WIP header *map* into that
+            // array (see ResponseHeaders.FromWebKitMap) — reapplying it at this stage would
+            // wrongly split a single cookie whose own Expires attribute contains a comma.
             if (value.Contains('\n', StringComparison.Ordinal))
             {
                 foreach (string part in value.Split('\n'))
