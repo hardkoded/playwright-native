@@ -18,6 +18,7 @@ using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -125,7 +126,7 @@ namespace PlaywrightNative.Helpers
                         await copy[i].Locator.HighlightAsync(style: copy[i].Style).ConfigureAwait(false);
                     }
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
             }

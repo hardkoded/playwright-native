@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.Chromium;
 using PlaywrightNative.Input;
@@ -115,7 +116,7 @@ namespace PlaywrightNative.Tests.Chromium
             await Page.GoToAsync("data:text/html,<button id='b' style='display:none'>x</button>").ConfigureAwait(false);
             CRElementHandle handle = await Page.QuerySelectorAsync("#b").ConfigureAwait(false);
 
-            PlaywrightNativeException ex = Assert.ThrowsAsync<PlaywrightNativeException>(
+            PlaywrightException ex = Assert.ThrowsAsync<PlaywrightException>(
                 () => handle.ClickAsync());
             Assert.That(ex.Message, Does.Contain("no layout").Or.Contain("not visible"));
 
@@ -132,7 +133,7 @@ namespace PlaywrightNative.Tests.Chromium
             await handle.DisposeAsync().ConfigureAwait(false);
 
             Assert.That(handle.IsDisposed, Is.True);
-            PlaywrightNativeException ex = Assert.ThrowsAsync<PlaywrightNativeException>(
+            PlaywrightException ex = Assert.ThrowsAsync<PlaywrightException>(
                 () => handle.FocusAsync());
             Assert.That(ex.Message, Does.Contain("disposed"));
         }

@@ -20,6 +20,7 @@ using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -259,11 +260,11 @@ namespace PlaywrightNative.Helpers
             {
                 return assumeVisibleOnTimeout;
             }
-            catch (PlaywrightNativeException ex) when (ClosedTarget.IsClosed(ex))
+            catch (PlaywrightException ex) when (ClosedTarget.IsClosed(ex))
             {
                 throw;
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 return false;
             }
@@ -287,11 +288,11 @@ namespace PlaywrightNative.Helpers
                         return true;
                     }
                 }
-                catch (PlaywrightNativeException ex) when (ClosedTarget.IsClosed(ex))
+                catch (PlaywrightException ex) when (ClosedTarget.IsClosed(ex))
                 {
                     throw;
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
             }

@@ -17,6 +17,7 @@
 using System;
 using System.Text.Json;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -101,7 +102,7 @@ namespace PlaywrightNative.Helpers
 
                 // Upstream $eval uses "Failed to find element matching selector";
                 // ElementQuery-style helpers also look for "No node found for selector".
-                throw new PlaywrightNativeException(
+                throw new PlaywrightException(
                     prefix
                     + "Failed to find element matching selector \""
                     + selector
@@ -135,7 +136,7 @@ namespace PlaywrightNative.Helpers
             IJSHandle array = await arrayTask.ConfigureAwait(false);
             if (array == null)
             {
-                throw new PlaywrightNativeException("Failed to create an element array for evaluation.");
+                throw new PlaywrightException("Failed to create an element array for evaluation.");
             }
 
             try

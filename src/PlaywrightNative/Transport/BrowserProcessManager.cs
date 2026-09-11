@@ -8,6 +8,7 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
+using Microsoft.Playwright;
 using PlaywrightNative.Helpers;
 
 namespace PlaywrightNative.Transport
@@ -394,7 +395,7 @@ namespace PlaywrightNative.Transport
             if (!RuntimeInformation.IsOSPlatform(OSPlatform.OSX) &&
                 !RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
             {
-                throw new PlaywrightNativeException(
+                throw new PlaywrightException(
                     "The bash fd-3/4 remap is only used on macOS and Linux. Windows uses STARTUPINFOEX.");
             }
 
@@ -433,7 +434,7 @@ namespace PlaywrightNative.Transport
                 int read = await stdout.ReadAsync(one.AsMemory(0, 1), cancellationToken).ConfigureAwait(false);
                 if (read == 0)
                 {
-                    throw new PlaywrightNativeException("Firefox stdout closed before Juggler reported ready.");
+                    throw new PlaywrightException("Firefox stdout closed before Juggler reported ready.");
                 }
 
                 if (one[0] == (byte)'\n')
@@ -724,7 +725,7 @@ namespace PlaywrightNative.Transport
                     }
 
                     void OnProcessExitedWhileStarting(object sender, EventArgs e)
-                        => p._startCompletionSource.TrySetException(new PlaywrightNativeException(
+                        => p._startCompletionSource.TrySetException(new PlaywrightException(
                             BrowserTypeLaunchGuard.RewriteStartupLog($"Failed to launch browser! {output}")));
 
                     void OnProcessExited(object sender, EventArgs e) => _exited.EnterFrom(p, p._currentState);
@@ -742,7 +743,7 @@ namespace PlaywrightNative.Transport
                         {
                             cts = new CancellationTokenSource(timeout);
                             cts.Token.Register(() => p._startCompletionSource.TrySetException(
-                                new PlaywrightNativeException($"Timed out after {timeout} ms while trying to connect to the browser!")));
+                                new PlaywrightException($"Timed out after {timeout} ms while trying to connect to the browser!")));
                         }
 
                         // PipeStdio (Firefox): the ready banner is written on stdout, then
@@ -788,7 +789,7 @@ namespace PlaywrightNative.Transport
                         // Official browsertype-launch.spec.ts asserts the message contains
                         // "Failed to launch" even when Process.Start fails (missing binary).
                         string detail = string.IsNullOrEmpty(ex.Message) ? "browser" : ex.Message;
-                        throw new PlaywrightNativeException(
+                        throw new PlaywrightException(
                             detail.Contains("Failed to launch", StringComparison.Ordinal)
                                 ? detail
                                 : $"Failed to launch browser: {detail}",

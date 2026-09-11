@@ -16,6 +16,7 @@
  */
 using System;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 
@@ -113,7 +114,7 @@ namespace PlaywrightNative.Tests
                             return found;
                         }
                     }
-                    catch (PlaywrightNativeException)
+                    catch (PlaywrightException)
                     {
                     }
 

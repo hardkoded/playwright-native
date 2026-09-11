@@ -16,6 +16,7 @@
  */
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 
@@ -467,31 +468,31 @@ namespace PlaywrightNative.Tests
             await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
 
-            PlaywrightNativeException e0 = Assert.CatchAsync<PlaywrightNativeException>(() => page.QuerySelectorAsync("role=[bar]"));
+            PlaywrightException e0 = Assert.CatchAsync<PlaywrightException>(() => page.QuerySelectorAsync("role=[bar]"));
             Assert.That(e0.Message, Does.Contain("Role must not be empty"));
 
-            PlaywrightNativeException e1 = Assert.CatchAsync<PlaywrightNativeException>(() => page.QuerySelectorAsync("role=foo[sElected]"));
+            PlaywrightException e1 = Assert.CatchAsync<PlaywrightException>(() => page.QuerySelectorAsync("role=foo[sElected]"));
             Assert.That(e1.Message, Does.Contain("Unknown attribute \"sElected\", must be one of \"checked\", \"description\", \"disabled\", \"expanded\", \"include-hidden\", \"level\", \"name\", \"pressed\", \"selected\""));
 
-            PlaywrightNativeException e2 = Assert.CatchAsync<PlaywrightNativeException>(() => page.QuerySelectorAsync("role=foo[bar . qux=true]"));
+            PlaywrightException e2 = Assert.CatchAsync<PlaywrightException>(() => page.QuerySelectorAsync("role=foo[bar . qux=true]"));
             Assert.That(e2.Message, Does.Contain("Unknown attribute \"bar.qux\""));
 
-            PlaywrightNativeException e3 = Assert.CatchAsync<PlaywrightNativeException>(() => page.QuerySelectorAsync("role=heading[level=\"bar\"]"));
+            PlaywrightException e3 = Assert.CatchAsync<PlaywrightException>(() => page.QuerySelectorAsync("role=heading[level=\"bar\"]"));
             Assert.That(e3.Message, Does.Contain("\"level\" attribute must be compared to a number"));
 
-            PlaywrightNativeException e4 = Assert.CatchAsync<PlaywrightNativeException>(() => page.QuerySelectorAsync("role=checkbox[checked=\"bar\"]"));
+            PlaywrightException e4 = Assert.CatchAsync<PlaywrightException>(() => page.QuerySelectorAsync("role=checkbox[checked=\"bar\"]"));
             Assert.That(e4.Message, Does.Contain("\"checked\" must be one of true, false, \"mixed\""));
 
-            PlaywrightNativeException e5 = Assert.CatchAsync<PlaywrightNativeException>(() => page.QuerySelectorAsync("role=checkbox[checked~=true]"));
+            PlaywrightException e5 = Assert.CatchAsync<PlaywrightException>(() => page.QuerySelectorAsync("role=checkbox[checked~=true]"));
             Assert.That(e5.Message, Does.Contain("cannot use ~= in attribute with non-string matching value"));
 
-            PlaywrightNativeException e6 = Assert.CatchAsync<PlaywrightNativeException>(() => page.QuerySelectorAsync("role=button[level=3]"));
+            PlaywrightException e6 = Assert.CatchAsync<PlaywrightException>(() => page.QuerySelectorAsync("role=button[level=3]"));
             Assert.That(e6.Message, Does.Contain("\"level\" attribute is only supported for roles: \"heading\", \"listitem\", \"row\", \"treeitem\""));
 
-            PlaywrightNativeException e7 = Assert.CatchAsync<PlaywrightNativeException>(() => page.QuerySelectorAsync("role=button[name]"));
+            PlaywrightException e7 = Assert.CatchAsync<PlaywrightException>(() => page.QuerySelectorAsync("role=button[name]"));
             Assert.That(e7.Message, Does.Contain("\"name\" attribute must have a value"));
 
-            PlaywrightNativeException e8 = Assert.CatchAsync<PlaywrightNativeException>(() => page.QuerySelectorAsync("role=treeitem[expanded=\"none\"]"));
+            PlaywrightException e8 = Assert.CatchAsync<PlaywrightException>(() => page.QuerySelectorAsync("role=treeitem[expanded=\"none\"]"));
             Assert.That(e8.Message, Does.Contain("\"expanded\" must be one of true, false"));
         }
 

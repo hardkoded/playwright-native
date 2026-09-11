@@ -16,6 +16,7 @@
  */
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 
@@ -39,7 +40,7 @@ namespace PlaywrightNative.Tests
             await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
 
-            PlaywrightNativeException ex = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException ex = Assert.CatchAsync<PlaywrightException>(
                 () => page.QuerySelectorAsync(null));
             Assert.That(ex, Is.Not.Null);
             Assert.That(ex.Message, Does.Contain("selector: expected string, got object"));

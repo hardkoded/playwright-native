@@ -513,7 +513,7 @@ namespace PlaywrightNative
                 {
                     await _crPage.ClosePageAsync(runUnload).ConfigureAwait(false);
                 }
-                catch (PlaywrightNativeException ex) when (
+                catch (PlaywrightException ex) when (
                     ClosedTarget.IsClosed(ex)
                     || ex.Message.Contains("No target with given id", StringComparison.OrdinalIgnoreCase))
                 {
@@ -1246,7 +1246,7 @@ namespace PlaywrightNative
                             break;
                         }
                     }
-                    catch (PlaywrightNativeException ex) when (
+                    catch (PlaywrightException ex) when (
                         ex.Message.Contains("Execution context was destroyed", StringComparison.Ordinal)
                         || ex.Message.Contains("Cannot find context with specified id", StringComparison.Ordinal)
                         || ex.Message.Contains(navigating, StringComparison.Ordinal))
@@ -1255,7 +1255,7 @@ namespace PlaywrightNative
 
                     if (attempt >= 20)
                     {
-                        throw new PlaywrightNativeException(navigating);
+                        throw new PlaywrightException(navigating);
                     }
 
                     await Task.Delay(50).ConfigureAwait(false);
@@ -1824,7 +1824,7 @@ namespace PlaywrightNative
             {
                 await Task.WhenAll(cancels).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
         }
@@ -1893,7 +1893,7 @@ namespace PlaywrightNative
         {
             if (_isClosed)
             {
-                throw new PlaywrightNativeException("page.pause: Page has been closed.");
+                throw new PlaywrightException("page.pause: Page has been closed.");
             }
 
             int timeoutMs = TimeoutSettings.TimeoutMs(DefaultTimeout);
@@ -2013,7 +2013,7 @@ namespace PlaywrightNative
         {
             if (Context is IHasExposedFunctionNames contextNames && contextNames.HasExposedFunction(name))
             {
-                throw new PlaywrightNativeException(PageBindingScript.AlreadyRegisteredInBrowserContext(name));
+                throw new PlaywrightException(PageBindingScript.AlreadyRegisteredInBrowserContext(name));
             }
         }
 
@@ -2051,7 +2051,7 @@ namespace PlaywrightNative
                 JsonElement? wrapped = await context.EvaluateFunctionAsync(serializedFn, args).ConfigureAwait(false);
                 return EvaluateSerialization.ParseRemote<T>(wrapped);
             }
-            catch (PlaywrightNativeException ex)
+            catch (PlaywrightException ex)
             {
                 throw EvaluateSerialization.RewriteException(ex);
             }
@@ -2080,7 +2080,7 @@ namespace PlaywrightNative
                     id => context.EvaluateFunctionOnHandleAsync<JsonElement>(id, EvaluateSerialization.SerializeAwaitedJs),
                     id => context.ReleaseHandleAsync(id)).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException ex)
+            catch (PlaywrightException ex)
             {
                 throw EvaluateSerialization.RewriteException(ex);
             }
@@ -2207,7 +2207,7 @@ namespace PlaywrightNative
                 CRElementHandle crHandle = await _crPage.ResolveBackendNodeAsync(e.BackendNodeId, e.Session).ConfigureAwait(false);
                 element = crHandle == null ? null : new ChromiumElementHandle(crHandle);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
             catch (InvalidOperationException)

@@ -67,7 +67,7 @@ namespace PlaywrightNative.Helpers
 
             if (root == null)
             {
-                throw new PlaywrightNativeException("page.ariaSnapshot: no document body.");
+                throw new PlaywrightException("page.ariaSnapshot: no document body.");
             }
 
             return await root.AriaSnapshotAsync(mode, options.Depth, options.Boxes).ConfigureAwait(false);

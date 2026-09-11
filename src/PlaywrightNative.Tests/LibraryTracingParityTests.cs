@@ -23,6 +23,7 @@ using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 using PlaywrightNative.TestServer;
@@ -156,7 +157,7 @@ namespace PlaywrightNative.Tests
             await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
             await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
             await context.Tracing.StartAsync(new TracingStartOptions { Screenshots = true, Snapshots = true }).ConfigureAwait(false);
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => context.Tracing.StartAsync(new TracingStartOptions { Screenshots = false, Snapshots = false }));
             Assert.That(error, Is.Not.Null);
             Assert.That(error.Message, Does.Contain("Tracing has been already started"));
@@ -172,7 +173,7 @@ namespace PlaywrightNative.Tests
             {
                 await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
                 await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
-                PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+                PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                     () => context.Tracing.StopAsync(new TracingStopOptions { Path = path }));
                 Assert.That(error, Is.Not.Null);
                 Assert.That(error.Message, Does.Contain("Must start tracing before stopping"));
@@ -882,7 +883,7 @@ namespace PlaywrightNative.Tests
                 {
                     await page.GoToAsync(EmptyPage).ConfigureAwait(false);
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
 
@@ -1179,7 +1180,7 @@ namespace PlaywrightNative.Tests
             catch (TimeoutException)
             {
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
 
@@ -1474,7 +1475,7 @@ namespace PlaywrightNative.Tests
                 {
                     await evaluatePromise.ConfigureAwait(false);
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
 

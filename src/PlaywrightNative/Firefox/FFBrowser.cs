@@ -21,6 +21,7 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
+using Microsoft.Playwright;
 using PlaywrightNative.Transport;
 
 namespace PlaywrightNative.Firefox
@@ -160,7 +161,7 @@ namespace PlaywrightNative.Firefox
 
             if (string.IsNullOrEmpty(browserContextId))
             {
-                throw new PlaywrightNativeException("Browser.createBrowserContext did not return a browserContextId.");
+                throw new PlaywrightException("Browser.createBrowserContext did not return a browserContextId.");
             }
 
             FFBrowserContext context = new(this, browserContextId);

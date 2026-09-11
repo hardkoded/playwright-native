@@ -24,6 +24,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.Helpers;
 using PlaywrightNative.NUnit;
@@ -383,7 +384,7 @@ namespace PlaywrightNative.Tests
         [Timeout(TestConstants.DefaultTestTimeout)]
         public void ShouldThrowWhenEvaluationTriggersReload()
         {
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => Page.EvaluateAsync<object>(@"() => {
     location.reload();
     return new Promise(() => { });
@@ -453,7 +454,7 @@ namespace PlaywrightNative.Tests
         [Timeout(TestConstants.DefaultTestTimeout)]
         public void ShouldRejectPromiseWithException()
         {
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => Page.EvaluateAsync<object>("() => not_existing_object.property"));
             Assert.That(error, Is.Not.Null);
             Assert.That(error.Message, Does.Contain("not_existing_object"));
@@ -464,7 +465,7 @@ namespace PlaywrightNative.Tests
         [Timeout(TestConstants.DefaultTestTimeout)]
         public void ShouldSupportThrownStringsAsErrorMessages()
         {
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => Page.EvaluateAsync<object>("() => { throw 'qwerty'; }"));
             Assert.That(error, Is.Not.Null);
             Assert.That(error.Message, Does.Contain("qwerty"));
@@ -475,7 +476,7 @@ namespace PlaywrightNative.Tests
         [Timeout(TestConstants.DefaultTestTimeout)]
         public void ShouldSupportThrownNumbersAsErrorMessages()
         {
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => Page.EvaluateAsync<object>("() => { throw 100500; }"));
             Assert.That(error, Is.Not.Null);
             Assert.That(error.Message, Does.Contain("100500"));
@@ -701,7 +702,7 @@ namespace PlaywrightNative.Tests
         [Timeout(TestConstants.DefaultTestTimeout)]
         public void ShouldThrowForTooDeepReferenceChain()
         {
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => Page.EvaluateAsync<object>(@"depth => {
     const obj = {};
     let temp = obj;
@@ -725,7 +726,7 @@ namespace PlaywrightNative.Tests
                 Assert.Ignore("this is a chromium-only limitation");
             }
 
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => Page.EvaluateAsync<object>(@"depth => {
     let node = {};
     for (let i = 0; i < depth; i++)
@@ -741,7 +742,7 @@ namespace PlaywrightNative.Tests
         [Timeout(TestConstants.DefaultTestTimeout)]
         public void ShouldThrowUsableMessageForUnserializableShallowFunction()
         {
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => Page.EvaluateAsync<object>("arg => arg", (Action)(() => { })));
             Assert.That(error, Is.Not.Null);
             Assert.That(error.Message, Does.Match(@"Attempting to serialize unexpected value: \(\) => \{\}"));
@@ -752,7 +753,7 @@ namespace PlaywrightNative.Tests
         [Timeout(TestConstants.DefaultTestTimeout)]
         public void ShouldThrowUsableMessageForUnserializableObjectOneDeepFunction()
         {
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => Page.EvaluateAsync<object>("arg => arg", new Dictionary<string, object> { ["aProperty"] = (Action)(() => { }) }));
             Assert.That(error, Is.Not.Null);
             Assert.That(error.Message, Does.Match(@"Attempting to serialize unexpected value at position ""aProperty"": \(\) => \{\}"));
@@ -763,7 +764,7 @@ namespace PlaywrightNative.Tests
         [Timeout(TestConstants.DefaultTestTimeout)]
         public void ShouldThrowUsableMessageForUnserializableObjectNestedFunction()
         {
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => Page.EvaluateAsync<object>(
                     "arg => arg",
                     new Dictionary<string, object>
@@ -782,7 +783,7 @@ namespace PlaywrightNative.Tests
         [Timeout(TestConstants.DefaultTestTimeout)]
         public void ShouldThrowUsableMessageForUnserializableArrayNestedFunction()
         {
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => Page.EvaluateAsync<object>(
                     "arg => arg",
                     new Dictionary<string, object>
@@ -835,7 +836,7 @@ namespace PlaywrightNative.Tests
                 errorText = ex.Message;
             }
 
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => Page.EvaluateAsync<object>("errorText => { throw new Error(errorText); }", errorText));
             Assert.That(error, Is.Not.Null);
             Assert.That(error.Message, Does.Contain(errorText));
@@ -885,7 +886,7 @@ namespace PlaywrightNative.Tests
             IElementHandle element = await Page.QuerySelectorAsync("section").ConfigureAwait(false);
             Assert.That(element, Is.Not.Null);
             await element.DisposeAsync().ConfigureAwait(false);
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => Page.EvaluateAsync<string>("e => e.textContent", element));
             Assert.That(error, Is.Not.Null);
             Assert.That(error.Message, Does.Contain("no object with guid"));
@@ -916,7 +917,7 @@ namespace PlaywrightNative.Tests
     window.location.reload();
     setTimeout(() => window['__resolve'](42), 1000);
   }")).ConfigureAwait(false);
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(async () => await errorTask.ConfigureAwait(false));
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(async () => await errorTask.ConfigureAwait(false));
             Assert.That(error, Is.Not.Null);
             Assert.That(error.Message, Does.Contain("navigation"));
         }
@@ -973,7 +974,7 @@ namespace PlaywrightNative.Tests
         [Timeout(TestConstants.DefaultTestTimeout)]
         public void ShouldThrowErrorWithDetailedInformationOnExceptionInsidePromise()
         {
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => Page.EvaluateAsync<object>(@"() => new Promise(() => {
     throw new Error('Error in promise');
   })"));
@@ -1033,7 +1034,7 @@ namespace PlaywrightNative.Tests
         [Timeout(TestConstants.DefaultTestTimeout)]
         public void ShouldRespectUseStrictExpression()
         {
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => Page.EvaluateAsync<object>(@"() => {
     'use strict';
     variableY = 3.14;
@@ -1056,7 +1057,7 @@ namespace PlaywrightNative.Tests
         [Timeout(TestConstants.DefaultTestTimeout)]
         public void ShouldNotLeakHandles()
         {
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => Page.EvaluateAsync<object>("handles.length"));
             Assert.That(error, Is.Not.Null);
             Assert.That(error.Message, Does.Contain(" handles"));
@@ -1282,7 +1283,7 @@ namespace PlaywrightNative.Tests
             IFrame frame = Page.Frames.ElementAt(1);
             Task<object> promise = frame.EvaluateAsync<object>("() => new Promise(() => {})");
             await DetachFrameAsync(Page, "frame1").ConfigureAwait(false);
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(async () => await promise.ConfigureAwait(false));
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(async () => await promise.ConfigureAwait(false));
             Assert.That(error, Is.Not.Null);
             Assert.That(error.Message, Does.Match(@"frame\.evaluate: (Frame was detached|Execution context was destroyed)"));
         }

@@ -19,6 +19,7 @@ using System;
 using System.Collections.Generic;
 using System.Text.Json;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using PlaywrightNative.Helpers;
 
 namespace PlaywrightNative.WebKit
@@ -131,7 +132,7 @@ namespace PlaywrightNative.WebKit
             {
                 names = await EvaluateAsync<string[]>(JsonValueHelper.EnumerablePropertyNamesFunction).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 return result;
             }
@@ -210,7 +211,7 @@ namespace PlaywrightNative.WebKit
         {
             if (_disposed)
             {
-                throw new PlaywrightNativeException(EvaluateSerialization.DisposedHandleMessage);
+                throw new PlaywrightException(EvaluateSerialization.DisposedHandleMessage);
             }
         }
 

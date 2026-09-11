@@ -16,6 +16,7 @@
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -84,7 +85,7 @@ namespace PlaywrightNative.Helpers
             {
                 if (_names.Contains(name))
                 {
-                    throw new PlaywrightNativeException(PageBindingScript.AlreadyRegistered(name));
+                    throw new PlaywrightException(PageBindingScript.AlreadyRegistered(name));
                 }
             }
 
@@ -92,7 +93,7 @@ namespace PlaywrightNative.Helpers
             {
                 if (pageHasName != null && pageHasName(page))
                 {
-                    throw new PlaywrightNativeException(PageBindingScript.AlreadyRegisteredInOneOfThePages(name));
+                    throw new PlaywrightException(PageBindingScript.AlreadyRegisteredInOneOfThePages(name));
                 }
             }
 

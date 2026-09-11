@@ -23,6 +23,7 @@ using System.Reflection;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -376,7 +377,7 @@ namespace PlaywrightNative.Helpers
         /// <param name="error">The protocol or engine exception.</param>
         /// <param name="frameEvaluate">Whether the call is <c>frame.evaluate</c>.</param>
         /// <returns>The original or rewritten exception.</returns>
-        internal static PlaywrightNativeException RewriteException(PlaywrightNativeException error, bool frameEvaluate = false)
+        internal static PlaywrightException RewriteException(PlaywrightException error, bool frameEvaluate = false)
         {
             if (error == null)
             {
@@ -384,7 +385,7 @@ namespace PlaywrightNative.Helpers
             }
 
             string rewritten = RewriteError(error.Message, frameEvaluate);
-            return rewritten == error.Message ? error : new PlaywrightNativeException(rewritten);
+            return rewritten == error.Message ? error : new PlaywrightException(rewritten);
         }
 
         /// <summary>
@@ -540,7 +541,7 @@ namespace PlaywrightNative.Helpers
 
             if (value is IJSHandle)
             {
-                throw new PlaywrightNativeException("JSHandle arguments must be passed through the handle evaluate path.");
+                throw new PlaywrightException("JSHandle arguments must be passed through the handle evaluate path.");
             }
 
             Type type = value.GetType();

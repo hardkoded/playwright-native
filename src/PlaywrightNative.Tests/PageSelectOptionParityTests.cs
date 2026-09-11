@@ -18,6 +18,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 using PlaywrightNative.TestServer;
@@ -255,7 +256,7 @@ namespace PlaywrightNative.Tests
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
             await GoToSelectAsync(page).ConfigureAwait(false);
             await page.EvalOnSelectorAsync<object>("select", "s => s.value = undefined").ConfigureAwait(false);
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => page.SelectOptionAsync("select", new SelectOptionValue { Value = "green", Label = "Brown" }, timeout: 1000));
             Assert.That(error, Is.Not.Null);
             Assert.That(error.Message, Does.Contain("Timeout"));
@@ -356,7 +357,7 @@ namespace PlaywrightNative.Tests
             await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
             await GoToSelectAsync(page).ConfigureAwait(false);
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => page.SelectOptionAsync("body", string.Empty));
             Assert.That(error, Is.Not.Null);
             Assert.That(error.Message, Does.Contain("Element is not a <select> element"));
@@ -425,7 +426,7 @@ namespace PlaywrightNative.Tests
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
             await GoToSelectAsync(page).ConfigureAwait(false);
             await page.EvaluateAsync<object>("(() => window['makeMultiple']())()").ConfigureAwait(false);
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => page.SelectOptionAsync("select", new string[] { "blue", null, "black", "magenta" }));
             Assert.That(error, Is.Not.Null);
             Assert.That(error.Message, Does.Contain("options[1]: expected object, got null"));
@@ -676,7 +677,7 @@ namespace PlaywrightNative.Tests
     }
     </script>
   ").ConfigureAwait(false);
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => page.Locator("select").SelectOptionAsync("two", options: new() { Timeout = 1000 }));
             Assert.That(error, Is.Not.Null);
             Assert.That(error.Message, Does.Contain("option being selected is not enabled"));
@@ -716,7 +717,7 @@ namespace PlaywrightNative.Tests
     }
     </script>
   ").ConfigureAwait(false);
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => page.Locator("select").SelectOptionAsync("two", options: new() { Timeout = 1000 }));
             Assert.That(error, Is.Not.Null);
             Assert.That(error.Message, Does.Contain("option being selected is not enabled"));

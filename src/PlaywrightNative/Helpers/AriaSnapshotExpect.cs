@@ -12,6 +12,7 @@ using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -337,7 +338,7 @@ namespace PlaywrightNative.Helpers
                             ok = true;
                         }
                     }
-                    catch (Exception ex) when (ex is PlaywrightNativeException || ex is TimeoutException || ex is AriaSnapshotParseException)
+                    catch (Exception ex) when (ex is PlaywrightException || ex is TimeoutException || ex is AriaSnapshotParseException)
                     {
                     }
                 }
@@ -526,7 +527,7 @@ namespace PlaywrightNative.Helpers
             {
                 all = await locator.ElementHandlesAsync().ConfigureAwait(false);
             }
-            catch (Exception ex) when (ex is PlaywrightNativeException || ex is TimeoutException)
+            catch (Exception ex) when (ex is PlaywrightException || ex is TimeoutException)
             {
                 return null;
             }
@@ -538,7 +539,7 @@ namespace PlaywrightNative.Helpers
 
             if (all.Count > 1)
             {
-                throw new PlaywrightNativeException(
+                throw new PlaywrightException(
                     await StrictModeViolation.FormatAsync(locator.ToString(), all).ConfigureAwait(false));
             }
 
@@ -567,7 +568,7 @@ namespace PlaywrightNative.Helpers
 
                 return ReadDomAriaNode(JsonSerializer.Deserialize<JsonElement>(json));
             }
-            catch (Exception ex) when (ex is PlaywrightNativeException || ex is TimeoutException || ex is JsonException || ex is ArgumentNullException)
+            catch (Exception ex) when (ex is PlaywrightException || ex is TimeoutException || ex is JsonException || ex is ArgumentNullException)
             {
                 return null;
             }
@@ -680,7 +681,7 @@ namespace PlaywrightNative.Helpers
                     .SnapshotAccessibilityAsync(interestingOnly: false, root: root)
                     .ConfigureAwait(false);
             }
-            catch (Exception ex) when (ex is PlaywrightNativeException || ex is TimeoutException || ex is ArgumentNullException)
+            catch (Exception ex) when (ex is PlaywrightException || ex is TimeoutException || ex is ArgumentNullException)
             {
                 return null;
             }
@@ -732,7 +733,7 @@ namespace PlaywrightNative.Helpers
 
                 InsertMissingTextChildren(snapshot, items);
             }
-            catch (Exception ex) when (ex is PlaywrightNativeException || ex is TimeoutException || ex is JsonException)
+            catch (Exception ex) when (ex is PlaywrightException || ex is TimeoutException || ex is JsonException)
             {
             }
         }
@@ -1302,7 +1303,7 @@ namespace PlaywrightNative.Helpers
                     state.Values = JsonSerializer.Deserialize<List<DomValue>>(invalids, DomStateJson) ?? state.Values;
                 }
             }
-            catch (Exception ex) when (ex is PlaywrightNativeException || ex is TimeoutException || ex is JsonException)
+            catch (Exception ex) when (ex is PlaywrightException || ex is TimeoutException || ex is JsonException)
             {
             }
         }
@@ -1321,7 +1322,7 @@ namespace PlaywrightNative.Helpers
                     return JsonSerializer.Deserialize<DomState>(json, DomStateJson) ?? new DomState();
                 }
             }
-            catch (Exception ex) when (ex is PlaywrightNativeException || ex is TimeoutException || ex is JsonException)
+            catch (Exception ex) when (ex is PlaywrightException || ex is TimeoutException || ex is JsonException)
             {
             }
 

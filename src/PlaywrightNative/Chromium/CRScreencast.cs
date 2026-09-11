@@ -48,7 +48,7 @@ namespace PlaywrightNative.Chromium
             {
                 if (_started)
                 {
-                    throw new PlaywrightNativeException("Screencast is already started");
+                    throw new PlaywrightException("Screencast is already started");
                 }
 
                 _started = true;
@@ -123,7 +123,7 @@ namespace PlaywrightNative.Chromium
             {
                 throw;
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
 
@@ -302,7 +302,7 @@ namespace PlaywrightNative.Chromium
             catch (TargetClosedException)
             {
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
         }

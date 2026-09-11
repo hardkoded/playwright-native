@@ -468,7 +468,7 @@ namespace PlaywrightNative.Chromium
             Close?.Invoke(this, this);
             if (harError != null)
             {
-                throw new PlaywrightNativeException(harError.Message, harError);
+                throw new PlaywrightException(harError.Message, harError);
             }
         }
 
@@ -549,7 +549,7 @@ namespace PlaywrightNative.Chromium
 
             if (page is not Page instance)
             {
-                throw new PlaywrightNativeException("CDP sessions require a Chromium page.");
+                throw new PlaywrightException("CDP sessions require a Chromium page.");
             }
 
             CRSession session = await _crCtx.Browser.AttachToTargetAsync(instance.CrPage.TargetId).ConfigureAwait(false);
@@ -557,7 +557,7 @@ namespace PlaywrightNative.Chromium
             {
                 await session.SendAsync("Runtime.runIfWaitingForDebugger").ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 // Session is already running.
             }
@@ -592,7 +592,7 @@ namespace PlaywrightNative.Chromium
                 {
                     await session.SendAsync("Runtime.runIfWaitingForDebugger").ConfigureAwait(false);
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                     // Session is already running.
                 }
@@ -602,7 +602,7 @@ namespace PlaywrightNative.Chromium
                 return cdp;
             }
 
-            throw new PlaywrightNativeException(
+            throw new PlaywrightException(
                 "This frame does not have a separate CDP session, it is a part of the parent frame's session");
         }
 
@@ -1173,7 +1173,7 @@ namespace PlaywrightNative.Chromium
                         acceptLanguage = _locale,
                     }).ConfigureAwait(false);
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
             }
@@ -1194,7 +1194,7 @@ namespace PlaywrightNative.Chromium
                 {
                     await worker.InitializeAsync().ConfigureAwait(false);
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
             }
@@ -1216,7 +1216,7 @@ namespace PlaywrightNative.Chromium
                 return chromium.InstallExposedAsync(name, handler, fromContext: true);
             }
 
-            throw new PlaywrightNativeException("Context exposeFunction requires a Chromium page.");
+            throw new PlaywrightException("Context exposeFunction requires a Chromium page.");
         }
 
         private static Task<IAsyncDisposable> InstallHandleOnAsync(
@@ -1236,7 +1236,7 @@ namespace PlaywrightNative.Chromium
                     fromContext: true);
             }
 
-            throw new PlaywrightNativeException("Context exposeBinding requires a Chromium page.");
+            throw new PlaywrightException("Context exposeBinding requires a Chromium page.");
         }
 
         private void OnServiceWorkerCreated(object sender, CRWorker worker)
@@ -1692,7 +1692,7 @@ namespace PlaywrightNative.Chromium
             {
                 await Task.WhenAll(cancels).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
         }

@@ -20,6 +20,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Text.Json;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using PlaywrightNative.Helpers;
 using PlaywrightNative.Transport.Protocol;
 
@@ -130,7 +131,7 @@ namespace PlaywrightNative.Chromium
             foreach (KeyValuePair<int, PendingCallback> kvp in _callbacks)
             {
                 kvp.Value.Completion.TrySetException(
-                    new PlaywrightNativeException($"Protocol error ({kvp.Value.Method}): Target crashed."));
+                    new PlaywrightException($"Protocol error ({kvp.Value.Method}): Target crashed."));
             }
 
             _callbacks.Clear();
@@ -143,7 +144,7 @@ namespace PlaywrightNative.Chromium
         /// <param name="parameters">Optional method parameters, serialized to <see cref="JsonElement"/>.</param>
         /// <returns>A task that resolves with the result of the CDP command.</returns>
         /// <exception cref="TargetClosedException">Thrown when the session has been closed.</exception>
-        /// <exception cref="PlaywrightNativeException">Thrown when the target has crashed.</exception>
+        /// <exception cref="PlaywrightException">Thrown when the target has crashed.</exception>
         internal Task<JsonElement?> SendAsync(string method, object parameters = null)
         {
             if (_closed)
@@ -154,7 +155,7 @@ namespace PlaywrightNative.Chromium
 
             if (_crashed)
             {
-                throw new PlaywrightNativeException($"Protocol error ({method}): Session crashed.");
+                throw new PlaywrightException($"Protocol error ({method}): Session crashed.");
             }
 
             JsonElement? jsonParams = null;
@@ -218,7 +219,7 @@ namespace PlaywrightNative.Chromium
                         string method = !string.IsNullOrEmpty(message.Method)
                             ? message.Method
                             : callback.Method;
-                        callback.Completion.TrySetException(new PlaywrightNativeException(
+                        callback.Completion.TrySetException(new PlaywrightException(
                             $"Protocol error ({method}): {message.Error.Message}"));
                     }
                     else

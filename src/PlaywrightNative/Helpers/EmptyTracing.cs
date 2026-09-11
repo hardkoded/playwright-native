@@ -256,7 +256,7 @@ namespace PlaywrightNative.Helpers
             {
                 if (options?.Path != null)
                 {
-                    throw new PlaywrightNativeException("Must start tracing before stopping");
+                    throw new PlaywrightException("Must start tracing before stopping");
                 }
 
                 return;
@@ -328,7 +328,7 @@ namespace PlaywrightNative.Helpers
         {
             if (_har == null)
             {
-                throw new PlaywrightNativeException("HAR recording has not been started");
+                throw new PlaywrightException("HAR recording has not been started");
             }
 
             return _har;

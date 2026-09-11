@@ -14,6 +14,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+using Microsoft.Playwright;
+
 namespace PlaywrightNative.Helpers
 {
     /// <summary>
@@ -36,7 +38,7 @@ namespace PlaywrightNative.Helpers
         {
             if (owned)
             {
-                throw new PlaywrightNativeException(SecondPageMessage);
+                throw new PlaywrightException(SecondPageMessage);
             }
         }
     }

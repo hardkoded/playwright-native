@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 
@@ -36,7 +37,7 @@ namespace PlaywrightNative.Tests
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
             await page.SetContentAsync("<div data-x='a'></div><div data-x='b'></div>").ConfigureAwait(false);
 
-            PlaywrightNativeException ex = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException ex = Assert.CatchAsync<PlaywrightException>(
                 () => page.GetAttributeAsync("div", "data-x", new() { Strict = true }));
 
             Assert.That(ex, Is.Not.Null);
@@ -96,7 +97,7 @@ namespace PlaywrightNative.Tests
             Assert.That(frame, Is.Not.Null);
             await frame.SetContentAsync("<div data-x='a'></div><div data-x='b'></div>").ConfigureAwait(false);
 
-            PlaywrightNativeException ex = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException ex = Assert.CatchAsync<PlaywrightException>(
                 () => frame.GetAttributeAsync("div", "data-x", new() { Strict = true }));
 
             Assert.That(ex, Is.Not.Null);

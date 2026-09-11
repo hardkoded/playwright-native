@@ -121,7 +121,7 @@ namespace PlaywrightNative
         {
             if (!string.Equals(_name, "chromium", StringComparison.Ordinal))
             {
-                throw new PlaywrightNativeException("Connecting over CDP is only supported in Chromium and WebKit.");
+                throw new PlaywrightException("Connecting over CDP is only supported in Chromium and WebKit.");
             }
 
             if (string.IsNullOrEmpty(endpointURL))

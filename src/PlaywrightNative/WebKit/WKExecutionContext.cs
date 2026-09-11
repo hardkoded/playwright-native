@@ -17,6 +17,7 @@
 using System;
 using System.Text.Json;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using PlaywrightNative.Helpers;
 
 namespace PlaywrightNative.WebKit
@@ -152,14 +153,14 @@ namespace PlaywrightNative.WebKit
                 response = await _session.SendAsync("Runtime.callFunctionOn", payload)
                     .ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException ex)
+            catch (PlaywrightException ex)
             {
                 if (HasForeignElementArgument(args)
                     && (ex.Message.Contains("adopt", StringComparison.OrdinalIgnoreCase)
                         || ex.Message.Contains("different document", StringComparison.OrdinalIgnoreCase)
                         || ex.Message.Contains("Cannot find context", StringComparison.OrdinalIgnoreCase)))
                 {
-                    throw new PlaywrightNativeException(EvaluateWithArg.UnableToAdoptMessage);
+                    throw new PlaywrightException(EvaluateWithArg.UnableToAdoptMessage);
                 }
 
                 throw;
@@ -175,14 +176,14 @@ namespace PlaywrightNative.WebKit
             {
                 ThrowIfThrown(responseElement);
             }
-            catch (PlaywrightNativeException ex)
+            catch (PlaywrightException ex)
             {
                 if (HasForeignElementArgument(args)
                     && (ex.Message.Contains("adopt", StringComparison.OrdinalIgnoreCase)
                         || ex.Message.Contains("different document", StringComparison.OrdinalIgnoreCase)
                         || ex.Message.Contains("Cannot find context", StringComparison.OrdinalIgnoreCase)))
                 {
-                    throw new PlaywrightNativeException(EvaluateWithArg.UnableToAdoptMessage);
+                    throw new PlaywrightException(EvaluateWithArg.UnableToAdoptMessage);
                 }
 
                 throw;
@@ -374,7 +375,7 @@ namespace PlaywrightNative.WebKit
             {
                 await _session.SendAsync("Runtime.releaseObject", new { objectId }).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 // Best-effort disposal — session closed or object already released.
             }
@@ -494,7 +495,7 @@ namespace PlaywrightNative.WebKit
         {
             if (handle == null || string.IsNullOrEmpty(handle.ObjectId))
             {
-                throw new PlaywrightNativeException(EvaluateWithArg.UnableToAdoptMessage);
+                throw new PlaywrightException(EvaluateWithArg.UnableToAdoptMessage);
             }
 
             if (handle.ExecutionContext != null && handle.ExecutionContext.ContextId == ContextId)
@@ -504,7 +505,7 @@ namespace PlaywrightNative.WebKit
 
             if (handle.AsElement() == null)
             {
-                throw new PlaywrightNativeException(DispatchEventScript.DifferentContextMessage);
+                throw new PlaywrightException(DispatchEventScript.DifferentContextMessage);
             }
 
             return await AdoptElementObjectIdAsync(handle.ObjectId).ConfigureAwait(false);
@@ -520,7 +521,7 @@ namespace PlaywrightNative.WebKit
         {
             if (string.IsNullOrEmpty(objectId) || !_contextId.HasValue)
             {
-                throw new PlaywrightNativeException(EvaluateWithArg.UnableToAdoptMessage);
+                throw new PlaywrightException(EvaluateWithArg.UnableToAdoptMessage);
             }
 
             try
@@ -539,25 +540,25 @@ namespace PlaywrightNative.WebKit
                     || !remote.TryGetProperty("objectId", out JsonElement adoptedId)
                     || adoptedId.ValueKind != JsonValueKind.String)
                 {
-                    throw new PlaywrightNativeException(EvaluateWithArg.UnableToAdoptMessage);
+                    throw new PlaywrightException(EvaluateWithArg.UnableToAdoptMessage);
                 }
 
                 string adopted = adoptedId.GetString();
                 if (string.IsNullOrEmpty(adopted))
                 {
-                    throw new PlaywrightNativeException(EvaluateWithArg.UnableToAdoptMessage);
+                    throw new PlaywrightException(EvaluateWithArg.UnableToAdoptMessage);
                 }
 
                 return adopted;
             }
-            catch (PlaywrightNativeException ex)
+            catch (PlaywrightException ex)
             {
                 if (string.Equals(ex.Message, EvaluateWithArg.UnableToAdoptMessage, StringComparison.Ordinal))
                 {
                     throw;
                 }
 
-                throw new PlaywrightNativeException(EvaluateWithArg.UnableToAdoptMessage);
+                throw new PlaywrightException(EvaluateWithArg.UnableToAdoptMessage);
             }
         }
 
@@ -679,7 +680,7 @@ namespace PlaywrightNative.WebKit
                 }
             }
 
-            throw new PlaywrightNativeException(EvaluateSerialization.RewriteError(message));
+            throw new PlaywrightException(EvaluateSerialization.RewriteError(message));
         }
 
         private object BuildEvaluateParams(string expression, bool returnByValue)
@@ -741,7 +742,7 @@ namespace PlaywrightNative.WebKit
         {
             if (_destroyed.Task.IsCompleted)
             {
-                throw new PlaywrightNativeException(EvaluateSerialization.NavigationMessage);
+                throw new PlaywrightException(EvaluateSerialization.NavigationMessage);
             }
 
             JsonElement? dummyResponse = await _session.SendAsync(
@@ -772,7 +773,7 @@ namespace PlaywrightNative.WebKit
                 Task completed = await Task.WhenAny(awaitTask, _destroyed.Task).ConfigureAwait(false);
                 if (completed == _destroyed.Task)
                 {
-                    throw new PlaywrightNativeException(EvaluateSerialization.NavigationMessage);
+                    throw new PlaywrightException(EvaluateSerialization.NavigationMessage);
                 }
 
                 return await awaitTask.ConfigureAwait(false);
@@ -863,7 +864,7 @@ namespace PlaywrightNative.WebKit
 
             if (handle.AsElement() == null)
             {
-                throw new PlaywrightNativeException(DispatchEventScript.DifferentContextMessage);
+                throw new PlaywrightException(DispatchEventScript.DifferentContextMessage);
             }
 
             string adopted = await AdoptElementObjectIdAsync(handle.ObjectId).ConfigureAwait(false);

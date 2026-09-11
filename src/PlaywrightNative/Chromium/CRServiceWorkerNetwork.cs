@@ -19,6 +19,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Text.Json;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using PlaywrightNative.Helpers;
 
 namespace PlaywrightNative.Chromium
@@ -92,7 +93,7 @@ namespace PlaywrightNative.Chromium
                 await _session.SendAsync("Network.enable").ConfigureAwait(false);
                 await ApplyEmulationAsync().ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 // Allow AdoptExisting / a later Prepare to retry StartAsync.
                 // Do not Dispose() here: that permanently sets _disposed and
@@ -190,7 +191,7 @@ namespace PlaywrightNative.Chromium
                     await _session.SendAsync("Network.setExtraHTTPHeaders", new { headers = _extraHeaders }).ConfigureAwait(false);
                 }
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
         }
@@ -227,7 +228,7 @@ namespace PlaywrightNative.Chromium
                     _fetchEnabled = false;
                 }
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
         }
@@ -376,14 +377,14 @@ namespace PlaywrightNative.Chromium
 
                     EmitSyntheticResponseIfNeeded(request);
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                     try
                     {
                         await route.ContinueAsync().ConfigureAwait(false);
                         EmitSyntheticResponseIfNeeded(request);
                     }
-                    catch (PlaywrightNativeException)
+                    catch (PlaywrightException)
                     {
                     }
                 }

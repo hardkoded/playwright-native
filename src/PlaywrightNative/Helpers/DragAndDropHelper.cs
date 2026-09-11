@@ -65,7 +65,7 @@ namespace PlaywrightNative.Helpers
             IElementHandle targetHandle = await page.WaitForSelectorAsync(target, state, timeout, strict).ConfigureAwait(false);
             if (sourceHandle == null || targetHandle == null)
             {
-                throw new PlaywrightNativeException($"Could not resolve drag selectors '{source}' -> '{target}'");
+                throw new PlaywrightException($"Could not resolve drag selectors '{source}' -> '{target}'");
             }
 
             await RunHandlesAsync(
@@ -133,7 +133,7 @@ namespace PlaywrightNative.Helpers
                 }).ConfigureAwait(false);
             if (sourceHandle == null || targetHandle == null)
             {
-                throw new PlaywrightNativeException($"Could not resolve drag selectors '{source}' -> '{target}'");
+                throw new PlaywrightException($"Could not resolve drag selectors '{source}' -> '{target}'");
             }
 
             await RunHandlesAsync(
@@ -221,7 +221,7 @@ namespace PlaywrightNative.Helpers
             ElementHandleBoundingBoxResult box = await handle.BoundingBoxAsync().ConfigureAwait(false);
             if (box == null)
             {
-                throw new PlaywrightNativeException("Element is not visible");
+                throw new PlaywrightException("Element is not visible");
             }
 
             float x = box.X + (position != null ? position.X : box.Width / 2f);

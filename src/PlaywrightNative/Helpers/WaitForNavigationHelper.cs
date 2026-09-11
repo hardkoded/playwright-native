@@ -22,6 +22,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -123,7 +124,7 @@ namespace PlaywrightNative.Helpers
                 }
 
                 failureTcs.TrySetException(
-                    new PlaywrightNativeException(
+                    new PlaywrightException(
                         WaitingLine(urlString, urlRegex, waitUntil) + Environment.NewLine + "frame was detached"));
             }
 
@@ -139,7 +140,7 @@ namespace PlaywrightNative.Helpers
                 {
                     frame = request.Frame;
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                     return;
                 }
@@ -162,7 +163,7 @@ namespace PlaywrightNative.Helpers
                     return;
                 }
 
-                failureTcs.TrySetException(new PlaywrightNativeException(failure));
+                failureTcs.TrySetException(new PlaywrightException(failure));
             }
 
             page.Response += OnResponse;
@@ -202,9 +203,9 @@ namespace PlaywrightNative.Helpers
                     {
                         throw BuildTimeout(apiName, timeoutMs, urlString, urlRegex, waitUntil, navigatedUrls);
                     }
-                    catch (PlaywrightNativeException ex) when (ex.Message.Contains("frame was detached", StringComparison.OrdinalIgnoreCase))
+                    catch (PlaywrightException ex) when (ex.Message.Contains("frame was detached", StringComparison.OrdinalIgnoreCase))
                     {
-                        throw new PlaywrightNativeException(
+                        throw new PlaywrightException(
                             WaitingLine(urlString, urlRegex, waitUntil) + Environment.NewLine + "frame was detached",
                             ex);
                     }

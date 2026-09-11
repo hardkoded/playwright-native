@@ -18,6 +18,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative
 {
@@ -200,7 +201,7 @@ namespace PlaywrightNative
 
             if (!paths.TryGetValue(playwrightPlatformKey, out string template))
             {
-                throw new PlaywrightNativeException(
+                throw new PlaywrightException(
                     $"{browser} is not supported on platform '{playwrightPlatformKey}'.");
             }
 
@@ -234,7 +235,7 @@ namespace PlaywrightNative
 
             if (!paths.TryGetValue(shortKey, out string[] segments))
             {
-                throw new PlaywrightNativeException(
+                throw new PlaywrightException(
                     $"{browser} executable path is not defined for platform '{shortKey}'.");
             }
 

@@ -495,7 +495,7 @@ namespace PlaywrightNative.Chromium
                     JsonElement? wrapped = await context.EvaluateFunctionAsync(serializedFn, args).ConfigureAwait(false);
                     return EvaluateSerialization.ParseRemote<T>(wrapped);
                 }
-                catch (PlaywrightNativeException ex)
+                catch (PlaywrightException ex)
                 {
                     throw EvaluateSerialization.RewriteException(ex, frameEvaluate: true);
                 }
@@ -525,7 +525,7 @@ namespace PlaywrightNative.Chromium
                     id => context.EvaluateFunctionOnHandleAsync<JsonElement>(id, EvaluateSerialization.SerializeAwaitedJs),
                     id => context.ReleaseHandleAsync(id)).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException ex)
+            catch (PlaywrightException ex)
             {
                 throw EvaluateSerialization.RewriteException(ex, frameEvaluate: true);
             }
@@ -581,7 +581,7 @@ namespace PlaywrightNative.Chromium
         {
             if (_page is not Page instance)
             {
-                throw new PlaywrightNativeException("AddScriptTagAsync requires a PlaywrightNative page.");
+                throw new PlaywrightException("AddScriptTagAsync requires a PlaywrightNative page.");
             }
 
             CRElementHandle handle = await instance.CrPage.AddScriptTagInFrameAsync(

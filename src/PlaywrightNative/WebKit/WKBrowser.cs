@@ -520,15 +520,15 @@ namespace PlaywrightNative.WebKit
 
         /// <inheritdoc/>
         public Task<ICDPSession> NewBrowserCDPSessionAsync()
-            => throw new PlaywrightNativeException("CDP sessions are only supported in Chromium.");
+            => throw new PlaywrightException("CDP sessions are only supported in Chromium.");
 
         /// <inheritdoc/>
         public Task StartTracingAsync(IPage page = default, string path = default, bool screenshots = default, IEnumerable<string> categories = default)
-            => throw new PlaywrightNativeException("startTracing is only supported in Chromium.");
+            => throw new PlaywrightException("startTracing is only supported in Chromium.");
 
         /// <inheritdoc/>
         public Task<byte[]> StopTracingAsync()
-            => throw new PlaywrightNativeException("stopTracing is only supported in Chromium.");
+            => throw new PlaywrightException("stopTracing is only supported in Chromium.");
 
         /// <summary>
         /// Connects to a running WebKit browser process: enables Playwright protocol events
@@ -566,7 +566,7 @@ namespace PlaywrightNative.WebKit
         {
             if (_defaultContext == null)
             {
-                throw new PlaywrightNativeException("Browser was not launched as a persistent context.");
+                throw new PlaywrightException("Browser was not launched as a persistent context.");
             }
 
             _defaultContext.UseLaunchDownloadsPath(LaunchDownloadsPath);
@@ -614,7 +614,7 @@ namespace PlaywrightNative.WebKit
 
             if (string.IsNullOrEmpty(browserContextId))
             {
-                throw new PlaywrightNativeException("Playwright.createContext did not return a browserContextId.");
+                throw new PlaywrightException("Playwright.createContext did not return a browserContextId.");
             }
 
             WKBrowserContext context = new(this, browserContextId);

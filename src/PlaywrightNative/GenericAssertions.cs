@@ -9,6 +9,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using PlaywrightNative.Helpers;
 
 namespace PlaywrightNative
@@ -314,7 +315,7 @@ namespace PlaywrightNative
                 return new APIResponseAssertions(response, _negate).ToBeOKAsync();
             }
 
-            throw new PlaywrightNativeException("toBeOK can be only used with APIResponse object");
+            throw new PlaywrightException("toBeOK can be only used with APIResponse object");
         }
 
         /// <inheritdoc/>

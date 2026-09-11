@@ -17,6 +17,7 @@
 using System;
 using System.Collections.Generic;
 using System.Text.RegularExpressions;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -1259,14 +1260,14 @@ namespace PlaywrightNative.Helpers
         {
             if (selector == null)
             {
-                throw new PlaywrightNativeException("selector: expected string, got object");
+                throw new PlaywrightException("selector: expected string, got object");
             }
 
             string first = FirstChainPart(selector);
             if (first.StartsWith("internal:has=", StringComparison.Ordinal)
                 || string.Equals(first, "internal:has", StringComparison.Ordinal))
             {
-                throw new PlaywrightNativeException("\"internal:has\" selector cannot be first");
+                throw new PlaywrightException("\"internal:has\" selector cannot be first");
             }
         }
 

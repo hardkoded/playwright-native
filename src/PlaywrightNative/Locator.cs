@@ -1027,7 +1027,7 @@ namespace PlaywrightNative
 
             if (!ReferenceEquals(target.Page, Page))
             {
-                throw new PlaywrightNativeException("Target locator must belong to the same page.");
+                throw new PlaywrightException("Target locator must belong to the same page.");
             }
 
             _ = noWaitAfter;
@@ -1259,7 +1259,7 @@ namespace PlaywrightNative
 
                     if (all.Count > 1)
                     {
-                        throw new PlaywrightNativeException(
+                        throw new PlaywrightException(
                             await StrictResolvedMessageAsync(all).ConfigureAwait(false));
                     }
 
@@ -1296,7 +1296,7 @@ namespace PlaywrightNative
                 handle = await ResolveOneOrNullAsync().ConfigureAwait(false);
                 if (handle == null)
                 {
-                    throw new PlaywrightNativeException(
+                    throw new PlaywrightException(
                         "locator.ariaSnapshot: Locator does not match any element.");
                 }
             }
@@ -1321,7 +1321,7 @@ namespace PlaywrightNative
                 handle = await ResolveOneOrNullAsync().ConfigureAwait(false);
                 if (handle == null)
                 {
-                    throw new PlaywrightNativeException(
+                    throw new PlaywrightException(
                         "locator.ariaSnapshotJSON: Locator does not match any element.");
                 }
             }
@@ -1420,7 +1420,7 @@ namespace PlaywrightNative
             ArgumentNullException.ThrowIfNull(inner);
             if (!ReferenceEquals(inner._frame, _frame))
             {
-                throw new PlaywrightNativeException("Locators must belong to the same frame.");
+                throw new PlaywrightException("Locators must belong to the same frame.");
             }
 
             inner = ApplyCommonFramePrefix(inner);
@@ -1772,7 +1772,7 @@ namespace PlaywrightNative
 
                 if (TryParseVisibleEngine(parts[0], out _))
                 {
-                    throw new PlaywrightNativeException(
+                    throw new PlaywrightException(
                         "Error: Unknown engine \"visible\" while parsing selector " + parts[0]);
                 }
 
@@ -2091,7 +2091,7 @@ namespace PlaywrightNative
                 return true;
             }
 
-            if (ex is TargetClosedException || PlaywrightNativeException.IsDestroyedContext(ex))
+            if (ex is TargetClosedException || PlaywrightNative.Helpers.DestroyedContext.IsDestroyedContext(ex))
             {
                 return true;
             }
@@ -2113,7 +2113,7 @@ namespace PlaywrightNative
             }
 
             string html = await host.EvaluateAsync<string>("el => el.outerHTML").ConfigureAwait(false);
-            throw new PlaywrightNativeException((html ?? string.Empty) + "\n<iframe> was expected");
+            throw new PlaywrightException((html ?? string.Empty) + "\n<iframe> was expected");
         }
 
         private static async Task<ILocator> NormalizeFrameHostAsync(IElementHandle handle, string tag, IFrame frame)
@@ -2182,7 +2182,7 @@ namespace PlaywrightNative
             Locator locator = RequireLocator(other);
             if (!ReferenceEquals(locator._frame, _frame))
             {
-                throw new PlaywrightNativeException("Locators must belong to the same frame.");
+                throw new PlaywrightException("Locators must belong to the same frame.");
             }
 
             return locator;
@@ -2193,7 +2193,7 @@ namespace PlaywrightNative
             Locator locator = RequireLocator(other);
             if (!ReferenceEquals(locator._frame, _frame))
             {
-                throw new PlaywrightNativeException(
+                throw new PlaywrightException(
                     "Inner \"" + optionName + "\" locator must belong to the same frame.");
             }
 
@@ -2216,7 +2216,7 @@ namespace PlaywrightNative
                 {
                     all = await ResolveAllAsync().ConfigureAwait(false);
                 }
-                catch (PlaywrightNativeException ex) when (PlaywrightNativeException.IsDestroyedContext(ex))
+                catch (PlaywrightException ex) when (PlaywrightNative.Helpers.DestroyedContext.IsDestroyedContext(ex))
                 {
                     all = Array.Empty<IElementHandle>();
                 }
@@ -2245,7 +2245,7 @@ namespace PlaywrightNative
                     case WaitForSelectorState.Attached:
                         if (all.Count > 1)
                         {
-                            throw new PlaywrightNativeException(
+                            throw new PlaywrightException(
                                 await StrictResolvedMessageAsync(all).ConfigureAwait(false));
                         }
 
@@ -2255,7 +2255,7 @@ namespace PlaywrightNative
                     default:
                         if (all.Count > 1)
                         {
-                            throw new PlaywrightNativeException(
+                            throw new PlaywrightException(
                                 await StrictResolvedMessageAsync(all).ConfigureAwait(false));
                         }
 
@@ -2305,7 +2305,7 @@ namespace PlaywrightNative
                 IElementHandle found = await ResolveOneOrNullAsync().ConfigureAwait(false);
                 if (found == null)
                 {
-                    throw new PlaywrightNativeException("No element matching aria-ref=" + ariaRef);
+                    throw new PlaywrightException("No element matching aria-ref=" + ariaRef);
                 }
 
                 return found;
@@ -2354,7 +2354,7 @@ namespace PlaywrightNative
 
                 if (IsPierceLocator() && await FrameSelector.FromMultipleFramesAsync(all).ConfigureAwait(false))
                 {
-                    throw new PlaywrightNativeException("Pierce-frame mode matched elements from multiple frames");
+                    throw new PlaywrightException("Pierce-frame mode matched elements from multiple frames");
                 }
 
                 string strict = await StrictResolvedMessageAsync(all).ConfigureAwait(false);
@@ -2363,7 +2363,7 @@ namespace PlaywrightNative
                     strict = strict + "\nwaiting for " + ToString();
                 }
 
-                throw new PlaywrightNativeException(strict);
+                throw new PlaywrightException(strict);
             }
 
             return all[0];
@@ -2374,7 +2374,7 @@ namespace PlaywrightNative
             ThrowIfUnknownSelectorEngine();
             if (ContainsCapture() && HasNth())
             {
-                throw new PlaywrightNativeException("Can't query n-th element");
+                throw new PlaywrightException("Can't query n-th element");
             }
 
             if (_combine != CombineKind.None)
@@ -2464,7 +2464,7 @@ namespace PlaywrightNative
                     throw MultipleFramesException();
                 }
 
-                throw new PlaywrightNativeException(
+                throw new PlaywrightException(
                     "Error: strict mode violation: " +
                     _scope.ToString() +
                     " resolved to " +
@@ -2572,7 +2572,7 @@ namespace PlaywrightNative
                     ? await frame.QuerySelectorAllAsync("iframe, frame").ConfigureAwait(false)
                     : await scope.QuerySelectorAllAsync("iframe, frame").ConfigureAwait(false);
             }
-            catch (Exception ex) when (IsFrameScopeTransient(ex) || PlaywrightNativeException.IsDestroyedContext(ex))
+            catch (Exception ex) when (IsFrameScopeTransient(ex) || PlaywrightNative.Helpers.DestroyedContext.IsDestroyedContext(ex))
             {
                 childHosts = Array.Empty<IElementHandle>();
             }
@@ -3053,7 +3053,7 @@ namespace PlaywrightNative
 
             if (PrefixHasCapture(inner._scope))
             {
-                throw new PlaywrightNativeException("Can not capture the selector before diving into the frame. Only use * after the last frame has been selected");
+                throw new PlaywrightException("Can not capture the selector before diving into the frame. Only use * after the last frame has been selected");
             }
 
             return new Locator(inner._frame, inner._steps, null, inner._description, inner._anyFrame);
@@ -3204,10 +3204,10 @@ namespace PlaywrightNative
             return false;
         }
 
-        private PlaywrightNativeException MultipleFramesException()
+        private PlaywrightException MultipleFramesException()
         {
             string locator = ToString();
-            return new PlaywrightNativeException(
+            return new PlaywrightException(
                 "frameLocator() matched elements in multiple frames\nLocator: " +
                 locator +
                 "\nwaiting for " +
@@ -3231,7 +3231,7 @@ namespace PlaywrightNative
         {
             if (_right != null && _right.ContainsAnyFrameToken())
             {
-                throw new PlaywrightNativeException(
+                throw new PlaywrightException(
                     "frameLocator() is not allowed inside composite locators, while querying \"" +
                     ToString() +
                     "\"");
@@ -3293,7 +3293,7 @@ namespace PlaywrightNative
                 return;
             }
 
-            throw new PlaywrightNativeException(
+            throw new PlaywrightException(
                 "Frame locators are not allowed inside composite locators, while querying \"" +
                 ToString() +
                 "\"");
@@ -3321,7 +3321,7 @@ namespace PlaywrightNative
                 {
                     host = await FrameElementHelper.ResolveAsync(frame).ConfigureAwait(false);
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                     break;
                 }

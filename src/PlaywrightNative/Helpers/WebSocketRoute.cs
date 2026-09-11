@@ -141,7 +141,7 @@ namespace PlaywrightNative.Helpers
             {
                 if (_connected)
                 {
-                    throw new PlaywrightNativeException("Already connected to the server");
+                    throw new PlaywrightException("Already connected to the server");
                 }
 
                 _connected = true;
@@ -338,7 +338,7 @@ namespace PlaywrightNative.Helpers
                         return;
                     }
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
             }
@@ -490,7 +490,7 @@ namespace PlaywrightNative.Helpers
                 {
                     await previous.ConfigureAwait(false);
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
                 catch (ObjectDisposedException)
@@ -594,7 +594,7 @@ namespace PlaywrightNative.Helpers
                 => _owner.DispatchServer("sendToServer", Convert.ToBase64String(message ?? Array.Empty<byte>()), binary: true);
 
             public IWebSocketRoute ConnectToServer()
-                => throw new PlaywrightNativeException("connectToServer must be called on the page-side WebSocketRoute");
+                => throw new PlaywrightException("connectToServer must be called on the page-side WebSocketRoute");
 
             public Task CloseAsync(int? code = null, string reason = null)
             {

@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.Chromium;
 using PlaywrightNative.NUnit;
@@ -102,7 +103,7 @@ namespace PlaywrightNative.Tests.Chromium
             await Page.GoToAsync("data:text/html,<input id='r' type='radio' checked>").ConfigureAwait(false);
 
             await using CRElementHandle handle = await Page.QuerySelectorAsync("#r").ConfigureAwait(false);
-            PlaywrightNativeException ex = Assert.ThrowsAsync<PlaywrightNativeException>(
+            PlaywrightException ex = Assert.ThrowsAsync<PlaywrightException>(
                 () => handle.UncheckAsync());
             Assert.That(ex.Message, Does.Contain("radio").IgnoreCase);
         }
@@ -114,7 +115,7 @@ namespace PlaywrightNative.Tests.Chromium
             await Page.GoToAsync("data:text/html,<input id='t' type='text'>").ConfigureAwait(false);
 
             await using CRElementHandle handle = await Page.QuerySelectorAsync("#t").ConfigureAwait(false);
-            PlaywrightNativeException ex = Assert.ThrowsAsync<PlaywrightNativeException>(
+            PlaywrightException ex = Assert.ThrowsAsync<PlaywrightException>(
                 () => handle.IsCheckedAsync());
             Assert.That(ex.Message, Does.Contain("checkbox").Or.Contain("radio"));
         }

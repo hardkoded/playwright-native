@@ -16,6 +16,7 @@
  */
 using System;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 
@@ -69,7 +70,7 @@ namespace PlaywrightNative.Tests
             await page.ExposeBindingAsync("logme", (BindingSource _, IJSHandle _) => 0).ConfigureAwait(false);
             await page.GoToAsync("about:blank").ConfigureAwait(false);
 
-            PlaywrightNativeException exception = Assert.ThrowsAsync<PlaywrightNativeException>(
+            PlaywrightException exception = Assert.ThrowsAsync<PlaywrightException>(
                 async () => await page.EvaluateAsync<object>("window.logme({ a: 1 }, { b: 2 })").ConfigureAwait(false));
             Assert.That(exception.Message, Does.Contain("exposeBindingHandle supports a single argument"));
         }

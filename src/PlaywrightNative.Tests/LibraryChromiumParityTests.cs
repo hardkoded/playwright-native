@@ -23,6 +23,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 using PlaywrightNative.TestServer;
@@ -296,11 +297,11 @@ namespace PlaywrightNative.Tests
             Assert.That(html.ServiceWorker(), Is.Null);
             Assert.That((await html.ResponseAsync().ConfigureAwait(false)).FromServiceWorker, Is.False);
 
-            Assert.Throws<PlaywrightNativeException>(() => _ = main.Frame);
+            Assert.Throws<PlaywrightException>(() => _ = main.Frame);
             Assert.That(main.ServiceWorker(), Is.SameAs(worker));
             Assert.That((await main.ResponseAsync().ConfigureAwait(false)).FromServiceWorker, Is.False);
 
-            Assert.Throws<PlaywrightNativeException>(() => _ = inWorker.Frame);
+            Assert.Throws<PlaywrightException>(() => _ = inWorker.Frame);
             Assert.That(inWorker.ServiceWorker(), Is.SameAs(worker));
             Assert.That((await inWorker.ResponseAsync().ConfigureAwait(false)).FromServiceWorker, Is.False);
 

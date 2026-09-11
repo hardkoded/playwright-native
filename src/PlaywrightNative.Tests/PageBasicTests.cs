@@ -21,6 +21,7 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 using PlaywrightNative.TestServer;
@@ -93,7 +94,7 @@ namespace PlaywrightNative.Tests
                 }
 
                 Assert.That(error, Is.Not.Null);
-                Assert.That(error, Is.InstanceOf<PlaywrightNativeException>());
+                Assert.That(error, Is.InstanceOf<PlaywrightException>());
                 Assert.That(
                     error.Message,
                     Does.Match("(?i)(navigation|net::|ERR_|connection|abort|socket|failed|reset|empty)"));

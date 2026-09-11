@@ -18,6 +18,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Text;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -346,7 +347,7 @@ namespace PlaywrightNative.Helpers
                     return line;
                 }
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
 
@@ -358,7 +359,7 @@ namespace PlaywrightNative.Helpers
                     return preview;
                 }
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
 

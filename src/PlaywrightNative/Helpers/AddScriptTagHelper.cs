@@ -16,6 +16,7 @@
  */
 using System;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -82,7 +83,7 @@ namespace PlaywrightNative.Helpers
         {
             if (string.IsNullOrEmpty(url) && string.IsNullOrEmpty(path) && string.IsNullOrEmpty(content))
             {
-                throw new PlaywrightNativeException(MissingOptionsMessage);
+                throw new PlaywrightException(MissingOptionsMessage);
             }
 
             if (!string.IsNullOrEmpty(path))
@@ -170,7 +171,7 @@ namespace PlaywrightNative.Helpers
 
                 if (csp.Task.IsCompletedSuccessfully)
                 {
-                    throw new PlaywrightNativeException(await csp.Task.ConfigureAwait(false));
+                    throw new PlaywrightException(await csp.Task.ConfigureAwait(false));
                 }
 
                 return await actionTask.ConfigureAwait(false);

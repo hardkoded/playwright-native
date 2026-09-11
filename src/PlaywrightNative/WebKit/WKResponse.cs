@@ -299,7 +299,7 @@ namespace PlaywrightNative.WebKit
 
             if (ResponseHeaders.IsRedirectStatus(Status))
             {
-                throw new PlaywrightNativeException(ResponseHeaders.RedirectBodyUnavailable);
+                throw new PlaywrightException(ResponseHeaders.RedirectBodyUnavailable);
             }
 
             if (WKRequest.FulfilledBody != null && RouteFulfill.ShouldOverrideBody(Status))
@@ -328,7 +328,7 @@ namespace PlaywrightNative.WebKit
                         return bytes;
                     }
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
 

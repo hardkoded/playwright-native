@@ -31,6 +31,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.Helpers;
 using PlaywrightNative.NUnit;
@@ -869,7 +870,7 @@ namespace PlaywrightNative.Tests
             {
                 await session.Page.GoToAsync(Prefix + "/har.html").ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
 
@@ -907,7 +908,7 @@ namespace PlaywrightNative.Tests
             {
                 await session.Page.GoToAsync(Prefix + "/foo").ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
 
@@ -1765,7 +1766,7 @@ namespace PlaywrightNative.Tests
             await using IBrowserContext context = await _browser.NewContextAsync().ConfigureAwait(false);
             string harPath = TempHarPath("tracing", ".har.zip");
             string resourcesDir = Path.Combine(Path.GetTempPath(), "pwsharp-wave879-har-resources-" + Guid.NewGuid().ToString("N"));
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => context.Tracing.StartHarAsync(harPath, content: HarContentPolicy.Attach, resourcesDir: resourcesDir));
             Assert.That(error, Is.Not.Null);
             Assert.That(error.Message, Does.Match("resourcesDir option is not compatible with a \\.zip har file"));

@@ -16,6 +16,7 @@
  */
 using System;
 using System.Collections.Generic;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -74,7 +75,7 @@ namespace PlaywrightNative.Helpers
                 || !Uri.TryCreate(overrideUrl, UriKind.Absolute, out Uri newUri)
                 || !string.Equals(oldUri.Scheme, newUri.Scheme, StringComparison.OrdinalIgnoreCase))
             {
-                throw new PlaywrightNativeException("New URL must have same protocol as overridden URL");
+                throw new PlaywrightException("New URL must have same protocol as overridden URL");
             }
         }
 

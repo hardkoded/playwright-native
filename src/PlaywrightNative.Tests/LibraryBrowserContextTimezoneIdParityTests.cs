@@ -17,6 +17,7 @@
 using System;
 using System.Globalization;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 using PlaywrightNative.TestServer;
@@ -129,13 +130,13 @@ namespace PlaywrightNative.Tests
             foreach (string timezoneId in new[] { "Foo/Bar", "Baz/Qux" })
             {
                 IBrowserContext context = null;
-                PlaywrightNativeException error = null;
+                PlaywrightException error = null;
                 try
                 {
                     context = await _browser.NewContextAsync(new() { TimezoneId = timezoneId }).ConfigureAwait(false);
                     await context.NewPageAsync().ConfigureAwait(false);
                 }
-                catch (PlaywrightNativeException ex)
+                catch (PlaywrightException ex)
                 {
                     error = ex;
                 }

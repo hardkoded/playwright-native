@@ -240,7 +240,7 @@ namespace PlaywrightNative.Helpers
         {
             if (_disposed)
             {
-                throw new PlaywrightNativeException("Response has been disposed");
+                throw new PlaywrightException("Response has been disposed");
             }
         }
 

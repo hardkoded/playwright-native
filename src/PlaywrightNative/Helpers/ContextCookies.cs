@@ -17,6 +17,7 @@
 using System;
 using System.Collections.Generic;
 using System.Text.Json;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -283,24 +284,24 @@ namespace PlaywrightNative.Helpers
             bool hasPath = !string.IsNullOrEmpty(cookie.Path);
             if (!hasUrl && !(hasDomain && hasPath))
             {
-                throw new PlaywrightNativeException("Cookie should have a url or a domain/path pair");
+                throw new PlaywrightException("Cookie should have a url or a domain/path pair");
             }
 
             if (hasUrl && hasDomain)
             {
-                throw new PlaywrightNativeException("Cookie should have either url or domain");
+                throw new PlaywrightException("Cookie should have either url or domain");
             }
 
             if (hasUrl && hasPath)
             {
-                throw new PlaywrightNativeException("Cookie should have either url or path");
+                throw new PlaywrightException("Cookie should have either url or path");
             }
 
             if (cookie.Expires.HasValue
                 && cookie.Expires.Value < 0
                 && cookie.Expires.Value != -1)
             {
-                throw new PlaywrightNativeException(
+                throw new PlaywrightException(
                     "Cookie should have a valid expires, only -1 or a positive number for the unix timestamp in seconds is allowed");
             }
 
@@ -308,7 +309,7 @@ namespace PlaywrightNative.Helpers
                 && cookie.Expires.Value > 0
                 && cookie.Expires.Value > MaxCookieExpiresDateInSeconds)
             {
-                throw new PlaywrightNativeException(
+                throw new PlaywrightException(
                     "Cookie should have a valid expires, only -1 or a positive number for the unix timestamp in seconds is allowed");
             }
 
@@ -319,19 +320,19 @@ namespace PlaywrightNative.Helpers
 
             if (string.Equals(cookie.Url, "about:blank", StringComparison.Ordinal))
             {
-                throw new PlaywrightNativeException(
+                throw new PlaywrightException(
                     "Blank page can not have cookie \"" + (cookie.Name ?? string.Empty) + "\"");
             }
 
             if (cookie.Url.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
             {
-                throw new PlaywrightNativeException(
+                throw new PlaywrightException(
                     "Data URL page can not have cookie \"" + (cookie.Name ?? string.Empty) + "\"");
             }
 
             if (!Uri.TryCreate(cookie.Url, UriKind.Absolute, out Uri uri))
             {
-                throw new PlaywrightNativeException("Cookie should have a url or a domain/path pair");
+                throw new PlaywrightException("Cookie should have a url or a domain/path pair");
             }
 
             string pathname = uri.AbsolutePath;

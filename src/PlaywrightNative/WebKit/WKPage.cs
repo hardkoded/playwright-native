@@ -714,7 +714,7 @@ namespace PlaywrightNative.WebKit
 
         /// <inheritdoc/>
         public Task EmulateVisionDeficiencyAsync(VisionDeficiency type = default)
-            => throw new PlaywrightNativeException("EmulateVisionDeficiencyAsync is Chromium-only.");
+            => throw new PlaywrightException("EmulateVisionDeficiencyAsync is Chromium-only.");
 
         /// <inheritdoc/>
         public Task EmulateMediaAsync(ReducedMotion? reducedMotion = default, ForcedColors? forcedColors = default, Contrast? contrast = default)
@@ -820,7 +820,7 @@ namespace PlaywrightNative.WebKit
 
                 if (arg is IJSHandle)
                 {
-                    throw new PlaywrightNativeException(DispatchEventScript.DifferentContextMessage);
+                    throw new PlaywrightException(DispatchEventScript.DifferentContextMessage);
                 }
 
                 if (EvaluateHandleArg.TryPrepareHandleCall(expression, arg, out string handleFn, out object[] handleArgs))
@@ -1047,7 +1047,7 @@ namespace PlaywrightNative.WebKit
         {
             if (_crashed)
             {
-                throw new PlaywrightNativeException("page.goto: Target crashed");
+                throw new PlaywrightException("page.goto: Target crashed");
             }
 
             url = NavigationTimeout.CompleteUserUrl(NavigationUrl.Resolve(Context, url));
@@ -1127,7 +1127,7 @@ namespace PlaywrightNative.WebKit
             {
                 if (_crashed)
                 {
-                    throw new PlaywrightNativeException("Target crashed");
+                    throw new PlaywrightException("Target crashed");
                 }
 
                 string currentUrl = Url;
@@ -1367,7 +1367,7 @@ namespace PlaywrightNative.WebKit
             async Task<byte[]> CaptureRectAsync()
             {
                 WKTargetSession target = _targetSession
-                    ?? throw new PlaywrightNativeException("Cannot take a screenshot: the page has no active target session.");
+                    ?? throw new PlaywrightException("Cannot take a screenshot: the page has no active target session.");
 
                 bool captureFullPage = fullPage ?? false;
                 bool hideBackground = omitBackground == true;
@@ -1407,7 +1407,7 @@ namespace PlaywrightNative.WebKit
                                 break;
                             }
                         }
-                        catch (PlaywrightNativeException ex) when (
+                        catch (PlaywrightException ex) when (
                             ex.Message.Contains("Execution context was destroyed", StringComparison.Ordinal)
                             || ex.Message.Contains("most likely because of a navigation", StringComparison.Ordinal)
                             || ex.Message.Contains("Missing injected script", StringComparison.Ordinal)
@@ -1417,7 +1417,7 @@ namespace PlaywrightNative.WebKit
 
                         if (attempt >= 20)
                         {
-                            throw new PlaywrightNativeException(navigating);
+                            throw new PlaywrightException(navigating);
                         }
 
                         await Task.Delay(50).ConfigureAwait(false);
@@ -1463,7 +1463,7 @@ namespace PlaywrightNative.WebKit
 
                 if (!response.HasValue || !response.Value.TryGetProperty("dataURL", out JsonElement dataUrlElement))
                 {
-                    throw new PlaywrightNativeException("Page.snapshotRect returned no data.");
+                    throw new PlaywrightException("Page.snapshotRect returned no data.");
                 }
 
                 byte[] bytes = ScreenshotEncode.RecodeIfNeeded(
@@ -1509,7 +1509,7 @@ namespace PlaywrightNative.WebKit
             type = ScreenshotValidate.ResolveType(path, type);
             ScreenshotValidate.EnsureQuality(type, quality);
             WKTargetSession target = _targetSession
-                ?? throw new PlaywrightNativeException("Cannot take a screenshot: the page has no active target session.");
+                ?? throw new PlaywrightException("Cannot take a screenshot: the page has no active target session.");
 
             int? resolvedQuality = ScreenshotValidate.ResolvedQuality(type, quality);
             bool cssScale = ScreenshotScaleHelper.IsCss(scale);
@@ -1552,7 +1552,7 @@ namespace PlaywrightNative.WebKit
 
             if (!response.HasValue || !response.Value.TryGetProperty("dataURL", out JsonElement dataUrlElement))
             {
-                throw new PlaywrightNativeException("Page.snapshotRect returned no data.");
+                throw new PlaywrightException("Page.snapshotRect returned no data.");
             }
 
             byte[] bytes = ScreenshotEncode.RecodeIfNeeded(
@@ -1649,7 +1649,7 @@ namespace PlaywrightNative.WebKit
         public async Task ApplyMergedExtraHttpHeadersAsync()
         {
             WKTargetSession target = _targetSession
-                ?? throw new PlaywrightNativeException("Cannot set extra HTTP headers: the page has no active target session.");
+                ?? throw new PlaywrightException("Cannot set extra HTTP headers: the page has no active target session.");
             await ApplyExtraHttpHeadersOnAsync(target).ConfigureAwait(false);
             if (_provisionalSession != null && !ReferenceEquals(_provisionalSession, target))
             {
@@ -2161,7 +2161,7 @@ namespace PlaywrightNative.WebKit
             {
                 await Task.WhenAll(cancels).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
         }
@@ -2272,7 +2272,7 @@ namespace PlaywrightNative.WebKit
             {
                 described = await _targetSession.SendAsync("DOM.describeNode", new { objectId }).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 return (null, null);
             }
@@ -2319,7 +2319,7 @@ namespace PlaywrightNative.WebKit
             WKFrame parent = frame.ParentFrame;
             if (parent == null || frame.IsDetached || _targetSession == null)
             {
-                throw new PlaywrightNativeException("Frame has been detached.");
+                throw new PlaywrightException("Frame has been detached.");
             }
 
             WKExecutionContext context = await WaitForFrameContextAsync(parent).ConfigureAwait(false);
@@ -2332,12 +2332,12 @@ namespace PlaywrightNative.WebKit
                     executionContextId = context.ContextId,
                 }).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException ex)
+            catch (PlaywrightException ex)
             {
                 if (ex.Message.Contains("detached", StringComparison.OrdinalIgnoreCase)
                     || ex.Message.Contains("not found", StringComparison.OrdinalIgnoreCase))
                 {
-                    throw new PlaywrightNativeException("Frame has been detached.");
+                    throw new PlaywrightException("Frame has been detached.");
                 }
 
                 throw;
@@ -2346,25 +2346,25 @@ namespace PlaywrightNative.WebKit
             parent = frame.ParentFrame;
             if (parent == null || frame.IsDetached)
             {
-                throw new PlaywrightNativeException("Frame has been detached.");
+                throw new PlaywrightException("Frame has been detached.");
             }
 
             if (result == null || !result.Value.TryGetProperty("object", out JsonElement remote))
             {
-                throw new PlaywrightNativeException("Frame has been detached.");
+                throw new PlaywrightException("Frame has been detached.");
             }
 
             if (remote.TryGetProperty("subtype", out JsonElement subtype)
                 && subtype.ValueKind == JsonValueKind.String
                 && string.Equals(subtype.GetString(), "null", StringComparison.Ordinal))
             {
-                throw new PlaywrightNativeException("Frame has been detached.");
+                throw new PlaywrightException("Frame has been detached.");
             }
 
             IElementHandle handle = WrapElement(context, remote);
             if (handle == null)
             {
-                throw new PlaywrightNativeException("Frame has been detached.");
+                throw new PlaywrightException("Frame has been detached.");
             }
 
             return handle;
@@ -2470,7 +2470,7 @@ namespace PlaywrightNative.WebKit
         internal Task SetUserAgentAsync(string userAgent)
         {
             WKTargetSession target = _targetSession
-                ?? throw new PlaywrightNativeException("Cannot override the user agent: the page has no active target session.");
+                ?? throw new PlaywrightException("Cannot override the user agent: the page has no active target session.");
 
             return target.SendAsync("Page.overrideUserAgent", new { value = userAgent ?? string.Empty });
         }
@@ -2483,18 +2483,18 @@ namespace PlaywrightNative.WebKit
         internal async Task SetTimezoneAsync(string timezoneId)
         {
             WKTargetSession target = _targetSession
-                ?? throw new PlaywrightNativeException("Cannot override the timezone: the page has no active target session.");
+                ?? throw new PlaywrightException("Cannot override the timezone: the page has no active target session.");
 
             try
             {
                 await target.SendAsync("Page.setTimeZone", new { timeZone = timezoneId ?? string.Empty }).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException ex) when (
+            catch (PlaywrightException ex) when (
                 ex.Message.Contains("timezone", StringComparison.OrdinalIgnoreCase)
                 || ex.Message.Contains("time zone", StringComparison.OrdinalIgnoreCase)
                 || ex.Message.Contains("timeZone", StringComparison.Ordinal))
             {
-                throw new PlaywrightNativeException("Invalid timezone ID: " + timezoneId);
+                throw new PlaywrightException("Invalid timezone ID: " + timezoneId);
             }
         }
 
@@ -2506,7 +2506,7 @@ namespace PlaywrightNative.WebKit
         internal Task SetOfflineAsync(bool offline)
         {
             WKTargetSession target = _targetSession
-                ?? throw new PlaywrightNativeException("Cannot emulate offline: the page has no active target session.");
+                ?? throw new PlaywrightException("Cannot emulate offline: the page has no active target session.");
 
             return target.SendAsync("Network.setEmulateOfflineState", new { offline });
         }
@@ -2519,7 +2519,7 @@ namespace PlaywrightNative.WebKit
         internal Task SetTouchEmulationEnabledAsync(bool enabled)
         {
             WKTargetSession target = _targetSession
-                ?? throw new PlaywrightNativeException("Cannot emulate touch: the page has no active target session.");
+                ?? throw new PlaywrightException("Cannot emulate touch: the page has no active target session.");
 
             return target.SendAsync("Page.setTouchEmulationEnabled", new { enabled });
         }
@@ -2534,7 +2534,7 @@ namespace PlaywrightNative.WebKit
         internal Task ApplySafariOverrideSettingsAsync(bool isMobile)
         {
             WKTargetSession target = _targetSession
-                ?? throw new PlaywrightNativeException("Cannot apply Safari settings: the page has no active target session.");
+                ?? throw new PlaywrightException("Cannot apply Safari settings: the page has no active target session.");
 
             return ApplySafariOverrideSettingsOnAsync(target, isMobile);
         }
@@ -2577,7 +2577,7 @@ namespace PlaywrightNative.WebKit
             {
                 await target.SendAsync("Page.overrideSetting", new { setting, value }).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
         }
@@ -2590,7 +2590,7 @@ namespace PlaywrightNative.WebKit
         internal Task SetBypassCSPAsync(bool enabled)
         {
             WKTargetSession target = _targetSession
-                ?? throw new PlaywrightNativeException("Cannot bypass CSP: the page has no active target session.");
+                ?? throw new PlaywrightException("Cannot bypass CSP: the page has no active target session.");
 
             return target.SendAsync("Page.setBypassCSP", new { enabled });
         }
@@ -2613,7 +2613,7 @@ namespace PlaywrightNative.WebKit
                 Dictionary<string, string> merged = ExtraHttpHeaders.Merged(_context, _extraHttpHeaders);
                 await target.SendAsync("Network.setExtraHTTPHeaders", new { headers = merged ?? new Dictionary<string, string>() }).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
         }
@@ -2705,7 +2705,7 @@ namespace PlaywrightNative.WebKit
             bool rememberIndependentScreen = true)
         {
             WKTargetSession target = _targetSession
-                ?? throw new PlaywrightNativeException("Cannot set the viewport size: the page has no active target session.");
+                ?? throw new PlaywrightException("Cannot set the viewport size: the page has no active target session.");
 
             _emulatedDeviceScaleFactor = deviceScaleFactor;
             _emulatedIsMobile = isMobile;
@@ -2917,7 +2917,7 @@ namespace PlaywrightNative.WebKit
                     }
                     else
                     {
-                        PlaywrightNativeException interrupted = new(
+                        PlaywrightException interrupted = new(
                             "page.goto: Navigation to \"" + _pendingNavigationUrl +
                             "\" is interrupted by another navigation to \"" + url + "\"");
                         _pendingLoadTcs?.TrySetException(interrupted);
@@ -3003,7 +3003,7 @@ namespace PlaywrightNative.WebKit
                         await _session.SendAsync("Target.activate", new { targetId = _targetSession.TargetId })
                             .ConfigureAwait(false);
                     }
-                    catch (PlaywrightNativeException)
+                    catch (PlaywrightException)
                     {
                     }
                 }
@@ -3122,7 +3122,7 @@ namespace PlaywrightNative.WebKit
                     break;
                 }
             }
-            catch (PlaywrightNativeException ex) when (ex is not NavigationException)
+            catch (PlaywrightException ex) when (ex is not NavigationException)
             {
                 if (HasDownloadForUrl(url))
                 {
@@ -3319,7 +3319,7 @@ namespace PlaywrightNative.WebKit
                 await target.SendAsync(method).ConfigureAwait(false);
                 return true;
             }
-            catch (PlaywrightNativeException ex) when (ex.Message != null && ex.Message.Contains("Failed to go", StringComparison.OrdinalIgnoreCase))
+            catch (PlaywrightException ex) when (ex.Message != null && ex.Message.Contains("Failed to go", StringComparison.OrdinalIgnoreCase))
             {
                 return false;
             }
@@ -3468,7 +3468,7 @@ namespace PlaywrightNative.WebKit
                         returnByValue = true,
                     });
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
                 catch (ObjectDisposedException)
@@ -3546,7 +3546,7 @@ namespace PlaywrightNative.WebKit
                     id => context.EvaluateFunctionOnHandleAsync<JsonElement>(id, EvaluateSerialization.SerializeAwaitedJs),
                     id => context.ReleaseHandleAsync(id)).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException ex)
+            catch (PlaywrightException ex)
             {
                 throw EvaluateSerialization.RewriteException(ex, frameEvaluate: true);
             }
@@ -3583,7 +3583,7 @@ namespace PlaywrightNative.WebKit
                     .ConfigureAwait(false);
                 return EvaluateSerialization.ParseRemote<T>(wrapped);
             }
-            catch (PlaywrightNativeException ex)
+            catch (PlaywrightException ex)
             {
                 throw EvaluateSerialization.RewriteException(ex, frameEvaluate: true);
             }
@@ -3764,7 +3764,7 @@ namespace PlaywrightNative.WebKit
                     .ConfigureAwait(false);
                 return WrapWKHandle(context, handleValue) as IElementHandle;
             }
-            catch (PlaywrightNativeException ex) when (PlaywrightNativeException.IsDestroyedContext(ex))
+            catch (PlaywrightException ex) when (PlaywrightNative.Helpers.DestroyedContext.IsDestroyedContext(ex))
             {
                 string frameId = frame?.FrameId;
                 if (!string.IsNullOrEmpty(frameId))
@@ -3944,7 +3944,7 @@ namespace PlaywrightNative.WebKit
                 {
                     await EvaluateInAllFramesAsync(script).ConfigureAwait(false);
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
                 catch (TimeoutException)
@@ -3970,7 +3970,7 @@ namespace PlaywrightNative.WebKit
             {
                 await SyncBootstrapScriptAsync().ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
         }
@@ -4003,7 +4003,7 @@ namespace PlaywrightNative.WebKit
 
             if (_handleBindings.ContainsKey(name) || !_exposedFunctions.TryAdd(name, handler))
             {
-                throw new PlaywrightNativeException(PageBindingScript.AlreadyRegisteredFunction(name));
+                throw new PlaywrightException(PageBindingScript.AlreadyRegisteredFunction(name));
             }
 
             await EnsureBindingInfrastructureAsync().ConfigureAwait(false);
@@ -4033,7 +4033,7 @@ namespace PlaywrightNative.WebKit
 
             if (!_exposedFunctions.TryAdd(name, handler))
             {
-                throw new PlaywrightNativeException(PageBindingScript.AlreadyRegisteredFunction(name));
+                throw new PlaywrightException(PageBindingScript.AlreadyRegisteredFunction(name));
             }
 
             _evaluateCallbackNames[name] = 0;
@@ -4061,7 +4061,7 @@ namespace PlaywrightNative.WebKit
 
             if (!_exposedFunctions.TryAdd(name, handler))
             {
-                throw new PlaywrightNativeException(PageBindingScript.AlreadyRegisteredFunction(name));
+                throw new PlaywrightException(PageBindingScript.AlreadyRegisteredFunction(name));
             }
 
             await EnsureBindingInfrastructureAsync().ConfigureAwait(false);
@@ -4121,7 +4121,7 @@ namespace PlaywrightNative.WebKit
 
             if (_exposedFunctions.ContainsKey(name) || !_handleBindings.TryAdd(name, handler))
             {
-                throw new PlaywrightNativeException(PageBindingScript.AlreadyRegisteredFunction(name));
+                throw new PlaywrightException(PageBindingScript.AlreadyRegisteredFunction(name));
             }
 
             await EnsureBindingInfrastructureAsync().ConfigureAwait(false);
@@ -4222,7 +4222,7 @@ namespace PlaywrightNative.WebKit
                 {
                     await EvaluateInFrameAsync<object>(frame, expression).ConfigureAwait(false);
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
                 catch (TimeoutException)
@@ -4248,7 +4248,7 @@ namespace PlaywrightNative.WebKit
         internal async Task InstallBindingInfrastructureAsync()
         {
             WKTargetSession target = _targetSession
-                ?? throw new PlaywrightNativeException("Inner target session is not yet available — the page has not finished initializing.");
+                ?? throw new PlaywrightException("Inner target session is not yet available — the page has not finished initializing.");
             await target.SendAsync("Runtime.addBinding", new { name = PageBindingScript.ChannelName }).ConfigureAwait(false);
             await AddInitScriptInternalAsync(PageBindingScript.InitScript).ConfigureAwait(false);
             await EvaluateInAllFramesAsync(PageBindingScript.InitScript).ConfigureAwait(false);
@@ -4282,7 +4282,7 @@ namespace PlaywrightNative.WebKit
         {
             if (string.IsNullOrEmpty(url) && string.IsNullOrEmpty(content))
             {
-                throw new PlaywrightNativeException(AddScriptTagHelper.MissingOptionsMessage);
+                throw new PlaywrightException(AddScriptTagHelper.MissingOptionsMessage);
             }
 
             if (!string.IsNullOrEmpty(url) && !string.IsNullOrEmpty(content))
@@ -4361,7 +4361,7 @@ namespace PlaywrightNative.WebKit
         {
             if (string.IsNullOrEmpty(url) && string.IsNullOrEmpty(content))
             {
-                throw new PlaywrightNativeException(AddStyleTagHelper.MissingOptionsMessage);
+                throw new PlaywrightException(AddStyleTagHelper.MissingOptionsMessage);
             }
 
             if (!string.IsNullOrEmpty(url) && !string.IsNullOrEmpty(content))
@@ -4501,7 +4501,7 @@ namespace PlaywrightNative.WebKit
             if (!_initializedTcs.Task.IsCompleted)
             {
                 _initializedTcs.TrySetException(
-                    new PlaywrightNativeException(
+                    new PlaywrightException(
                         string.IsNullOrEmpty(errorText) ? "Initial load failed" : errorText));
             }
         }
@@ -4940,7 +4940,7 @@ namespace PlaywrightNative.WebKit
             {
                 return await sendTask.ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException ex) when (ex is not NavigationException)
+            catch (PlaywrightException ex) when (ex is not NavigationException)
             {
                 throw new NavigationException(ex.Message, url, ex);
             }
@@ -4952,7 +4952,7 @@ namespace PlaywrightNative.WebKit
             {
                 await waitTask.ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException ex) when (ex is not NavigationException)
+            catch (PlaywrightException ex) when (ex is not NavigationException)
             {
                 throw new NavigationException(ex.Message, url, ex);
             }
@@ -5061,7 +5061,7 @@ namespace PlaywrightNative.WebKit
         {
             if (Context is IHasExposedFunctionNames contextNames && contextNames.HasExposedFunction(name))
             {
-                throw new PlaywrightNativeException(PageBindingScript.AlreadyRegisteredInBrowserContext(name));
+                throw new PlaywrightException(PageBindingScript.AlreadyRegisteredInBrowserContext(name));
             }
         }
 
@@ -5087,7 +5087,7 @@ namespace PlaywrightNative.WebKit
                 return;
             }
 
-            throw new PlaywrightNativeException(
+            throw new PlaywrightException(
                 "page.goto: Navigation to \"" + pendingUrl +
                 "\" is interrupted by another navigation to \"" + competing + "\"");
         }
@@ -5380,7 +5380,7 @@ namespace PlaywrightNative.WebKit
                     await EvaluateAsync<object>("1").ConfigureAwait(false);
                     return;
                 }
-                catch (PlaywrightNativeException ex) when (
+                catch (PlaywrightException ex) when (
                     ex.Message != null
                     && (ex.Message.Contains("Missing injected script", StringComparison.OrdinalIgnoreCase)
                         || ex.Message.Contains("execution context", StringComparison.OrdinalIgnoreCase)))
@@ -5427,7 +5427,7 @@ namespace PlaywrightNative.WebKit
         private async Task SyncBootstrapScriptAsync()
         {
             WKTargetSession target = _targetSession
-                ?? throw new PlaywrightNativeException("Inner target session is not yet available — the page has not finished initializing.");
+                ?? throw new PlaywrightException("Inner target session is not yet available — the page has not finished initializing.");
             await SyncBootstrapScriptOnAsync(target).ConfigureAwait(false);
         }
 
@@ -5468,7 +5468,7 @@ namespace PlaywrightNative.WebKit
 
                 if (state == 2)
                 {
-                    throw new PlaywrightNativeException(errorMessage);
+                    throw new PlaywrightException(errorMessage);
                 }
 
                 if (cts.IsCancellationRequested)
@@ -5531,7 +5531,7 @@ namespace PlaywrightNative.WebKit
                 return await EvaluateSerializedAsync<T>(
                     EvaluateHandleArg.PreparedExpression(handleFn, handleArgs)).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException ex)
+            catch (PlaywrightException ex)
             {
                 throw EvaluateSerialization.RewriteException(ex);
             }
@@ -5558,7 +5558,7 @@ namespace PlaywrightNative.WebKit
 
                 if (wk.AsElement() == null)
                 {
-                    throw new PlaywrightNativeException(DispatchEventScript.DifferentContextMessage);
+                    throw new PlaywrightException(DispatchEventScript.DifferentContextMessage);
                 }
 
                 string adoptedId = await target.AdoptElementObjectIdAsync(wk.ObjectId).ConfigureAwait(false);
@@ -5591,7 +5591,7 @@ namespace PlaywrightNative.WebKit
                     id => context.EvaluateFunctionOnHandleAsync<JsonElement>(id, EvaluateSerialization.SerializeAwaitedJs),
                     id => context.ReleaseHandleAsync(id)).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException ex)
+            catch (PlaywrightException ex)
             {
                 throw EvaluateSerialization.RewriteException(ex);
             }
@@ -5609,7 +5609,7 @@ namespace PlaywrightNative.WebKit
                 // then evaluate with the handle as `this`/first argument.
                 if (arg is not WKJSHandle handle)
                 {
-                    throw new PlaywrightNativeException(DispatchEventScript.DifferentContextMessage);
+                    throw new PlaywrightException(DispatchEventScript.DifferentContextMessage);
                 }
 
                 string objectId = await context.ResolveHandleObjectIdAsync(handle).ConfigureAwait(false);
@@ -5625,7 +5625,7 @@ namespace PlaywrightNative.WebKit
                     .ConfigureAwait(false);
                 return JsonValueHelper.Parse<T>(tagged);
             }
-            catch (PlaywrightNativeException ex)
+            catch (PlaywrightException ex)
             {
                 throw EvaluateSerialization.RewriteException(ex);
             }
@@ -5671,7 +5671,7 @@ namespace PlaywrightNative.WebKit
         {
             if (_closed || _closing)
             {
-                throw new PlaywrightNativeException("page.pause: Page has been closed.");
+                throw new PlaywrightException("page.pause: Page has been closed.");
             }
 
             int timeoutMs = TimeoutSettings.TimeoutMs(DefaultTimeout);
@@ -5730,11 +5730,11 @@ namespace PlaywrightNative.WebKit
             ThrowIfClosed();
             if (_crashed)
             {
-                throw new PlaywrightNativeException("Target crashed");
+                throw new PlaywrightException("Target crashed");
             }
 
             WKExecutionContext ctx = _executionContext
-                ?? throw new PlaywrightNativeException("Execution context is not yet available — the page has not finished initializing.");
+                ?? throw new PlaywrightException("Execution context is not yet available — the page has not finished initializing.");
             return ctx;
         }
 
@@ -5744,7 +5744,7 @@ namespace PlaywrightNative.WebKit
             {
                 return await run().ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException ex) when (
+            catch (PlaywrightException ex) when (
                 ex.Message != null
                 && (ex.Message.Contains("Missing injected script", StringComparison.Ordinal)
                     || ex.Message.Contains("Execution context was destroyed", StringComparison.Ordinal)
@@ -5785,7 +5785,7 @@ namespace PlaywrightNative.WebKit
             {
                 await target.SendAsync("Page.createUserWorld", new { name = UtilityWorldName }).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
         }
@@ -5851,7 +5851,7 @@ namespace PlaywrightNative.WebKit
             }
 
             string frameId = frame.FrameId
-                ?? throw new PlaywrightNativeException("Cannot navigate a frame without a protocol id.");
+                ?? throw new PlaywrightException("Cannot navigate a frame without a protocol id.");
 
             if (!string.IsNullOrEmpty(frameId))
             {
@@ -5898,7 +5898,7 @@ namespace PlaywrightNative.WebKit
             {
                 if (frame.IsDetached)
                 {
-                    throw new PlaywrightNativeException("frame was detached");
+                    throw new PlaywrightException("frame was detached");
                 }
 
                 if (UrlMatches(frame.Url, url))
@@ -5914,7 +5914,7 @@ namespace PlaywrightNative.WebKit
                             return;
                         }
                     }
-                    catch (PlaywrightNativeException)
+                    catch (PlaywrightException)
                     {
                         // New document context is not ready yet.
                     }
@@ -5932,7 +5932,7 @@ namespace PlaywrightNative.WebKit
 
             if (frame.IsDetached)
             {
-                throw new PlaywrightNativeException("frame was detached");
+                throw new PlaywrightException("frame was detached");
             }
 
             throw NavigationTimeout.Exceeded(
@@ -5946,7 +5946,7 @@ namespace PlaywrightNative.WebKit
         {
             if (_crashed)
             {
-                throw new PlaywrightNativeException("Target crashed");
+                throw new PlaywrightException("Target crashed");
             }
 
             WKFrame main = _frameManager.MainFrame;
@@ -5964,7 +5964,7 @@ namespace PlaywrightNative.WebKit
             {
                 if (_crashed)
                 {
-                    throw new PlaywrightNativeException("Target crashed");
+                    throw new PlaywrightException("Target crashed");
                 }
 
                 if (_closed || _closing)
@@ -5985,7 +5985,7 @@ namespace PlaywrightNative.WebKit
                 throw PageClosedException();
             }
 
-            throw new PlaywrightNativeException("Execution context is not yet available — the frame has not finished initializing.");
+            throw new PlaywrightException("Execution context is not yet available — the frame has not finished initializing.");
         }
 
         private bool TryGetFrameContext(WKFrame frame, out WKExecutionContext context)
@@ -6124,7 +6124,7 @@ namespace PlaywrightNative.WebKit
             IElementHandle handle = await QuerySelectorAsync(selector).ConfigureAwait(false);
             if (handle == null)
             {
-                throw new PlaywrightNativeException($"No node found for selector: {selector}");
+                throw new PlaywrightException($"No node found for selector: {selector}");
             }
 
             return handle;
@@ -6390,7 +6390,7 @@ namespace PlaywrightNative.WebKit
                     await worker.Session.SendAsync("Network.enable").ConfigureAwait(false);
                     await worker.Session.SendAsync("Network.setExtraHTTPHeaders", new { headers }).ConfigureAwait(false);
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
             }
@@ -6416,7 +6416,7 @@ namespace PlaywrightNative.WebKit
                         await worker.Session.SendAsync("Network.enable").ConfigureAwait(false);
                         await worker.Session.SendAsync("Network.setExtraHTTPHeaders", new { headers = workerHeaders }).ConfigureAwait(false);
                     }
-                    catch (PlaywrightNativeException)
+                    catch (PlaywrightException)
                     {
                     }
                 }
@@ -6619,7 +6619,7 @@ namespace PlaywrightNative.WebKit
                 {
                     await owner.ApplyEmulationToPageAsync(this).ConfigureAwait(false);
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
             }
@@ -6649,7 +6649,7 @@ namespace PlaywrightNative.WebKit
                 {
                     await ReplayExposedBindingsAsync().ConfigureAwait(false);
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
             }
@@ -6760,7 +6760,7 @@ namespace PlaywrightNative.WebKit
                         await _session.SendAsync("Emulation.setActiveAndFocused", new { active = true })
                             .ConfigureAwait(false);
                     }
-                    catch (PlaywrightNativeException)
+                    catch (PlaywrightException)
                     {
                     }
 
@@ -7364,7 +7364,7 @@ namespace PlaywrightNative.WebKit
             }
 
             _crashed = true;
-            PlaywrightNativeException crashed = new PlaywrightNativeException("page.goto: Page crashed");
+            PlaywrightException crashed = new PlaywrightException("page.goto: Page crashed");
             lock (_navigationLock)
             {
                 _pendingLoadTcs?.TrySetException(crashed);
@@ -7402,7 +7402,7 @@ namespace PlaywrightNative.WebKit
                     multiple = await element.EvaluateAsync<bool>("e => !!e.multiple").ConfigureAwait(false);
                 }
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
             catch (InvalidOperationException)
@@ -8170,7 +8170,7 @@ namespace PlaywrightNative.WebKit
                     }
 
                     WKTargetSession target = _targetSession
-                        ?? throw new PlaywrightNativeException("Inner target session is not yet available.");
+                        ?? throw new PlaywrightException("Inner target session is not yet available.");
                     WKExecutionContext context = new WKExecutionContext(target, contextId);
                     JsonElement? handleValue = await context.EvaluateHandleAsync(PageBindingScript.TakeHandleExpression(seq)).ConfigureAwait(false);
                     IJSHandle jsHandle = WrapRemoteObject(context, handleValue);
@@ -8255,7 +8255,7 @@ namespace PlaywrightNative.WebKit
                     returnByValue = true,
                 }).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 // Best-effort delivery — the execution context may have been destroyed by a
                 // navigation between the call and the response.

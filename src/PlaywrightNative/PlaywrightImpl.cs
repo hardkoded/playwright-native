@@ -6,6 +6,7 @@
 // http://www.apache.org/licenses/LICENSE-2.0
 using System;
 using System.Collections.Generic;
+using Microsoft.Playwright;
 using PlaywrightNative.Helpers;
 
 namespace PlaywrightNative
@@ -60,7 +61,7 @@ namespace PlaywrightNative
                     return Webkit;
                 }
 
-                throw new PlaywrightNativeException($"Unknown browser type: {browserType}");
+                throw new PlaywrightException($"Unknown browser type: {browserType}");
             }
         }
 

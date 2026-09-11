@@ -568,7 +568,7 @@ namespace PlaywrightNative
                 strict).ConfigureAwait(false);
             if (handle == null)
             {
-                throw new PlaywrightNativeException($"Failed to find element matching selector \"{selector}\"");
+                throw new PlaywrightException($"Failed to find element matching selector \"{selector}\"");
             }
 
             if (scroll != ActionScroll.None)

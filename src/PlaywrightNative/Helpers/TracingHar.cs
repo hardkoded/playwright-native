@@ -17,6 +17,7 @@
 using System;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -47,12 +48,12 @@ namespace PlaywrightNative.Helpers
             if (!string.IsNullOrEmpty(resourcesDir)
                 && path.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
             {
-                throw new PlaywrightNativeException("resourcesDir option is not compatible with a .zip har file");
+                throw new PlaywrightException("resourcesDir option is not compatible with a .zip har file");
             }
 
             if (_started)
             {
-                throw new PlaywrightNativeException("HAR recording has already been started");
+                throw new PlaywrightException("HAR recording has already been started");
             }
 
             IAPIRequestContext api = _api ?? (_context != null ? APIRequestContext.For(_context) : null);
@@ -80,7 +81,7 @@ namespace PlaywrightNative.Helpers
         {
             if (!_started)
             {
-                throw new PlaywrightNativeException("HAR recording has not been started");
+                throw new PlaywrightException("HAR recording has not been started");
             }
 
             _started = false;

@@ -19,6 +19,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Text.Json;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Chromium
 {
@@ -86,7 +87,7 @@ namespace PlaywrightNative.Chromium
             catch (TargetClosedException)
             {
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
 
@@ -209,7 +210,7 @@ namespace PlaywrightNative.Chromium
             catch (TargetClosedException)
             {
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
 
@@ -402,7 +403,7 @@ namespace PlaywrightNative.Chromium
             catch (TargetClosedException)
             {
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
         }
@@ -422,7 +423,7 @@ namespace PlaywrightNative.Chromium
             catch (TargetClosedException)
             {
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
         }
@@ -442,7 +443,7 @@ namespace PlaywrightNative.Chromium
             catch (TargetClosedException)
             {
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
         }

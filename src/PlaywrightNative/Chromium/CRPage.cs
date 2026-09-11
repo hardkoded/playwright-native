@@ -24,6 +24,7 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
+using Microsoft.Playwright;
 using PlaywrightNative.Helpers;
 
 namespace PlaywrightNative.Chromium
@@ -472,7 +473,7 @@ namespace PlaywrightNative.Chromium
                 {
                     await _client.SendAsync("Page.close").ConfigureAwait(false);
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
 
@@ -620,7 +621,7 @@ namespace PlaywrightNative.Chromium
                 string errorText = errorTextElement.GetString();
                 if (!string.IsNullOrEmpty(errorText))
                 {
-                    throw new PlaywrightNativeException($"Navigation failed: {errorText}");
+                    throw new PlaywrightException($"Navigation failed: {errorText}");
                 }
             }
 
@@ -1060,7 +1061,7 @@ namespace PlaywrightNative.Chromium
             {
                 return await context.EvaluateAsync<T>(expression).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException ex) when (
+            catch (PlaywrightException ex) when (
                 ex.Message != null
                 && ex.Message.Contains("Cannot find context", StringComparison.Ordinal))
             {
@@ -1139,7 +1140,7 @@ namespace PlaywrightNative.Chromium
                         };
                     _ = _client.SendAsync("Runtime.evaluate", args);
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
                 catch (ObjectDisposedException)
@@ -1248,7 +1249,7 @@ namespace PlaywrightNative.Chromium
                 catch (TimeoutException)
                 {
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
 
@@ -1284,7 +1285,7 @@ namespace PlaywrightNative.Chromium
                 catch (TimeoutException)
                 {
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
 
@@ -1342,7 +1343,7 @@ namespace PlaywrightNative.Chromium
                     catch (TimeoutException)
                     {
                     }
-                    catch (PlaywrightNativeException)
+                    catch (PlaywrightException)
                     {
                     }
 
@@ -1636,7 +1637,7 @@ namespace PlaywrightNative.Chromium
                     identifier,
                 }).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 // Swallow — unknown identifier, session closed, etc.
             }
@@ -1682,7 +1683,7 @@ namespace PlaywrightNative.Chromium
 
             if (_handleBindings.ContainsKey(name) || !_exposedFunctions.TryAdd(name, handler))
             {
-                throw new PlaywrightNativeException(PageBindingScript.AlreadyRegisteredFunction(name));
+                throw new PlaywrightException(PageBindingScript.AlreadyRegisteredFunction(name));
             }
 
             await EnsureBindingInfrastructureAsync().ConfigureAwait(false);
@@ -1713,7 +1714,7 @@ namespace PlaywrightNative.Chromium
 
             if (!_exposedFunctions.TryAdd(name, handler))
             {
-                throw new PlaywrightNativeException(PageBindingScript.AlreadyRegisteredFunction(name));
+                throw new PlaywrightException(PageBindingScript.AlreadyRegisteredFunction(name));
             }
 
             _evaluateCallbackNames[name] = 0;
@@ -1741,7 +1742,7 @@ namespace PlaywrightNative.Chromium
 
             if (!_exposedFunctions.TryAdd(name, handler))
             {
-                throw new PlaywrightNativeException(PageBindingScript.AlreadyRegisteredFunction(name));
+                throw new PlaywrightException(PageBindingScript.AlreadyRegisteredFunction(name));
             }
 
             await EnsureBindingInfrastructureAsync().ConfigureAwait(false);
@@ -1816,7 +1817,7 @@ namespace PlaywrightNative.Chromium
 
             if (_exposedFunctions.ContainsKey(name) || !_handleBindings.TryAdd(name, handler))
             {
-                throw new PlaywrightNativeException(PageBindingScript.AlreadyRegisteredFunction(name));
+                throw new PlaywrightException(PageBindingScript.AlreadyRegisteredFunction(name));
             }
 
             await EnsureBindingInfrastructureAsync().ConfigureAwait(false);
@@ -1878,7 +1879,7 @@ namespace PlaywrightNative.Chromium
 
                 return WrapElementHandle(context, handleValue);
             }
-            catch (PlaywrightNativeException ex) when (PlaywrightNativeException.IsDestroyedContext(ex))
+            catch (PlaywrightException ex) when (PlaywrightNative.Helpers.DestroyedContext.IsDestroyedContext(ex))
             {
                 if (frame != null && frame.ExecutionContext == context)
                 {
@@ -2037,7 +2038,7 @@ namespace PlaywrightNative.Chromium
             {
                 described = await _client.SendAsync("DOM.describeNode", new { objectId }).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 return null;
             }
@@ -2076,7 +2077,7 @@ namespace PlaywrightNative.Chromium
                 {
                     await session.SendAsync("DOM.enable").ConfigureAwait(false);
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
 
@@ -2117,7 +2118,7 @@ namespace PlaywrightNative.Chromium
                 {
                     await session.SendAsync("DOM.enable").ConfigureAwait(false);
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
 
@@ -2219,7 +2220,7 @@ namespace PlaywrightNative.Chromium
             Frame parent = frame.ParentFrame;
             if (parent == null || frame.IsDetached)
             {
-                throw new PlaywrightNativeException("Frame has been detached.");
+                throw new PlaywrightException("Frame has been detached.");
             }
 
             JsonElement? response;
@@ -2228,12 +2229,12 @@ namespace PlaywrightNative.Chromium
                 response = await _client.SendAsync("DOM.getFrameOwner", new { frameId = frame.FrameId })
                     .ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException ex)
+            catch (PlaywrightException ex)
             {
                 if (ex.Message.Contains("Frame with the given id was not found.", StringComparison.Ordinal)
                     || ex.Message.Contains("detached", StringComparison.OrdinalIgnoreCase))
                 {
-                    throw new PlaywrightNativeException("Frame has been detached.");
+                    throw new PlaywrightException("Frame has been detached.");
                 }
 
                 throw;
@@ -2242,14 +2243,14 @@ namespace PlaywrightNative.Chromium
             parent = frame.ParentFrame;
             if (parent == null || frame.IsDetached)
             {
-                throw new PlaywrightNativeException("Frame has been detached.");
+                throw new PlaywrightException("Frame has been detached.");
             }
 
             if (response == null
                 || !response.Value.TryGetProperty("backendNodeId", out JsonElement backendEl)
                 || !backendEl.TryGetInt32(out int backendNodeId))
             {
-                throw new PlaywrightNativeException("Frame has been detached.");
+                throw new PlaywrightException("Frame has been detached.");
             }
 
             CRExecutionContext context = await WaitForFrameExecutionContextAsync(parent).ConfigureAwait(false);
@@ -2261,13 +2262,13 @@ namespace PlaywrightNative.Chromium
 
             if (resolved == null || !resolved.Value.TryGetProperty("object", out JsonElement remote))
             {
-                throw new PlaywrightNativeException("Frame has been detached.");
+                throw new PlaywrightException("Frame has been detached.");
             }
 
             CRElementHandle handle = WrapElementHandle(context, remote);
             if (handle == null)
             {
-                throw new PlaywrightNativeException("Frame has been detached.");
+                throw new PlaywrightException("Frame has been detached.");
             }
 
             return new ChromiumElementHandle(handle);
@@ -2468,7 +2469,7 @@ namespace PlaywrightNative.Chromium
             {
                 if (ReferenceEquals(detached, frame))
                 {
-                    lifecycleTcs.TrySetException(new PlaywrightNativeException("frame was detached"));
+                    lifecycleTcs.TrySetException(new PlaywrightException("frame was detached"));
                 }
             }
 
@@ -2509,7 +2510,7 @@ namespace PlaywrightNative.Chromium
 
             void OnCrashed(object sender, EventArgs e)
             {
-                lifecycleTcs.TrySetException(new PlaywrightNativeException($"{apiName}: Page crashed"));
+                lifecycleTcs.TrySetException(new PlaywrightException($"{apiName}: Page crashed"));
             }
 
             // Subscribe before Page.navigate so about:blank -> about:blank cannot
@@ -2545,7 +2546,7 @@ namespace PlaywrightNative.Chromium
             {
                 if (frame.IsDetached)
                 {
-                    throw new PlaywrightNativeException("frame was detached");
+                    throw new PlaywrightException("frame was detached");
                 }
 
                 // Fast-path: lifecycle may have fired during navigate (sawTargetLifecycle)
@@ -2643,7 +2644,7 @@ namespace PlaywrightNative.Chromium
                         || host.Equals("settings", StringComparison.OrdinalIgnoreCase);
                 if (crashes)
                 {
-                    throw new PlaywrightNativeException(
+                    throw new PlaywrightException(
                         "Cannot navigate to \"" + url + "\": this page is not available in an isolated browser context, and opening it crashes the browser. Use browserType.launchPersistentContext() instead.");
                 }
             }
@@ -2791,7 +2792,7 @@ namespace PlaywrightNative.Chromium
                 IReadOnlyCollection<string> lifecycle = main.LifecycleEvents;
                 if (!lifecycle.Contains("DOMContentLoaded") && !lifecycle.Contains("load"))
                 {
-                    throw new PlaywrightNativeException("Cannot take a screenshot while page is navigating");
+                    throw new PlaywrightException("Cannot take a screenshot while page is navigating");
                 }
             }
 
@@ -2822,7 +2823,7 @@ namespace PlaywrightNative.Chromium
                         .ConfigureAwait(false);
                     if (!response.HasValue || !response.Value.TryGetProperty("data", out JsonElement data))
                     {
-                        throw new PlaywrightNativeException("Page.captureScreenshot returned no data.");
+                        throw new PlaywrightException("Page.captureScreenshot returned no data.");
                     }
 
                     string base64 = data.GetString();
@@ -2830,7 +2831,7 @@ namespace PlaywrightNative.Chromium
                 }
                 catch (Exception ex) when (
                     ex is TimeoutException
-                    || (ex is PlaywrightNativeException
+                    || (ex is PlaywrightException
                         && (ex.Message.Contains("Not attached to an active page", StringComparison.Ordinal)
                             || ex.Message.Contains("Cannot take screenshot with 0 width", StringComparison.Ordinal)
                             || ex.Message.Contains("Cannot take screenshot with 0 height", StringComparison.Ordinal)
@@ -2840,7 +2841,7 @@ namespace PlaywrightNative.Chromium
                 {
                     if (attempt >= 20)
                     {
-                        throw new PlaywrightNativeException(navigating);
+                        throw new PlaywrightException(navigating);
                     }
 
                     await Task.Delay(50).ConfigureAwait(false);
@@ -2958,7 +2959,7 @@ namespace PlaywrightNative.Chromium
 
             if (!response.HasValue || !response.Value.TryGetProperty("data", out JsonElement data))
             {
-                throw new PlaywrightNativeException("Page.printToPDF returned no data.");
+                throw new PlaywrightException("Page.printToPDF returned no data.");
             }
 
             string base64 = data.GetString();
@@ -3182,7 +3183,7 @@ namespace PlaywrightNative.Chromium
                     acceptLanguage,
                 }).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 // Older Chromium builds only expose Emulation.setUserAgentOverride.
             }
@@ -3276,11 +3277,11 @@ namespace PlaywrightNative.Chromium
             {
                 await _client.SendAsync("Emulation.setTimezoneOverride", new { timezoneId = _timezoneOverride }).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException ex) when (
+            catch (PlaywrightException ex) when (
                 ex.Message.Contains("timezone", StringComparison.OrdinalIgnoreCase)
                 || ex.Message.Contains("time zone", StringComparison.OrdinalIgnoreCase))
             {
-                throw new PlaywrightNativeException("Invalid timezone ID: " + timezoneId);
+                throw new PlaywrightException("Invalid timezone ID: " + timezoneId);
             }
 
             await SendToOopifSessionsAsync("Emulation.setTimezoneOverride", new { timezoneId = _timezoneOverride }).ConfigureAwait(false);
@@ -3637,7 +3638,7 @@ namespace PlaywrightNative.Chromium
             {
                 return await session.SendAsync("DOM.describeNode", new { objectId }).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 return null;
             }
@@ -3756,7 +3757,7 @@ namespace PlaywrightNative.Chromium
             {
                 await session.SendAsync(method, parameters).WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
             catch (TimeoutException)
@@ -3884,7 +3885,7 @@ namespace PlaywrightNative.Chromium
                     history = await _client.SendAsync("Page.getNavigationHistory").ConfigureAwait(false);
                     break;
                 }
-                catch (PlaywrightNativeException ex) when (
+                catch (PlaywrightException ex) when (
                     attempt < attempts - 1
                     && ex.Message != null
                     && ex.Message.Contains("Not attached to an active page", StringComparison.OrdinalIgnoreCase))
@@ -4093,7 +4094,7 @@ namespace PlaywrightNative.Chromium
                         "Target.setAutoAttach",
                         new { autoAttach = true, waitForDebuggerOnStart = true, flatten = true }).ConfigureAwait(false);
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                     // Nested-worker auto-attach is best-effort on older Chrome.
                 }
@@ -4112,7 +4113,7 @@ namespace PlaywrightNative.Chromium
                 WorkerCreated?.Invoke(this, worker);
                 await worker.ResumeDebuggerAsync().ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 // The worker may close before domains are enabled.
                 WorkerCreated?.Invoke(this, worker);
@@ -4983,7 +4984,7 @@ namespace PlaywrightNative.Chromium
 
                     await context.EvaluateAsync<object>(expression).WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
                 catch (TimeoutException)
@@ -5006,7 +5007,7 @@ namespace PlaywrightNative.Chromium
                     awaitPromise = false,
                 }).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 // Best-effort delivery — the execution context may have been destroyed
                 // by a navigation between the call and the response.
@@ -5144,7 +5145,7 @@ namespace PlaywrightNative.Chromium
             {
                 response = await _client.SendAsync("Page.getFrameTree").ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 return;
             }

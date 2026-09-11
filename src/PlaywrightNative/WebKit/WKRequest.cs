@@ -128,13 +128,13 @@ namespace PlaywrightNative.WebKit
             {
                 if (FrameUnavailable)
                 {
-                    throw new PlaywrightNativeException(
+                    throw new PlaywrightException(
                         "Frame for this navigation request is not available, because the request\nwas issued before the frame is created. You can check whether the request\nis a navigation request by calling isNavigationRequest() method.");
                 }
 
                 if (_frame != null && _frame.Page == null)
                 {
-                    throw new PlaywrightNativeException(
+                    throw new PlaywrightException(
                         "Frame for this navigation request is not available, because the request\nwas issued before the frame is created. You can check whether the request\nis a navigation request by calling isNavigationRequest() method.");
                 }
 
@@ -299,7 +299,7 @@ namespace PlaywrightNative.WebKit
             await WaitUntilFinishedAsync().ConfigureAwait(false);
             if (Response == null)
             {
-                throw new PlaywrightNativeException("Unable to fetch sizes for failed request");
+                throw new PlaywrightException("Unable to fetch sizes for failed request");
             }
 
             return RequestSizesCalculator.Compute(
@@ -614,9 +614,9 @@ namespace PlaywrightNative.WebKit
 
             public Task<string> FinishedAsync() => Task.FromResult<string>(null);
 
-            public Task<T> JsonAsync<T>() => throw new PlaywrightNativeException("Response has no body.");
+            public Task<T> JsonAsync<T>() => throw new PlaywrightException("Response has no body.");
 
-            public Task<JsonElement?> JsonAsync() => throw new PlaywrightNativeException("Response has no body.");
+            public Task<JsonElement?> JsonAsync() => throw new PlaywrightException("Response has no body.");
 
             public Task<string> TextAsync() => Task.FromResult(string.Empty);
 

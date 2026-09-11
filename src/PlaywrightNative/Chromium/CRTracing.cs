@@ -79,7 +79,7 @@ namespace PlaywrightNative.Chromium
             {
                 if (_recording)
                 {
-                    throw new PlaywrightNativeException("Tracing has already been started.");
+                    throw new PlaywrightException("Tracing has already been started.");
                 }
 
                 _recording = true;
@@ -122,7 +122,7 @@ namespace PlaywrightNative.Chromium
             {
                 if (!_recording)
                 {
-                    throw new PlaywrightNativeException("Tracing has not been started.");
+                    throw new PlaywrightException("Tracing has not been started.");
                 }
 
                 _events.Clear();
@@ -224,7 +224,7 @@ namespace PlaywrightNative.Chromium
             {
                 if (!_recording)
                 {
-                    throw new PlaywrightNativeException("Tracing has not been started.");
+                    throw new PlaywrightException("Tracing has not been started.");
                 }
 
                 snapshot = new List<JsonElement>(_events);
@@ -247,7 +247,7 @@ namespace PlaywrightNative.Chromium
             {
                 if (options?.Path != null)
                 {
-                    throw new PlaywrightNativeException("Must start tracing before stopping");
+                    throw new PlaywrightException("Must start tracing before stopping");
                 }
 
                 return;
@@ -299,7 +299,7 @@ namespace PlaywrightNative.Chromium
             {
                 if (!_recording)
                 {
-                    throw new PlaywrightNativeException("Tracing has not been started.");
+                    throw new PlaywrightException("Tracing has not been started.");
                 }
 
                 complete = _complete;
@@ -339,7 +339,7 @@ namespace PlaywrightNative.Chromium
                 return host.OfficialTrace;
             }
 
-            throw new PlaywrightNativeException("Tracing is not bound to a browser context.");
+            throw new PlaywrightException("Tracing is not bound to a browser context.");
         }
 
         private OfficialTraceSession OfficialSessionOrNull()

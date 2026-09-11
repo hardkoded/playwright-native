@@ -30,6 +30,7 @@ using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -101,7 +102,7 @@ namespace PlaywrightNative.Helpers
             SessionBag bag = GetOrCreateBag(context);
             if (bag.Tracing != null)
             {
-                throw new PlaywrightNativeException("HAR recording has already been started");
+                throw new PlaywrightException("HAR recording has already been started");
             }
 
             bag.Tracing = CreateSession(
@@ -142,7 +143,7 @@ namespace PlaywrightNative.Helpers
 
             if (ApiSessions.TryGetValue(api, out List<Session> existing) && existing.Count > 0)
             {
-                throw new PlaywrightNativeException("HAR recording has already been started");
+                throw new PlaywrightException("HAR recording has already been started");
             }
 
             Session session = CreateSession(
@@ -489,7 +490,7 @@ namespace PlaywrightNative.Helpers
                     return list;
                 }
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
 
@@ -512,7 +513,7 @@ namespace PlaywrightNative.Helpers
                     return list;
                 }
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
 
@@ -539,7 +540,7 @@ namespace PlaywrightNative.Helpers
             {
                 return default;
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 return default;
             }
@@ -1132,7 +1133,7 @@ namespace PlaywrightNative.Helpers
 
                 return Encoding.UTF8.GetBytes(text);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 return null;
             }
@@ -1165,7 +1166,7 @@ namespace PlaywrightNative.Helpers
             {
                 return request?.Frame?.Page;
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 return null;
             }
@@ -1320,7 +1321,7 @@ namespace PlaywrightNative.Helpers
             {
                 addr = await response.ServerAddrAsync().ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
 
@@ -1354,7 +1355,7 @@ namespace PlaywrightNative.Helpers
                 ResponseSecurityDetailsResult details = await response.SecurityDetailsAsync().ConfigureAwait(false);
                 entry["_securityDetails"] = SecurityNode(details);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 entry["_securityDetails"] = new JsonObject();
             }
@@ -1647,7 +1648,7 @@ namespace PlaywrightNative.Helpers
                     catch (TimeoutException)
                     {
                     }
-                    catch (PlaywrightNativeException)
+                    catch (PlaywrightException)
                     {
                     }
                 }
@@ -1680,7 +1681,7 @@ namespace PlaywrightNative.Helpers
                         catch (TimeoutException)
                         {
                         }
-                        catch (PlaywrightNativeException)
+                        catch (PlaywrightException)
                         {
                         }
                     }
@@ -1929,7 +1930,7 @@ namespace PlaywrightNative.Helpers
                 catch (TimeoutException)
                 {
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
             }
@@ -2238,7 +2239,7 @@ namespace PlaywrightNative.Helpers
                             response = latest;
                         }
                     }
-                    catch (PlaywrightNativeException)
+                    catch (PlaywrightException)
                     {
                     }
                 }
@@ -2260,7 +2261,7 @@ namespace PlaywrightNative.Helpers
                     {
                         httpVersion = await response.HttpVersionAsync().ConfigureAwait(false) ?? httpVersion;
                     }
-                    catch (PlaywrightNativeException)
+                    catch (PlaywrightException)
                     {
                     }
                 }
@@ -2274,7 +2275,7 @@ namespace PlaywrightNative.Helpers
                         // hanging chunked response cannot block context.CloseAsync.
                         sizes = await AwaitOrDefaultAsync(request.GetSizesAsync()).ConfigureAwait(false);
                     }
-                    catch (PlaywrightNativeException)
+                    catch (PlaywrightException)
                     {
                         sizes = null;
                     }
@@ -2333,7 +2334,7 @@ namespace PlaywrightNative.Helpers
                             catch (TimeoutException)
                             {
                             }
-                            catch (PlaywrightNativeException)
+                            catch (PlaywrightException)
                             {
                             }
                         }
@@ -2349,7 +2350,7 @@ namespace PlaywrightNative.Helpers
                         gzip = !string.IsNullOrEmpty(encoding)
                             && encoding.Contains("gzip", StringComparison.OrdinalIgnoreCase);
                     }
-                    catch (PlaywrightNativeException)
+                    catch (PlaywrightException)
                     {
                     }
                 }
@@ -2789,7 +2790,7 @@ namespace PlaywrightNative.Helpers
                             restrictToHtml = true;
                         }
                     }
-                    catch (PlaywrightNativeException)
+                    catch (PlaywrightException)
                     {
                     }
                 }
@@ -2846,7 +2847,7 @@ namespace PlaywrightNative.Helpers
                                     continue;
                                 }
                             }
-                            catch (PlaywrightNativeException)
+                            catch (PlaywrightException)
                             {
                             }
                         }
@@ -2866,7 +2867,7 @@ namespace PlaywrightNative.Helpers
                             return Encoding.UTF8.GetBytes(text);
                         }
                     }
-                    catch (PlaywrightNativeException)
+                    catch (PlaywrightException)
                     {
                     }
                 }
@@ -3026,7 +3027,7 @@ namespace PlaywrightNative.Helpers
                         ApplyTiming(result, "load", contentLoad: false);
                     }
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                     try
                     {
@@ -3036,7 +3037,7 @@ namespace PlaywrightNative.Helpers
                             Title = title;
                         }
                     }
-                    catch (PlaywrightNativeException)
+                    catch (PlaywrightException)
                     {
                     }
                 }
@@ -3108,7 +3109,7 @@ namespace PlaywrightNative.Helpers
                         }
                     }
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
             }

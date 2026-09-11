@@ -16,6 +16,7 @@
  */
 using System.Text.Json;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 
@@ -185,7 +186,7 @@ namespace PlaywrightNative.Tests
             await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
             await page.SetContentAsync("<div>Check me</div>").ConfigureAwait(false);
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(() => page.CheckAsync("div"));
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(() => page.CheckAsync("div"));
             Assert.That(error, Is.Not.Null);
             Assert.That(error.Message, Does.Contain("Not a checkbox or radio button"));
         }
@@ -199,7 +200,7 @@ namespace PlaywrightNative.Tests
             await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
             await page.SetContentAsync("<div role=button>Check me</div>").ConfigureAwait(false);
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(() => page.CheckAsync("div"));
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(() => page.CheckAsync("div"));
             Assert.That(error, Is.Not.Null);
             Assert.That(error.Message, Does.Contain("Not a checkbox or radio button"));
         }
@@ -299,7 +300,7 @@ namespace PlaywrightNative.Tests
             await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
             await page.SetContentAsync("<input type='radio' name='test' checked id='radio'>").ConfigureAwait(false);
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(() => page.UncheckAsync("#radio"));
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(() => page.UncheckAsync("#radio"));
             Assert.That(error, Is.Not.Null);
             Assert.That(error.Message, Does.Contain("Cannot uncheck radio button"));
         }

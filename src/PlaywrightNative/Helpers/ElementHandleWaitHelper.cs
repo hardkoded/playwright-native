@@ -85,7 +85,7 @@ namespace PlaywrightNative.Helpers
             {
                 return await handle.EvaluateAsync<bool>("el => !!(el && el.isConnected)").ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 return false;
             }

@@ -251,7 +251,7 @@ namespace PlaywrightNative.Helpers
                     frames[index++] = frame;
                 }
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 return;
             }
@@ -267,7 +267,7 @@ namespace PlaywrightNative.Helpers
                 {
                     await frame.EvaluateAsync(WebAuthnInjectScript.Source).ConfigureAwait(false);
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
             }

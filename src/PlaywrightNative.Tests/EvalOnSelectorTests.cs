@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 
@@ -67,7 +68,7 @@ namespace PlaywrightNative.Tests
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
             await page.SetContentAsync("<p>only</p>").ConfigureAwait(false);
 
-            PlaywrightNativeException ex = Assert.ThrowsAsync<PlaywrightNativeException>(
+            PlaywrightException ex = Assert.ThrowsAsync<PlaywrightException>(
                 () => page.EvalOnSelectorAsync<string>(".nope", "el => el.textContent"));
             Assert.That(ex.Message, Does.Contain("No node found for selector"));
         }

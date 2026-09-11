@@ -17,6 +17,7 @@
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -42,7 +43,7 @@ namespace PlaywrightNative.Helpers
             {
                 if (header.Value == null)
                 {
-                    throw new PlaywrightNativeException(
+                    throw new PlaywrightException(
                         "Expected value of header \"" + header.Key + "\" to be String, but \"object\" is found.");
                 }
 
@@ -74,7 +75,7 @@ namespace PlaywrightNative.Helpers
                     continue;
                 }
 
-                throw new PlaywrightNativeException(
+                throw new PlaywrightException(
                     "Expected value of header \"" + header.Key + "\" to be String, but \"" + JavaScriptTypeName(header.Value) + "\" is found.");
             }
 

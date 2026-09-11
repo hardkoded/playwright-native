@@ -18,6 +18,7 @@
 using System;
 using System.Text.Json;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using PlaywrightNative.Helpers;
 
 namespace PlaywrightNative.Chromium
@@ -61,7 +62,7 @@ namespace PlaywrightNative.Chromium
         /// <typeparam name="T">The type to deserialize the result value to.</typeparam>
         /// <param name="expression">The JavaScript expression to evaluate.</param>
         /// <returns>The deserialized result of the evaluation.</returns>
-        /// <exception cref="PlaywrightNativeException">
+        /// <exception cref="PlaywrightException">
         /// Thrown when the evaluation produces an exception in the browser context.
         /// </exception>
         internal async Task<T> EvaluateAsync<T>(string expression)
@@ -106,7 +107,7 @@ namespace PlaywrightNative.Chromium
         /// The <c>result</c> property from the CDP <c>Runtime.evaluate</c> response as a
         /// <see cref="JsonElement"/>, or <c>null</c> if no result was returned.
         /// </returns>
-        /// <exception cref="PlaywrightNativeException">
+        /// <exception cref="PlaywrightException">
         /// Thrown when the evaluation produces an exception in the browser context.
         /// </exception>
         internal async Task<JsonElement?> EvaluateAsync(string expression)
@@ -148,7 +149,7 @@ namespace PlaywrightNative.Chromium
         /// <c>type</c>, <c>subtype</c>, <c>value</c>, etc.), or <c>null</c> if no result
         /// was returned.
         /// </returns>
-        /// <exception cref="PlaywrightNativeException">
+        /// <exception cref="PlaywrightException">
         /// Thrown when the evaluation produces an exception in the browser context.
         /// </exception>
         internal async Task<JsonElement?> EvaluateHandleAsync(string expression)
@@ -186,7 +187,7 @@ namespace PlaywrightNative.Chromium
         /// <param name="functionDeclaration">A JavaScript function declaration (e.g. "(a, b) => a + b").</param>
         /// <param name="args">Arguments to pass to the function.</param>
         /// <returns>The deserialized result of the function call.</returns>
-        /// <exception cref="PlaywrightNativeException">
+        /// <exception cref="PlaywrightException">
         /// Thrown when the evaluation produces an exception in the browser context.
         /// </exception>
         internal async Task<T> EvaluateFunctionAsync<T>(string functionDeclaration, params object[] args)
@@ -307,7 +308,7 @@ namespace PlaywrightNative.Chromium
         /// <param name="functionDeclaration">The JavaScript function declaration (e.g. "node => node.focus()").</param>
         /// <param name="args">Additional arguments beyond the implicit <c>this</c>.</param>
         /// <returns>The deserialized result.</returns>
-        /// <exception cref="PlaywrightNativeException">When the evaluation throws in the browser.</exception>
+        /// <exception cref="PlaywrightException">When the evaluation throws in the browser.</exception>
         internal async Task<T> EvaluateFunctionOnHandleAsync<T>(string objectId, string functionDeclaration, params object[] args)
         {
             JsonElement? response = await _client.SendAsync("Runtime.callFunctionOn", new
@@ -349,7 +350,7 @@ namespace PlaywrightNative.Chromium
         /// <param name="functionDeclaration">The JavaScript function declaration.</param>
         /// <param name="args">Additional arguments beyond the implicit <c>this</c>.</param>
         /// <returns>The raw CDP <c>RemoteObject</c> as a <see cref="JsonElement"/>, or <c>null</c>.</returns>
-        /// <exception cref="PlaywrightNativeException">When the evaluation throws in the browser.</exception>
+        /// <exception cref="PlaywrightException">When the evaluation throws in the browser.</exception>
         internal async Task<JsonElement?> EvaluateFunctionOnHandleAsync(string objectId, string functionDeclaration, params object[] args)
         {
             JsonElement? response = await _client.SendAsync("Runtime.callFunctionOn", new
@@ -467,7 +468,7 @@ namespace PlaywrightNative.Chromium
             {
                 await _client.SendAsync("Runtime.releaseObject", new { objectId }).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 // Best-effort disposal — session closed or object already released.
             }
@@ -592,7 +593,7 @@ namespace PlaywrightNative.Chromium
                 message = text.GetString();
             }
 
-            throw new PlaywrightNativeException(EvaluateSerialization.RewriteError(message));
+            throw new PlaywrightException(EvaluateSerialization.RewriteError(message));
         }
 
         private async Task<object[]> PrepareCallArgumentsAsync(object[] args)
@@ -666,7 +667,7 @@ namespace PlaywrightNative.Chromium
 
             if (!isElement)
             {
-                throw new PlaywrightNativeException(DispatchEventScript.DifferentContextMessage);
+                throw new PlaywrightException(DispatchEventScript.DifferentContextMessage);
             }
 
             try
@@ -678,7 +679,7 @@ namespace PlaywrightNative.Chromium
                     || !node.TryGetProperty("backendNodeId", out JsonElement backendEl)
                     || !backendEl.TryGetInt32(out int backendNodeId))
                 {
-                    throw new PlaywrightNativeException(EvaluateWithArg.UnableToAdoptMessage);
+                    throw new PlaywrightException(EvaluateWithArg.UnableToAdoptMessage);
                 }
 
                 JsonElement? resolved = await _client.SendAsync("DOM.resolveNode", new
@@ -692,18 +693,18 @@ namespace PlaywrightNative.Chromium
                     || !remote.TryGetProperty("objectId", out JsonElement adoptedId)
                     || adoptedId.ValueKind != JsonValueKind.String)
                 {
-                    throw new PlaywrightNativeException(EvaluateWithArg.UnableToAdoptMessage);
+                    throw new PlaywrightException(EvaluateWithArg.UnableToAdoptMessage);
                 }
 
                 string adopted = adoptedId.GetString();
                 if (string.IsNullOrEmpty(adopted))
                 {
-                    throw new PlaywrightNativeException(EvaluateWithArg.UnableToAdoptMessage);
+                    throw new PlaywrightException(EvaluateWithArg.UnableToAdoptMessage);
                 }
 
                 return new { objectId = adopted };
             }
-            catch (PlaywrightNativeException ex)
+            catch (PlaywrightException ex)
             {
                 if (string.Equals(ex.Message, DispatchEventScript.DifferentContextMessage, StringComparison.Ordinal)
                     || string.Equals(ex.Message, EvaluateWithArg.UnableToAdoptMessage, StringComparison.Ordinal))
@@ -711,7 +712,7 @@ namespace PlaywrightNative.Chromium
                     throw;
                 }
 
-                throw new PlaywrightNativeException(EvaluateWithArg.UnableToAdoptMessage);
+                throw new PlaywrightException(EvaluateWithArg.UnableToAdoptMessage);
             }
         }
     }

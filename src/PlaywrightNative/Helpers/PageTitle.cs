@@ -16,6 +16,7 @@
  */
 using System;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -46,7 +47,7 @@ namespace PlaywrightNative.Helpers
                 {
                     return await evaluateAsync().ConfigureAwait(false) ?? string.Empty;
                 }
-                catch (PlaywrightNativeException) when (i < attempts - 1)
+                catch (PlaywrightException) when (i < attempts - 1)
                 {
                     await Task.Delay(25).ConfigureAwait(false);
                 }

@@ -342,7 +342,7 @@ namespace PlaywrightNative
                                 .ConfigureAwait(false);
                             ariaSnapshot = AriaSnapshotYaml.Format(snapshot) ?? string.Empty;
                         }
-                        catch (Exception ex) when (ex is PlaywrightNativeException || ex is TimeoutException)
+                        catch (Exception ex) when (ex is PlaywrightException || ex is TimeoutException)
                         {
                             ariaSnapshot = string.Empty;
                         }
@@ -454,7 +454,7 @@ namespace PlaywrightNative
                                 .ConfigureAwait(false);
                             ariaSnapshot = AriaSnapshotYaml.Format(snapshot) ?? string.Empty;
                         }
-                        catch (Exception ex) when (ex is PlaywrightNativeException || ex is TimeoutException)
+                        catch (Exception ex) when (ex is PlaywrightException || ex is TimeoutException)
                         {
                             ariaSnapshot = string.Empty;
                         }

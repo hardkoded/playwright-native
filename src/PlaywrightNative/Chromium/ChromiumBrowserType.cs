@@ -23,6 +23,7 @@ using System.Net.Http;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
+using Microsoft.Playwright;
 using PlaywrightNative.Helpers;
 using PlaywrightNative.Transport;
 using PlaywrightNative.Transport.Protocol;
@@ -128,7 +129,7 @@ namespace PlaywrightNative.Chromium
                     {
                         // Official _innerDefaultArgs: Playwright owns the
                         // debugging transport (pipe or websocket).
-                        throw new PlaywrightNativeException(
+                        throw new PlaywrightException(
                             "Playwright manages remote debugging connection itself.");
                     }
                 }
@@ -430,14 +431,14 @@ namespace PlaywrightNative.Chromium
             }
             catch (HttpRequestException ex)
             {
-                throw new PlaywrightNativeException(ex.Message, ex);
+                throw new PlaywrightException(ex.Message, ex);
             }
 
             using (response)
             {
                 if (!response.IsSuccessStatusCode)
                 {
-                    throw new PlaywrightNativeException(
+                    throw new PlaywrightException(
                         "Unexpected status " + ((int)response.StatusCode).ToString(System.Globalization.CultureInfo.InvariantCulture)
                         + " when connecting to " + httpURL + ".\n"
                         + "This does not look like a DevTools server, try connecting via ws://.");
@@ -449,7 +450,7 @@ namespace PlaywrightNative.Chromium
                     || wsEl.ValueKind != JsonValueKind.String
                     || string.IsNullOrEmpty(wsEl.GetString()))
                 {
-                    throw new PlaywrightNativeException("Invalid URL");
+                    throw new PlaywrightException("Invalid URL");
                 }
 
                 return wsEl.GetString();
@@ -460,7 +461,7 @@ namespace PlaywrightNative.Chromium
         {
             if (!Uri.TryCreate(endpointURL, UriKind.Absolute, out Uri uri))
             {
-                throw new PlaywrightNativeException("Invalid URL");
+                throw new PlaywrightException("Invalid URL");
             }
 
             string path = uri.AbsolutePath;

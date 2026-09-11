@@ -19,6 +19,7 @@ using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using PlaywrightNative.Helpers;
 using PlaywrightNative.Transport.Protocol;
 
@@ -211,7 +212,7 @@ namespace PlaywrightNative.WebKit
                 {
                     if (message.Error != null)
                     {
-                        tcs.TrySetException(new PlaywrightNativeException(message.Error.Message ?? "Unknown WebKit protocol error"));
+                        tcs.TrySetException(new PlaywrightException(message.Error.Message ?? "Unknown WebKit protocol error"));
                     }
                     else
                     {

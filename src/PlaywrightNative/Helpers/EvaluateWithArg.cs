@@ -16,6 +16,7 @@
  */
 using System;
 using System.Text.Json;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -65,7 +66,7 @@ namespace PlaywrightNative.Helpers
         {
             if (frame != null && frame.IsDetached)
             {
-                throw new PlaywrightNativeException(FrameDetachedMessage);
+                throw new PlaywrightException(FrameDetachedMessage);
             }
         }
 
@@ -88,7 +89,7 @@ namespace PlaywrightNative.Helpers
         {
             if (arg is IHasDisposedState disposable && disposable.IsDisposed)
             {
-                throw new PlaywrightNativeException(EvaluateSerialization.DisposedHandleMessage);
+                throw new PlaywrightException(EvaluateSerialization.DisposedHandleMessage);
             }
         }
 

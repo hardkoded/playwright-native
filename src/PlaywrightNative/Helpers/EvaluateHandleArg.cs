@@ -19,6 +19,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Text.Json;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -66,7 +67,7 @@ namespace PlaywrightNative.Helpers
             {
                 if (handle is IHasDisposedState disposable && disposable.IsDisposed)
                 {
-                    throw new PlaywrightNativeException(EvaluateSerialization.DisposedHandleMessage);
+                    throw new PlaywrightException(EvaluateSerialization.DisposedHandleMessage);
                 }
             }
 

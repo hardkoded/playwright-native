@@ -19,6 +19,7 @@ using System.Collections.Generic;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using PlaywrightNative.Compat;
 
 namespace PlaywrightNative.Helpers
@@ -56,7 +57,7 @@ namespace PlaywrightNative.Helpers
 
             if (string.IsNullOrEmpty(script))
             {
-                throw new PlaywrightNativeException(MissingOptionsMessage);
+                throw new PlaywrightException(MissingOptionsMessage);
             }
 
             arg = UnwrapInitScriptArg(arg);

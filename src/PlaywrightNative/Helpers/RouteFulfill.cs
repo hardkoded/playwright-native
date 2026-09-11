@@ -18,6 +18,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -185,7 +186,7 @@ namespace PlaywrightNative.Helpers
             }
             catch (Exception ex) when (ex is InvalidDataException || ex is IOException || ex is InvalidOperationException)
             {
-                throw new PlaywrightNativeException(
+                throw new PlaywrightException(
                     "failed to decompress '" + encoding.Trim() + "' encoding",
                     ex);
             }

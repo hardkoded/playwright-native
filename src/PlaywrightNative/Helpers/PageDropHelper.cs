@@ -18,6 +18,7 @@ using System;
 using System.Collections.Generic;
 using System.Text.Json;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -129,7 +130,7 @@ namespace PlaywrightNative.Helpers
 
             if (files.Count == 0 && data.Count == 0)
             {
-                throw new PlaywrightNativeException("At least one of \"files\" or \"data\" must be provided");
+                throw new PlaywrightException("At least one of \"files\" or \"data\" must be provided");
             }
 
             IElementHandle handle = await page.WaitForSelectorAsync(
@@ -139,7 +140,7 @@ namespace PlaywrightNative.Helpers
                 strict).ConfigureAwait(false);
             if (handle == null)
             {
-                throw new PlaywrightNativeException("Could not resolve drop selector '" + selector + "'");
+                throw new PlaywrightException("Could not resolve drop selector '" + selector + "'");
             }
 
             object spec = new

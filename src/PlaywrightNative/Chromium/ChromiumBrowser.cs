@@ -147,13 +147,13 @@ namespace PlaywrightNative.Chromium
         {
             if (_tracingRecording)
             {
-                throw new PlaywrightNativeException("Cannot start recording trace while already recording trace.");
+                throw new PlaywrightException("Cannot start recording trace while already recording trace.");
             }
 
             Page chromiumPage = page as Page;
             if (page != null && chromiumPage == null)
             {
-                throw new PlaywrightNativeException("startTracing requires a Chromium page.");
+                throw new PlaywrightException("startTracing requires a Chromium page.");
             }
 
             CRSession client = chromiumPage != null
@@ -183,7 +183,7 @@ namespace PlaywrightNative.Chromium
         {
             if (_tracingClient == null)
             {
-                throw new PlaywrightNativeException("Tracing was not started.");
+                throw new PlaywrightException("Tracing was not started.");
             }
 
             CRSession client = _tracingClient;
@@ -493,7 +493,7 @@ namespace PlaywrightNative.Chromium
             CRBrowserContext context = _crBrowser.DefaultContext;
             if (context == null)
             {
-                throw new PlaywrightNativeException("Browser was not launched as a persistent context.");
+                throw new PlaywrightException("Browser was not launched as a persistent context.");
             }
 
             return GetOrCreateContext(context);
@@ -533,7 +533,7 @@ namespace PlaywrightNative.Chromium
                     {
                         await session.SendAsync("IO.close", new { handle }).ConfigureAwait(false);
                     }
-                    catch (PlaywrightNativeException)
+                    catch (PlaywrightException)
                     {
                     }
 

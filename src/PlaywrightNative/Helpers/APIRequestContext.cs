@@ -101,7 +101,7 @@ namespace PlaywrightNative.Helpers
             if (!string.Equals(uri.Scheme, "http", StringComparison.OrdinalIgnoreCase)
                 && !string.Equals(uri.Scheme, "https", StringComparison.OrdinalIgnoreCase))
             {
-                throw new PlaywrightNativeException("Protocol \"" + uri.Scheme + ":\" not supported");
+                throw new PlaywrightException("Protocol \"" + uri.Scheme + ":\" not supported");
             }
 
             int bodyKinds = 0;
@@ -137,7 +137,7 @@ namespace PlaywrightNative.Helpers
 
             if (json is Delegate)
             {
-                throw new PlaywrightNativeException("Unexpected 'data' type given: " + json.GetType().Name);
+                throw new PlaywrightException("Unexpected 'data' type given: " + json.GetType().Name);
             }
 
             string payload = data;
@@ -184,7 +184,7 @@ namespace PlaywrightNative.Helpers
             int redirectLimit = maxRedirects ?? _standalone?.MaxRedirects ?? 20;
             if (redirectLimit < 0)
             {
-                throw new PlaywrightNativeException("'maxRedirects' must be greater than or equal to '0'");
+                throw new PlaywrightException("'maxRedirects' must be greater than or equal to '0'");
             }
 
             if (maxRetries < 0)
@@ -269,9 +269,9 @@ namespace PlaywrightNative.Helpers
                     {
                         body = RouteFulfill.DecodeEncodedBody(body, responseHeaders);
                     }
-                    catch (Exception ex) when (ex is not PlaywrightNativeException)
+                    catch (Exception ex) when (ex is not PlaywrightException)
                     {
-                        throw new PlaywrightNativeException(
+                        throw new PlaywrightException(
                             "failed to decompress '" + (HeaderMap.Value(responseHeaders, "content-encoding") ?? string.Empty).Trim() + "' encoding",
                             ex);
                     }
@@ -292,7 +292,7 @@ namespace PlaywrightNative.Helpers
                     {
                         string bodyText = Encoding.UTF8.GetString(body ?? Array.Empty<byte>());
                         await result.DisposeAsync().ConfigureAwait(false);
-                        throw new PlaywrightNativeException(
+                        throw new PlaywrightException(
                             result.Status + " " + result.StatusText + "\nResponse text:\n" + bodyText);
                     }
 
@@ -453,7 +453,7 @@ namespace PlaywrightNative.Helpers
 
             if (maxRedirects.HasValue && maxRedirects.Value < 0)
             {
-                throw new PlaywrightNativeException("'maxRedirects' must be greater than or equal to '0'");
+                throw new PlaywrightException("'maxRedirects' must be greater than or equal to '0'");
             }
 
             Dictionary<string, string> headers = null;
@@ -989,7 +989,7 @@ namespace PlaywrightNative.Helpers
                 string value = header.Value ?? string.Empty;
                 if (!IsAsciiHeader(header.Key) || !IsAsciiHeader(value))
                 {
-                    throw new PlaywrightNativeException("Invalid character in header content");
+                    throw new PlaywrightException("Invalid character in header content");
                 }
 
                 if (string.Equals(header.Key, "Content-Type", StringComparison.OrdinalIgnoreCase)
@@ -1473,7 +1473,7 @@ namespace PlaywrightNative.Helpers
             {
                 await context.AddCookiesAsync(cookies).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 // Official fetch: cookie values over 4096 characters are rejected;
                 // remaining Set-Cookie lines are applied one by one.
@@ -1483,7 +1483,7 @@ namespace PlaywrightNative.Helpers
                     {
                         await context.AddCookiesAsync(new[] { cookie }).ConfigureAwait(false);
                     }
-                    catch (PlaywrightNativeException)
+                    catch (PlaywrightException)
                     {
                     }
                 }
@@ -1822,20 +1822,20 @@ namespace PlaywrightNative.Helpers
                             throw DisposedException(inFlight: true);
                         }
 
-                        throw new PlaywrightNativeException(
+                        throw new PlaywrightException(
                             "apiRequestContext." + MethodLabel(verb) + ": Timeout " + timeoutMs + "ms exceeded",
                             ex);
                     }
                     catch (HttpRequestException ex) when (IsRedirectLimitExceeded(ex))
                     {
                         request.Dispose();
-                        throw new PlaywrightNativeException("Max redirect count exceeded", ex);
+                        throw new PlaywrightException("Max redirect count exceeded", ex);
                     }
                     catch (ResetAfterHeadersException ex) when (ex.MidBody)
                     {
                         // Upstream: response aborted after headers/body started → "aborted", no retry.
                         request.Dispose();
-                        throw new PlaywrightNativeException(
+                        throw new PlaywrightException(
                             "apiRequestContext." + MethodLabel(verb) + ": aborted",
                             ex);
                     }
@@ -1847,14 +1847,14 @@ namespace PlaywrightNative.Helpers
                         request.Dispose();
                         if (maxRetries == 0)
                         {
-                            throw new PlaywrightNativeException(
+                            throw new PlaywrightException(
                                 "apiRequestContext." + MethodLabel(verb) + ": socket hang up",
                                 ex);
                         }
 
                         if (attempt == maxRetries)
                         {
-                            throw new PlaywrightNativeException(
+                            throw new PlaywrightException(
                                 "APIRequest maxRetries exceeded: " + maxRetries + " " + url,
                                 ex);
                         }
@@ -1869,7 +1869,7 @@ namespace PlaywrightNative.Helpers
                     }
                 }
 
-                throw new PlaywrightNativeException("APIRequest maxRetries exceeded: " + maxRetries + " " + url);
+                throw new PlaywrightException("APIRequest maxRetries exceeded: " + maxRetries + " " + url);
             }
             finally
             {
@@ -2201,7 +2201,7 @@ namespace PlaywrightNative.Helpers
                     if (remaining == 0)
                     {
                         response.Dispose();
-                        throw new PlaywrightNativeException("Max redirect count exceeded");
+                        throw new PlaywrightException("Max redirect count exceeded");
                     }
 
                     timing.MarkResponseStart();
@@ -2546,22 +2546,22 @@ namespace PlaywrightNative.Helpers
             }
         }
 
-        private PlaywrightNativeException DisposedException(bool inFlight = false)
+        private PlaywrightException DisposedException(bool inFlight = false)
         {
             // Upstream: in-flight abort uses "Request context disposed.";
             // post-dispose calls use TargetClosedError default message when no
             // closeReason was set (browsercontext-fetch / global-fetch specs).
             if (!string.IsNullOrEmpty(_closeReason))
             {
-                return new PlaywrightNativeException(_closeReason);
+                return new PlaywrightException(_closeReason);
             }
 
             if (inFlight)
             {
-                return new PlaywrightNativeException("Request context disposed.");
+                return new PlaywrightException("Request context disposed.");
             }
 
-            return new PlaywrightNativeException(PlaywrightNative.DriverMessages.BrowserOrContextClosedExceptionMessage);
+            return new PlaywrightException(PlaywrightNative.DriverMessages.BrowserOrContextClosedExceptionMessage);
         }
 
         private void EnsureNotDisposed()
@@ -2611,7 +2611,7 @@ namespace PlaywrightNative.Helpers
                             return ua;
                         }
                     }
-                    catch (Exception ex) when (ex is PlaywrightNativeException || ClosedTarget.IsClosed(ex))
+                    catch (Exception ex) when (ex is PlaywrightException || ClosedTarget.IsClosed(ex))
                     {
                         // Page may be closing while we read the default User-Agent.
                     }

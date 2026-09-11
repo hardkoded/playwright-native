@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 
@@ -37,7 +38,7 @@ namespace PlaywrightNative.Tests
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
             await page.SetContentAsync("<span>span1</span><div><span>target</span></div>").ConfigureAwait(false);
 
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => page.TextContentAsync("span", new() { Strict = true }));
 
             Assert.That(error, Is.Not.Null);
@@ -56,7 +57,7 @@ namespace PlaywrightNative.Tests
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
             await page.SetContentAsync("<span>span1</span><div><span>target</span></div>").ConfigureAwait(false);
 
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => page.GetAttributeAsync("span", "id", new() { Strict = true }));
 
             Assert.That(error, Is.Not.Null);
@@ -73,7 +74,7 @@ namespace PlaywrightNative.Tests
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
             await page.SetContentAsync("<input></input><div><input></input></div>").ConfigureAwait(false);
 
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => page.FillAsync("input", "text", strict: true));
 
             Assert.That(error, Is.Not.Null);
@@ -92,7 +93,7 @@ namespace PlaywrightNative.Tests
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
             await page.SetContentAsync("<span>span1</span><div><span>target</span></div>").ConfigureAwait(false);
 
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => page.QuerySelectorAsync("span", new() { Strict = true }));
 
             Assert.That(error, Is.Not.Null);
@@ -109,7 +110,7 @@ namespace PlaywrightNative.Tests
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
             await page.SetContentAsync("<span>span1</span><div><span>target</span></div>").ConfigureAwait(false);
 
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => page.WaitForSelectorAsync("span", new() { Strict = true }));
 
             Assert.That(error, Is.Not.Null);
@@ -126,7 +127,7 @@ namespace PlaywrightNative.Tests
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
             await page.SetContentAsync("<span></span><div><span></span></div>").ConfigureAwait(false);
 
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => page.DispatchEventAsync("span", "click", new object(), strict: true));
 
             Assert.That(error, Is.Not.Null);
@@ -162,7 +163,7 @@ namespace PlaywrightNative.Tests
   </div>
   ").ConfigureAwait(false);
 
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => page.Locator(".foo").HoverAsync());
 
             Assert.That(error, Is.Not.Null);
@@ -194,7 +195,7 @@ namespace PlaywrightNative.Tests
   </div>
   ").ConfigureAwait(false);
 
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => page.Locator(".foo").HoverAsync());
 
             Assert.That(error, Is.Not.Null);
@@ -219,7 +220,7 @@ namespace PlaywrightNative.Tests
     </q:template>
   ").ConfigureAwait(false);
 
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => Assertions.Expect(page.GetByText("special test description")).ToBeVisibleAsync());
 
             Assert.That(error, Is.Not.Null);
@@ -238,7 +239,7 @@ namespace PlaywrightNative.Tests
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
             await page.SetContentAsync("<div>..loading</div><div>..loading</div>").ConfigureAwait(false);
 
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => page.Locator("text=..loading").HoverAsync());
 
             Assert.That(error, Is.Not.Null);

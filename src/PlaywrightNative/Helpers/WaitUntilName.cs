@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 using System;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -55,7 +56,7 @@ namespace PlaywrightNative.Helpers
                 return WaitUntilState.Commit;
             }
 
-            throw new PlaywrightNativeException("waitUntil: expected one of (load|domcontentloaded|networkidle|commit)");
+            throw new PlaywrightException("waitUntil: expected one of (load|domcontentloaded|networkidle|commit)");
         }
     }
 }

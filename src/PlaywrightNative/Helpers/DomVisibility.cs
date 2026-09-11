@@ -18,6 +18,7 @@ using System;
 using System.Collections.Generic;
 using System.Text;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -119,13 +120,13 @@ namespace PlaywrightNative.Helpers
 
             if (selector.Contains("##", StringComparison.Ordinal))
             {
-                throw new PlaywrightNativeException(
+                throw new PlaywrightException(
                     "Unexpected token \"#\" while parsing css selector \"" + selector + "\". Did you mean to CSS.escape it?");
             }
 
             if (selector.Contains(']') && !selector.Contains('['))
             {
-                throw new PlaywrightNativeException(
+                throw new PlaywrightException(
                     "Unexpected token \"]\" while parsing css selector \"" + selector + "\"");
             }
 
@@ -153,7 +154,7 @@ namespace PlaywrightNative.Helpers
                 {
                     if (capture)
                     {
-                        throw new PlaywrightNativeException(
+                        throw new PlaywrightException(
                             "Unknown engine \"\" while parsing selector " + selector);
                     }
 
@@ -171,7 +172,7 @@ namespace PlaywrightNative.Helpers
                     continue;
                 }
 
-                throw new PlaywrightNativeException(
+                throw new PlaywrightException(
                     "Unknown engine \"" + name + "\" while parsing selector " + selector);
             }
         }

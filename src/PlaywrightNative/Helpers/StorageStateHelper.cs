@@ -21,6 +21,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -121,7 +122,7 @@ namespace PlaywrightNative.Helpers
                 sourcePath = storageStatePath;
                 if (!System.IO.File.Exists(storageStatePath))
                 {
-                    throw new PlaywrightNativeException(
+                    throw new PlaywrightException(
                         "Error reading storage state from " + storageStatePath + ":\nENOENT");
                 }
 
@@ -131,7 +132,7 @@ namespace PlaywrightNative.Helpers
                 }
                 catch (Exception ex)
                 {
-                    throw new PlaywrightNativeException(
+                    throw new PlaywrightException(
                         "Error reading storage state from " + storageStatePath + ":\n" + ex.Message);
                 }
             }
@@ -152,7 +153,7 @@ namespace PlaywrightNative.Helpers
                     : OfficialJsonParseError(json);
                 if (!string.IsNullOrEmpty(sourcePath))
                 {
-                    throw new PlaywrightNativeException(
+                    throw new PlaywrightException(
                         "Error reading storage state from " + sourcePath + ":\n" + detail);
                 }
 
@@ -250,7 +251,7 @@ namespace PlaywrightNative.Helpers
                         state.Credentials ?? Array.Empty<VirtualCredential>()).ConfigureAwait(false);
                 }
             }
-            catch (Exception ex) when (ex is PlaywrightNativeException || ex is ArgumentException)
+            catch (Exception ex) when (ex is PlaywrightException || ex is ArgumentException)
             {
                 if (ex.Message.StartsWith("Error reading storage state", StringComparison.Ordinal)
                     || ex.Message.StartsWith("Error setting storage state", StringComparison.Ordinal))
@@ -258,7 +259,7 @@ namespace PlaywrightNative.Helpers
                     throw;
                 }
 
-                throw new PlaywrightNativeException("Error setting storage state:\n" + ex.Message);
+                throw new PlaywrightException("Error setting storage state:\n" + ex.Message);
             }
         }
 
@@ -443,7 +444,7 @@ namespace PlaywrightNative.Helpers
                                 continue;
                             }
                         }
-                        catch (Exception ex) when (ex is PlaywrightNativeException || ex is TimeoutException)
+                        catch (Exception ex) when (ex is PlaywrightException || ex is TimeoutException)
                         {
                             continue;
                         }
@@ -465,7 +466,7 @@ namespace PlaywrightNative.Helpers
 
                         originsToSave.Remove(origin);
                     }
-                    catch (Exception ex) when (ex is PlaywrightNativeException || ex is TimeoutException)
+                    catch (Exception ex) when (ex is PlaywrightException || ex is TimeoutException)
                     {
                     }
                 }
@@ -753,7 +754,7 @@ namespace PlaywrightNative.Helpers
                     await page.GoToAsync(url).ConfigureAwait(false);
                     return;
                 }
-                catch (Exception ex) when (ex is NavigationException || ex is PlaywrightNativeException)
+                catch (Exception ex) when (ex is NavigationException || ex is PlaywrightException)
                 {
                     last = ex;
                 }
@@ -761,11 +762,11 @@ namespace PlaywrightNative.Helpers
 
             if (last != null)
             {
-                throw new PlaywrightNativeException(
+                throw new PlaywrightException(
                     "Error setting storage state:\n" + last.Message + " " + origin.Origin);
             }
 
-            throw new PlaywrightNativeException("Error setting storage state:\n" + origin.Origin);
+            throw new PlaywrightException("Error setting storage state:\n" + origin.Origin);
         }
 
         private sealed class LoneSurrogateStringConverter : JsonConverter<string>

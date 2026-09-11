@@ -69,21 +69,21 @@ namespace PlaywrightNative
         /// <inheritdoc/>
 #pragma warning disable CA1065 // Official frameLocator().first() throws when any-frame.
         public IFrameLocator First => _anyFrame
-            ? throw new PlaywrightNativeException(NthNotAllowed)
+            ? throw new PlaywrightException(NthNotAllowed)
             : new FrameLocator(_iframe.First);
 #pragma warning restore CA1065
 
         /// <inheritdoc/>
 #pragma warning disable CA1065 // Official frameLocator().last() throws when any-frame.
         public IFrameLocator Last => _anyFrame
-            ? throw new PlaywrightNativeException(NthNotAllowed)
+            ? throw new PlaywrightException(NthNotAllowed)
             : new FrameLocator(_iframe.Last);
 #pragma warning restore CA1065
 
         /// <inheritdoc/>
         public IFrameLocator Nth(int index)
             => _anyFrame
-                ? throw new PlaywrightNativeException(NthNotAllowed)
+                ? throw new PlaywrightException(NthNotAllowed)
                 : new FrameLocator(_iframe.Nth(index));
 
         /// <inheritdoc/>
@@ -122,7 +122,7 @@ namespace PlaywrightNative
             {
                 if (!ReferenceEquals(inner.Frame, _frame))
                 {
-                    throw new PlaywrightNativeException("Locators must belong to the same frame.");
+                    throw new PlaywrightException("Locators must belong to the same frame.");
                 }
 
                 return inner.WithAnyFrame();
@@ -130,7 +130,7 @@ namespace PlaywrightNative
 
             if (!ReferenceEquals(inner.Frame(), _iframe.Frame()))
             {
-                throw new PlaywrightNativeException("Locators must belong to the same frame.");
+                throw new PlaywrightException("Locators must belong to the same frame.");
             }
 
             return RequireLocator(_iframe).EnterThenLocator(inner);

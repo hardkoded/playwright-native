@@ -160,7 +160,7 @@ namespace PlaywrightNative
                 }).ConfigureAwait(false);
             if (handle == null)
             {
-                throw new PlaywrightNativeException($"Failed to find element matching selector \"{selector}\"");
+                throw new PlaywrightException($"Failed to find element matching selector \"{selector}\"");
             }
 
             if (scroll != ActionScroll.None)
@@ -188,7 +188,7 @@ namespace PlaywrightNative
 
             _ = timeout;
             IElementHandle root = await page.QuerySelectorAsync("html").ConfigureAwait(false)
-                ?? throw new PlaywrightNativeException("page.ariaSnapshotJSON: no documentElement.");
+                ?? throw new PlaywrightException("page.ariaSnapshotJSON: no documentElement.");
             return await root.AriaSnapshotJsonAsync(mode, depth, boxes).ConfigureAwait(false);
         }
 

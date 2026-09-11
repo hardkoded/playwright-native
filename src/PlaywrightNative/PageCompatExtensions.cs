@@ -938,7 +938,7 @@ namespace PlaywrightNative
                 return RemoveAllListenersBehavior.Default;
             }
 
-            throw new PlaywrightNativeException($"Unknown removeAllListeners behavior: {behavior}");
+            throw new PlaywrightException($"Unknown removeAllListeners behavior: {behavior}");
         }
 
         private static float? ParsePollingInterval(object polling)
@@ -961,7 +961,7 @@ namespace PlaywrightNative
                 }
 
                 WaitForFunctionHelper.ValidatePollingOption(pollingText);
-                throw new PlaywrightNativeException($"Unknown polling value: {pollingText}");
+                throw new PlaywrightException($"Unknown polling value: {pollingText}");
             }
 
             if (polling is float floatValue)
@@ -979,7 +979,7 @@ namespace PlaywrightNative
                 return intValue;
             }
 
-            throw new PlaywrightNativeException($"Unknown polling value: {polling}");
+            throw new PlaywrightException($"Unknown polling value: {polling}");
         }
     }
 }

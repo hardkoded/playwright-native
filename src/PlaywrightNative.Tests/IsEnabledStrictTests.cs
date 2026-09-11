@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 
@@ -36,7 +37,7 @@ namespace PlaywrightNative.Tests
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
             await page.SetContentAsync("<button>one</button><button>two</button>").ConfigureAwait(false);
 
-            PlaywrightNativeException ex = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException ex = Assert.CatchAsync<PlaywrightException>(
                 () => page.IsEnabledAsync("button", new() { Strict = true }));
 
             Assert.That(ex, Is.Not.Null);
@@ -96,7 +97,7 @@ namespace PlaywrightNative.Tests
             Assert.That(frame, Is.Not.Null);
             await frame.SetContentAsync("<button>one</button><button>two</button>").ConfigureAwait(false);
 
-            PlaywrightNativeException ex = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException ex = Assert.CatchAsync<PlaywrightException>(
                 () => frame.IsEnabledAsync("button", new() { Strict = true }));
 
             Assert.That(ex, Is.Not.Null);

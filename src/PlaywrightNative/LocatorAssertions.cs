@@ -130,14 +130,14 @@ namespace PlaywrightNative
                     queryTimedOut = true;
                     all = Array.Empty<IElementHandle>();
                 }
-                catch (PlaywrightNativeException ex) when (IsSelectorSyntaxError(ex))
+                catch (PlaywrightException ex) when (IsSelectorSyntaxError(ex))
                 {
                     throw FormatVisibleSelectorError(ex);
                 }
 
                 if (all.Count > 1)
                 {
-                    throw new PlaywrightNativeException(
+                    throw new PlaywrightException(
                         await StrictModeViolation.FormatAsync(_locator.ToString(), all).ConfigureAwait(false));
                 }
 
@@ -149,7 +149,7 @@ namespace PlaywrightNative
                     {
                         preview = await all[0].EvaluateAsync<string>(ElementPreviewFunction).ConfigureAwait(false);
                     }
-                    catch (PlaywrightNativeException)
+                    catch (PlaywrightException)
                     {
                         preview = "element";
                     }
@@ -158,7 +158,7 @@ namespace PlaywrightNative
                     {
                         isVisible = await all[0].IsVisibleAsync().ConfigureAwait(false);
                     }
-                    catch (PlaywrightNativeException)
+                    catch (PlaywrightException)
                     {
                         isVisible = false;
                     }
@@ -229,7 +229,7 @@ namespace PlaywrightNative
 
                 if (all.Count > 1)
                 {
-                    throw new PlaywrightNativeException(
+                    throw new PlaywrightException(
                         await StrictModeViolation.FormatAsync(_locator.ToString(), all).ConfigureAwait(false));
                 }
 
@@ -242,7 +242,7 @@ namespace PlaywrightNative
                         preview = await all[0].EvaluateAsync<string>(ElementStateScript.PreviewNodeFunction)
                             .ConfigureAwait(false);
                     }
-                    catch (PlaywrightNativeException)
+                    catch (PlaywrightException)
                     {
                         preview = "element";
                     }
@@ -251,7 +251,7 @@ namespace PlaywrightNative
                     {
                         isHidden = await all[0].IsHiddenAsync().ConfigureAwait(false);
                     }
-                    catch (PlaywrightNativeException)
+                    catch (PlaywrightException)
                     {
                         isHidden = true;
                     }
@@ -331,7 +331,7 @@ namespace PlaywrightNative
 
                 if (all.Count > 1)
                 {
-                    throw new PlaywrightNativeException(
+                    throw new PlaywrightException(
                         await StrictModeViolation.FormatAsync(_locator.ToString(), all).ConfigureAwait(false));
                 }
 
@@ -344,7 +344,7 @@ namespace PlaywrightNative
                         preview = await all[0].EvaluateAsync<string>(ElementStateScript.PreviewNodeFunction)
                             .ConfigureAwait(false);
                     }
-                    catch (PlaywrightNativeException)
+                    catch (PlaywrightException)
                     {
                         preview = "element";
                     }
@@ -448,7 +448,7 @@ namespace PlaywrightNative
 
                 if (all.Count > 1)
                 {
-                    throw new PlaywrightNativeException(
+                    throw new PlaywrightException(
                         await StrictModeViolation.FormatAsync(_locator.ToString(), all).ConfigureAwait(false));
                 }
 
@@ -461,7 +461,7 @@ namespace PlaywrightNative
                         preview = await all[0].EvaluateAsync<string>(ElementStateScript.PreviewNodeFunction)
                             .ConfigureAwait(false);
                     }
-                    catch (PlaywrightNativeException)
+                    catch (PlaywrightException)
                     {
                         preview = "element";
                     }
@@ -470,7 +470,7 @@ namespace PlaywrightNative
                     {
                         isEnabled = await all[0].IsEnabledAsync().ConfigureAwait(false);
                     }
-                    catch (PlaywrightNativeException)
+                    catch (PlaywrightException)
                     {
                         isEnabled = false;
                     }
@@ -576,7 +576,7 @@ namespace PlaywrightNative
                         preview = await handle.EvaluateAsync<string>(ElementStateScript.PreviewNodeFunction)
                             .ConfigureAwait(false);
                     }
-                    catch (PlaywrightNativeException)
+                    catch (PlaywrightException)
                     {
                         preview = "element";
                     }
@@ -589,7 +589,7 @@ namespace PlaywrightNative
                             .EvaluateAsync<bool>(ElementStateScript.MatchesCheckedStateFunction, spec)
                             .ConfigureAwait(false);
                     }
-                    catch (PlaywrightNativeException)
+                    catch (PlaywrightException)
                     {
                         lastMatched = false;
                     }
@@ -622,7 +622,7 @@ namespace PlaywrightNative
 
                     if (all.Count > 1)
                     {
-                        throw new PlaywrightNativeException(
+                        throw new PlaywrightException(
                             await StrictModeViolation.FormatAsync(_locator.ToString(), all).ConfigureAwait(false));
                     }
 
@@ -660,7 +660,7 @@ namespace PlaywrightNative
                             catch (TimeoutException)
                             {
                             }
-                            catch (PlaywrightNativeException)
+                            catch (PlaywrightException)
                             {
                             }
                         }
@@ -1815,7 +1815,7 @@ namespace PlaywrightNative
                     {
                         visible = await all[0].IsVisibleAsync().ConfigureAwait(false);
                     }
-                    catch (PlaywrightNativeException)
+                    catch (PlaywrightException)
                     {
                     }
                 }
@@ -1855,13 +1855,13 @@ namespace PlaywrightNative
 
                 return yaml;
             }
-            catch (Exception ex) when (ex is PlaywrightNativeException || ex is TimeoutException)
+            catch (Exception ex) when (ex is PlaywrightException || ex is TimeoutException)
             {
                 try
                 {
                     return await CapturePageExpectAriaSnapshotAsync().ConfigureAwait(false);
                 }
-                catch (Exception fallback) when (fallback is PlaywrightNativeException || fallback is TimeoutException)
+                catch (Exception fallback) when (fallback is PlaywrightException || fallback is TimeoutException)
                 {
                     // Prefer empty over null so matcherResult.ariaSnapshot stays populated.
                     return string.Empty;
@@ -2133,7 +2133,7 @@ namespace PlaywrightNative
 
                 if (all.Count > 1)
                 {
-                    throw new PlaywrightNativeException(
+                    throw new PlaywrightException(
                         await StrictModeViolation.FormatAsync(_locator.ToString(), all).ConfigureAwait(false));
                 }
 
@@ -2219,7 +2219,7 @@ namespace PlaywrightNative
 
                 if (all.Count > 1)
                 {
-                    throw new PlaywrightNativeException(
+                    throw new PlaywrightException(
                         await StrictModeViolation.FormatAsync(_locator.ToString(), all).ConfigureAwait(false));
                 }
 
@@ -2384,7 +2384,7 @@ namespace PlaywrightNative
                             break;
                         }
                     }
-                    catch (PlaywrightNativeException)
+                    catch (PlaywrightException)
                     {
                     }
 
@@ -2439,7 +2439,7 @@ namespace PlaywrightNative
                             ariaSnapshot: null);
                     }
 
-                    throw new PlaywrightNativeException(header + "\n" + ex.Message, ex);
+                    throw new PlaywrightException(header + "\n" + ex.Message, ex);
                 }
 
                 if (single && all.Count > 1)
@@ -2447,7 +2447,7 @@ namespace PlaywrightNative
                     string strict = await StrictModeViolation.FormatAsync(_locator.ToString(), all)
                         .ConfigureAwait(false);
                     ExpectTextNeedle needle = needles.Length > 0 ? needles[0] : new ExpectTextNeedle(string.Empty);
-                    throw new PlaywrightNativeException(
+                    throw new PlaywrightException(
                         header +
                         "\n\nLocator: " +
                         _locator +
@@ -2470,7 +2470,7 @@ namespace PlaywrightNative
                         {
                             received[i] = await ReadTextAsync(all[i], useInnerText).ConfigureAwait(false);
                         }
-                        catch (PlaywrightNativeException)
+                        catch (PlaywrightException)
                         {
                             readFailed = true;
                             break;
@@ -2488,7 +2488,7 @@ namespace PlaywrightNative
                                 lastPreview = await all[0].EvaluateAsync<string>(ElementPreviewFunction)
                                     .ConfigureAwait(false);
                             }
-                            catch (PlaywrightNativeException)
+                            catch (PlaywrightException)
                             {
                             }
                         }
@@ -2519,7 +2519,7 @@ namespace PlaywrightNative
                             ariaSnapshot: null);
                     }
 
-                    throw new PlaywrightNativeException(header + "\n" + ex.Message, ex);
+                    throw new PlaywrightException(header + "\n" + ex.Message, ex);
                 }
 
                 bool matched;
@@ -2813,8 +2813,8 @@ namespace PlaywrightNative
             {
                 throw;
             }
-            catch (PlaywrightNativeException ex) when (
-                PlaywrightNativeException.IsDestroyedContext(ex)
+            catch (PlaywrightException ex) when (
+                PlaywrightNative.Helpers.DestroyedContext.IsDestroyedContext(ex)
                 || DomVisibility.IsTransientVisibilityError(ex))
             {
                 return Array.Empty<IElementHandle>();
@@ -2826,7 +2826,7 @@ namespace PlaywrightNative
             IReadOnlyList<IElementHandle> all = await ElementHandlesOrEmptyAsync().ConfigureAwait(false);
             if (all.Count > 1)
             {
-                throw new PlaywrightNativeException(
+                throw new PlaywrightException(
                     await StrictModeViolation.FormatAsync(_locator.ToString(), all).ConfigureAwait(false));
             }
 
@@ -2877,7 +2877,7 @@ namespace PlaywrightNative
                 return check(snapshot);
             });
 
-        private PlaywrightNativeException FormatVisibleSelectorError(Exception ex)
+        private PlaywrightException FormatVisibleSelectorError(Exception ex)
         {
             string locator = _locator.ToString();
             string raw = locator;
@@ -2889,7 +2889,7 @@ namespace PlaywrightNative
             string header = _negate
                 ? "expect(locator).not.toBeVisible() failed"
                 : "expect(locator).toBeVisible() failed";
-            return new PlaywrightNativeException(
+            return new PlaywrightException(
                 header +
                 "\n\nLocator: " +
                 raw +

@@ -71,15 +71,15 @@ namespace PlaywrightNative.Firefox
 
         /// <inheritdoc/>
         public Task<ICDPSession> NewBrowserCDPSessionAsync()
-            => throw new PlaywrightNativeException("CDP sessions are only supported in Chromium.");
+            => throw new PlaywrightException("CDP sessions are only supported in Chromium.");
 
         /// <inheritdoc/>
         public Task StartTracingAsync(IPage page = default, string path = default, bool screenshots = default, IEnumerable<string> categories = default)
-            => throw new PlaywrightNativeException("startTracing is only supported in Chromium.");
+            => throw new PlaywrightException("startTracing is only supported in Chromium.");
 
         /// <inheritdoc/>
         public Task<byte[]> StopTracingAsync()
-            => throw new PlaywrightNativeException("stopTracing is only supported in Chromium.");
+            => throw new PlaywrightException("stopTracing is only supported in Chromium.");
 
         /// <inheritdoc/>
         public Task<IBrowserContext> NewContextAsync(BrowserContextOptions options)
@@ -237,7 +237,7 @@ namespace PlaywrightNative.Firefox
             FFBrowserContext context = _browser.DefaultContext;
             if (context == null)
             {
-                throw new PlaywrightNativeException("Browser was not launched as a persistent context.");
+                throw new PlaywrightException("Browser was not launched as a persistent context.");
             }
 
             return new FirefoxBrowserContext(context, this);

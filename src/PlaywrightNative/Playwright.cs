@@ -10,6 +10,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using PlaywrightNative.Helpers;
 
 namespace PlaywrightNative
@@ -622,7 +623,7 @@ namespace PlaywrightNative
             {
                 if (!string.IsNullOrEmpty(arg) && !arg.StartsWith('-'))
                 {
-                    throw new PlaywrightNativeException("Arguments can not specify page to be opened");
+                    throw new PlaywrightException("Arguments can not specify page to be opened");
                 }
             }
         }
@@ -712,7 +713,7 @@ namespace PlaywrightNative
             {
                 if (browser != SupportedBrowser.Chromium)
                 {
-                    throw new PlaywrightNativeException("Browser channel is only supported when launching Chromium.");
+                    throw new PlaywrightException("Browser channel is only supported when launching Chromium.");
                 }
 
                 return BrowserChannelResolver.Resolve(options.Channel);

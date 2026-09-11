@@ -20,6 +20,7 @@ using System.Globalization;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using PlaywrightNative.Helpers;
 
 namespace PlaywrightNative.Chromium
@@ -149,7 +150,7 @@ namespace PlaywrightNative.Chromium
             {
                 await _session.SendAsync("Fetch.continueRequest", parameters).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException ex) when (IsCancelledInterception(ex))
+            catch (PlaywrightException ex) when (IsCancelledInterception(ex))
             {
                 // Official: continue after the page cancelled the request must not throw.
             }
@@ -232,7 +233,7 @@ namespace PlaywrightNative.Chromium
             {
                 await _session.SendAsync("Fetch.fulfillRequest", parameters).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException ex) when (IsCancelledInterception(ex))
+            catch (PlaywrightException ex) when (IsCancelledInterception(ex))
             {
                 // Official: fulfill after the page cancelled the request must not throw.
             }
@@ -256,7 +257,7 @@ namespace PlaywrightNative.Chromium
         {
             if (_handled)
             {
-                throw new PlaywrightNativeException("Route is already handled!");
+                throw new PlaywrightException("Route is already handled!");
             }
 
             byte[] body = postDataBytes ?? (postData == null ? null : Encoding.UTF8.GetBytes(postData));
@@ -311,7 +312,7 @@ namespace PlaywrightNative.Chromium
                     errorReason = FetchErrorReason.ToProtocol(errorReason),
                 }).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException ex) when (IsCancelledInterception(ex))
+            catch (PlaywrightException ex) when (IsCancelledInterception(ex))
             {
                 // Official: abort after the page cancelled the request must not throw.
             }
@@ -329,7 +330,7 @@ namespace PlaywrightNative.Chromium
         {
             if (_handled)
             {
-                throw new PlaywrightNativeException("Route is already handled!");
+                throw new PlaywrightException("Route is already handled!");
             }
 
             _handled = true;

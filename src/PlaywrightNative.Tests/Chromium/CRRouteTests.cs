@@ -19,6 +19,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.Chromium;
 using PlaywrightNative.NUnit;
@@ -158,7 +159,7 @@ namespace PlaywrightNative.Tests.Chromium
             {
                 navigationFailed = true;
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 navigationFailed = true;
             }

@@ -22,6 +22,7 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
+using Microsoft.Playwright;
 using PlaywrightNative.Helpers;
 using PlaywrightNative.Transport;
 
@@ -372,7 +373,7 @@ namespace PlaywrightNative.Chromium
 
             if (string.IsNullOrEmpty(browserContextId))
             {
-                throw new PlaywrightNativeException("Target.createBrowserContext did not return a browserContextId.");
+                throw new PlaywrightException("Target.createBrowserContext did not return a browserContextId.");
             }
 
             CRBrowserContext context = new(this, browserContextId);
@@ -578,7 +579,7 @@ namespace PlaywrightNative.Chromium
 
             if (string.IsNullOrEmpty(sessionId))
             {
-                throw new PlaywrightNativeException($"{method} did not return a sessionId.");
+                throw new PlaywrightException($"{method} did not return a sessionId.");
             }
 
             if (_connection.Sessions.TryGetValue(sessionId, out CRSession existing))
@@ -1051,7 +1052,7 @@ namespace PlaywrightNative.Chromium
             {
                 response = await _connection.RootSession.SendAsync("Target.getBrowserContexts").ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 return;
             }
@@ -1164,7 +1165,7 @@ namespace PlaywrightNative.Chromium
                 catch (TimeoutException)
                 {
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
             }
@@ -1196,7 +1197,7 @@ namespace PlaywrightNative.Chromium
             {
                 response = await _connection.RootSession.SendAsync("Target.getTargets").ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 return false;
             }

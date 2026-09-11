@@ -20,6 +20,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -81,7 +82,7 @@ namespace PlaywrightNative.Helpers
             {
                 if (isDetached != null && isDetached())
                 {
-                    throw new PlaywrightNativeException(apiName + ": Frame was detached");
+                    throw new PlaywrightException(apiName + ": Frame was detached");
                 }
 
                 if (isScopeConnectedAsync != null)
@@ -94,7 +95,7 @@ namespace PlaywrightNative.Helpers
                             return null;
                         }
 
-                        throw new PlaywrightNativeException(
+                        throw new PlaywrightException(
                             ClickAction.NotAttachedMessage +
                             Environment.NewLine +
                             WaitingLog(selector, wanted));
@@ -115,15 +116,15 @@ namespace PlaywrightNative.Helpers
                         visible = await handle.IsVisibleAsync().ConfigureAwait(false);
                     }
                 }
-                catch (PlaywrightNativeException ex) when (IsFrameDetachedError(ex) || (isDetached != null && isDetached()))
+                catch (PlaywrightException ex) when (IsFrameDetachedError(ex) || (isDetached != null && isDetached()))
                 {
-                    throw new PlaywrightNativeException(apiName + ": Frame was detached", ex);
+                    throw new PlaywrightException(apiName + ": Frame was detached", ex);
                 }
-                catch (PlaywrightNativeException ex) when (PlaywrightNativeException.IsDestroyedContext(ex) || IsMissingInjectedScript(ex))
+                catch (PlaywrightException ex) when (PlaywrightNative.Helpers.DestroyedContext.IsDestroyedContext(ex) || IsMissingInjectedScript(ex))
                 {
                     if (isDetached != null && isDetached())
                     {
-                        throw new PlaywrightNativeException(apiName + ": Frame was detached", ex);
+                        throw new PlaywrightException(apiName + ": Frame was detached", ex);
                     }
 
                     if (handle != null)
@@ -132,7 +133,7 @@ namespace PlaywrightNative.Helpers
                         {
                             await handle.DisposeAsync().ConfigureAwait(false);
                         }
-                        catch (PlaywrightNativeException)
+                        catch (PlaywrightException)
                         {
                         }
 
@@ -236,7 +237,7 @@ namespace PlaywrightNative.Helpers
                     preview = value;
                 }
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
 

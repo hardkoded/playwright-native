@@ -19,6 +19,7 @@ using System.Collections.Generic;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -355,7 +356,7 @@ namespace PlaywrightNative.Helpers
 
                 if (abortOnPageCrash && abortOnPageClose != null)
                 {
-                    crashHandler = (_, _) => tcs.TrySetException(new PlaywrightNativeException("Page crashed"));
+                    crashHandler = (_, _) => tcs.TrySetException(new PlaywrightException("Page crashed"));
                     abortOnPageClose.Crash += crashHandler;
                 }
 

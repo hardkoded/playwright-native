@@ -22,6 +22,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using PlaywrightNative.Helpers;
 
 namespace PlaywrightNative.WebKit
@@ -1445,7 +1446,7 @@ namespace PlaywrightNative.WebKit
                         {
                             await route.AbortAsync().ConfigureAwait(false);
                         }
-                        catch (PlaywrightNativeException)
+                        catch (PlaywrightException)
                         {
                         }
                     }

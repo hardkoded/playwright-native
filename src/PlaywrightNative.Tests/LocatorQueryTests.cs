@@ -17,6 +17,7 @@
 using System;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 
@@ -82,7 +83,7 @@ namespace PlaywrightNative.Tests
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
             await page.SetContentAsync("<section><div><p>A</p></div></section>").ConfigureAwait(false);
 
-            PlaywrightNativeException ex = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException ex = Assert.CatchAsync<PlaywrightException>(
                 () => page.Locator("*css=div >> p").Nth(1).ClickAsync());
 
             Assert.That(ex, Is.Not.Null);
@@ -99,7 +100,7 @@ namespace PlaywrightNative.Tests
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
             await page.SetContentAsync("<div>A</div><div>B</div>").ConfigureAwait(false);
 
-            PlaywrightNativeException ex = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException ex = Assert.CatchAsync<PlaywrightException>(
                 () => page.Locator("div").IsVisibleAsync());
 
             Assert.That(ex, Is.Not.Null);
@@ -116,7 +117,7 @@ namespace PlaywrightNative.Tests
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
             await page.SetContentAsync("<select><option>One</option><option>Two</option></select>").ConfigureAwait(false);
 
-            PlaywrightNativeException ex = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException ex = Assert.CatchAsync<PlaywrightException>(
                 () => page.Locator("option").EvaluateAsync<object>("e => {}"));
 
             Assert.That(ex, Is.Not.Null);
@@ -413,14 +414,14 @@ namespace PlaywrightNative.Tests
             await Assertions.Expect(page.FrameLocator("iframe").Locator("article").Or(page.FrameLocator("iframe").Locator("span"))).ToHaveTextAsync("world").ConfigureAwait(false);
             await Assertions.Expect(page.FrameLocator("iframe").Locator("span").And(page.FrameLocator("iframe").Locator("#target"))).ToHaveTextAsync("world").ConfigureAwait(false);
 
-            PlaywrightNativeException error1 = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error1 = Assert.CatchAsync<PlaywrightException>(
                 () => Assertions.Expect(page.FrameLocator("iframe").Locator("div").Or(page.FrameLocator("#iframe").Locator("span"))).ToHaveTextAsync("world"));
             Assert.That(error1, Is.Not.Null);
             Assert.That(
                 error1.Message,
                 Does.Contain("Frame locators are not allowed inside composite locators, while querying \"locator('iframe').contentFrame().locator('div').or(locator('#iframe').contentFrame().locator('span'))"));
 
-            PlaywrightNativeException error2 = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error2 = Assert.CatchAsync<PlaywrightException>(
                 () => Assertions.Expect(page.FrameLocator("iframe").Locator("div").And(page.FrameLocator("#iframe").Locator("span"))).ToHaveTextAsync("world"));
             Assert.That(error2, Is.Not.Null);
             Assert.That(
@@ -442,7 +443,7 @@ namespace PlaywrightNative.Tests
             await Assertions.Expect(page.FrameLocator("#f").Locator("body").Locator(inner)).ToHaveAttributeAsync("id", "target").ConfigureAwait(false);
 
             ILocator captureFrame = page.Locator("*css=#f").ContentFrame.Locator("span");
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => page.FrameLocator("#f").Locator("body").Locator(captureFrame).CountAsync());
             Assert.That(error, Is.Not.Null);
             Assert.That(error.Message, Does.Contain("Can not capture the selector before diving into the frame"));
@@ -470,7 +471,7 @@ namespace PlaywrightNative.Tests
 
             Assert.That(child, Is.Not.Null);
 
-            PlaywrightNativeException error = Assert.Throws<PlaywrightNativeException>(
+            PlaywrightException error = Assert.Throws<PlaywrightException>(
                 () => page.Locator("div", new() { Has = child.Locator("span") }));
 
             Assert.That(error.Message, Does.Contain("Inner \"has\" locator must belong to the same frame."));

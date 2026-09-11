@@ -51,7 +51,7 @@ namespace PlaywrightNative.WebKit
             {
                 if (_started)
                 {
-                    throw new PlaywrightNativeException("Screencast is already started");
+                    throw new PlaywrightException("Screencast is already started");
                 }
 
                 _started = true;
@@ -86,7 +86,7 @@ namespace PlaywrightNative.WebKit
 
                 _ownsProtocol = true;
             }
-            catch (PlaywrightNativeException ex) when (ex.Message != null && ex.Message.Contains("Already screencasting", StringComparison.OrdinalIgnoreCase))
+            catch (PlaywrightException ex) when (ex.Message != null && ex.Message.Contains("Already screencasting", StringComparison.OrdinalIgnoreCase))
             {
                 // recordVideo already started the page-proxy screencast. Official
                 // multiplexes clients; attach to the existing stream.
@@ -142,7 +142,7 @@ namespace PlaywrightNative.WebKit
                 {
                     throw;
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
             }
@@ -328,7 +328,7 @@ namespace PlaywrightNative.WebKit
                     catch (TargetClosedException)
                     {
                     }
-                    catch (PlaywrightNativeException)
+                    catch (PlaywrightException)
                     {
                     }
                 }

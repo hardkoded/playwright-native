@@ -19,6 +19,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Text;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using PlaywrightNative.Helpers;
 
 namespace PlaywrightNative.WebKit
@@ -146,7 +147,7 @@ namespace PlaywrightNative.WebKit
                         stage = "request",
                     }).ConfigureAwait(false);
                 }
-                catch (PlaywrightNativeException ex) when (IsCancelledInterception(ex))
+                catch (PlaywrightException ex) when (IsCancelledInterception(ex))
                 {
                 }
 
@@ -182,7 +183,7 @@ namespace PlaywrightNative.WebKit
             {
                 await _session.SendAsync("Network.interceptWithRequest", parameters).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException ex) when (IsCancelledInterception(ex))
+            catch (PlaywrightException ex) when (IsCancelledInterception(ex))
             {
             }
         }
@@ -207,7 +208,7 @@ namespace PlaywrightNative.WebKit
 
             if (statusCode >= 300 && statusCode < 400)
             {
-                throw new PlaywrightNativeException("Cannot fulfill with redirect status");
+                throw new PlaywrightException("Cannot fulfill with redirect status");
             }
 
             Dictionary<string, string> responseHeaders = new(StringComparer.OrdinalIgnoreCase);
@@ -253,7 +254,7 @@ namespace PlaywrightNative.WebKit
                     headers = responseHeaders,
                 }).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException ex) when (
+            catch (PlaywrightException ex) when (
                 IsCancelledInterception(ex)
                 || ex.Message.Contains("already been processed", StringComparison.OrdinalIgnoreCase))
             {
@@ -279,7 +280,7 @@ namespace PlaywrightNative.WebKit
         {
             if (_handled)
             {
-                throw new PlaywrightNativeException("Route is already handled!");
+                throw new PlaywrightException("Route is already handled!");
             }
 
             byte[] body = postDataBytes ?? (postData == null ? null : Encoding.UTF8.GetBytes(postData));
@@ -334,7 +335,7 @@ namespace PlaywrightNative.WebKit
                     errorType,
                 }).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException ex) when (
+            catch (PlaywrightException ex) when (
                 IsCancelledInterception(ex)
                 || ex.Message.Contains("already been processed", StringComparison.OrdinalIgnoreCase))
             {
@@ -408,7 +409,7 @@ namespace PlaywrightNative.WebKit
         {
             if (_handled)
             {
-                throw new PlaywrightNativeException("Route is already handled!");
+                throw new PlaywrightException("Route is already handled!");
             }
 
             _handled = true;

@@ -20,6 +20,7 @@ using System.Collections.Generic;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using PlaywrightNative.WebKit;
 
 namespace PlaywrightNative.Helpers
@@ -261,7 +262,7 @@ namespace PlaywrightNative.Helpers
   return true;
 }").ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
         }
@@ -295,7 +296,7 @@ namespace PlaywrightNative.Helpers
                         tags.Add(tag);
                     }
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
                 catch (TimeoutException)
@@ -319,7 +320,7 @@ namespace PlaywrightNative.Helpers
                 {
                     await page.EvaluateAsync(expression).ConfigureAwait(false);
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
                 catch (TimeoutException)
@@ -340,7 +341,7 @@ namespace PlaywrightNative.Helpers
                 {
                     await frame.EvaluateAsync(expression).ConfigureAwait(false);
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
                 catch (TimeoutException)
@@ -383,7 +384,7 @@ namespace PlaywrightNative.Helpers
                         await frame.EvaluateAsync(expression).ConfigureAwait(false);
                     }
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
                 catch (TimeoutException)
@@ -407,7 +408,7 @@ namespace PlaywrightNative.Helpers
                 {
                     await frame.EvaluateAsync(FinishAnimationsJs).ConfigureAwait(false);
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
             }
@@ -421,7 +422,7 @@ namespace PlaywrightNative.Helpers
                 {
                     await tag.EvaluateAsync("el => { if (el && el.remove) el.remove(); }").ConfigureAwait(false);
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
             }

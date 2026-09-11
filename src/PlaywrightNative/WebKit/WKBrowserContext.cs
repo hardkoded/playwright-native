@@ -605,7 +605,7 @@ namespace PlaywrightNative.WebKit
 
         /// <inheritdoc/>
         public Task<ICDPSession> NewCDPSessionAsync(IPage page)
-            => throw new PlaywrightNativeException("CDP sessions are only supported in Chromium.");
+            => throw new PlaywrightException("CDP sessions are only supported in Chromium.");
 
         /// <inheritdoc/>
         public Task<T> WaitForEventAsync<T>(PlaywrightEvent<T> contextEvent, Func<T, bool> predicate = null, float? timeout = null)
@@ -883,7 +883,7 @@ namespace PlaywrightNative.WebKit
 
                 if (string.IsNullOrEmpty(pageProxyId))
                 {
-                    throw new PlaywrightNativeException("Playwright.createPage did not return a pageProxyId.");
+                    throw new PlaywrightException("Playwright.createPage did not return a pageProxyId.");
                 }
 
                 // Decide-and-register atomically against AddPage so the pageProxyCreated event
@@ -1469,7 +1469,7 @@ namespace PlaywrightNative.WebKit
                 return webkit.InstallExposedAsync(name, handler, fromContext: true);
             }
 
-            throw new PlaywrightNativeException("Context exposeFunction requires a WebKit page.");
+            throw new PlaywrightException("Context exposeFunction requires a WebKit page.");
         }
 
         private static Task<IAsyncDisposable> InstallHandleOnAsync(
@@ -1489,7 +1489,7 @@ namespace PlaywrightNative.WebKit
                     fromContext: true);
             }
 
-            throw new PlaywrightNativeException("Context exposeBinding requires a WebKit page.");
+            throw new PlaywrightException("Context exposeBinding requires a WebKit page.");
         }
 
         private static bool ContainsClipboardRead(IEnumerable<string> permissions)
@@ -1670,7 +1670,7 @@ namespace PlaywrightNative.WebKit
                 {
                     await page.EvaluateAsync(WebKitClipboardShim.Source).ConfigureAwait(false);
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
             }
@@ -1723,7 +1723,7 @@ namespace PlaywrightNative.WebKit
                     }).ConfigureAwait(false);
                 }
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 // Older WebKit builds may not expose Playwright.setIgnoreCertificateErrors.
             }
@@ -1956,7 +1956,7 @@ namespace PlaywrightNative.WebKit
         {
             if (harError != null)
             {
-                throw new PlaywrightNativeException(harError.Message, harError);
+                throw new PlaywrightException(harError.Message, harError);
             }
         }
 
@@ -1993,7 +1993,7 @@ namespace PlaywrightNative.WebKit
             {
                 await Task.WhenAll(cancels).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
         }

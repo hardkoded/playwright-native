@@ -18,6 +18,7 @@ using System;
 using System.Collections.Generic;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -189,7 +190,7 @@ namespace PlaywrightNative.Helpers
                     case '{':
                         if (inGroup)
                         {
-                            throw new PlaywrightNativeException(
+                            throw new PlaywrightException(
                                 "Invalid glob pattern " + JsonSerializer.Serialize(glob) + ": nested '{' is not supported");
                         }
 
@@ -199,7 +200,7 @@ namespace PlaywrightNative.Helpers
                     case '}':
                         if (!inGroup)
                         {
-                            throw new PlaywrightNativeException(
+                            throw new PlaywrightException(
                                 "Invalid glob pattern " + JsonSerializer.Serialize(glob) + ": unmatched '}'");
                         }
 
@@ -217,7 +218,7 @@ namespace PlaywrightNative.Helpers
 
             if (inGroup)
             {
-                throw new PlaywrightNativeException(
+                throw new PlaywrightException(
                     "Invalid glob pattern " + JsonSerializer.Serialize(glob) + ": unmatched '{'");
             }
 

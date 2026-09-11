@@ -16,6 +16,7 @@
  */
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 
@@ -61,8 +62,8 @@ namespace PlaywrightNative.Tests.Chromium
         public void ShouldThrowWhenNeitherUrlNorContent()
         {
             // Matches PageAddScriptTagTests.ShouldThrowAnErrorIfNoOptionsAreProvided:
-            // official validation errors surface as PlaywrightNativeException here.
-            PlaywrightNativeException ex = Assert.ThrowsAsync<PlaywrightNativeException>(
+            // official validation errors surface as PlaywrightException here.
+            PlaywrightException ex = Assert.ThrowsAsync<PlaywrightException>(
                 () => Page.AddScriptTagAsync());
             Assert.That(ex.Message, Does.Contain("url").Or.Contain("content"));
         }

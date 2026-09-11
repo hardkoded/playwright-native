@@ -288,7 +288,7 @@ namespace PlaywrightNative.Firefox
 
         /// <inheritdoc/>
         public Task EmulateVisionDeficiencyAsync(VisionDeficiency type = default)
-            => throw new PlaywrightNativeException("EmulateVisionDeficiencyAsync is Chromium-only.");
+            => throw new PlaywrightException("EmulateVisionDeficiencyAsync is Chromium-only.");
 
         /// <inheritdoc/>
         public async Task<T> EvaluateAsync<T>(string expression, object arg = null)

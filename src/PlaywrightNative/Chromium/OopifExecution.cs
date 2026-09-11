@@ -19,6 +19,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Text.Json;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Chromium
 {
@@ -75,7 +76,7 @@ namespace PlaywrightNative.Chromium
                 {
                     await state.Session.SendAsync("Security.setIgnoreCertificateErrors", new { ignore = true }).ConfigureAwait(false);
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
 
@@ -92,7 +93,7 @@ namespace PlaywrightNative.Chromium
                     HandleFrameTree(state.Page.FrameManager, tree);
                 }
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 // Target may detach before domains are enabled.
             }

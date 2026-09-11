@@ -69,7 +69,7 @@ namespace PlaywrightNative
                 log.Append(text);
             }
 
-            throw new PlaywrightNativeException(log.ToString());
+            throw new PlaywrightException(log.ToString());
         }
 
         private static bool IsPrintableTextContentType(IAPIResponse response)

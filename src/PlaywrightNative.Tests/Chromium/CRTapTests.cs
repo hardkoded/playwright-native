@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.Chromium;
 using PlaywrightNative.NUnit;
@@ -71,7 +72,7 @@ namespace PlaywrightNative.Tests.Chromium
             await Page.GoToAsync("data:text/html,<div id='t' style='display:none'>hidden</div>").ConfigureAwait(false);
 
             CRElementHandle handle = await Page.QuerySelectorAsync("#t").ConfigureAwait(false);
-            PlaywrightNativeException ex = Assert.ThrowsAsync<PlaywrightNativeException>(
+            PlaywrightException ex = Assert.ThrowsAsync<PlaywrightException>(
                 () => handle.TapAsync());
             Assert.That(ex.Message, Does.Contain("no layout").Or.Contain("not visible"));
 

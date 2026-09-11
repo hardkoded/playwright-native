@@ -494,7 +494,7 @@ namespace PlaywrightNative.Chromium
                     new { objectId = _crElement.ObjectId }).ConfigureAwait(false);
                 return ScrollIntoViewIfNeededAction.ResultDone;
             }
-            catch (PlaywrightNativeException ex)
+            catch (PlaywrightException ex)
             {
                 string mapped = ScrollIntoViewIfNeededAction.MapProtocolError(ex.Message);
                 if (mapped != null)

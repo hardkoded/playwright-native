@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.Chromium;
 using PlaywrightNative.Input;
@@ -146,7 +147,7 @@ namespace PlaywrightNative.Tests.Chromium
             await Page.GoToAsync("data:text/html,<div id='d'>not a select</div>").ConfigureAwait(false);
             await using CRElementHandle handle = await Page.QuerySelectorAsync("#d").ConfigureAwait(false);
 
-            PlaywrightNativeException ex = Assert.ThrowsAsync<PlaywrightNativeException>(
+            PlaywrightException ex = Assert.ThrowsAsync<PlaywrightException>(
                 () => handle.SelectOptionAsync("anything"));
             Assert.That(ex.Message, Does.Contain("select"));
         }

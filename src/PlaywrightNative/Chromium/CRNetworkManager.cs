@@ -21,6 +21,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using PlaywrightNative.Helpers;
 
 namespace PlaywrightNative.Chromium
@@ -144,7 +145,7 @@ namespace PlaywrightNative.Chromium
             catch (TimeoutException)
             {
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 RemoveWorkerSession(session);
             }
@@ -167,7 +168,7 @@ namespace PlaywrightNative.Chromium
             {
                 await EnableFetchBoundedAsync(session).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
         }
@@ -276,7 +277,7 @@ namespace PlaywrightNative.Chromium
                         return bytes;
                     }
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
             }
@@ -316,7 +317,7 @@ namespace PlaywrightNative.Chromium
                 {
                     await state.Session.SendAsync("Network.setExtraHTTPHeaders", new { headers }).ConfigureAwait(false);
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
             }
@@ -543,7 +544,7 @@ namespace PlaywrightNative.Chromium
                     catch (TimeoutException)
                     {
                     }
-                    catch (PlaywrightNativeException)
+                    catch (PlaywrightException)
                     {
                     }
                 }
@@ -561,7 +562,7 @@ namespace PlaywrightNative.Chromium
                 catch (TimeoutException)
                 {
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
 
@@ -584,7 +585,7 @@ namespace PlaywrightNative.Chromium
                     catch (TimeoutException)
                     {
                     }
-                    catch (PlaywrightNativeException)
+                    catch (PlaywrightException)
                     {
                     }
                 }
@@ -715,7 +716,7 @@ namespace PlaywrightNative.Chromium
             catch (TimeoutException)
             {
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
         }
@@ -745,14 +746,14 @@ namespace PlaywrightNative.Chromium
                     {
                         await worker.Session.SendAsync("Network.setRequestInterception", new { patterns }).ConfigureAwait(false);
                     }
-                    catch (PlaywrightNativeException)
+                    catch (PlaywrightException)
                     {
                     }
                 }
 
                 _webSocketInterceptingEnabled = needWs;
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
         }

@@ -19,6 +19,7 @@ using System;
 using System.Collections.Generic;
 using System.Text.Json;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using PlaywrightNative.Helpers;
 
 namespace PlaywrightNative.Firefox
@@ -82,7 +83,7 @@ namespace PlaywrightNative.Firefox
         {
             if (_context == null || string.IsNullOrEmpty(_objectId))
             {
-                throw new PlaywrightNativeException("Handle is disposed.");
+                throw new PlaywrightException("Handle is disposed.");
             }
 
             string functionDeclaration = EvaluateWithArg.AsFunction(expression);
@@ -99,7 +100,7 @@ namespace PlaywrightNative.Firefox
         {
             if (_context == null || string.IsNullOrEmpty(_objectId))
             {
-                throw new PlaywrightNativeException("Handle is disposed.");
+                throw new PlaywrightException("Handle is disposed.");
             }
 
             JsonElement? remote = arg != null
@@ -122,7 +123,7 @@ namespace PlaywrightNative.Firefox
             {
                 names = await EvaluateAsync<string[]>(JsonValueHelper.EnumerablePropertyNamesFunction).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 return result;
             }

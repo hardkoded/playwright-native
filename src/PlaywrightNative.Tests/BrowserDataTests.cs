@@ -5,6 +5,7 @@
 // You may obtain a copy of the License at
 // http://www.apache.org/licenses/LICENSE-2.0
 using System.IO;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative;
 using PlaywrightNative.NUnit;
@@ -101,7 +102,7 @@ namespace PlaywrightNative.Tests
         [Test]
         public void DownloadUrlsThrowsForUnsupportedPlatformKey()
         {
-            Assert.Throws<PlaywrightNativeException>(() =>
+            Assert.Throws<PlaywrightException>(() =>
                 BrowserData.DownloadUrls(SupportedBrowser.Chromium, "platform-that-does-not-exist", "1219", null));
         }
 

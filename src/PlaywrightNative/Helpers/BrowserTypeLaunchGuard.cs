@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 using System;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -47,13 +48,13 @@ namespace PlaywrightNative.Helpers
 
             if (!string.IsNullOrEmpty(options.UserDataDir))
             {
-                throw new PlaywrightNativeException(
+                throw new PlaywrightException(
                     "userDataDir option is not supported in `browserType.launch`. Use `browserType.launchPersistentContext` instead");
             }
 
             if (options.Port.HasValue)
             {
-                throw new PlaywrightNativeException("Cannot specify a port without launching as a server.");
+                throw new PlaywrightException("Cannot specify a port without launching as a server.");
             }
 
             ThrowIfHeadedWithoutXServer(options);
@@ -73,13 +74,13 @@ namespace PlaywrightNative.Helpers
                 if (arg.StartsWith("--user-data-dir", StringComparison.Ordinal)
                     || arg.StartsWith("--profile", StringComparison.Ordinal))
                 {
-                    throw new PlaywrightNativeException(
+                    throw new PlaywrightException(
                         "Pass userDataDir parameter to 'browserType.launchPersistentContext");
                 }
 
                 if (!arg.StartsWith('-'))
                 {
-                    throw new PlaywrightNativeException("Arguments can not specify page to be opened");
+                    throw new PlaywrightException("Arguments can not specify page to be opened");
                 }
             }
         }
@@ -97,7 +98,7 @@ namespace PlaywrightNative.Helpers
 
             if (options.Port.HasValue)
             {
-                throw new PlaywrightNativeException("Cannot specify a port without launching as a server.");
+                throw new PlaywrightException("Cannot specify a port without launching as a server.");
             }
 
             ThrowIfHeadedWithoutXServer(options);
@@ -117,7 +118,7 @@ namespace PlaywrightNative.Helpers
 
             if (string.IsNullOrEmpty(ResolveDisplay(options)))
             {
-                throw new PlaywrightNativeException(NoXServerRunningError);
+                throw new PlaywrightException(NoXServerRunningError);
             }
         }
 
@@ -128,16 +129,16 @@ namespace PlaywrightNative.Helpers
         /// </summary>
         /// <param name="api">Official API name, for example <c>browserType.launch</c>.</param>
         /// <param name="ex">The launch failure.</param>
-        /// <returns>A wrapped <see cref="PlaywrightNativeException"/>.</returns>
-        internal static PlaywrightNativeException WrapLaunch(string api, Exception ex)
+        /// <returns>A wrapped <see cref="PlaywrightException"/>.</returns>
+        internal static PlaywrightException WrapLaunch(string api, Exception ex)
         {
             string inner = RewriteStartupLog(ex?.Message ?? string.Empty);
             if (inner.StartsWith(api, StringComparison.Ordinal))
             {
-                return ex as PlaywrightNativeException ?? new PlaywrightNativeException(inner, ex);
+                return ex as PlaywrightException ?? new PlaywrightException(inner, ex);
             }
 
-            return new PlaywrightNativeException(api + ": " + inner + "\nBrowser logs:\n\n" + inner, ex);
+            return new PlaywrightException(api + ": " + inner + "\nBrowser logs:\n\n" + inner, ex);
         }
 
         /// <summary>
@@ -146,18 +147,18 @@ namespace PlaywrightNative.Helpers
         /// </summary>
         /// <param name="ex">The connect failure.</param>
         /// <param name="browserLogs">WebSocket close reason, or <see langword="null"/>.</param>
-        /// <returns>A wrapped <see cref="PlaywrightNativeException"/>.</returns>
-        internal static PlaywrightNativeException WrapConnectOverCdp(Exception ex, string browserLogs = null)
+        /// <returns>A wrapped <see cref="PlaywrightException"/>.</returns>
+        internal static PlaywrightException WrapConnectOverCdp(Exception ex, string browserLogs = null)
         {
             const string api = "browserType.connectOverCDP";
             string inner = ex?.Message ?? string.Empty;
             if (inner.StartsWith(api, StringComparison.Ordinal))
             {
-                return ex as PlaywrightNativeException ?? new PlaywrightNativeException(inner, ex);
+                return ex as PlaywrightException ?? new PlaywrightException(inner, ex);
             }
 
             string logs = string.IsNullOrEmpty(browserLogs) ? inner : browserLogs;
-            return new PlaywrightNativeException(api + ": " + inner + "\nBrowser logs:\n\n" + logs + "\n", ex);
+            return new PlaywrightException(api + ": " + inner + "\nBrowser logs:\n\n" + logs + "\n", ex);
         }
 
         /// <summary>

@@ -546,7 +546,7 @@ namespace PlaywrightNative.WebKit
         {
             EnsureNotDisposed();
             WKTargetSession target = _page.CurrentTargetSession
-                ?? throw new PlaywrightNativeException("WebKit target session is not available.");
+                ?? throw new PlaywrightException("WebKit target session is not available.");
 
             string[] pathArray;
             if (paths == null || paths.Count == 0)
@@ -604,7 +604,7 @@ namespace PlaywrightNative.WebKit
 
             if (point == null || point.Length < 2)
             {
-                throw new PlaywrightNativeException("Unable to compute a click point for the element.");
+                throw new PlaywrightException("Unable to compute a click point for the element.");
             }
 
             return point;
@@ -619,7 +619,7 @@ namespace PlaywrightNative.WebKit
 
             if (!check && await EvaluateFunctionAsync<bool>(ElementStateScript.IsNativeRadioFunction).ConfigureAwait(false))
             {
-                throw new PlaywrightNativeException("Cannot uncheck radio button");
+                throw new PlaywrightException("Cannot uncheck radio button");
             }
 
             // Prefer the full click pipeline (scroll, hit-test, modifiers). WebKit's
@@ -638,7 +638,7 @@ namespace PlaywrightNative.WebKit
             // would overwrite document-level force hit listeners for visibility:hidden.
             if (force == true)
             {
-                throw new PlaywrightNativeException("Clicking the checkbox did not change its state.");
+                throw new PlaywrightException("Clicking the checkbox did not change its state.");
             }
 
             await EvaluateFunctionAsync<bool>(
@@ -647,7 +647,7 @@ namespace PlaywrightNative.WebKit
 
             if (await IsCheckedAsync().ConfigureAwait(false) != check)
             {
-                throw new PlaywrightNativeException("Clicking the checkbox did not change its state.");
+                throw new PlaywrightException("Clicking the checkbox did not change its state.");
             }
         }
 
@@ -684,7 +684,7 @@ namespace PlaywrightNative.WebKit
         private async Task<string> ScrollRectIntoViewIfNeededAsync()
         {
             WKTargetSession target = _page.CurrentTargetSession
-                ?? throw new PlaywrightNativeException("WebKit target session is not available.");
+                ?? throw new PlaywrightException("WebKit target session is not available.");
 
             try
             {
@@ -693,7 +693,7 @@ namespace PlaywrightNative.WebKit
                     new { objectId = ObjectId }).ConfigureAwait(false);
                 return ScrollIntoViewIfNeededAction.ResultDone;
             }
-            catch (PlaywrightNativeException ex)
+            catch (PlaywrightException ex)
             {
                 string mapped = ScrollIntoViewIfNeededAction.MapProtocolError(ex.Message);
                 if (mapped != null)
@@ -757,7 +757,7 @@ namespace PlaywrightNative.WebKit
                     SetPreview("JSHandle@" + nodePreview);
                 }
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 // Best-effort preview, matching upstream ElementHandle._initializePreview.
             }

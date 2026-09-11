@@ -329,7 +329,7 @@ namespace PlaywrightNative.Firefox
 
         /// <inheritdoc/>
         public Task<ICDPSession> NewCDPSessionAsync(IPage page)
-            => throw new PlaywrightNativeException("CDP sessions are only supported in Chromium.");
+            => throw new PlaywrightException("CDP sessions are only supported in Chromium.");
 
         /// <inheritdoc/>
         public Task<T> WaitForEventAsync<T>(PlaywrightEvent<T> contextEvent, Func<T, bool> predicate = null, float? timeout = null)

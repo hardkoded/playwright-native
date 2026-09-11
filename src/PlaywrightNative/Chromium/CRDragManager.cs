@@ -18,6 +18,7 @@ using System;
 using System.Collections.Generic;
 using System.Text.Json;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using PlaywrightNative.Helpers;
 using PlaywrightNative.Input;
 
@@ -210,7 +211,7 @@ namespace PlaywrightNative.Chromium
         {
             if (!_dragState.HasValue)
             {
-                throw new PlaywrightNativeException("missing drag state");
+                throw new PlaywrightException("missing drag state");
             }
 
             await _page.Session.SendAsync("Input.dispatchDragEvent", new
@@ -240,7 +241,7 @@ namespace PlaywrightNative.Chromium
                         .WaitAsync(TimeSpan.FromSeconds(2))
                         .ConfigureAwait(false);
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
                 catch (TimeoutException)
@@ -273,7 +274,7 @@ namespace PlaywrightNative.Chromium
                         any = true;
                     }
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
                 catch (TimeoutException)

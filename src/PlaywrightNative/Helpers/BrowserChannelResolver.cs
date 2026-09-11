@@ -17,6 +17,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -30,14 +31,14 @@ namespace PlaywrightNative.Helpers
         /// </summary>
         /// <param name="channel">A Chromium or Edge channel.</param>
         /// <returns>An absolute path to the browser binary.</returns>
-        /// <exception cref="PlaywrightNativeException">
+        /// <exception cref="PlaywrightException">
         /// The channel is unset or no matching binary is installed.
         /// </exception>
         internal static string Resolve(BrowserChannel channel)
         {
             if (channel == BrowserChannel.Undefined)
             {
-                throw new PlaywrightNativeException("Browser channel is not set.");
+                throw new PlaywrightException("Browser channel is not set.");
             }
 
             string fallback = null;
@@ -65,7 +66,7 @@ namespace PlaywrightNative.Helpers
                 return fallback;
             }
 
-            throw new PlaywrightNativeException($"Failed to find browser for channel '{ToName(channel)}'.");
+            throw new PlaywrightException($"Failed to find browser for channel '{ToName(channel)}'.");
         }
 
         /// <summary>

@@ -14,6 +14,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+using Microsoft.Playwright;
+
 namespace PlaywrightNative.Helpers
 {
     /// <summary>
@@ -40,13 +42,13 @@ namespace PlaywrightNative.Helpers
 
             if (deviceScaleFactor.HasValue)
             {
-                throw new PlaywrightNativeException(
+                throw new PlaywrightException(
                     "\"deviceScaleFactor\" option is not supported with null \"viewport\"");
             }
 
             if (isMobile.HasValue)
             {
-                throw new PlaywrightNativeException(
+                throw new PlaywrightException(
                     "\"isMobile\" option is not supported with null \"viewport\"");
             }
         }
@@ -71,12 +73,12 @@ namespace PlaywrightNative.Helpers
             string server = proxy.Server;
             if (server.StartsWith("socks4:", System.StringComparison.OrdinalIgnoreCase))
             {
-                throw new PlaywrightNativeException("Socks4 proxy protocol does not support authentication");
+                throw new PlaywrightException("Socks4 proxy protocol does not support authentication");
             }
 
             if (server.StartsWith("socks5:", System.StringComparison.OrdinalIgnoreCase))
             {
-                throw new PlaywrightNativeException("Browser does not support socks5 proxy authentication");
+                throw new PlaywrightException("Browser does not support socks5 proxy authentication");
             }
         }
 

@@ -44,7 +44,7 @@ namespace PlaywrightNative.Helpers
             _ = width;
             _ = height;
             _ = path;
-            throw new PlaywrightNativeException("Screencast is not supported on " + _browserName + ".");
+            throw new PlaywrightException("Screencast is not supported on " + _browserName + ".");
         }
 
         /// <inheritdoc/>

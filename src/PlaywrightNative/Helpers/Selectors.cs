@@ -43,7 +43,7 @@ namespace PlaywrightNative.Helpers
 
             if (!NameIsValid(name))
             {
-                throw new PlaywrightNativeException("selectors.register: Selector engine name may only contain [a-zA-Z0-9_] characters");
+                throw new PlaywrightException("selectors.register: Selector engine name may only contain [a-zA-Z0-9_] characters");
             }
 
             string source = script;

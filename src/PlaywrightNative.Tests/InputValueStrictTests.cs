@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 
@@ -36,7 +37,7 @@ namespace PlaywrightNative.Tests
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
             await page.SetContentAsync("<div><input value='a'/><input value='b'/></div>").ConfigureAwait(false);
 
-            PlaywrightNativeException ex = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException ex = Assert.CatchAsync<PlaywrightException>(
                 () => page.InputValueAsync("input", new() { Strict = true }));
 
             Assert.That(ex, Is.Not.Null);
@@ -94,7 +95,7 @@ namespace PlaywrightNative.Tests
             Assert.That(frame, Is.Not.Null);
             await frame.SetContentAsync("<div><input value='a'/><input value='b'/></div>").ConfigureAwait(false);
 
-            PlaywrightNativeException ex = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException ex = Assert.CatchAsync<PlaywrightException>(
                 () => frame.InputValueAsync("input", new() { Strict = true }));
 
             Assert.That(ex, Is.Not.Null);
