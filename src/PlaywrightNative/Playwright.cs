@@ -390,7 +390,13 @@ namespace PlaywrightNative
                     return;
                 }
 
-                await Task.WhenAny(firstPageTcs.Task, Task.Delay(TimeSpan.FromSeconds(30))).ConfigureAwait(false);
+                // This is closing a race measured in milliseconds (WKPage.OnPageProxyCreated
+                // hasn't run yet when LaunchAsync returns), not a real wait for the browser to
+                // start. A long fallback here would eat a caller's own action/test timeout
+                // before ever reaching their "no initial page" fallback (e.g. NewPageAsync()) —
+                // seen firsthand on CI's WebKit/Linux leg, where 30s here meant 30s stacked on
+                // top of every persistent-context test's own 30s timeout.
+                await Task.WhenAny(firstPageTcs.Task, Task.Delay(TimeSpan.FromSeconds(2))).ConfigureAwait(false);
             }
             finally
             {
