@@ -16,6 +16,7 @@
  */
 using System;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 
@@ -114,7 +115,7 @@ namespace PlaywrightNative.Tests
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
             await page.GoToAsync("about:blank").ConfigureAwait(false);
 
-            PlaywrightNativeException ex = Assert.ThrowsAsync<PlaywrightNativeException>(
+            PlaywrightException ex = Assert.ThrowsAsync<PlaywrightException>(
                 () => page.MainFrame.FrameElementAsync());
             Assert.That(ex.Message, Does.Contain("detached").IgnoreCase);
         }
@@ -157,7 +158,7 @@ namespace PlaywrightNative.Tests
                         return child;
                     }
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                     // Execution context is not ready yet.
                 }

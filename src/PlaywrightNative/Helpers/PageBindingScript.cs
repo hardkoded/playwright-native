@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 using System.Text.Json;
+using PlaywrightNative.Helpers;
 
 namespace PlaywrightNative
 {
@@ -332,6 +333,11 @@ namespace PlaywrightNative
             int i = 0;
             foreach (JsonElement arg in argsElement.EnumerateArray())
             {
+                // Page-side serialize() wraps each argument as { n }, { s }, { a, id }, …
+                // Leave it tagged: ExposeFunctionBinder.Arg<T> already understands this
+                // shape directly, including array/object nesting and { ref } cycles that
+                // a plain-JSON reconstruction could not represent (a JsonElement tree has
+                // no way to point back at an ancestor).
                 args[i++] = clone ? arg.Clone() : arg;
             }
 

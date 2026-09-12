@@ -19,6 +19,7 @@ using System.IO;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 using PlaywrightNative.TestServer;
@@ -84,7 +85,7 @@ namespace PlaywrightNative.Tests
                 await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
                 await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
                 await context.Tracing.StartHarAsync(path).ConfigureAwait(false);
-                PlaywrightNativeException ex = Assert.CatchAsync<PlaywrightNativeException>(
+                PlaywrightException ex = Assert.CatchAsync<PlaywrightException>(
                     () => context.Tracing.StartHarAsync(path));
                 Assert.That(ex, Is.Not.Null);
                 Assert.That(ex.Message, Does.Contain("already been started"));
@@ -103,7 +104,7 @@ namespace PlaywrightNative.Tests
         {
             await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
             await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
-            PlaywrightNativeException ex = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException ex = Assert.CatchAsync<PlaywrightException>(
                 () => context.Tracing.StopHarAsync());
             Assert.That(ex, Is.Not.Null);
             Assert.That(ex.Message, Does.Contain("has not been started"));

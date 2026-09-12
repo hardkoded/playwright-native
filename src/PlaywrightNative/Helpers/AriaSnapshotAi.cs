@@ -13,6 +13,7 @@ using System.Text;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -77,7 +78,7 @@ namespace PlaywrightNative.Helpers
             catch (TimeoutException)
             {
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
 
@@ -113,7 +114,7 @@ namespace PlaywrightNative.Helpers
             catch (TimeoutException)
             {
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
 
@@ -143,7 +144,7 @@ namespace PlaywrightNative.Helpers
             IPage page = owner?.Page;
             if (page == null)
             {
-                throw new PlaywrightNativeException("Cannot take an aria snapshot of a detached element.");
+                throw new PlaywrightException("Cannot take an aria snapshot of a detached element.");
             }
 
             await EnsurePrefixesAsync(page).ConfigureAwait(false);
@@ -170,7 +171,7 @@ namespace PlaywrightNative.Helpers
             IPage page = owner?.Page;
             if (page == null)
             {
-                throw new PlaywrightNativeException("Cannot take an aria snapshot of a detached element.");
+                throw new PlaywrightException("Cannot take an aria snapshot of a detached element.");
             }
 
             await EnsurePrefixesAsync(page).ConfigureAwait(false);
@@ -298,7 +299,7 @@ namespace PlaywrightNative.Helpers
                     {
                         child = await iframeEl.ContentFrameAsync().ConfigureAwait(false);
                     }
-                    catch (PlaywrightNativeException)
+                    catch (PlaywrightException)
                     {
                         child = null;
                     }
@@ -327,7 +328,7 @@ namespace PlaywrightNative.Helpers
                         .ConfigureAwait(false);
                     childYaml = await StitchAsync(page, child, childYaml, depth, boxes, timeout, startDepth).ConfigureAwait(false);
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                     result.Append(line);
                     continue;
@@ -458,7 +459,7 @@ namespace PlaywrightNative.Helpers
                 {
                     child = await iframeEl.ContentFrameAsync().ConfigureAwait(false);
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                     child = null;
                 }
@@ -484,7 +485,7 @@ namespace PlaywrightNative.Helpers
                 JsonNode parsed = JsonNode.Parse(childJson ?? "[]");
                 return (child, parsed as JsonArray);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 return (null, null);
             }
@@ -521,7 +522,7 @@ namespace PlaywrightNative.Helpers
                 {
                     await PrefixForAsync(page, frame).ConfigureAwait(false);
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                     continue;
                 }
@@ -535,7 +536,7 @@ namespace PlaywrightNative.Helpers
                 {
                     hosts = await frame.QuerySelectorAllAsync("iframe, frame").ConfigureAwait(false);
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                     continue;
                 }
@@ -551,7 +552,7 @@ namespace PlaywrightNative.Helpers
                     {
                         child = await hosts[i].ContentFrameAsync().ConfigureAwait(false);
                     }
-                    catch (PlaywrightNativeException)
+                    catch (PlaywrightException)
                     {
                         continue;
                     }
@@ -575,7 +576,7 @@ namespace PlaywrightNative.Helpers
                     return existing;
                 }
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
             catch (TimeoutException)
@@ -602,7 +603,7 @@ namespace PlaywrightNative.Helpers
             {
                 await frame.EvaluateAsync<object>(WritePrefixFunction, prefix).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
 
@@ -621,7 +622,7 @@ namespace PlaywrightNative.Helpers
                 IJSHandle handle = await frame.EvaluateHandleAsync(FindRefFunction, ariaRef).ConfigureAwait(false);
                 return handle?.AsElement();
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 return null;
             }

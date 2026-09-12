@@ -18,6 +18,7 @@ using System;
 using System.Collections.Generic;
 using System.Text;
 using System.Text.Json;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -162,7 +163,7 @@ namespace PlaywrightNative.Helpers
             }
             catch (JsonException ex)
             {
-                throw new PlaywrightNativeException("POST data is not a valid JSON object: " + postData, ex);
+                throw new PlaywrightException("POST data is not a valid JSON object: " + postData, ex);
             }
         }
 

@@ -15,6 +15,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.FileProviders;
+using Microsoft.Extensions.Primitives;
 
 namespace PlaywrightNative.TestServer
 {
@@ -499,7 +500,18 @@ namespace PlaywrightNative.TestServer
             var taskCompletion = new TaskCompletionSource<T>();
             _requestWaits[path] = context =>
             {
-                taskCompletion.SetResult(selector(context.Request));
+                T result = selector(context.Request);
+
+                // Kestrel pools and resets the header dictionary once the
+                // connection serves its next request, so a live reference
+                // captured here would read back empty/wrong values by the
+                // time the caller awaits this task. Snapshot it now.
+                if (result is IHeaderDictionary headers)
+                {
+                    result = (T)(object)new HeaderDictionary(new Dictionary<string, StringValues>(headers));
+                }
+
+                taskCompletion.SetResult(result);
             };
 
             var request = await taskCompletion.Task;
@@ -640,6 +652,7 @@ namespace PlaywrightNative.TestServer
             private readonly TaskCompletionSource<bool> _done =
                 new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
             private OfficialServerWebSocket _socket;
+            private bool _httpResponseWritten;
 
             internal UpgradeConnection(HttpContext context, SimpleServer server)
             {
@@ -682,6 +695,7 @@ namespace PlaywrightNative.TestServer
 
             /// <summary>
             /// Writes an HTTP response status line and headers, then finishes the response.
+            /// Official <c>socket.write</c> of a raw HTTP rejection (e.g. 403).
             /// </summary>
             /// <param name="raw">A raw HTTP/1.1 response, including the status line.</param>
             /// <returns>A task that completes when the response has been written.</returns>
@@ -695,11 +709,22 @@ namespace PlaywrightNative.TestServer
                     {
                         _context.Response.StatusCode = status;
                     }
+
+                    if (parts.Length >= 3 && !string.IsNullOrEmpty(parts[2]))
+                    {
+                        // Preserve reason phrase when Kestrel exposes it via the response feature.
+                        IHttpResponseFeature responseFeature = _context.Features.Get<IHttpResponseFeature>();
+                        if (responseFeature != null)
+                        {
+                            responseFeature.ReasonPhrase = parts[2].Trim();
+                        }
+                    }
                 }
 
                 _context.Response.Headers.ContentLength = 0;
                 _context.Response.Headers["Connection"] = "close";
                 await _context.Response.CompleteAsync().ConfigureAwait(false);
+                _httpResponseWritten = true;
             }
 
             /// <summary>
@@ -733,7 +758,14 @@ namespace PlaywrightNative.TestServer
                 try
                 {
                     _socket?.Destroy();
-                    _context.Abort();
+
+                    // After a normal HTTP rejection (WriteAsync), do not Abort the
+                    // connection — that races WebKit into status 0 / "Connection
+                    // reset by peer" instead of the written 403 Forbidden.
+                    if (!_httpResponseWritten && !_context.Response.HasStarted)
+                    {
+                        _context.Abort();
+                    }
                 }
                 catch (ObjectDisposedException)
                 {

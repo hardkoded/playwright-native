@@ -19,6 +19,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -91,7 +92,7 @@ namespace PlaywrightNative.Helpers
                 {
                     frame = request.Frame;
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                     return;
                 }
@@ -106,7 +107,7 @@ namespace PlaywrightNative.Helpers
                 {
                     requestPage = frame?.Page;
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                     return;
                 }
@@ -138,7 +139,7 @@ namespace PlaywrightNative.Helpers
                 {
                     failedFrame = request.Frame;
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                     return;
                 }
@@ -211,7 +212,7 @@ namespace PlaywrightNative.Helpers
                 {
                     await epilogueAsync().ConfigureAwait(false);
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
             }
@@ -267,7 +268,7 @@ namespace PlaywrightNative.Helpers
             {
                 await page.EvaluateAsync<object>("window." + SameDocumentToken + " = true").ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
         }
@@ -297,7 +298,7 @@ namespace PlaywrightNative.Helpers
                     "() => window." + SameDocumentToken + " === true ? document.location.href : ''");
                 live = await WaitForEvaluateAsync(liveTask, timeout, sw).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 return;
             }

@@ -17,6 +17,7 @@
 using System;
 using System.Globalization;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 using PlaywrightNative.TestServer;
@@ -89,7 +90,7 @@ namespace PlaywrightNative.Tests
             await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
 
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(() => page.AddStyleTagAsync());
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(() => page.AddStyleTagAsync());
             Assert.That(error, Is.Not.Null);
             Assert.That(error.Message, Does.Contain("Provide an object with a `url`, `path` or `content` property"));
         }
@@ -122,7 +123,7 @@ namespace PlaywrightNative.Tests
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
 
             await page.GoToAsync(EmptyPage).ConfigureAwait(false);
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => page.AddStyleTagAsync(new() { Url = "/nonexistfile.js" }));
             Assert.That(error, Is.Not.Null);
         }
@@ -190,7 +191,7 @@ namespace PlaywrightNative.Tests
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
 
             await page.GoToAsync(Prefix + "/csp.html").ConfigureAwait(false);
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => page.AddStyleTagAsync(new() { Content = "body { background-color: green; }" }));
             Assert.That(error, Is.Not.Null);
         }
@@ -205,7 +206,7 @@ namespace PlaywrightNative.Tests
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
 
             await page.GoToAsync(Prefix + "/csp.html").ConfigureAwait(false);
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => page.AddStyleTagAsync(new() { Url = CrossProcessPrefix + "/injectedstyle.css" }));
             Assert.That(error, Is.Not.Null);
         }

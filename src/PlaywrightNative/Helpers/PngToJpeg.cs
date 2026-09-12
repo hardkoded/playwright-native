@@ -17,6 +17,7 @@
 using System;
 using System.IO;
 using System.IO.Compression;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -72,7 +73,7 @@ namespace PlaywrightNative.Helpers
         {
             if (png == null || png.Length < 8)
             {
-                throw new PlaywrightNativeException("PNG screenshot is empty.");
+                throw new PlaywrightException("PNG screenshot is empty.");
             }
 
             RgbImage image = DecodePng(png);
@@ -94,7 +95,7 @@ namespace PlaywrightNative.Helpers
             if (png[0] != 0x89 || png[1] != 0x50 || png[2] != 0x4E || png[3] != 0x47
                 || png[4] != 0x0D || png[5] != 0x0A || png[6] != 0x1A || png[7] != 0x0A)
             {
-                throw new PlaywrightNativeException("Screenshot is not a PNG.");
+                throw new PlaywrightException("Screenshot is not a PNG.");
             }
 
             int width = 0;
@@ -109,7 +110,7 @@ namespace PlaywrightNative.Helpers
                 int length = ReadInt32Be(png, offset);
                 if (length < 0 || offset + 12 + length > png.Length)
                 {
-                    throw new PlaywrightNativeException("PNG chunk is truncated.");
+                    throw new PlaywrightException("PNG chunk is truncated.");
                 }
 
                 string type = System.Text.Encoding.ASCII.GetString(png, offset + 4, 4);
@@ -118,7 +119,7 @@ namespace PlaywrightNative.Helpers
                 {
                     if (length < 13)
                     {
-                        throw new PlaywrightNativeException("PNG IHDR is truncated.");
+                        throw new PlaywrightException("PNG IHDR is truncated.");
                     }
 
                     width = ReadInt32Be(png, dataStart);
@@ -141,17 +142,17 @@ namespace PlaywrightNative.Helpers
 
             if (width <= 0 || height <= 0)
             {
-                throw new PlaywrightNativeException("PNG IHDR is missing or invalid.");
+                throw new PlaywrightException("PNG IHDR is missing or invalid.");
             }
 
             if (bitDepth != 8)
             {
-                throw new PlaywrightNativeException("Only 8-bit PNG screenshots are supported.");
+                throw new PlaywrightException("Only 8-bit PNG screenshots are supported.");
             }
 
             if (interlace != 0)
             {
-                throw new PlaywrightNativeException("Interlaced PNG screenshots are not supported.");
+                throw new PlaywrightException("Interlaced PNG screenshots are not supported.");
             }
 
             int channels = colorType switch
@@ -160,7 +161,7 @@ namespace PlaywrightNative.Helpers
                 2 => 3,
                 4 => 2,
                 6 => 4,
-                _ => throw new PlaywrightNativeException("Unsupported PNG color type " + colorType + "."),
+                _ => throw new PlaywrightException("Unsupported PNG color type " + colorType + "."),
             };
 
             byte[] raw = InflateZlib(idat.ToArray());
@@ -172,7 +173,7 @@ namespace PlaywrightNative.Helpers
         {
             if (zlib == null || zlib.Length < 6)
             {
-                throw new PlaywrightNativeException("PNG IDAT is empty.");
+                throw new PlaywrightException("PNG IDAT is empty.");
             }
 
             using MemoryStream input = new MemoryStream(zlib, 2, zlib.Length - 6);
@@ -188,7 +189,7 @@ namespace PlaywrightNative.Helpers
             int expected = height * (stride + 1);
             if (raw.Length < expected)
             {
-                throw new PlaywrightNativeException("PNG pixel data is truncated.");
+                throw new PlaywrightException("PNG pixel data is truncated.");
             }
 
             byte[] recon = new byte[height * stride];
@@ -210,7 +211,7 @@ namespace PlaywrightNative.Helpers
                         2 => (byte)(value + up),
                         3 => (byte)(value + ((left + up) / 2)),
                         4 => (byte)(value + Paeth(left, up, upLeft)),
-                        _ => throw new PlaywrightNativeException("Unknown PNG filter " + filter + "."),
+                        _ => throw new PlaywrightException("Unknown PNG filter " + filter + "."),
                     };
                 }
             }
@@ -678,7 +679,7 @@ namespace PlaywrightNative.Helpers
                 int length = _lengths[symbol];
                 if (length == 0)
                 {
-                    throw new PlaywrightNativeException("JPEG Huffman symbol " + symbol + " is not in the table.");
+                    throw new PlaywrightException("JPEG Huffman symbol " + symbol + " is not in the table.");
                 }
 
                 bits.WriteBits(_codes[symbol], length);

@@ -23,6 +23,7 @@ using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -76,7 +77,7 @@ namespace PlaywrightNative.Helpers
             string targetMethod = string.IsNullOrEmpty(method) ? request.Method : method;
             if (string.IsNullOrEmpty(targetUrl))
             {
-                throw new PlaywrightNativeException("Cannot fetch a route without a URL.");
+                throw new PlaywrightException("Cannot fetch a route without a URL.");
             }
 
             if (string.IsNullOrEmpty(targetMethod))
@@ -129,7 +130,7 @@ namespace PlaywrightNative.Helpers
 
                         if (attempt == maxRetries)
                         {
-                            throw new PlaywrightNativeException(
+                            throw new PlaywrightException(
                                 "Route.FetchAsync maxRetries exceeded: " + maxRetries,
                                 ex);
                         }
@@ -141,7 +142,7 @@ namespace PlaywrightNative.Helpers
 
                 if (response == null)
                 {
-                    throw new PlaywrightNativeException("Route.FetchAsync maxRetries exceeded: " + maxRetries);
+                    throw new PlaywrightException("Route.FetchAsync maxRetries exceeded: " + maxRetries);
                 }
 
                 using (response)
@@ -295,7 +296,7 @@ namespace PlaywrightNative.Helpers
                         }
 
                         response.Dispose();
-                        throw new PlaywrightNativeException(
+                        throw new PlaywrightException(
                             "Route.FetchAsync maxRedirects exceeded: " + maxRedirects);
                     }
 

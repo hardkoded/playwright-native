@@ -20,6 +20,8 @@ using System.Collections.Generic;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
+using PlaywrightNative.WebKit;
 
 namespace PlaywrightNative.Helpers
 {
@@ -29,14 +31,6 @@ namespace PlaywrightNative.Helpers
     /// </summary>
     internal static class ScreenshotDecorations
     {
-        internal const string DisableAnimationsCss = @"*, *::before, *::after {
-  animation-delay: 0s !important;
-  animation-duration: 0s !important;
-  animation-play-state: paused !important;
-  transition-duration: 0s !important;
-  transition-delay: 0s !important;
-}";
-
         internal const string HideCaretCss = "* { caret-color: transparent !important; }";
 
         internal const string HideCaretJs = @"(function() {
@@ -53,6 +47,12 @@ namespace PlaywrightNative.Helpers
   };
   const roots = collectRoots(document, []);
   const restore = [];
+  const active = document.activeElement;
+  let refocus = null;
+  if (active && active.matches && active.matches('input,textarea,[contenteditable]')) {
+    refocus = active;
+    active.blur();
+  }
   for (const root of roots) {
     root.querySelectorAll('input,textarea,[contenteditable]').forEach(element => {
       restore.push({
@@ -66,6 +66,9 @@ namespace PlaywrightNative.Helpers
   window.__pwRestoreCaret = () => {
     for (const item of restore)
       item.element.style.setProperty('caret-color', item.value, item.priority);
+    if (refocus && typeof refocus.focus === 'function') {
+      try { refocus.focus(); } catch (e) {}
+    }
     delete window.__pwRestoreCaret;
   };
 })()";
@@ -139,14 +142,23 @@ namespace PlaywrightNative.Helpers
 
         /// <summary>
         /// Builds the stylesheet injected for the given screenshot options.
+        /// Animations are frozen via <see cref="FinishAnimationsJs"/> (matching
+        /// upstream), not CSS: forcing <c>animation-duration: 0s</c> here snaps
+        /// a running CSS animation to completion and drops it from
+        /// <c>getAnimations()</c> before that script can cancel/finish it,
+        /// which suppresses the finish/cancel events official tests assert on.
         /// </summary>
-        /// <param name="animations">The screenshot animations option.</param>
         /// <param name="caret">The screenshot caret option.</param>
         /// <param name="style">Optional caller stylesheet.</param>
         /// <returns>The combined CSS, or an empty string.</returns>
-        internal static string BuildCss(string animations, string caret, string style)
+        internal static string BuildCss(string caret, string style)
         {
             StringBuilder builder = new StringBuilder();
+            if (IsHideCaret(caret))
+            {
+                builder.Append(HideCaretCss);
+            }
+
             if (!string.IsNullOrEmpty(style))
             {
                 builder.Append(style);
@@ -187,7 +199,7 @@ namespace PlaywrightNative.Helpers
 
             SemaphoreSlim gate = ScreenshotGates.GetOrAdd(page.GetHashCode(), _ => new SemaphoreSlim(1, 1));
             await gate.WaitAsync().ConfigureAwait(false);
-            string css = BuildCss(animations, caret, style);
+            string css = BuildCss(caret, style);
             List<IElementHandle> tags = new List<IElementHandle>();
             try
             {
@@ -250,7 +262,7 @@ namespace PlaywrightNative.Helpers
   return true;
 }").ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
         }
@@ -284,7 +296,7 @@ namespace PlaywrightNative.Helpers
                         tags.Add(tag);
                     }
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
                 catch (TimeoutException)
@@ -295,6 +307,12 @@ namespace PlaywrightNative.Helpers
 
         private static async Task EvaluateInFramesAsync(IPage page, string expression)
         {
+            if (page is WKPage webkit)
+            {
+                await EvaluateInWebKitUtilityAsync(webkit, expression).ConfigureAwait(false);
+                return;
+            }
+
             IReadOnlyCollection<IFrame> frames = page.Frames;
             if (frames == null || frames.Count == 0)
             {
@@ -302,7 +320,7 @@ namespace PlaywrightNative.Helpers
                 {
                     await page.EvaluateAsync(expression).ConfigureAwait(false);
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
                 catch (TimeoutException)
@@ -323,7 +341,50 @@ namespace PlaywrightNative.Helpers
                 {
                     await frame.EvaluateAsync(expression).ConfigureAwait(false);
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
+                {
+                }
+                catch (TimeoutException)
+                {
+                }
+            }
+        }
+
+        private static async Task EvaluateInWebKitUtilityAsync(WKPage page, string expression)
+        {
+            IReadOnlyCollection<IFrame> frames = page.Frames;
+            List<WebKitFrame> targets = new List<WebKitFrame>();
+            if (frames != null)
+            {
+                foreach (IFrame frame in frames)
+                {
+                    if (frame is WebKitFrame webkitFrame && !webkitFrame.IsDetached)
+                    {
+                        targets.Add(webkitFrame);
+                    }
+                }
+            }
+
+            if (targets.Count == 0 && page.MainFrame is WebKitFrame main)
+            {
+                targets.Add(main);
+            }
+
+            foreach (WebKitFrame frame in targets)
+            {
+                try
+                {
+                    WKExecutionContext utility = await page.GetUtilityWorldAsync(frame.GetWKFrame()).ConfigureAwait(false);
+                    if (utility != null)
+                    {
+                        await utility.EvaluateAsync(expression).ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        await frame.EvaluateAsync(expression).ConfigureAwait(false);
+                    }
+                }
+                catch (PlaywrightException)
                 {
                 }
                 catch (TimeoutException)
@@ -347,7 +408,7 @@ namespace PlaywrightNative.Helpers
                 {
                     await frame.EvaluateAsync(FinishAnimationsJs).ConfigureAwait(false);
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
             }
@@ -361,7 +422,7 @@ namespace PlaywrightNative.Helpers
                 {
                     await tag.EvaluateAsync("el => { if (el && el.remove) el.remove(); }").ConfigureAwait(false);
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
             }

@@ -20,6 +20,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Text.Json;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using PlaywrightNative.Helpers;
 using PlaywrightNative.Transport.Protocol;
 
@@ -76,13 +77,9 @@ namespace PlaywrightNative.Chromium
         internal bool IsClosed => _closed;
 
         /// <summary>
-        /// Gets or sets a value indicating whether this session has crashed.
+        /// Gets a value indicating whether this session has crashed.
         /// </summary>
-        internal bool IsCrashed
-        {
-            get => _crashed;
-            set => _crashed = value;
-        }
+        internal bool IsCrashed => _crashed;
 
         /// <summary>
         /// Gets or sets the reason recorded when the owning page was closed.
@@ -115,12 +112,39 @@ namespace PlaywrightNative.Chromium
         }
 
         /// <summary>
+        /// Marks the session as crashed and rejects any commands still awaiting a
+        /// response. Unlike <see cref="Dispose"/>, the session is not removed from
+        /// the connection: the transport is still alive, only this target's renderer
+        /// died (<c>Inspector.targetCrashed</c>). Subsequent <see cref="SendAsync"/>
+        /// calls fail fast instead of hanging forever waiting for a reply that will
+        /// never arrive.
+        /// </summary>
+        internal void MarkCrashed()
+        {
+            if (_crashed)
+            {
+                return;
+            }
+
+            _crashed = true;
+
+            foreach (KeyValuePair<int, PendingCallback> kvp in _callbacks)
+            {
+                kvp.Value.Completion.TrySetException(
+                    new PlaywrightException($"Protocol error ({kvp.Value.Method}): Target crashed."));
+            }
+
+            _callbacks.Clear();
+        }
+
+        /// <summary>
         /// Sends a CDP command and waits for the response.
         /// </summary>
         /// <param name="method">The CDP method name (e.g. "Page.navigate").</param>
         /// <param name="parameters">Optional method parameters, serialized to <see cref="JsonElement"/>.</param>
         /// <returns>A task that resolves with the result of the CDP command.</returns>
-        /// <exception cref="TargetClosedException">Thrown when the session has been closed or crashed.</exception>
+        /// <exception cref="TargetClosedException">Thrown when the session has been closed.</exception>
+        /// <exception cref="PlaywrightException">Thrown when the target has crashed.</exception>
         internal Task<JsonElement?> SendAsync(string method, object parameters = null)
         {
             if (_closed)
@@ -131,7 +155,7 @@ namespace PlaywrightNative.Chromium
 
             if (_crashed)
             {
-                throw new TargetClosedException($"Protocol error ({method}): Session crashed.");
+                throw new PlaywrightException($"Protocol error ({method}): Session crashed.");
             }
 
             JsonElement? jsonParams = null;
@@ -140,14 +164,17 @@ namespace PlaywrightNative.Chromium
                 jsonParams = JsonSerializer.SerializeToElement(parameters);
             }
 
-            int id = _connection.RawSend(SessionId, method, jsonParams);
-
+            // Register the callback before sending. A reply that arrives between
+            // RawSend and TryAdd was previously dropped, leaving SendAsync hung
+            // forever (flaky NewPage / setDeviceMetricsOverride stalls).
+            int id = _connection.NextMessageId();
             PendingCallback pending = new PendingCallback
             {
                 Method = method,
                 Completion = new TaskCompletionSource<JsonElement?>(TaskCreationOptions.RunContinuationsAsynchronously),
             };
             _callbacks.TryAdd(id, pending);
+            _connection.RawSend(id, SessionId, method, jsonParams);
 
             return pending.Completion.Task;
         }
@@ -192,7 +219,7 @@ namespace PlaywrightNative.Chromium
                         string method = !string.IsNullOrEmpty(message.Method)
                             ? message.Method
                             : callback.Method;
-                        callback.Completion.TrySetException(new PlaywrightNativeException(
+                        callback.Completion.TrySetException(new PlaywrightException(
                             $"Protocol error ({method}): {message.Error.Message}"));
                     }
                     else

@@ -44,7 +44,7 @@ namespace PlaywrightNative.Helpers
         /// <returns>JSON text, or <c>[]</c> when <paramref name="node"/> is null.</returns>
         internal static string Format(
             AccessibilitySnapshotResult node,
-            AriaSnapshotMode mode = default,
+            AriaSnapshotMode mode = AriaSnapshotMode.Default,
             int? depth = default,
             IReadOnlyList<int[]> boxes = null)
         {

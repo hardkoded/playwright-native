@@ -17,6 +17,7 @@
 using System;
 using System.Text.Json;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using PlaywrightNative.Helpers;
 
 namespace PlaywrightNative.Chromium
@@ -193,7 +194,7 @@ namespace PlaywrightNative.Chromium
         {
             if (_disposed)
             {
-                throw new PlaywrightNativeException(EvaluateSerialization.DisposedHandleMessage);
+                throw new PlaywrightException(EvaluateSerialization.DisposedHandleMessage);
             }
         }
     }

@@ -23,6 +23,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 using PlaywrightNative.TestServer;
@@ -345,7 +346,7 @@ namespace PlaywrightNative.Tests
             await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
             await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
 
-            PlaywrightNativeException ex = Assert.ThrowsAsync<PlaywrightNativeException>(async () =>
+            PlaywrightException ex = Assert.ThrowsAsync<PlaywrightException>(async () =>
             {
                 await context.APIRequest.GetAsync(TestConstants.ServerUrl + "/api-fail", new() { FailOnStatusCode = true }).ConfigureAwait(false);
             });
@@ -429,7 +430,7 @@ namespace PlaywrightNative.Tests
             await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
             await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
 
-            PlaywrightNativeException ex = Assert.ThrowsAsync<PlaywrightNativeException>(async () =>
+            PlaywrightException ex = Assert.ThrowsAsync<PlaywrightException>(async () =>
             {
                 await context.APIRequest.GetAsync(TestConstants.ServerUrl + "/api-slow", new() { Timeout = 300 }).ConfigureAwait(false);
             });
@@ -540,11 +541,11 @@ namespace PlaywrightNative.Tests
             await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
             await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
 
-            PlaywrightNativeException ex = Assert.ThrowsAsync<PlaywrightNativeException>(async () =>
+            PlaywrightException ex = Assert.ThrowsAsync<PlaywrightException>(async () =>
             {
                 await context.APIRequest.GetAsync(TestConstants.ServerUrl + "/api-hop1", new() { MaxRedirects = 1 }).ConfigureAwait(false);
             });
-            Assert.That(ex.Message, Does.Contain("maxRedirects"));
+            Assert.That(ex.Message, Does.Contain("Max redirect count exceeded"));
         }
 
         [PlaywrightTest("global-fetch.spec.ts", "APIRequest GET uses context ignoreHTTPSErrors")]
@@ -628,7 +629,7 @@ namespace PlaywrightNative.Tests
             await response.DisposeAsync().ConfigureAwait(false);
             await response.DisposeAsync().ConfigureAwait(false);
 
-            PlaywrightNativeException ex = Assert.ThrowsAsync<PlaywrightNativeException>(
+            PlaywrightException ex = Assert.ThrowsAsync<PlaywrightException>(
                 async () => await response.TextAsync().ConfigureAwait(false));
             Assert.That(ex.Message, Does.Contain("disposed"));
         }
@@ -658,15 +659,18 @@ namespace PlaywrightNative.Tests
             await request.DisposeAsync().ConfigureAwait(false);
             await request.DisposeAsync().ConfigureAwait(false);
 
-            PlaywrightNativeException ex = Assert.ThrowsAsync<PlaywrightNativeException>(async () =>
+            PlaywrightException ex = Assert.ThrowsAsync<PlaywrightException>(async () =>
             {
                 await request.GetAsync(TestConstants.ServerUrl + "/api-dispose-fetch").ConfigureAwait(false);
             });
-            Assert.That(ex.Message, Does.Contain("disposed"));
+            Assert.That(ex.Message, Does.Contain("Target page, context or browser has been closed"));
 
-            IAPIResponse response = await context.APIRequest.GetAsync(
-                TestConstants.ServerUrl + "/api-dispose-fetch").ConfigureAwait(false);
-            Assert.That(await response.TextAsync().ConfigureAwait(false), Is.EqualTo("ok"));
+            // Upstream keeps the same disposed context.request; further calls fail.
+            PlaywrightException ex2 = Assert.ThrowsAsync<PlaywrightException>(async () =>
+            {
+                await context.APIRequest.GetAsync(TestConstants.ServerUrl + "/api-dispose-fetch").ConfigureAwait(false);
+            });
+            Assert.That(ex2.Message, Does.Contain("Target page, context or browser has been closed"));
         }
 
         [PlaywrightTest("global-fetch.spec.ts", "APIRequest POST sends a JSON body")]
@@ -1160,7 +1164,7 @@ namespace PlaywrightNative.Tests
             await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
             await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
 
-            PlaywrightNativeException resetError = Assert.ThrowsAsync<PlaywrightNativeException>(async () =>
+            PlaywrightException resetError = Assert.ThrowsAsync<PlaywrightException>(async () =>
             {
                 await context.APIRequest.GetAsync(
                     TestConstants.ServerUrl + "/api-reset-once").ConfigureAwait(false);
@@ -1254,11 +1258,11 @@ namespace PlaywrightNative.Tests
             await using IAPIRequestContext request = await Playwright.APIRequest.NewContextAsync().ConfigureAwait(false);
             await request.DisposeAsync().ConfigureAwait(false);
 
-            PlaywrightNativeException ex = Assert.ThrowsAsync<PlaywrightNativeException>(async () =>
+            PlaywrightException ex = Assert.ThrowsAsync<PlaywrightException>(async () =>
             {
                 await request.GetAsync(TestConstants.ServerUrl + "/api-standalone-disposed").ConfigureAwait(false);
             });
-            Assert.That(ex.Message, Does.Contain("disposed"));
+            Assert.That(ex.Message, Does.Contain("Target page, context or browser has been closed"));
         }
 
         [PlaywrightTest("global-fetch.spec.ts", "Playwright.APIRequest ignoreHTTPSErrors accepts untrusted TLS")]
@@ -1355,7 +1359,7 @@ namespace PlaywrightNative.Tests
             });
 
             await using IAPIRequestContext request = await Playwright.APIRequest.NewContextAsync(new() { Timeout = 300 }).ConfigureAwait(false);
-            PlaywrightNativeException ex = Assert.ThrowsAsync<PlaywrightNativeException>(async () =>
+            PlaywrightException ex = Assert.ThrowsAsync<PlaywrightException>(async () =>
             {
                 await request.GetAsync(TestConstants.ServerUrl + "/api-standalone-slow").ConfigureAwait(false);
             });
@@ -1383,7 +1387,7 @@ namespace PlaywrightNative.Tests
             });
 
             await using IAPIRequestContext request = await Playwright.APIRequest.NewContextAsync(new() { FailOnStatusCode = true }).ConfigureAwait(false);
-            PlaywrightNativeException ex = Assert.ThrowsAsync<PlaywrightNativeException>(async () =>
+            PlaywrightException ex = Assert.ThrowsAsync<PlaywrightException>(async () =>
             {
                 await request.GetAsync(TestConstants.ServerUrl + "/api-standalone-404").ConfigureAwait(false);
             });
@@ -1411,11 +1415,11 @@ namespace PlaywrightNative.Tests
             Server.SetRedirect("/api-standalone-hop1", TestConstants.ServerUrl + "/api-standalone-hop2");
 
             await using IAPIRequestContext request = await Playwright.APIRequest.NewContextAsync(new() { MaxRedirects = 1 }).ConfigureAwait(false);
-            PlaywrightNativeException ex = Assert.ThrowsAsync<PlaywrightNativeException>(async () =>
+            PlaywrightException ex = Assert.ThrowsAsync<PlaywrightException>(async () =>
             {
                 await request.GetAsync(TestConstants.ServerUrl + "/api-standalone-hop1").ConfigureAwait(false);
             });
-            Assert.That(ex.Message, Does.Contain("maxRedirects"));
+            Assert.That(ex.Message, Does.Contain("Max redirect count exceeded"));
         }
 
         [PlaywrightTest("global-fetch.spec.ts", "Playwright.APIRequest storageState sends cookies")]

@@ -30,5 +30,8 @@ namespace PlaywrightNative
 
         /// <summary>Apple WebKit (used by Safari).</summary>
         Webkit,
+
+        /// <summary>ffmpeg, used for WebP screenshot recoding and screencasts.</summary>
+        Ffmpeg,
     }
 }

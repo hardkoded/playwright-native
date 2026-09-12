@@ -19,6 +19,7 @@ using System;
 using System.Collections.Generic;
 using System.Text.Json;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using PlaywrightNative.Helpers;
 
 namespace PlaywrightNative.WebKit
@@ -29,7 +30,7 @@ namespace PlaywrightNative.WebKit
     /// a specialized subclass (<see cref="WKElementHandle"/>) is used when the remote object
     /// is a DOM node (<c>subtype == "node"</c>). Disposed via <c>Runtime.releaseObject</c>.
     /// </summary>
-    internal partial class WKJSHandle : IJSHandle
+    internal partial class WKJSHandle : IJSHandle, IHasDisposedState
     {
         private readonly WKExecutionContext _context;
         private readonly string _objectId;
@@ -57,6 +58,9 @@ namespace PlaywrightNative.WebKit
 
         /// <inheritdoc/>
         public virtual IElementHandle AsElement() => null;
+
+        /// <inheritdoc/>
+        bool IHasDisposedState.IsDisposed => _disposed;
 
         /// <summary>Gets the WIP remote object identifier for this handle.</summary>
         internal string ObjectId => _objectId;
@@ -128,7 +132,7 @@ namespace PlaywrightNative.WebKit
             {
                 names = await EvaluateAsync<string[]>(JsonValueHelper.EnumerablePropertyNamesFunction).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 return result;
             }
@@ -207,7 +211,7 @@ namespace PlaywrightNative.WebKit
         {
             if (_disposed)
             {
-                throw new PlaywrightNativeException(EvaluateSerialization.DisposedHandleMessage);
+                throw new PlaywrightException(EvaluateSerialization.DisposedHandleMessage);
             }
         }
 

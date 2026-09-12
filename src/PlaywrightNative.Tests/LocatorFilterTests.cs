@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 
@@ -34,11 +35,13 @@ namespace PlaywrightNative.Tests
             await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
             await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
-            await page.SetContentAsync("<button id=\"a\">Save</button><button id=\"b\">Cancel</button>").ConfigureAwait(false);
+            await page.SetContentAsync(
+                "<button id=\"a\" onclick=\"window.lastClickedId = this.id\">Save</button>" +
+                "<button id=\"b\" onclick=\"window.lastClickedId = this.id\">Cancel</button>").ConfigureAwait(false);
 
             await page.Locator("button").Filter("Save").ClickAsync().ConfigureAwait(false);
 
-            string id = await page.EvaluateAsync<string>("document.activeElement && document.activeElement.id").ConfigureAwait(false);
+            string id = await page.EvaluateAsync<string>("window.lastClickedId").ConfigureAwait(false);
             Assert.That(id, Is.EqualTo("a"));
             Assert.That(await page.Locator("button").Filter("Save").CountAsync().ConfigureAwait(false), Is.EqualTo(1));
         }
@@ -104,7 +107,7 @@ namespace PlaywrightNative.Tests
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
             await page.SetContentAsync("<button>Save now</button><button>Save later</button>").ConfigureAwait(false);
 
-            PlaywrightNativeException ex = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException ex = Assert.CatchAsync<PlaywrightException>(
                 () => page.Locator("button").Filter("Save").ClickAsync());
 
             Assert.That(ex, Is.Not.Null);

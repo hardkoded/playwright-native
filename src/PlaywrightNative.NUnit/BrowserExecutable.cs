@@ -45,6 +45,7 @@ public static class BrowserExecutable
     private static bool _chromiumResolved;
     private static bool _webkitResolved;
     private static bool _firefoxResolved;
+    private static bool _ffmpegResolved;
 
     /// <summary>
     /// Gets the resolved Chromium executable path, or <c>null</c> when unavailable.
@@ -62,12 +63,20 @@ public static class BrowserExecutable
     public static string FirefoxExecutablePath { get; private set; }
 
     /// <summary>
-    /// Ensures Chromium is resolved, and WebKit/Firefox when <c>PRODUCT</c>/<c>BROWSER</c>
-    /// selects them.
+    /// Gets the resolved ffmpeg executable path, or <c>null</c> when unavailable.
+    /// </summary>
+    public static string FfmpegExecutablePath { get; private set; }
+
+    /// <summary>
+    /// Ensures Chromium and ffmpeg are resolved, and WebKit/Firefox when
+    /// <c>PRODUCT</c>/<c>BROWSER</c> selects them. ffmpeg is fetched unconditionally
+    /// (official installs it by default alongside every browser) so WebP/screencast
+    /// helpers can find it via <see cref="Helpers.FfmpegLocator"/> regardless of product.
     /// </summary>
     public static async Task EnsureCurrentProductAsync()
     {
         await EnsureAsync("chromium").ConfigureAwait(false);
+        await EnsureAsync("ffmpeg").ConfigureAwait(false);
 
         string browserName = ResolveBrowserName();
         if (browserName == "webkit")
@@ -110,6 +119,16 @@ public static class BrowserExecutable
                             SupportedBrowser.Webkit,
                             "PLAYWRIGHT_WEBKIT_EXECUTABLE_PATH").ConfigureAwait(false);
                         _webkitResolved = true;
+                    }
+
+                    break;
+                case "ffmpeg":
+                    if (!_ffmpegResolved)
+                    {
+                        FfmpegExecutablePath = await ResolveBrowserAsync(
+                            SupportedBrowser.Ffmpeg,
+                            "PLAYWRIGHT_FFMPEG_PATH").ConfigureAwait(false);
+                        _ffmpegResolved = true;
                     }
 
                     break;
@@ -170,7 +189,11 @@ public static class BrowserExecutable
             Assert.Ignore($"{label} executable not available (download skipped or failed).");
         }
 
-        return new BrowserTypeLaunchOptions { ExecutablePath = path };
+        bool headless = !string.Equals(
+            Environment.GetEnvironmentVariable("HEADLESS"),
+            "false",
+            StringComparison.OrdinalIgnoreCase);
+        return new BrowserTypeLaunchOptions { ExecutablePath = path, Headless = headless };
     }
 
     /// <summary>
@@ -229,9 +252,12 @@ public static class BrowserExecutable
                 return downloadedPath;
             }
         }
-        catch
+        catch (Exception ex)
         {
             // Network unreachable, archive corrupt, or extraction failed.
+            // Surface the reason so CI logs explain skipped browser tests.
+            TestContext.Progress.WriteLine(
+                $"BrowserExecutable: failed to download {browser}: {ex.Message}");
         }
 
         return null;
@@ -259,6 +285,11 @@ public class BrowserExecutableFixture
     /// Gets <see cref="BrowserExecutable.FirefoxExecutablePath"/>.
     /// </summary>
     public static string FirefoxExecutablePath => BrowserExecutable.FirefoxExecutablePath;
+
+    /// <summary>
+    /// Gets <see cref="BrowserExecutable.FfmpegExecutablePath"/>.
+    /// </summary>
+    public static string FfmpegExecutablePath => BrowserExecutable.FfmpegExecutablePath;
 
     /// <summary>
     /// Prefetches browsers for the current product.

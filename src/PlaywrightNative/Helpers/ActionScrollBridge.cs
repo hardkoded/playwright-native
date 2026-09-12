@@ -28,5 +28,13 @@ namespace PlaywrightNative.Helpers
         /// <returns><see cref="ScrollMode.None"/> for <see cref="ActionScroll.None"/>; otherwise <see langword="null"/>.</returns>
         internal static ScrollMode? ToScrollOption(ActionScroll scroll)
             => scroll == ActionScroll.None ? ScrollMode.None : null;
+
+        /// <summary>
+        /// Converts an official <see cref="ScrollMode"/> option to <see cref="ActionScroll"/>.
+        /// </summary>
+        /// <param name="scroll">Official scroll option, or <see langword="null"/> for default auto.</param>
+        /// <returns><see cref="ActionScroll.None"/> only when <paramref name="scroll"/> is <see cref="ScrollMode.None"/>.</returns>
+        internal static ActionScroll FromScrollOption(ScrollMode? scroll)
+            => scroll == ScrollMode.None ? ActionScroll.None : ActionScroll.Undefined;
     }
 }

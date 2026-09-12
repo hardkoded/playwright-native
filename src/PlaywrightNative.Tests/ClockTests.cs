@@ -90,7 +90,7 @@ namespace PlaywrightNative.Tests
 
             const long frozen = 1_706_871_600_000;
             await page.Clock.InstallAsync(frozen).ConfigureAwait(false);
-
+            await page.Clock.PauseAtAsync(frozen).ConfigureAwait(false);
             long now = await page.EvaluateAsync<long>("Date.now()").ConfigureAwait(false);
             Assert.That(now, Is.EqualTo(frozen));
         }
@@ -107,6 +107,7 @@ namespace PlaywrightNative.Tests
 
             const long frozen = 1_706_871_600_000;
             await page.Clock.InstallAsync(frozen).ConfigureAwait(false);
+            await page.Clock.PauseAtAsync(frozen).ConfigureAwait(false);
             await page.EvaluateAsync("window.__fired = 0; setTimeout(() => { window.__fired = 1; }, 1000);").ConfigureAwait(false);
 
             Assert.That(await page.EvaluateAsync<int>("window.__fired").ConfigureAwait(false), Is.EqualTo(0));
@@ -127,6 +128,7 @@ namespace PlaywrightNative.Tests
 
             const long frozen = 1_706_871_600_000;
             await page.Clock.InstallAsync(frozen).ConfigureAwait(false);
+            await page.Clock.PauseAtAsync(frozen).ConfigureAwait(false);
             await page.Clock.RunForAsync("00:02").ConfigureAwait(false);
 
             Assert.That(await page.EvaluateAsync<long>("Date.now()").ConfigureAwait(false), Is.EqualTo(frozen + 2000));
@@ -163,6 +165,7 @@ namespace PlaywrightNative.Tests
 
             const long frozen = 1_706_871_600_000;
             await page.Clock.InstallAsync(frozen).ConfigureAwait(false);
+            await page.Clock.PauseAtAsync(frozen).ConfigureAwait(false);
             await page.Clock.ResumeAsync().ConfigureAwait(false);
             await page.WaitForTimeoutAsync(50).ConfigureAwait(false);
 

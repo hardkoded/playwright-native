@@ -21,6 +21,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using PlaywrightNative.Helpers;
 
 namespace PlaywrightNative.Chromium
@@ -144,7 +145,7 @@ namespace PlaywrightNative.Chromium
             catch (TimeoutException)
             {
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 RemoveWorkerSession(session);
             }
@@ -167,7 +168,7 @@ namespace PlaywrightNative.Chromium
             {
                 await EnableFetchBoundedAsync(session).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
         }
@@ -276,7 +277,7 @@ namespace PlaywrightNative.Chromium
                         return bytes;
                     }
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
             }
@@ -316,7 +317,7 @@ namespace PlaywrightNative.Chromium
                 {
                     await state.Session.SendAsync("Network.setExtraHTTPHeaders", new { headers }).ConfigureAwait(false);
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
             }
@@ -543,7 +544,7 @@ namespace PlaywrightNative.Chromium
                     catch (TimeoutException)
                     {
                     }
-                    catch (PlaywrightNativeException)
+                    catch (PlaywrightException)
                     {
                     }
                 }
@@ -561,7 +562,7 @@ namespace PlaywrightNative.Chromium
                 catch (TimeoutException)
                 {
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
 
@@ -584,7 +585,7 @@ namespace PlaywrightNative.Chromium
                     catch (TimeoutException)
                     {
                     }
-                    catch (PlaywrightNativeException)
+                    catch (PlaywrightException)
                     {
                     }
                 }
@@ -715,7 +716,7 @@ namespace PlaywrightNative.Chromium
             catch (TimeoutException)
             {
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
         }
@@ -745,14 +746,14 @@ namespace PlaywrightNative.Chromium
                     {
                         await worker.Session.SendAsync("Network.setRequestInterception", new { patterns }).ConfigureAwait(false);
                     }
-                    catch (PlaywrightNativeException)
+                    catch (PlaywrightException)
                     {
                     }
                 }
 
                 _webSocketInterceptingEnabled = needWs;
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
         }
@@ -963,8 +964,21 @@ namespace PlaywrightNative.Chromium
 
             string requestId = RequestKey(session, rawId);
             string holdType = GetString(p, "type");
+
+            // A CORS preflight's own requestWillBeSent reports type "Other", not
+            // "Fetch"/"XHR" -- but it still gets its own Fetch.requestPaused, paired
+            // by requestId the same way. Without buffering it here too, its paused
+            // event finds nothing under its own id and falls back to matching by
+            // URL, where it collides with the real request's buffered entry (both
+            // target the identical URL by definition). That steals the real
+            // request's pairing and leaves its own paused event -- and the whole
+            // connection -- waiting on a reply that never comes.
+            bool isPreflightWillBeSent = p.TryGetProperty("initiator", out JsonElement wbsInitiator)
+                && string.Equals(GetString(wbsInitiator, "type"), "preflight", StringComparison.OrdinalIgnoreCase);
             if (!force
-                && (string.Equals(holdType, "Fetch", StringComparison.Ordinal) || string.Equals(holdType, "XHR", StringComparison.Ordinal))
+                && (string.Equals(holdType, "Fetch", StringComparison.Ordinal)
+                    || string.Equals(holdType, "XHR", StringComparison.Ordinal)
+                    || isPreflightWillBeSent)
                 && !_networkIdToFetchRequestPaused.ContainsKey(rawId)
                 && !_networkIdToFetchRequestPaused.ContainsKey(requestId)
                 && HasUserRoutes())
@@ -1578,7 +1592,7 @@ namespace PlaywrightNative.Chromium
             ApplyChromiumRefererConcatenation(request);
             if (pausedHeaders.Count > 0)
             {
-                request.SetRawRequestHeaders(pausedHeaders);
+                request.SetRawRequestHeaders(pausedHeaders, isFinal: true);
             }
         }
 
@@ -1631,7 +1645,7 @@ namespace PlaywrightNative.Chromium
         {
             request.ApplyInterceptedHeaders(request.Headers, EffectiveExtraHeaders());
             ApplyChromiumRefererConcatenation(request);
-            request.SetRawRequestHeaders(HeaderMap.Array(request.Headers));
+            request.SetRawRequestHeaders(HeaderMap.Array(request.Headers), isFinal: true);
 
             if (request.RedirectedFrom != null)
             {

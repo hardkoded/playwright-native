@@ -1,13 +1,12 @@
 using System;
-using System.Runtime.Serialization;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative
 {
     /// <summary>
     /// Exception thrown when a <see cref="IPage"/> fails to navigate an URL.
     /// </summary>
-    [Serializable]
-    public class NavigationException : PlaywrightNativeException
+    public class NavigationException : PlaywrightException
     {
         /// <summary>
         /// Initializes a new instance of the <see cref="NavigationException"/> class.
@@ -42,18 +41,6 @@ namespace PlaywrightNative
         /// <param name="innerException">Inner exception.</param>
         public NavigationException(string message, Exception innerException)
             : this(message, (innerException as NavigationException)?.Url, innerException)
-        {
-        }
-
-        /// <summary>
-        /// Initializes a new instance of the <see cref="NavigationException"/> class.
-        /// </summary>
-        /// <param name="info">Info.</param>
-        /// <param name="context">Context.</param>
-#if NET8_0_OR_GREATER
-        [Obsolete("Formatter-based serialization is obsolete", DiagnosticId = "SYSLIB0051")]
-#endif
-        protected NavigationException(SerializationInfo info, StreamingContext context) : base(info, context)
         {
         }
 

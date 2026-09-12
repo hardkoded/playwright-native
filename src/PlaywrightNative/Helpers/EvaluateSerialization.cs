@@ -23,6 +23,7 @@ using System.Reflection;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -51,10 +52,14 @@ namespace PlaywrightNative.Helpers
 
         /// <summary>
         /// Browser-side serialize matching Playwright's utility-script serializer.
+        /// Cycle detection uses a parallel object/id array instead of <c>Map</c>,
+        /// since page code can reassign the global <c>Map</c> binding (official
+        /// "should work with deleted Map in main world" parity).
         /// </summary>
         internal const string SerializeJs =
             "function (value) {" +
-            "  const seen = new Map();" +
+            "  const seenObjs = [];" +
+            "  const seenIds = [];" +
             "  let nextId = 1;" +
             "  const isRegExp = (obj) => { try { return obj instanceof RegExp || Object.prototype.toString.call(obj) === '[object RegExp]'; } catch (e) { return false; } };" +
             "  const isDate = (obj) => { try { return obj instanceof Date || Object.prototype.toString.call(obj) === '[object Date]'; } catch (e) { return false; } };" +
@@ -114,9 +119,11 @@ namespace PlaywrightNative.Helpers
             "      if (!ctor) continue;" +
             "      try { if (v instanceof ctor) return { ta: { b: toBase64(v), k: typed[t][0] } }; } catch (e) {}" +
             "    }" +
-            "    if (seen.has(v)) return { ref: seen.get(v) };" +
+            "    const seenIdx = seenObjs.indexOf(v);" +
+            "    if (seenIdx !== -1) return { ref: seenIds[seenIdx] };" +
             "    const id = nextId++;" +
-            "    seen.set(v, id);" +
+            "    seenObjs.push(v);" +
+            "    seenIds.push(id);" +
             "    if (Array.isArray(v)) {" +
             "      const a = [];" +
             "      for (let i = 0; i < v.length; i++) a[i] = visit(v[i]);" +
@@ -144,11 +151,13 @@ namespace PlaywrightNative.Helpers
             "}";
 
         /// <summary>
-        /// Browser-side parse of the tagged evaluate payload.
+        /// Browser-side parse of the tagged evaluate payload. Keyed by the
+        /// numeric tag id, so a plain object stands in for <c>Map</c> here too -
+        /// same reasoning as <see cref="SerializeJs"/>.
         /// </summary>
         internal const string ParseJs =
             "function (value) {" +
-            "  const refs = new Map();" +
+            "  const refs = Object.create(null);" +
             "  const typed = {" +
             "    i8: typeof Int8Array === 'function' ? Int8Array : null," +
             "    ui8: typeof Uint8Array === 'function' ? Uint8Array : null," +
@@ -170,7 +179,7 @@ namespace PlaywrightNative.Helpers
             "  };" +
             "  const visit = (v) => {" +
             "    if (v === undefined || v === null || typeof v !== 'object') return v;" +
-            "    if (Object.prototype.hasOwnProperty.call(v, 'ref')) return refs.get(v.ref);" +
+            "    if (Object.prototype.hasOwnProperty.call(v, 'ref')) return refs[v.ref];" +
             "    if (Object.prototype.hasOwnProperty.call(v, 'v')) {" +
             "      if (v.v === 'undefined') return undefined;" +
             "      if (v.v === 'null') return null;" +
@@ -196,13 +205,13 @@ namespace PlaywrightNative.Helpers
             "    if (Object.prototype.hasOwnProperty.call(v, 'ta')) return fromBase64(v.ta.b, typed[v.ta.k]);" +
             "    if (Object.prototype.hasOwnProperty.call(v, 'a')) {" +
             "      const a = [];" +
-            "      refs.set(v.id, a);" +
+            "      refs[v.id] = a;" +
             "      for (let i = 0; i < v.a.length; i++) a[i] = visit(v.a[i]);" +
             "      return a;" +
             "    }" +
             "    if (Object.prototype.hasOwnProperty.call(v, 'o')) {" +
             "      const o = {};" +
-            "      refs.set(v.id, o);" +
+            "      refs[v.id] = o;" +
             "      for (let i = 0; i < v.o.length; i++) {" +
             "        const e = v.o[i];" +
             "        if (e.k === '__proto__') continue;" +
@@ -368,7 +377,7 @@ namespace PlaywrightNative.Helpers
         /// <param name="error">The protocol or engine exception.</param>
         /// <param name="frameEvaluate">Whether the call is <c>frame.evaluate</c>.</param>
         /// <returns>The original or rewritten exception.</returns>
-        internal static PlaywrightNativeException RewriteException(PlaywrightNativeException error, bool frameEvaluate = false)
+        internal static PlaywrightException RewriteException(PlaywrightException error, bool frameEvaluate = false)
         {
             if (error == null)
             {
@@ -376,7 +385,7 @@ namespace PlaywrightNative.Helpers
             }
 
             string rewritten = RewriteError(error.Message, frameEvaluate);
-            return rewritten == error.Message ? error : new PlaywrightNativeException(rewritten);
+            return rewritten == error.Message ? error : new PlaywrightException(rewritten);
         }
 
         /// <summary>
@@ -532,7 +541,7 @@ namespace PlaywrightNative.Helpers
 
             if (value is IJSHandle)
             {
-                throw new PlaywrightNativeException("JSHandle arguments must be passed through the handle evaluate path.");
+                throw new PlaywrightException("JSHandle arguments must be passed through the handle evaluate path.");
             }
 
             Type type = value.GetType();

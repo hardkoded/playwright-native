@@ -847,9 +847,10 @@ namespace PlaywrightNative.Helpers
 }";
 
         /// <summary>
-        /// JavaScript function <c>(el, json) => boolean</c> that draws official
+        /// JavaScript function <c>(el, json) => boolean</c> that marks the element
+        /// (<c>data-pw-highlight</c> + outline) and draws official
         /// <c>x-pw-highlight</c> / <c>x-pw-tooltip</c> overlays. <c>json</c> is
-        /// <c>{ tooltip, style }</c>.
+        /// <c>{ tooltip, style, id }</c>.
         /// </summary>
         internal const string HighlightFunction = @"(el, json) => {
     if (!el || !el.isConnected) {
@@ -869,6 +870,13 @@ namespace PlaywrightNative.Helpers
         if (existing[i].getAttribute('data-pw-hl') === id) {
             existing[i].remove();
         }
+    }
+    el.setAttribute('data-pw-highlight', 'true');
+    el.setAttribute('data-pw-hl', id);
+    if (style) {
+        el.style.cssText += ';' + style;
+    } else {
+        el.style.outline = '2px solid rgb(255, 0, 0)';
     }
     const box = el.getBoundingClientRect();
     const highlight = document.createElement('x-pw-highlight');
@@ -901,14 +909,22 @@ namespace PlaywrightNative.Helpers
 
         /// <summary>
         /// JavaScript function <c>id => undefined</c> that removes one locator
-        /// highlight by overlay id.
+        /// highlight by overlay / element id.
         /// </summary>
         internal const string HideHighlightByIdFunction = @"id => {
     const key = String(id || '');
-    const nodes = document.querySelectorAll('x-pw-highlight, x-pw-tooltip');
+    const nodes = document.querySelectorAll('x-pw-highlight, x-pw-tooltip, [data-pw-hl]');
     for (let i = 0; i < nodes.length; i++) {
-        if (nodes[i].getAttribute('data-pw-hl') === key) {
+        if (nodes[i].getAttribute('data-pw-hl') !== key) {
+            continue;
+        }
+        const tag = String(nodes[i].tagName || '').toUpperCase();
+        if (tag === 'X-PW-HIGHLIGHT' || tag === 'X-PW-TOOLTIP') {
             nodes[i].remove();
+        } else {
+            nodes[i].removeAttribute('data-pw-highlight');
+            nodes[i].removeAttribute('data-pw-hl');
+            nodes[i].style.outline = '';
         }
     }
 }";
@@ -921,6 +937,7 @@ namespace PlaywrightNative.Helpers
     for (let i = 0; i < nodes.length; i++) {
         if (nodes[i].hasAttribute && nodes[i].hasAttribute('data-pw-highlight')) {
             nodes[i].removeAttribute('data-pw-highlight');
+            nodes[i].removeAttribute('data-pw-hl');
             nodes[i].style.outline = '';
         } else {
             nodes[i].remove();
@@ -930,19 +947,20 @@ namespace PlaywrightNative.Helpers
 }";
 
         /// <summary>
-        /// JavaScript IIFE that clears every locator highlight on the page.
+        /// JavaScript function that clears every locator highlight on the page.
         /// </summary>
-        internal const string HideAllHighlightsFunction = @"(() => {
+        internal const string HideAllHighlightsFunction = @"() => {
     const nodes = document.querySelectorAll('x-pw-highlight, x-pw-tooltip, [data-pw-highlight]');
     for (let i = 0; i < nodes.length; i++) {
         if (nodes[i].hasAttribute && nodes[i].hasAttribute('data-pw-highlight')) {
             nodes[i].removeAttribute('data-pw-highlight');
+            nodes[i].removeAttribute('data-pw-hl');
             nodes[i].style.outline = '';
         } else {
             nodes[i].remove();
         }
     }
-})()";
+}";
 
         /// <summary>
         /// JavaScript function <c>(el, testIdAttr) => string[]</c> used by
@@ -1040,6 +1058,18 @@ namespace PlaywrightNative.Helpers
     }
     return el.innerText;
 }";
+
+        /// <summary>
+        /// Expression using an in-scope <c>el</c> for atomic selector reads.
+        /// Throws when the node is not an <c>HTMLElement</c>.
+        /// </summary>
+        internal const string InnerTextValueExpression = @"(() => {
+    const view = el && el.ownerDocument && el.ownerDocument.defaultView;
+    if (!view || !(el instanceof view.HTMLElement)) {
+        throw new Error('Node is not an HTMLElement');
+    }
+    return el.innerText;
+})()";
 
         /// <summary>
         /// JavaScript function <c>(el, spec) => boolean</c> that compares

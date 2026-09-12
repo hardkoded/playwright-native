@@ -17,9 +17,12 @@
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
+
 using Microsoft.Playwright;
+using PlaywrightNative.Chromium;
 using PlaywrightNative.Compat;
 using PlaywrightNative.Helpers;
+using PlaywrightNative.WebKit;
 using static PlaywrightNative.Helpers.CompatCollections;
 
 namespace PlaywrightNative
@@ -112,19 +115,29 @@ namespace PlaywrightNative
             float? timeout = default,
             bool? force = default,
             ActionScroll scroll = default)
-            => handle.FillAsync(value, new ElementHandleFillOptions
+            => handle switch
             {
-                NoWaitAfter = noWaitAfter,
-                Timeout = timeout,
-                Force = force,
-            });
+                ChromiumElementHandle chromium => chromium.FillAsync(value, noWaitAfter, timeout, force, scroll),
+                WKElementHandle webkit => webkit.FillAsync(value, noWaitAfter, timeout, force, scroll),
+                _ => handle.FillAsync(value, new ElementHandleFillOptions
+                {
+                    NoWaitAfter = noWaitAfter,
+                    Timeout = timeout,
+                    Force = force,
+                }),
+            };
 
         /// <summary>Legacy expanded-parameter focus (scroll/timeout ignored on element handles).</summary>
         public static Task FocusAsync(
             this IElementHandle handle,
             float? timeout = default,
             ActionScroll scroll = default)
-            => handle.FocusAsync();
+            => handle switch
+            {
+                ChromiumElementHandle chromium => chromium.FocusAsync(timeout, scroll),
+                WKElementHandle webkit => webkit.FocusAsync(timeout, scroll),
+                _ => handle.FocusAsync(),
+            };
 
         /// <summary>Legacy expanded-parameter hover.</summary>
         public static Task HoverAsync(
@@ -154,13 +167,18 @@ namespace PlaywrightNative
             float? timeout = default,
             bool? force = default,
             ActionScroll scroll = default)
-            => handle.PressAsync(key, new LegacyElementHandlePressOptions
+            => handle switch
             {
-                Delay = delay,
-                NoWaitAfter = noWaitAfter,
-                Timeout = timeout,
-                Force = force,
-            });
+                ChromiumElementHandle chromium => chromium.PressAsync(key, delay, noWaitAfter, timeout, force, scroll),
+                WKElementHandle webkit => webkit.PressAsync(key, delay, noWaitAfter, timeout, force, scroll),
+                _ => handle.PressAsync(key, new LegacyElementHandlePressOptions
+                {
+                    Delay = delay,
+                    NoWaitAfter = noWaitAfter,
+                    Timeout = timeout,
+                    Force = force,
+                }),
+            };
 
         /// <summary>Legacy expanded-parameter select option.</summary>
         public static Task<IReadOnlyCollection<string>> SelectOptionAsync(
@@ -170,12 +188,17 @@ namespace PlaywrightNative
             float? timeout = default,
             bool? force = default,
             ActionScroll scroll = default)
-            => CompatCollections.AsCollectionAsync(handle.SelectOptionAsync(values, new ElementHandleSelectOptionOptions
+            => handle switch
             {
-                NoWaitAfter = noWaitAfter,
-                Timeout = timeout,
-                Force = force,
-            }));
+                ChromiumElementHandle chromium => chromium.SelectOptionAsync(values, noWaitAfter, timeout, force, scroll),
+                WKElementHandle webkit => webkit.SelectOptionAsync(values, noWaitAfter, timeout, force, scroll),
+                _ => CompatCollections.AsCollectionAsync(handle.SelectOptionAsync(values, new ElementHandleSelectOptionOptions
+                {
+                    NoWaitAfter = noWaitAfter,
+                    Timeout = timeout,
+                    Force = force,
+                })),
+            };
 
         /// <summary>Legacy expanded-parameter select option.</summary>
         public static Task<IReadOnlyCollection<string>> SelectOptionAsync(
@@ -273,11 +296,17 @@ namespace PlaywrightNative
             float? timeout = default,
             bool? force = default,
             ActionScroll scroll = default)
-            => handle.SetInputFilesAsync(files, new ElementHandleSetInputFilesOptions
+            => handle switch
             {
-                NoWaitAfter = noWaitAfter,
-                Timeout = timeout,
-            });
+                ChromiumElementHandle chromium => chromium.SetInputFilesAsync(files, noWaitAfter, timeout, force, scroll),
+                WKElementHandle webkit => webkit.SetInputFilesAsync(files, noWaitAfter, timeout, force, scroll),
+                _ => handle.SetInputFilesAsync(files, new LegacyElementHandleSetInputFilesOptions
+                {
+                    NoWaitAfter = noWaitAfter,
+                    Timeout = timeout,
+                    Force = force,
+                }),
+            };
 
         /// <summary>Legacy expanded-parameter set input files.</summary>
         public static Task SetInputFilesAsync(
@@ -345,13 +374,18 @@ namespace PlaywrightNative
             float? timeout = default,
             bool? force = default,
             ActionScroll scroll = default)
-            => handle.TypeAsync(text, new LegacyElementHandleTypeOptions
+            => handle switch
             {
-                Delay = delay,
-                NoWaitAfter = noWaitAfter,
-                Timeout = timeout,
-                Force = force,
-            });
+                ChromiumElementHandle chromium => chromium.TypeAsync(text, delay, noWaitAfter, timeout, force, scroll),
+                WKElementHandle webkit => webkit.TypeAsync(text, delay, noWaitAfter, timeout, force, scroll),
+                _ => handle.TypeAsync(text, new LegacyElementHandleTypeOptions
+                {
+                    Delay = delay,
+                    NoWaitAfter = noWaitAfter,
+                    Timeout = timeout,
+                    Force = force,
+                }),
+            };
 
         /// <summary>Legacy expanded-parameter uncheck.</summary>
         public static Task UncheckAsync(
@@ -450,35 +484,47 @@ namespace PlaywrightNative
 
         /// <summary>Legacy expanded-parameter dispatch event.</summary>
         public static Task DispatchEventAsync(this IElementHandle handle, string type, object eventInit = default, float? timeout = default)
-            => handle.DispatchEventAsync(type, eventInit);
+            => ElementDispatchEventAction.RunAsync(handle, type, eventInit, timeout);
 
         /// <summary>Legacy expanded-parameter select text.</summary>
         public static Task SelectTextAsync(this IElementHandle handle, float? timeout = default, bool? force = default, ActionScroll scroll = default)
-            => handle.SelectTextAsync(new ElementHandleSelectTextOptions
+        {
+            if (handle is ChromiumElementHandle chromium)
+            {
+                return chromium.SelectTextAsync(timeout, force, scroll);
+            }
+
+            if (handle is WKElementHandle webkit)
+            {
+                return webkit.SelectTextAsync(timeout, force, scroll);
+            }
+
+            return handle.SelectTextAsync(new ElementHandleSelectTextOptions
             {
                 Timeout = timeout,
                 Force = force,
             });
+        }
 
         /// <summary>Legacy element aria snapshot YAML.</summary>
-        public static Task<string> AriaSnapshotAsync(this IElementHandle handle, AriaSnapshotMode mode = default, int? depth = default, bool? boxes = default)
+        public static Task<string> AriaSnapshotAsync(this IElementHandle handle, AriaSnapshotMode mode = AriaSnapshotMode.Default, int? depth = default, bool? boxes = default)
         {
             bool renderBoxes = boxes ?? false;
             if (mode == AriaSnapshotMode.Ai)
             {
-                return AriaSnapshotOfficialAi.CaptureYamlAsync(handle, depth, renderBoxes, string.Empty);
+                return AriaSnapshotAi.CaptureElementAsync(handle, depth, renderBoxes);
             }
 
             return AriaSnapshotOfficial.CaptureYamlAsync(handle, depth, renderBoxes);
         }
 
         /// <summary>Legacy element aria snapshot JSON.</summary>
-        public static Task<string> AriaSnapshotJsonAsync(this IElementHandle handle, AriaSnapshotMode mode = default, int? depth = default, bool? boxes = default)
+        public static Task<string> AriaSnapshotJsonAsync(this IElementHandle handle, AriaSnapshotMode mode = AriaSnapshotMode.Default, int? depth = default, bool? boxes = default)
         {
             bool renderBoxes = boxes ?? false;
             if (mode == AriaSnapshotMode.Ai)
             {
-                return AriaSnapshotOfficialAi.CaptureJsonAsync(handle, depth, renderBoxes, string.Empty);
+                return AriaSnapshotAi.CaptureElementJsonAsync(handle, depth, renderBoxes);
             }
 
             return AriaSnapshotOfficial.CaptureJsonAsync(handle, depth, renderBoxes);

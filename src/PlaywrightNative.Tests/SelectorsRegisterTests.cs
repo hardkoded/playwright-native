@@ -17,6 +17,7 @@
 using System;
 using System.IO;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 
@@ -102,7 +103,7 @@ namespace PlaywrightNative.Tests
         [Timeout(30_000)]
         public void ShouldThrowOnInvalidName()
         {
-            PlaywrightNativeException ex = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException ex = Assert.CatchAsync<PlaywrightException>(
                 () => Playwright.Selectors.RegisterAsync("$", TagEngine));
             Assert.That(ex.Message, Does.Contain("Selector engine name may only contain [a-zA-Z0-9_] characters"));
         }
@@ -113,7 +114,7 @@ namespace PlaywrightNative.Tests
         public async Task ShouldThrowAlreadyRegistered()
         {
             await Playwright.Selectors.RegisterAsync("tag635dup", TagEngine).ConfigureAwait(false);
-            PlaywrightNativeException ex = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException ex = Assert.CatchAsync<PlaywrightException>(
                 () => Playwright.Selectors.RegisterAsync("tag635dup", TagEngine));
             Assert.That(ex.Message, Does.Contain("\"tag635dup\" selector engine has been already registered"));
         }
@@ -123,7 +124,7 @@ namespace PlaywrightNative.Tests
         [Timeout(30_000)]
         public void ShouldThrowOnPredefinedEngine()
         {
-            PlaywrightNativeException ex = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException ex = Assert.CatchAsync<PlaywrightException>(
                 () => Playwright.Selectors.RegisterAsync("css", TagEngine));
             Assert.That(ex.Message, Does.Contain("\"css\" is a predefined selector engine"));
         }

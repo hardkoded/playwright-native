@@ -21,6 +21,7 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
+using Microsoft.Playwright;
 using PlaywrightNative.Transport;
 
 namespace PlaywrightNative.Firefox
@@ -92,15 +93,7 @@ namespace PlaywrightNative.Firefox
         public async ValueTask DisposeAsync()
         {
             GC.SuppressFinalize(this);
-
-            _connection.Disconnected -= OnDisconnected;
-            _connection.Dispose();
-
-            if (_processManager != null)
-            {
-                await _processManager.KillAsync().ConfigureAwait(false);
-                _processManager.Dispose();
-            }
+            await CloseAsync().ConfigureAwait(false);
         }
 
         /// <summary>
@@ -168,7 +161,7 @@ namespace PlaywrightNative.Firefox
 
             if (string.IsNullOrEmpty(browserContextId))
             {
-                throw new PlaywrightNativeException("Browser.createBrowserContext did not return a browserContextId.");
+                throw new PlaywrightException("Browser.createBrowserContext did not return a browserContextId.");
             }
 
             FFBrowserContext context = new(this, browserContextId);
@@ -201,6 +194,39 @@ namespace PlaywrightNative.Firefox
             if (_processManager != null)
             {
                 await _processManager.EnsureExitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+            }
+
+            try
+            {
+                _connection.Disconnected -= OnDisconnected;
+            }
+#pragma warning disable RCS1075
+            catch (Exception)
+            {
+            }
+#pragma warning restore RCS1075
+
+            try
+            {
+                _connection.Dispose();
+            }
+#pragma warning disable RCS1075
+            catch (Exception)
+            {
+            }
+#pragma warning restore RCS1075
+
+            if (_processManager != null)
+            {
+                try
+                {
+                    _processManager.Dispose();
+                }
+#pragma warning disable RCS1075
+                catch (Exception)
+                {
+                }
+#pragma warning restore RCS1075
             }
         }
 

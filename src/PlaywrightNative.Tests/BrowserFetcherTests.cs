@@ -123,7 +123,7 @@ namespace PlaywrightNative.Tests
         {
             BrowserFetcher fetcher = new(new BrowserFetcherOptions { Path = "/tmp/cache", Platform = Platform.Linux });
             string actual = fetcher.GetExecutablePath("9999");
-            Assert.That(actual, Is.EqualTo(Path.Combine("/tmp/cache", "chromium-9999", "chrome-linux", "chrome")));
+            Assert.That(actual, Is.EqualTo(Path.Combine("/tmp/cache", "chromium-9999", "chrome-linux64", "chrome")));
         }
 
         [PlaywrightTest("browsers-path.spec.ts", "Get installed browsers returns empty when cache missing")]

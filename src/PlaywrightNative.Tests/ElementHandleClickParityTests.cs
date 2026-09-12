@@ -17,6 +17,7 @@
 using System;
 using System.Globalization;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 using PlaywrightNative.TestServer;
@@ -147,7 +148,7 @@ namespace PlaywrightNative.Tests
             await page.GoToAsync(Prefix + "/input/button.html").ConfigureAwait(false);
             IElementHandle button = await page.QuerySelectorAsync("button").ConfigureAwait(false);
             await button.EvaluateAsync("button => button.remove()").ConfigureAwait(false);
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(() => button.ClickAsync());
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(() => button.ClickAsync());
             Assert.That(error, Is.Not.Null);
             Assert.That(error.Message, Does.Contain("Element is not attached to the DOM"));
         }
@@ -163,7 +164,7 @@ namespace PlaywrightNative.Tests
             await page.GoToAsync(Prefix + "/input/button.html").ConfigureAwait(false);
             IElementHandle button = await page.QuerySelectorAsync("button").ConfigureAwait(false);
             await button.EvaluateAsync("button => button.style.display = 'none'").ConfigureAwait(false);
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(() => button.ClickAsync(new() { Force = true }));
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(() => button.ClickAsync(new() { Force = true }));
             Assert.That(error, Is.Not.Null);
             Assert.That(error.Message, Does.Contain("Element is not visible"));
         }
@@ -179,7 +180,7 @@ namespace PlaywrightNative.Tests
             await page.GoToAsync(Prefix + "/input/button.html").ConfigureAwait(false);
             IElementHandle button = await page.QuerySelectorAsync("button").ConfigureAwait(false);
             await button.EvaluateAsync("button => button.parentElement.style.display = 'none'").ConfigureAwait(false);
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(() => button.ClickAsync(new() { Force = true }));
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(() => button.ClickAsync(new() { Force = true }));
             Assert.That(error, Is.Not.Null);
             Assert.That(error.Message, Does.Contain("Element is not visible"));
         }
@@ -194,7 +195,7 @@ namespace PlaywrightNative.Tests
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
             await page.SetContentAsync("hello<br>goodbye").ConfigureAwait(false);
             IElementHandle br = await page.QuerySelectorAsync("br").ConfigureAwait(false);
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(() => br.ClickAsync(new() { Force = true }));
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(() => br.ClickAsync(new() { Force = true }));
             Assert.That(error, Is.Not.Null);
             Assert.That(error.Message, Does.Contain("Element is outside of the viewport"));
         }

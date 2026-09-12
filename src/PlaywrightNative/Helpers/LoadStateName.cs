@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 using System;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -50,7 +51,7 @@ namespace PlaywrightNative.Helpers
                 return LoadState.Load;
             }
 
-            throw new PlaywrightNativeException("state: expected one of (load|domcontentloaded|networkidle|commit)");
+            throw new PlaywrightException("state: expected one of (load|domcontentloaded|networkidle|commit)");
         }
     }
 }

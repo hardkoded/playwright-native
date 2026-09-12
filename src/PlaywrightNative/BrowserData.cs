@@ -18,6 +18,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative
 {
@@ -28,14 +29,27 @@ namespace PlaywrightNative
     /// </summary>
     internal static class BrowserData
     {
-        internal const string ChromiumRevision = "1219";
+        // Pinned to packages/playwright-core/browsers.json. Chromium now ships as
+        // Chrome for Testing: CDN paths use ChromiumBrowserVersion (not the
+        // revision) under builds/cft/, while the on-disk install folder still
+        // uses ChromiumRevision (chromium-1234).
+        internal const string ChromiumRevision = "1234";
+        internal const string ChromiumBrowserVersion = "151.0.7922.34";
         internal const string FirefoxRevision = "1515";
         internal const string WebkitRevision = "2276";
+        internal const string FfmpegRevision = "1011";
 
         internal static readonly string[] CdnMirrors =
         [
             "https://cdn.playwright.dev/dbazure/download/playwright",
             "https://playwright.download.prss.microsoft.com/dbazure/download/playwright",
+        ];
+
+        // Chrome-for-Testing archives live on the storage bucket, not the
+        // dbazure playwright prefix used for Firefox/WebKit.
+        internal static readonly string[] ChromiumCdnMirrors =
+        [
+            "https://cdn.playwright.dev",
         ];
 
         private static readonly Dictionary<string, string> WebkitRevisionOverrides = new(StringComparer.Ordinal)
@@ -46,11 +60,11 @@ namespace PlaywrightNative
 
         private static readonly Dictionary<string, string> ChromiumDownloadPaths = new(StringComparer.Ordinal)
         {
-            ["linux-x64"] = "builds/chromium/{0}/chromium-linux.zip",
-            ["linux-arm64"] = "builds/chromium/{0}/chromium-linux-arm64.zip",
-            ["mac-x64"] = "builds/chromium/{0}/chromium-mac.zip",
-            ["mac-arm64"] = "builds/chromium/{0}/chromium-mac-arm64.zip",
-            ["win64"] = "builds/chromium/{0}/chromium-win64.zip",
+            ["linux-x64"] = "builds/cft/{0}/linux64/chrome-linux64.zip",
+            ["linux-arm64"] = "builds/cft/{0}/linux-arm64/chrome-linux-arm64.zip",
+            ["mac-x64"] = "builds/cft/{0}/mac-x64/chrome-mac-x64.zip",
+            ["mac-arm64"] = "builds/cft/{0}/mac-arm64/chrome-mac-arm64.zip",
+            ["win64"] = "builds/cft/{0}/win64/chrome-win64.zip",
         };
 
         private static readonly Dictionary<string, string> FirefoxDownloadPaths = new(StringComparer.Ordinal)
@@ -82,13 +96,28 @@ namespace PlaywrightNative
             ["win64"] = "builds/webkit/{0}/webkit-win64.zip",
         };
 
+        private static readonly Dictionary<string, string> FfmpegDownloadPaths = new(StringComparer.Ordinal)
+        {
+            ["ubuntu22.04-x64"] = "builds/ffmpeg/{0}/ffmpeg-linux.zip",
+            ["ubuntu22.04-arm64"] = "builds/ffmpeg/{0}/ffmpeg-linux-arm64.zip",
+            ["ubuntu24.04-x64"] = "builds/ffmpeg/{0}/ffmpeg-linux.zip",
+            ["ubuntu24.04-arm64"] = "builds/ffmpeg/{0}/ffmpeg-linux-arm64.zip",
+            ["mac14"] = "builds/ffmpeg/{0}/ffmpeg-mac.zip",
+            ["mac14-arm64"] = "builds/ffmpeg/{0}/ffmpeg-mac-arm64.zip",
+            ["mac15"] = "builds/ffmpeg/{0}/ffmpeg-mac.zip",
+            ["mac15-arm64"] = "builds/ffmpeg/{0}/ffmpeg-mac-arm64.zip",
+            ["mac26"] = "builds/ffmpeg/{0}/ffmpeg-mac.zip",
+            ["mac26-arm64"] = "builds/ffmpeg/{0}/ffmpeg-mac-arm64.zip",
+            ["win64"] = "builds/ffmpeg/{0}/ffmpeg-win64.zip",
+        };
+
         private static readonly Dictionary<string, string[]> ChromiumExecutablePaths = new(StringComparer.Ordinal)
         {
-            ["linux-x64"] = ["chrome-linux", "chrome"],
-            ["linux-arm64"] = ["chrome-linux", "chrome"],
-            ["mac-x64"] = ["chrome-mac", "Google Chrome for Testing.app", "Contents", "MacOS", "Google Chrome for Testing"],
+            ["linux-x64"] = ["chrome-linux64", "chrome"],
+            ["linux-arm64"] = ["chrome-linux-arm64", "chrome"],
+            ["mac-x64"] = ["chrome-mac-x64", "Google Chrome for Testing.app", "Contents", "MacOS", "Google Chrome for Testing"],
             ["mac-arm64"] = ["chrome-mac-arm64", "Google Chrome for Testing.app", "Contents", "MacOS", "Google Chrome for Testing"],
-            ["win-x64"] = ["chrome-win", "chrome.exe"],
+            ["win-x64"] = ["chrome-win64", "chrome.exe"],
         };
 
         private static readonly Dictionary<string, string[]> FirefoxExecutablePaths = new(StringComparer.Ordinal)
@@ -109,11 +138,21 @@ namespace PlaywrightNative
             ["win-x64"] = ["Playwright.exe"],
         };
 
+        private static readonly Dictionary<string, string[]> FfmpegExecutablePaths = new(StringComparer.Ordinal)
+        {
+            ["linux-x64"] = ["ffmpeg-linux"],
+            ["linux-arm64"] = ["ffmpeg-linux"],
+            ["mac-x64"] = ["ffmpeg-mac"],
+            ["mac-arm64"] = ["ffmpeg-mac"],
+            ["win-x64"] = ["ffmpeg-win64.exe"],
+        };
+
         internal static string DefaultRevision(SupportedBrowser browser) => browser switch
         {
             SupportedBrowser.Chromium => ChromiumRevision,
             SupportedBrowser.Firefox => FirefoxRevision,
             SupportedBrowser.Webkit => WebkitRevision,
+            SupportedBrowser.Ffmpeg => FfmpegRevision,
             _ => throw new ArgumentOutOfRangeException(nameof(browser)),
         };
 
@@ -141,10 +180,11 @@ namespace PlaywrightNative
 
         internal static string PlaywrightPlatformKey(SupportedBrowser browser, Platform platform)
         {
-            if (browser == SupportedBrowser.Webkit &&
+            // ffmpeg ships per-macOS-version archives just like WebKit.
+            if ((browser == SupportedBrowser.Webkit || browser == SupportedBrowser.Ffmpeg) &&
                 (platform == Platform.MacOS || platform == Platform.MacOSArm64))
             {
-                return MacOSWebkitPlatformKey(platform == Platform.MacOSArm64);
+                return MacOSVersionedPlatformKey(platform == Platform.MacOSArm64);
             }
 
             return SimplePlaywrightKey(browser, platform);
@@ -183,17 +223,22 @@ namespace PlaywrightNative
                 SupportedBrowser.Chromium => ChromiumDownloadPaths,
                 SupportedBrowser.Firefox => FirefoxDownloadPaths,
                 SupportedBrowser.Webkit => WebkitDownloadPaths,
+                SupportedBrowser.Ffmpeg => FfmpegDownloadPaths,
                 _ => throw new ArgumentOutOfRangeException(nameof(browser)),
             };
 
             if (!paths.TryGetValue(playwrightPlatformKey, out string template))
             {
-                throw new PlaywrightNativeException(
+                throw new PlaywrightException(
                     $"{browser} is not supported on platform '{playwrightPlatformKey}'.");
             }
 
-            string archivePath = string.Format(System.Globalization.CultureInfo.InvariantCulture, template, revision);
-            string[] hostList = (hosts != null && hosts.Length > 0) ? hosts : CdnMirrors;
+            // Chromium CfT archives are keyed by browser version (e.g. 151.0.7922.34),
+            // not by the Playwright revision used for the install directory name.
+            string formatArg = browser == SupportedBrowser.Chromium ? ChromiumBrowserVersion : revision;
+            string archivePath = string.Format(System.Globalization.CultureInfo.InvariantCulture, template, formatArg);
+            string[] defaultHosts = browser == SupportedBrowser.Chromium ? ChromiumCdnMirrors : CdnMirrors;
+            string[] hostList = (hosts != null && hosts.Length > 0) ? hosts : defaultHosts;
 
             string[] urls = new string[hostList.Length];
             for (int i = 0; i < hostList.Length; i++)
@@ -213,12 +258,13 @@ namespace PlaywrightNative
                 SupportedBrowser.Chromium => ChromiumExecutablePaths,
                 SupportedBrowser.Firefox => FirefoxExecutablePaths,
                 SupportedBrowser.Webkit => WebkitExecutablePaths,
+                SupportedBrowser.Ffmpeg => FfmpegExecutablePaths,
                 _ => throw new ArgumentOutOfRangeException(nameof(browser)),
             };
 
             if (!paths.TryGetValue(shortKey, out string[] segments))
             {
-                throw new PlaywrightNativeException(
+                throw new PlaywrightException(
                     $"{browser} executable path is not defined for platform '{shortKey}'.");
             }
 
@@ -258,6 +304,7 @@ namespace PlaywrightNative
                 SupportedBrowser.Chromium => "chromium",
                 SupportedBrowser.Firefox => "firefox",
                 SupportedBrowser.Webkit => "webkit",
+                SupportedBrowser.Ffmpeg => "ffmpeg",
                 _ => throw new ArgumentOutOfRangeException(nameof(browser)),
             };
 
@@ -315,7 +362,7 @@ namespace PlaywrightNative
             return "ubuntu24.04";
         }
 
-        private static string MacOSWebkitPlatformKey(bool arm64)
+        private static string MacOSVersionedPlatformKey(bool arm64)
         {
             // .NET 5+ reports the macOS product version here (e.g. 14, 15, 26), NOT the
             // Darwin kernel version (23, 24, 25). The old Darwin-based mapping shipped a

@@ -20,6 +20,7 @@ using System.IO;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 using PlaywrightNative.TestServer;
@@ -154,7 +155,7 @@ namespace PlaywrightNative.Tests
                 }
                 catch (Exception ex) when (
                     ex is TimeoutException
-                    || (ex is PlaywrightNativeException playwrightEx
+                    || (ex is PlaywrightException playwrightEx
                         && playwrightEx.Message != null
                         && playwrightEx.Message.Contains("Missing injected script", StringComparison.OrdinalIgnoreCase)))
                 {
@@ -260,7 +261,7 @@ namespace PlaywrightNative.Tests
                 await page.GoToAsync(url1, timeout: 8_000).ConfigureAwait(false);
                 await firstConsole.ConfigureAwait(false);
             }
-            catch (Exception ex) when (IsFileUrlUnsupported(ex) || ex is TimeoutException || ex is PlaywrightNativeException)
+            catch (Exception ex) when (IsFileUrlUnsupported(ex) || ex is TimeoutException || ex is PlaywrightException)
             {
                 Assert.Ignore("file URLs are unsupported here");
             }

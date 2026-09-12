@@ -13,6 +13,7 @@ using System.Net.Http;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative
 {
@@ -164,7 +165,7 @@ namespace PlaywrightNative
                     PermissionsFixed = permissionsFixed,
                 };
             }
-            catch (Exception ex) when (ex is not OperationCanceledException && ex is not PlaywrightNativeException)
+            catch (Exception ex) when (ex is not OperationCanceledException && ex is not PlaywrightException)
             {
                 if (Directory.Exists(installDir))
                 {
@@ -182,7 +183,7 @@ namespace PlaywrightNative
                     }
                 }
 
-                throw new PlaywrightNativeException($"Failed to download {Browser} build {buildId}: {ex.Message}", ex);
+                throw new PlaywrightException($"Failed to download {Browser} build {buildId}: {ex.Message}", ex);
             }
             finally
             {
@@ -234,6 +235,7 @@ namespace PlaywrightNative
                     "chromium" => SupportedBrowser.Chromium,
                     "firefox" => SupportedBrowser.Firefox,
                     "webkit" => SupportedBrowser.Webkit,
+                    "ffmpeg" => SupportedBrowser.Ffmpeg,
                     _ => (SupportedBrowser)(-1),
                 };
                 if ((int)browser < 0)
@@ -402,7 +404,7 @@ namespace PlaywrightNative
                 }
             }
 
-            throw new PlaywrightNativeException(
+            throw new PlaywrightException(
                 $"Failed to download {Browser} build {buildId} from any of {urls.Length} host(s):{Environment.NewLine}  {string.Join(Environment.NewLine + "  ", errors)}");
         }
     }

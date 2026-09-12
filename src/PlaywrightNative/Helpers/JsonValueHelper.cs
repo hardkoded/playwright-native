@@ -70,6 +70,13 @@ namespace PlaywrightNative.Helpers
 
             object parsed = ParseToClr(serialized, new Dictionary<int, object>());
 
+            if (typeof(T) == typeof(JsonDocument))
+            {
+                // JsonDocument has no public constructor, so the serializer cannot
+                // build one. Round-trip through its parser instead.
+                return (T)(object)JsonDocument.Parse(SerializeClrToJsonElement(parsed).GetRawText());
+            }
+
             if (typeof(T) == typeof(JsonElement) || typeof(T) == typeof(JsonElement?))
             {
                 if (parsed == null)

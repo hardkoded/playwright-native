@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 
@@ -37,7 +38,7 @@ namespace PlaywrightNative.Tests
             await page.SetContentAsync("<select><option value='wave674'>a</option></select><select><option value='wave674'>b</option></select>").ConfigureAwait(false);
             IElementHandle option = await page.QuerySelectorAsync("option").ConfigureAwait(false);
 
-            PlaywrightNativeException ex = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException ex = Assert.CatchAsync<PlaywrightException>(
                 () => page.SelectOptionAsync("select", option, strict: true));
 
             Assert.That(ex, Is.Not.Null);
@@ -100,7 +101,7 @@ namespace PlaywrightNative.Tests
             await frame.SetContentAsync("<select><option value='wave674'>a</option></select><select><option value='wave674'>b</option></select>").ConfigureAwait(false);
             IElementHandle option = await frame.QuerySelectorAsync("option").ConfigureAwait(false);
 
-            PlaywrightNativeException ex = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException ex = Assert.CatchAsync<PlaywrightException>(
                 () => frame.SelectOptionAsync("select", option, strict: true));
 
             Assert.That(ex, Is.Not.Null);

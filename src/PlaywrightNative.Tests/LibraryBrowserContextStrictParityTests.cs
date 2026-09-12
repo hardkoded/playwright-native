@@ -16,6 +16,7 @@
  */
 using System;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 
@@ -71,7 +72,7 @@ namespace PlaywrightNative.Tests
         [Timeout(TestConstants.DefaultTestTimeout)]
         public void ShouldFailPageTextContentInStrictMode()
         {
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(async () =>
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(async () =>
             {
                 IBrowserContext context = await _browser.NewContextAsync(new BrowserContextOptions { StrictSelectors = true }).ConfigureAwait(false);
                 IPage page = await context.NewPageAsync().ConfigureAwait(false);
@@ -86,7 +87,7 @@ namespace PlaywrightNative.Tests
         [Timeout(TestConstants.DefaultTestTimeout)]
         public void ShouldFailPageClickInStrictMode()
         {
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(async () =>
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(async () =>
             {
                 IBrowserContext context = await _browser.NewContextAsync(new BrowserContextOptions { StrictSelectors = true }).ConfigureAwait(false);
                 IPage page = await context.NewPageAsync().ConfigureAwait(false);

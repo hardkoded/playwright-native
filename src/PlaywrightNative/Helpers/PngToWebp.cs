@@ -18,6 +18,7 @@ using System;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -38,7 +39,7 @@ namespace PlaywrightNative.Helpers
         {
             if (png == null || png.Length == 0)
             {
-                throw new PlaywrightNativeException("PNG screenshot is empty.");
+                throw new PlaywrightException("PNG screenshot is empty.");
             }
 
             bool lossless = !quality.HasValue || quality.Value >= 100;
@@ -62,7 +63,7 @@ namespace PlaywrightNative.Helpers
                     : "-quality " + q.ToString(CultureInfo.InvariantCulture);
                 ProcessStartInfo startInfo = new ProcessStartInfo
                 {
-                    FileName = "ffmpeg",
+                    FileName = FfmpegLocator.Resolve(),
                     Arguments = "-hide_banner -loglevel error -y -i \"" + input + "\" -c:v libwebp " + qualityArg + " \"" + output + "\"",
                     RedirectStandardError = true,
                     UseShellExecute = false,
@@ -72,14 +73,14 @@ namespace PlaywrightNative.Helpers
                 using Process process = Process.Start(startInfo);
                 if (process == null)
                 {
-                    throw new PlaywrightNativeException("Failed to start ffmpeg for WebP screenshot.");
+                    throw new PlaywrightException("Failed to start ffmpeg for WebP screenshot.");
                 }
 
                 process.WaitForExit();
                 if (process.ExitCode != 0 || !File.Exists(output))
                 {
                     string error = process.StandardError.ReadToEnd();
-                    throw new PlaywrightNativeException(
+                    throw new PlaywrightException(
                         "Failed to encode WebP screenshot." + (string.IsNullOrEmpty(error) ? string.Empty : " " + error.Trim()));
                 }
 

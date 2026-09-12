@@ -58,5 +58,17 @@ internal sealed class BrowserService : IWorkerService
 
     public Task ResetAsync() => Task.CompletedTask;
 
-    public Task DisposeAsync() => Browser.CloseAsync();
+    public async Task DisposeAsync()
+    {
+        // Prefer full disposal so pipe transports / process handles are released.
+        // CloseAsync alone historically left AnonymousPipeServerStream FDs open,
+        // and WorkerAwareTest disposes the browser after every failed test.
+        if (Browser is IAsyncDisposable asyncDisposable)
+        {
+            await asyncDisposable.DisposeAsync().ConfigureAwait(false);
+            return;
+        }
+
+        await Browser.CloseAsync().ConfigureAwait(false);
+    }
 }

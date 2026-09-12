@@ -18,6 +18,7 @@ using System;
 using System.Collections.Generic;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 
@@ -223,7 +224,7 @@ namespace PlaywrightNative.Tests
             await RoutePageAsync(Page, "b.html", "<button>two</button>").ConfigureAwait(false);
             await Page.GoToAsync(EmptyPage).ConfigureAwait(false);
             await WaitForAllFramesAsync(Page, 3, "button").ConfigureAwait(false);
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => Page.FrameLocator().Locator("button").ClickAsync(new() { Timeout = 3000 }));
             Assert.That(error.Message, Does.Contain("frameLocator() matched elements in multiple frames"));
             Assert.That(error.Message, Does.Contain("waiting for frameLocator().locator('button')"));
@@ -238,7 +239,7 @@ namespace PlaywrightNative.Tests
             await RoutePageAsync(Page, "a.html", "<button>one</button><button>two</button>").ConfigureAwait(false);
             await Page.GoToAsync(EmptyPage).ConfigureAwait(false);
             await WaitForAllFramesAsync(Page, 2, "button").ConfigureAwait(false);
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => Page.FrameLocator().Locator("button").ClickAsync(new() { Timeout = 3000 }));
             Assert.That(error.Message, Does.Contain("strict mode violation"));
             Assert.That(error.Message, Does.Contain("waiting for frameLocator().locator('button')"));
@@ -252,7 +253,8 @@ namespace PlaywrightNative.Tests
             await RoutePageAsync(Page, "empty.html", "<iframe src=\"a.html\"></iframe>").ConfigureAwait(false);
             await RoutePageAsync(Page, "a.html", "<div>Nothing here</div>").ConfigureAwait(false);
             await Page.GoToAsync(EmptyPage).ConfigureAwait(false);
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            // A timeout is a TimeoutException everywhere else in this suite.
+            TimeoutException error = Assert.CatchAsync<TimeoutException>(
                 () => Page.FrameLocator().Locator("button").ClickAsync(new() { Timeout = 1000 }));
             Assert.That(error.Message, Does.Contain("Timeout 1000ms exceeded"));
             Assert.That(error.Message, Does.Contain("waiting for frameLocator().locator('button')"));
@@ -280,7 +282,7 @@ namespace PlaywrightNative.Tests
             await RoutePageAsync(Page, "a.html", "<div>child</div>").ConfigureAwait(false);
             await Page.GoToAsync(EmptyPage).ConfigureAwait(false);
             await WaitForAllFramesAsync(Page, 2, "div").ConfigureAwait(false);
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => Page.FrameLocator().Locator("div").CountAsync());
             Assert.That(error.Message, Does.Contain("frameLocator() matched elements in multiple frames"));
         }
@@ -325,7 +327,7 @@ namespace PlaywrightNative.Tests
             await RoutePageAsync(Page, "b.html", "<span>two</span>").ConfigureAwait(false);
             await Page.GoToAsync(EmptyPage).ConfigureAwait(false);
             await WaitForAllFramesAsync(Page, 3, "span").ConfigureAwait(false);
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => Assertions.Expect(Page.FrameLocator().Locator("span")).ToHaveCountAsync(2, new() { Timeout = 3000 }));
             Assert.That(error.Message, Does.Contain("frameLocator() matched elements in multiple frames"));
             Assert.That(error.Message, Does.Contain("Locator: frameLocator().locator('span')"));
@@ -363,7 +365,7 @@ namespace PlaywrightNative.Tests
             await RoutePageAsync(Page, "b.html", "<div>two</div>").ConfigureAwait(false);
             await Page.GoToAsync(EmptyPage).ConfigureAwait(false);
             await WaitForAllFramesAsync(Page, 3, "div").ConfigureAwait(false);
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => Assertions.Expect(Page.FrameLocator().Locator("div")).ToHaveTextAsync("one", new() { Timeout = 3000 }));
             Assert.That(error.Message, Does.Contain("frameLocator() matched elements in multiple frames"));
             Assert.That(error.Message, Does.Contain("Locator: frameLocator().locator('div')"));
@@ -379,7 +381,7 @@ namespace PlaywrightNative.Tests
             await RoutePageAsync(Page, "b.html", "<span>two</span>").ConfigureAwait(false);
             await Page.GoToAsync(EmptyPage).ConfigureAwait(false);
             await WaitForAllFramesAsync(Page, 3, "span").ConfigureAwait(false);
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => Assertions.Expect(Page.FrameLocator().Locator("span")).ToHaveTextAsync(new List<string> { "one", "two" }, new() { Timeout = 3000 }));
             Assert.That(error.Message, Does.Contain("frameLocator() matched elements in multiple frames"));
         }
@@ -393,7 +395,7 @@ namespace PlaywrightNative.Tests
             await RoutePageAsync(Page, "a.html", "<div>one</div><div>two</div>").ConfigureAwait(false);
             await Page.GoToAsync(EmptyPage).ConfigureAwait(false);
             await WaitForAllFramesAsync(Page, 2, "div").ConfigureAwait(false);
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => Assertions.Expect(Page.FrameLocator().Locator("div")).ToHaveTextAsync("one", new() { Timeout = 3000 }));
             Assert.That(error.Message, Does.Contain("strict mode violation"));
             Assert.That(error.Message, Does.Contain("Locator: frameLocator().locator('div')"));
@@ -422,7 +424,7 @@ namespace PlaywrightNative.Tests
             await RoutePageAsync(Page, "b.html", "<div>two</div>").ConfigureAwait(false);
             await Page.GoToAsync(EmptyPage).ConfigureAwait(false);
             await WaitForAllFramesAsync(Page, 3, "div").ConfigureAwait(false);
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => Page.FrameLocator().Locator("div").EvaluateAsync<string>("e => e.textContent", null, 3000));
             Assert.That(error.Message, Does.Contain("frameLocator() matched elements in multiple frames"));
         }
@@ -435,7 +437,8 @@ namespace PlaywrightNative.Tests
             await RoutePageAsync(Page, "empty.html", "<iframe src=\"a.html\"></iframe>").ConfigureAwait(false);
             await RoutePageAsync(Page, "a.html", "<div>Nothing here</div>").ConfigureAwait(false);
             await Page.GoToAsync(EmptyPage).ConfigureAwait(false);
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            // A timeout is a TimeoutException everywhere else in this suite.
+            TimeoutException error = Assert.CatchAsync<TimeoutException>(
                 () => Page.FrameLocator().Locator("button").EvaluateAsync<string>("e => e.textContent", null, 1000));
             Assert.That(error.Message, Does.Contain("Timeout 1000ms exceeded"));
             Assert.That(error.Message, Does.Contain("waiting for frameLocator().locator('button')"));
@@ -468,7 +471,7 @@ namespace PlaywrightNative.Tests
             await RoutePageAsync(Page, "b.html", "<span>two</span>").ConfigureAwait(false);
             await Page.GoToAsync(EmptyPage).ConfigureAwait(false);
             await WaitForAllFramesAsync(Page, 3, "span").ConfigureAwait(false);
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => Page.FrameLocator().Locator("span").EvaluateAllAsync<int>("els => els.length"));
             Assert.That(error.Message, Does.Contain("frameLocator() matched elements in multiple frames"));
         }
@@ -754,7 +757,7 @@ namespace PlaywrightNative.Tests
                 }
             }
 
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => Page.FrameLocator().FrameLocator(".inner").Locator("button").ClickAsync(new() { Timeout = 3000 }));
             Assert.That(error.Message, Does.Contain("frameLocator() matched elements in multiple frames"));
         }
@@ -794,23 +797,23 @@ namespace PlaywrightNative.Tests
             await Page.GoToAsync(EmptyPage).ConfigureAwait(false);
             await WaitForAllFramesAsync(Page, 2, "a").ConfigureAwait(false);
 
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => Page.Locator("button").Or(Page.FrameLocator().Locator("a")).CountAsync());
             Assert.That(error.Message, Does.Contain("frameLocator() is not allowed inside composite locators, while querying \"locator('button').or(frameLocator().locator('a'))\""));
 
-            PlaywrightNativeException error2 = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error2 = Assert.CatchAsync<PlaywrightException>(
                 () => Page.Locator("button").Filter(has: Page.FrameLocator().Locator("a")).CountAsync());
             Assert.That(error2.Message, Does.Contain("frameLocator() is not allowed inside composite locators"));
 
-            PlaywrightNativeException error3 = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error3 = Assert.CatchAsync<PlaywrightException>(
                 () => Page.FrameLocator().Locator("button").Or(Page.FrameLocator().Locator("a")).CountAsync());
             Assert.That(error3.Message, Does.Contain("frameLocator() is not allowed inside composite locators, while querying \"frameLocator().locator('button').or(frameLocator().locator('a'))\""));
 
-            PlaywrightNativeException error4 = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error4 = Assert.CatchAsync<PlaywrightException>(
                 () => Page.FrameLocator().FrameLocator("#f").Locator("a").Or(Page.FrameLocator().FrameLocator("#f").Locator("button")).CountAsync());
             Assert.That(error4.Message, Does.Contain("frameLocator() is not allowed inside composite locators"));
 
-            PlaywrightNativeException error5 = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error5 = Assert.CatchAsync<PlaywrightException>(
                 () => Page.FrameLocator().Locator("a").Or(Page.Locator("button")).CountAsync());
             Assert.That(error5.Message, Does.Contain("frameLocator() matched elements in multiple frames"));
         }
@@ -847,11 +850,11 @@ namespace PlaywrightNative.Tests
         [Timeout(TestConstants.DefaultTestTimeout)]
         public void ShouldNotAllowFirstLastNthOnFrameLocator()
         {
-            PlaywrightNativeException first = Assert.Throws<PlaywrightNativeException>(() => _ = Page.FrameLocator().First);
+            PlaywrightException first = Assert.Throws<PlaywrightException>(() => _ = Page.FrameLocator().First);
             Assert.That(first.Message, Does.Contain("Selecting the nth frame is not allowed on frameLocator()"));
-            PlaywrightNativeException last = Assert.Throws<PlaywrightNativeException>(() => _ = Page.FrameLocator().Last);
+            PlaywrightException last = Assert.Throws<PlaywrightException>(() => _ = Page.FrameLocator().Last);
             Assert.That(last.Message, Does.Contain("Selecting the nth frame is not allowed on frameLocator()"));
-            PlaywrightNativeException nth = Assert.Throws<PlaywrightNativeException>(() => Page.FrameLocator().Nth(1));
+            PlaywrightException nth = Assert.Throws<PlaywrightException>(() => Page.FrameLocator().Nth(1));
             Assert.That(nth.Message, Does.Contain("Selecting the nth frame is not allowed on frameLocator()"));
         }
 
@@ -860,7 +863,7 @@ namespace PlaywrightNative.Tests
         [Timeout(TestConstants.DefaultTestTimeout)]
         public void ShouldNotAllowOwnerOnFrameLocator()
         {
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(() => Page.FrameLocator().Owner.CountAsync());
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(() => Page.FrameLocator().Owner.CountAsync());
             Assert.That(error.Message, Does.Contain("Selector cannot be empty after frameLocator()"));
         }
 

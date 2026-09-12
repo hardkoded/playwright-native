@@ -17,6 +17,7 @@
 using System;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -74,11 +75,11 @@ namespace PlaywrightNative.Helpers
         /// </summary>
         /// <param name="ex">The original evaluate exception.</param>
         /// <param name="apiName">Official API name such as <c>page.fill</c>.</param>
-        /// <returns>A stackless <see cref="PlaywrightNativeException"/>.</returns>
-        internal static PlaywrightNativeException Wrap(Exception ex, string apiName)
+        /// <returns>A stackless <see cref="PlaywrightException"/>.</returns>
+        internal static PlaywrightException Wrap(Exception ex, string apiName)
         {
             string name = string.IsNullOrEmpty(apiName) ? "page.fill" : apiName;
-            return new PlaywrightNativeException(name + ": Error: " + Extract(ex) + "\nCall log:");
+            return new PlaywrightException(name + ": Error: " + Extract(ex) + "\nCall log:");
         }
 
         private static string Extract(Exception ex)

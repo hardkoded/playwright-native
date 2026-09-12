@@ -19,6 +19,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -64,7 +65,7 @@ namespace PlaywrightNative.Helpers
                 return;
             }
 
-            throw new PlaywrightNativeException("Unknown polling option: " + polling);
+            throw new PlaywrightException("Unknown polling option: " + polling);
         }
 
         /// <summary>
@@ -75,7 +76,7 @@ namespace PlaywrightNative.Helpers
         {
             if (pollingInterval.HasValue && pollingInterval.Value <= 0)
             {
-                throw new PlaywrightNativeException("Cannot poll with non-positive interval");
+                throw new PlaywrightException("Cannot poll with non-positive interval");
             }
         }
 
@@ -268,7 +269,7 @@ namespace PlaywrightNative.Helpers
                 ThrowIfTimedOut(sw, timeoutMs, timeoutTask, apiName);
                 if (isDetached != null && isDetached())
                 {
-                    throw new PlaywrightNativeException(apiName + ": Frame was detached");
+                    throw new PlaywrightException(apiName + ": Frame was detached");
                 }
 
                 try
@@ -297,13 +298,13 @@ namespace PlaywrightNative.Helpers
                 }
                 catch (Exception ex) when (IsDetachedError(ex))
                 {
-                    throw new PlaywrightNativeException(apiName + ": Frame was detached", ex);
+                    throw new PlaywrightException(apiName + ": Frame was detached", ex);
                 }
                 catch (Exception ex) when (IsRetriableContextError(ex))
                 {
                     if (isDetached != null && isDetached())
                     {
-                        throw new PlaywrightNativeException(apiName + ": Frame was detached", ex);
+                        throw new PlaywrightException(apiName + ": Frame was detached", ex);
                     }
                 }
 
@@ -396,17 +397,17 @@ namespace PlaywrightNative.Helpers
 
                 return extracted;
             }
-            catch (PlaywrightNativeException ex) when (IsRetriableContextError(ex))
+            catch (PlaywrightException ex) when (IsRetriableContextError(ex))
             {
                 throw;
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 try
                 {
                     await handle.DisposeAsync().ConfigureAwait(false);
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
 

@@ -17,6 +17,7 @@
 using System;
 using System.Text.Json;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Firefox
 {
@@ -334,7 +335,7 @@ namespace PlaywrightNative.Firefox
                 await _client.SendAsync("Runtime.disposeObject", new { objectId, executionContextId = _contextId })
                     .ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 // Best-effort — session may be closed or object already released.
             }
@@ -424,7 +425,7 @@ namespace PlaywrightNative.Firefox
                 message = text.GetString() ?? message;
             }
 
-            throw new PlaywrightNativeException(message);
+            throw new PlaywrightException(message);
         }
     }
 }

@@ -69,21 +69,21 @@ namespace PlaywrightNative
         /// <inheritdoc/>
 #pragma warning disable CA1065 // Official frameLocator().first() throws when any-frame.
         public IFrameLocator First => _anyFrame
-            ? throw new PlaywrightNativeException(NthNotAllowed)
+            ? throw new PlaywrightException(NthNotAllowed)
             : new FrameLocator(_iframe.First);
 #pragma warning restore CA1065
 
         /// <inheritdoc/>
 #pragma warning disable CA1065 // Official frameLocator().last() throws when any-frame.
         public IFrameLocator Last => _anyFrame
-            ? throw new PlaywrightNativeException(NthNotAllowed)
+            ? throw new PlaywrightException(NthNotAllowed)
             : new FrameLocator(_iframe.Last);
 #pragma warning restore CA1065
 
         /// <inheritdoc/>
         public IFrameLocator Nth(int index)
             => _anyFrame
-                ? throw new PlaywrightNativeException(NthNotAllowed)
+                ? throw new PlaywrightException(NthNotAllowed)
                 : new FrameLocator(_iframe.Nth(index));
 
         /// <inheritdoc/>
@@ -122,7 +122,7 @@ namespace PlaywrightNative
             {
                 if (!ReferenceEquals(inner.Frame, _frame))
                 {
-                    throw new PlaywrightNativeException("Locators must belong to the same frame.");
+                    throw new PlaywrightException("Locators must belong to the same frame.");
                 }
 
                 return inner.WithAnyFrame();
@@ -130,7 +130,7 @@ namespace PlaywrightNative
 
             if (!ReferenceEquals(inner.Frame(), _iframe.Frame()))
             {
-                throw new PlaywrightNativeException("Locators must belong to the same frame.");
+                throw new PlaywrightException("Locators must belong to the same frame.");
             }
 
             return RequireLocator(_iframe).EnterThenLocator(inner);
@@ -303,31 +303,61 @@ namespace PlaywrightNative
         }
 
 #pragma warning disable SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
-        ILocator IFrameLocator.GetByAltText(string text, FrameLocatorGetByAltTextOptions options) => null!;
+        ILocator IFrameLocator.GetByAltText(string text, FrameLocatorGetByAltTextOptions options) => GetByAltText(text, options?.Exact);
 
-        ILocator IFrameLocator.GetByAltText(Regex text, FrameLocatorGetByAltTextOptions options) => null!;
+        ILocator IFrameLocator.GetByAltText(Regex text, FrameLocatorGetByAltTextOptions options) => GetByAltText(text);
 
-        ILocator IFrameLocator.GetByLabel(string text, FrameLocatorGetByLabelOptions options) => null!;
+        ILocator IFrameLocator.GetByLabel(string text, FrameLocatorGetByLabelOptions options) => GetByLabel(text, options?.Exact);
 
-        ILocator IFrameLocator.GetByLabel(Regex text, FrameLocatorGetByLabelOptions options) => null!;
+        ILocator IFrameLocator.GetByLabel(Regex text, FrameLocatorGetByLabelOptions options) => GetByLabel(text);
 
-        ILocator IFrameLocator.GetByPlaceholder(string text, FrameLocatorGetByPlaceholderOptions options) => null!;
+        ILocator IFrameLocator.GetByPlaceholder(string text, FrameLocatorGetByPlaceholderOptions options) => GetByPlaceholder(text, options?.Exact);
 
-        ILocator IFrameLocator.GetByPlaceholder(Regex text, FrameLocatorGetByPlaceholderOptions options) => null!;
+        ILocator IFrameLocator.GetByPlaceholder(Regex text, FrameLocatorGetByPlaceholderOptions options) => GetByPlaceholder(text);
 
-        ILocator IFrameLocator.GetByRole(AriaRole role, FrameLocatorGetByRoleOptions options) => null!;
+        ILocator IFrameLocator.GetByRole(AriaRole role, FrameLocatorGetByRoleOptions options)
+            => GetByRole(
+                role.ToRoleString(),
+                options?.Name ?? options?.NameString,
+                options?.Exact,
+                options?.Checked,
+                options?.Disabled,
+                options?.Expanded,
+                options?.IncludeHidden,
+                options?.Level,
+                options?.Pressed,
+                options?.Selected,
+                options?.Description ?? options?.DescriptionString,
+                options?.DescriptionRegex,
+                options?.NameRegex);
 
-        ILocator IFrameLocator.GetByText(string text, FrameLocatorGetByTextOptions options) => null!;
+        ILocator IFrameLocator.GetByText(string text, FrameLocatorGetByTextOptions options) => GetByText(text, options?.Exact);
 
-        ILocator IFrameLocator.GetByText(Regex text, FrameLocatorGetByTextOptions options) => null!;
+        ILocator IFrameLocator.GetByText(Regex text, FrameLocatorGetByTextOptions options) => GetByText(text);
 
-        ILocator IFrameLocator.GetByTitle(string text, FrameLocatorGetByTitleOptions options) => null!;
+        ILocator IFrameLocator.GetByTitle(string text, FrameLocatorGetByTitleOptions options) => GetByTitle(text, options?.Exact);
 
-        ILocator IFrameLocator.GetByTitle(Regex text, FrameLocatorGetByTitleOptions options) => null!;
+        ILocator IFrameLocator.GetByTitle(Regex text, FrameLocatorGetByTitleOptions options) => GetByTitle(text);
 
-        ILocator IFrameLocator.Locator(string selectorOrLocator, FrameLocatorLocatorOptions options) => null!;
+        ILocator IFrameLocator.Locator(string selectorOrLocator, FrameLocatorLocatorOptions options)
+        {
+            options ??= new FrameLocatorLocatorOptions();
+            return Locator(
+                selectorOrLocator,
+                options.Has,
+                options.HasText ?? options.HasTextString,
+                options.HasTextRegex,
+                options.HasNot,
+                options.HasNotText ?? options.HasNotTextString,
+                options.HasNotTextRegex);
+        }
 
-        ILocator IFrameLocator.Locator(ILocator selectorOrLocator, FrameLocatorLocatorOptions options) => null!;
+        ILocator IFrameLocator.Locator(ILocator selectorOrLocator, FrameLocatorLocatorOptions options)
+        {
+            // Nested locator into frame: enter iframe then apply relative locator.
+            _ = options;
+            return Locator(selectorOrLocator);
+        }
 #pragma warning restore SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
     }
 }

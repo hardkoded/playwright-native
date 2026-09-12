@@ -28,6 +28,7 @@ using System.Security.Cryptography.X509Certificates;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.Chromium;
 using PlaywrightNative.Helpers;
@@ -496,7 +497,7 @@ namespace PlaywrightNative.Tests
                 http.Response.StatusCode = 404;
                 return http.Response.WriteAsync("{\"webSocketDebuggerUrl\":\"dont-use-me\"}");
             });
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => Playwright.Chromium.ConnectOverCDPAsync(Prefix));
             Assert.That(
                 error.Message,
@@ -514,7 +515,7 @@ namespace PlaywrightNative.Tests
                 http.Response.StatusCode = 200;
                 return http.Response.WriteAsync("{}");
             });
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => Playwright.Chromium.ConnectOverCDPAsync(Prefix));
             Assert.That(error.Message, Does.Contain("browserType.connectOverCDP: Invalid URL"));
         }
@@ -569,7 +570,7 @@ namespace PlaywrightNative.Tests
             try
             {
                 Environment.SetEnvironmentVariable("HTTP_PROXY", "http://" + proxyServer.Host);
-                PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+                PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                     () => Playwright.Chromium.ConnectOverCDPAsync(Prefix));
                 Assert.That(
                     error.Message,
@@ -594,7 +595,7 @@ namespace PlaywrightNative.Tests
             try
             {
                 Environment.SetEnvironmentVariable("HTTP_PROXY", "http://" + proxyServer.Host);
-                PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+                PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                     () => Playwright.Chromium.ConnectOverCDPAsync(Prefix));
                 Assert.That(
                     error.Message,
@@ -734,7 +735,7 @@ namespace PlaywrightNative.Tests
                 await ws.ReceiveAsync(new ArraySegment<byte>(buffer), CancellationToken.None).ConfigureAwait(false);
                 await ws.CloseAsync((WebSocketCloseStatus)4123, "Oh my!", CancellationToken.None).ConfigureAwait(false);
             });
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => Playwright.Chromium.ConnectOverCDPAsync("ws://localhost:" + TestConstants.Port + "/ws"));
             Assert.That(error.Message, Does.Contain("Browser logs:\n\nOh my!\n"));
         }
@@ -850,7 +851,7 @@ namespace PlaywrightNative.Tests
                 {
                     await host.CloseAsync().ConfigureAwait(false);
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
                 catch (ObjectDisposedException)

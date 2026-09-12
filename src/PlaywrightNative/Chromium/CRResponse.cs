@@ -19,6 +19,7 @@ using System.Collections.Generic;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using PlaywrightNative.Helpers;
 
 namespace PlaywrightNative.Chromium
@@ -223,7 +224,7 @@ namespace PlaywrightNative.Chromium
 
             if (ResponseHeaders.IsRedirectStatus(Status))
             {
-                throw new PlaywrightNativeException(ResponseHeaders.RedirectBodyUnavailable);
+                throw new PlaywrightException(ResponseHeaders.RedirectBodyUnavailable);
             }
 
             if (Request.FulfilledBody != null && RouteFulfill.ShouldOverrideBody(Status))
@@ -246,7 +247,7 @@ namespace PlaywrightNative.Chromium
 
                 if (Request.HasNavigatedAway())
                 {
-                    throw new PlaywrightNativeException(ResponseHeaders.NavigatedAway);
+                    throw new PlaywrightException(ResponseHeaders.NavigatedAway);
                 }
 
                 if (!CanRefetchBody())
@@ -256,11 +257,11 @@ namespace PlaywrightNative.Chromium
 
                 return await TryLoadNetworkResourceAsync().ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 if (Request.HasNavigatedAway())
                 {
-                    throw new PlaywrightNativeException(ResponseHeaders.NavigatedAway);
+                    throw new PlaywrightException(ResponseHeaders.NavigatedAway);
                 }
 
                 throw;
@@ -281,7 +282,7 @@ namespace PlaywrightNative.Chromium
                 JsonElement? result = await session.SendAsync("Network.getResponseBody", new { requestId }).ConfigureAwait(false);
                 return ResponseContent.DecodeProtocolBody(result);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 return Array.Empty<byte>();
             }
@@ -356,7 +357,7 @@ namespace PlaywrightNative.Chromium
                         {
                             await _session.SendAsync("IO.close", new { handle }).ConfigureAwait(false);
                         }
-                        catch (PlaywrightNativeException)
+                        catch (PlaywrightException)
                         {
                         }
 
@@ -366,7 +367,7 @@ namespace PlaywrightNative.Chromium
 
                 return chunks.ToArray();
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 return Array.Empty<byte>();
             }

@@ -35,12 +35,12 @@ namespace PlaywrightNative.Helpers
         {
             if (visibility != null)
             {
-                throw new PlaywrightNativeException("options.visibility is not supported, did you mean options.state?");
+                throw new PlaywrightException("options.visibility is not supported, did you mean options.state?");
             }
 
             if (waitFor != null && !string.Equals(waitFor, "visible", StringComparison.OrdinalIgnoreCase))
             {
-                throw new PlaywrightNativeException("options.waitFor is not supported, did you mean options.state?");
+                throw new PlaywrightException("options.waitFor is not supported, did you mean options.state?");
             }
         }
 
@@ -116,7 +116,7 @@ namespace PlaywrightNative.Helpers
             throw InvalidState();
         }
 
-        private static PlaywrightNativeException InvalidState()
-            => new PlaywrightNativeException("state: expected one of (attached|detached|visible|hidden)");
+        private static PlaywrightException InvalidState()
+            => new PlaywrightException("state: expected one of (attached|detached|visible|hidden)");
     }
 }

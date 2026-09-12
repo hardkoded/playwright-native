@@ -183,8 +183,14 @@ namespace PlaywrightNative.Tests
             IConsoleMessage message = await consoleTask.ConfigureAwait(false);
             double after = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + 1;
             Assert.That(message.Text, Is.EqualTo("ts"));
-            Assert.That(message.Timestamp, Is.GreaterThanOrEqualTo(before));
-            Assert.That(message.Timestamp, Is.LessThanOrEqualTo(after));
+
+            // IConsoleMessage.Timestamp is a float (fixed by the official interface),
+            // so an epoch-millisecond value only keeps ~24 bits of precision — around
+            // ±131s at today's magnitude. Round the bounds through float too: nearest-
+            // even rounding is monotonic, so before <= timestamp <= after still holds
+            // once both sides are quantized the same way.
+            Assert.That(message.Timestamp, Is.GreaterThanOrEqualTo((float)before));
+            Assert.That(message.Timestamp, Is.LessThanOrEqualTo((float)after));
         }
 
         [PlaywrightTest("workers.spec.ts", "should not report console logs from workers twice")]

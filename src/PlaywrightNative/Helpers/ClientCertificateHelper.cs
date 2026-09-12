@@ -20,6 +20,7 @@ using System.IO;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -117,7 +118,7 @@ namespace PlaywrightNative.Helpers
 
                 if (string.IsNullOrEmpty(certificate.Origin))
                 {
-                    throw new PlaywrightNativeException("clientCertificates.origin is required");
+                    throw new PlaywrightException("clientCertificates.origin is required");
                 }
 
                 bool hasCert = HasBytes(certificate.Cert) || !string.IsNullOrEmpty(certificate.CertPath);
@@ -126,22 +127,22 @@ namespace PlaywrightNative.Helpers
                 bool hasPassphrase = !string.IsNullOrEmpty(certificate.Passphrase);
                 if (!hasCert && !hasKey && !hasPfx && !hasPassphrase)
                 {
-                    throw new PlaywrightNativeException(MissingMaterialMessage);
+                    throw new PlaywrightException(MissingMaterialMessage);
                 }
 
                 if (hasCert && !hasKey)
                 {
-                    throw new PlaywrightNativeException("cert is specified without key");
+                    throw new PlaywrightException("cert is specified without key");
                 }
 
                 if (!hasCert && hasKey)
                 {
-                    throw new PlaywrightNativeException("key is specified without cert");
+                    throw new PlaywrightException("key is specified without cert");
                 }
 
                 if (hasPfx && (hasCert || hasKey))
                 {
-                    throw new PlaywrightNativeException(PfxConflictMessage);
+                    throw new PlaywrightException(PfxConflictMessage);
                 }
             }
         }
@@ -174,8 +175,8 @@ namespace PlaywrightNative.Helpers
         /// When <see langword="true"/>, prefix
         /// <c>Failed to load client certificate:</c>.
         /// </param>
-        /// <returns>A <see cref="PlaywrightNativeException"/>.</returns>
-        internal static PlaywrightNativeException RewriteLoadException(Exception ex, bool forBrowser)
+        /// <returns>A <see cref="PlaywrightException"/>.</returns>
+        internal static PlaywrightException RewriteLoadException(Exception ex, bool forBrowser)
         {
             string rewritten = RewriteLoadMessage(ex);
             if (forBrowser && !rewritten.StartsWith(FailedToLoadPrefix, StringComparison.Ordinal))
@@ -183,7 +184,7 @@ namespace PlaywrightNative.Helpers
                 rewritten = FailedToLoadPrefix + rewritten;
             }
 
-            return new PlaywrightNativeException(rewritten, ex);
+            return new PlaywrightException(rewritten, ex);
         }
 
         /// <summary>
@@ -247,7 +248,7 @@ namespace PlaywrightNative.Helpers
                 {
                     return Load(certificate);
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                     throw;
                 }
@@ -314,7 +315,7 @@ namespace PlaywrightNative.Helpers
                     : X509Certificate2.CreateFromEncryptedPem(certPem, keyPem, certificate.Passphrase);
                 return Normalize(loaded);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 throw;
             }
@@ -351,9 +352,9 @@ namespace PlaywrightNative.Helpers
                 {
                     map[origin] = Load(certificate);
                 }
-                catch (PlaywrightNativeException ex)
+                catch (PlaywrightException ex)
                 {
-                    throw new PlaywrightNativeException(
+                    throw new PlaywrightException(
                         FailedToLoadPrefix + StripFailedPrefix(ex.Message),
                         ex);
                 }
@@ -392,7 +393,7 @@ namespace PlaywrightNative.Helpers
 
             if (string.IsNullOrEmpty(path))
             {
-                throw new PlaywrightNativeException(
+                throw new PlaywrightException(
                     "Client certificate must provide " + kind + " bytes or path, or a PFX.");
             }
 
@@ -451,7 +452,7 @@ namespace PlaywrightNative.Helpers
         {
             if (ContainsLegacyPbe(pfx))
             {
-                throw new PlaywrightNativeException(UnsupportedTlsCertificateMessage);
+                throw new PlaywrightException(UnsupportedTlsCertificateMessage);
             }
         }
 

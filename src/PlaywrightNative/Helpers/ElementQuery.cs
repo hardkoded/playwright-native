@@ -16,6 +16,7 @@
  */
 using System;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -50,7 +51,7 @@ namespace PlaywrightNative.Helpers
             IElementHandle handle = await querySelectorAsync(selector).ConfigureAwait(false);
             if (handle == null)
             {
-                throw new PlaywrightNativeException($"No node found for selector: {selector}");
+                throw new PlaywrightException($"No node found for selector: {selector}");
             }
 
             return await onHandle(handle).ConfigureAwait(false);
@@ -94,7 +95,7 @@ namespace PlaywrightNative.Helpers
 
             if (handle == null)
             {
-                throw new PlaywrightNativeException($"No node found for selector: {selector}");
+                throw new PlaywrightException($"No node found for selector: {selector}");
             }
 
             if (scroll != ActionScroll.None)
@@ -130,7 +131,7 @@ namespace PlaywrightNative.Helpers
             IElementHandle handle = await querySelectorAsync(selector).ConfigureAwait(false);
             if (handle == null)
             {
-                throw new PlaywrightNativeException($"No node found for selector: {selector}");
+                throw new PlaywrightException($"No node found for selector: {selector}");
             }
 
             await onHandle(handle).ConfigureAwait(false);
@@ -173,7 +174,7 @@ namespace PlaywrightNative.Helpers
 
             if (handle == null)
             {
-                throw new PlaywrightNativeException($"No node found for selector: {selector}");
+                throw new PlaywrightException($"No node found for selector: {selector}");
             }
 
             if (scroll != ActionScroll.None)

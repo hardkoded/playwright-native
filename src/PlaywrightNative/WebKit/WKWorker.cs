@@ -17,6 +17,7 @@
 using System;
 using System.Text.Json;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using PlaywrightNative.Helpers;
 
 namespace PlaywrightNative.WebKit
@@ -57,7 +58,7 @@ namespace PlaywrightNative.WebKit
             {
                 await _session.SendAsync("Console.enable").ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 // Some WebKit builds expose worker logs only via Runtime.consoleAPICalled.
             }

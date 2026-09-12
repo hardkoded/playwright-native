@@ -16,6 +16,7 @@
  */
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 
@@ -39,7 +40,7 @@ namespace PlaywrightNative.Tests
             IElementHandle option = await page.QuerySelectorAsync("option").ConfigureAwait(false);
             List<IElementHandle> values = new List<IElementHandle> { option };
 
-            PlaywrightNativeException ex = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException ex = Assert.CatchAsync<PlaywrightException>(
                 () => page.SelectOptionAsync("select", values, strict: true));
 
             Assert.That(ex, Is.Not.Null);
@@ -105,7 +106,7 @@ namespace PlaywrightNative.Tests
             IElementHandle option = await frame.QuerySelectorAsync("option").ConfigureAwait(false);
             List<IElementHandle> values = new List<IElementHandle> { option };
 
-            PlaywrightNativeException ex = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException ex = Assert.CatchAsync<PlaywrightException>(
                 () => frame.SelectOptionAsync("select", values, strict: true));
 
             Assert.That(ex, Is.Not.Null);

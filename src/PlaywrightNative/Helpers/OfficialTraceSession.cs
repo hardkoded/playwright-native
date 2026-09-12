@@ -22,6 +22,7 @@ using System.IO.Compression;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -142,12 +143,12 @@ namespace PlaywrightNative.Helpers
             {
                 if (!chunk && _recording)
                 {
-                    throw new PlaywrightNativeException("Tracing has been already started");
+                    throw new PlaywrightException("Tracing has been already started");
                 }
 
                 if (chunk && !_recording)
                 {
-                    throw new PlaywrightNativeException("Must start tracing before starting a new chunk");
+                    throw new PlaywrightException("Must start tracing before starting a new chunk");
                 }
 
                 TracingStartOptions next = options ?? new TracingStartOptions();
@@ -274,6 +275,11 @@ namespace PlaywrightNative.Helpers
             try
             {
                 await CapturePhaseAsync(callId, "action", method).ConfigureAwait(false);
+
+                // Yield so callers can subscribe to waitForEvent (e.g. console)
+                // before a sync-completing CapturePhase lets the action body run
+                // and emit the event in the same turn.
+                await Task.Yield();
                 value = await body().ConfigureAwait(false);
             }
             finally
@@ -670,7 +676,7 @@ namespace PlaywrightNative.Helpers
                         AddScreencastFrame(jpeg);
                     }
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
                 catch (TimeoutException)
@@ -697,7 +703,7 @@ namespace PlaywrightNative.Helpers
                 {
                     if (!string.IsNullOrEmpty(path))
                     {
-                        throw new PlaywrightNativeException("Must start tracing before stopping");
+                        throw new PlaywrightException("Must start tracing before stopping");
                     }
 
                     return;
@@ -886,7 +892,7 @@ namespace PlaywrightNative.Helpers
             }
             catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
             {
-                throw new PlaywrightNativeException(FileSystemError(path, ex), ex);
+                throw new PlaywrightException(FileSystemError(path, ex), ex);
             }
         }
 
@@ -1052,7 +1058,7 @@ namespace PlaywrightNative.Helpers
             {
                 await Task.WhenAll(pending).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
             catch (InvalidOperationException)
@@ -1147,7 +1153,7 @@ namespace PlaywrightNative.Helpers
 
                     return;
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
                 catch (TimeoutException)
@@ -1216,7 +1222,7 @@ namespace PlaywrightNative.Helpers
                         ["children"] = children,
                     };
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
                 catch (InvalidOperationException)
@@ -1396,7 +1402,7 @@ namespace PlaywrightNative.Helpers
                     body = await bodyTask.ConfigureAwait(false);
                 }
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
             catch (InvalidOperationException)

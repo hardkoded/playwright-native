@@ -43,7 +43,7 @@ namespace PlaywrightNative.Helpers
 
             if (!NameIsValid(name))
             {
-                throw new PlaywrightNativeException("selectors.register: Selector engine name may only contain [a-zA-Z0-9_] characters");
+                throw new PlaywrightException("selectors.register: Selector engine name may only contain [a-zA-Z0-9_] characters");
             }
 
             string source = script;
@@ -83,7 +83,12 @@ namespace PlaywrightNative.Helpers
             => Playwright.SetTestIdAttribute(attributeName);
 
 #pragma warning disable SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
-        Task ISelectors.RegisterAsync(string name, SelectorsRegisterOptions options) => Task.CompletedTask;
+        Task ISelectors.RegisterAsync(string name, SelectorsRegisterOptions options)
+            => RegisterAsync(
+                name,
+                options?.Script,
+                options?.Path,
+                options?.ContentScript == true);
 #pragma warning restore SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
     }
 }

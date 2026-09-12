@@ -18,6 +18,7 @@ using System;
 using System.Collections.Generic;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 
@@ -64,7 +65,7 @@ namespace PlaywrightNative.Tests
                 ["DISPLAY"] = null,
             };
 
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => LaunchAsync(new BrowserTypeLaunchOptions
                 {
                     Headless = false,

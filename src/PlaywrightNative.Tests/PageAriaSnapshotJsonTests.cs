@@ -88,9 +88,13 @@ namespace PlaywrightNative.Tests
             await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
             await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
-            await page.SetContentAsync("<button>Go</button>").ConfigureAwait(false);
+            await page.SetContentAsync("<ul><li><button>Go</button></li></ul>").ConfigureAwait(false);
 
+            // depth 0 keeps the top-level nodes and drops their descendants,
+            // matching locator.ariaSnapshotJSON(depth: 0).
             string rootOnly = await page.AriaSnapshotJsonAsync(depth: 0).ConfigureAwait(false);
+            Assert.That(rootOnly, Does.Contain("\"role\":\"list\""));
+            Assert.That(rootOnly, Does.Not.Contain("\"children\""));
             Assert.That(rootOnly, Does.Not.Contain("\"role\":\"button\""));
 
             string json = await page.AriaSnapshotJsonAsync().ConfigureAwait(false);

@@ -141,7 +141,7 @@ namespace PlaywrightNative.Helpers
             {
                 if (_connected)
                 {
-                    throw new PlaywrightNativeException("Already connected to the server");
+                    throw new PlaywrightException("Already connected to the server");
                 }
 
                 _connected = true;
@@ -338,7 +338,7 @@ namespace PlaywrightNative.Helpers
                         return;
                     }
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
             }
@@ -490,7 +490,7 @@ namespace PlaywrightNative.Helpers
                 {
                     await previous.ConfigureAwait(false);
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
                 catch (ObjectDisposedException)
@@ -594,7 +594,7 @@ namespace PlaywrightNative.Helpers
                 => _owner.DispatchServer("sendToServer", Convert.ToBase64String(message ?? Array.Empty<byte>()), binary: true);
 
             public IWebSocketRoute ConnectToServer()
-                => throw new PlaywrightNativeException("connectToServer must be called on the page-side WebSocketRoute");
+                => throw new PlaywrightException("connectToServer must be called on the page-side WebSocketRoute");
 
             public Task CloseAsync(int? code = null, string reason = null)
             {
@@ -694,7 +694,8 @@ namespace PlaywrightNative.Helpers
         }
 
 #pragma warning disable SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
-        Task IWebSocketRoute.CloseAsync(WebSocketRouteCloseOptions options) => Task.CompletedTask;
+        Task IWebSocketRoute.CloseAsync(WebSocketRouteCloseOptions options)
+            => CloseAsync(options?.Code, options?.Reason);
 #pragma warning restore SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
     }
 }

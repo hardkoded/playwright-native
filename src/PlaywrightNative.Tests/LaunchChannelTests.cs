@@ -17,6 +17,7 @@
 using System;
 using System.IO;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.Helpers;
 using PlaywrightNative.NUnit;
@@ -58,7 +59,7 @@ namespace PlaywrightNative.Tests
                 return;
             }
 
-            PlaywrightNativeException exception = Assert.Catch(() => BrowserChannelResolver.Resolve(BrowserChannel.Msedge)) as PlaywrightNativeException;
+            PlaywrightException exception = Assert.Catch(() => BrowserChannelResolver.Resolve(BrowserChannel.Msedge)) as PlaywrightException;
             Assert.That(exception, Is.Not.Null);
             Assert.That(exception.Message, Does.Contain("msedge"));
         }

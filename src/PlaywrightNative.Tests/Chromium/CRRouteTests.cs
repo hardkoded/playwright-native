@@ -19,6 +19,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.Chromium;
 using PlaywrightNative.NUnit;
@@ -57,11 +58,16 @@ namespace PlaywrightNative.Tests.Chromium
         {
             // Test raw CDP Fetch: enable it, listen for requestPaused, manually continue.
             var fetchEvents = new List<string>();
+            object fetchEventsGate = new object();
             var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
             Page.Session.MessageReceived += (method, param) =>
             {
-                fetchEvents.Add(method);
+                lock (fetchEventsGate)
+                {
+                    fetchEvents.Add(method);
+                }
+
                 if (method == "Fetch.requestPaused" && param.HasValue)
                 {
                     string interceptionId = param.Value.GetProperty("requestId").GetString();
@@ -96,7 +102,13 @@ namespace PlaywrightNative.Tests.Chromium
                 await navTask.ConfigureAwait(false);
             }
 
-            string fetchEventsStr = string.Join(", ", fetchEvents.Where(e => e.StartsWith("Fetch.") || e.StartsWith("Network.request")));
+            string[] snapshot;
+            lock (fetchEventsGate)
+            {
+                snapshot = fetchEvents.ToArray();
+            }
+
+            string fetchEventsStr = string.Join(", ", snapshot.Where(e => e.StartsWith("Fetch.") || e.StartsWith("Network.request")));
             TestContext.Out.WriteLine($"Relevant events: {fetchEventsStr}");
             Assert.That(received, Is.True, $"Fetch.requestPaused not received. Events: [{fetchEventsStr}]");
         }
@@ -147,7 +159,7 @@ namespace PlaywrightNative.Tests.Chromium
             {
                 navigationFailed = true;
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 navigationFailed = true;
             }

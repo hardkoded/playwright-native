@@ -17,6 +17,7 @@
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -141,7 +142,7 @@ namespace PlaywrightNative.Helpers
                 {
                     await page.EvaluateAsync(entry.CurrentDocumentSource).ConfigureAwait(false);
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
             }
@@ -167,7 +168,7 @@ namespace PlaywrightNative.Helpers
             {
                 if (!EvaluateWithArg.IsFunction(script))
                 {
-                    throw new PlaywrightNativeException(EvaluateCallbacks.InitScriptRequiresFunction);
+                    throw new PlaywrightException(EvaluateCallbacks.InitScriptRequiresFunction);
                 }
 
                 return AddAsync(
@@ -183,12 +184,15 @@ namespace PlaywrightNative.Helpers
 
             if (arg != null && !string.IsNullOrEmpty(script))
             {
-                script = EvaluateWithArg.Wrap(script, EvaluateCallbacks.DropFunctions(arg), throwOnFunctions: false);
+                script = EvaluateWithArg.Wrap(
+                    script,
+                    EvaluateCallbacks.DropFunctions(AddInitScriptHelper.UnwrapInitScriptArg(arg)),
+                    throwOnFunctions: false);
             }
 
             if (string.IsNullOrEmpty(script))
             {
-                throw new PlaywrightNativeException(AddInitScriptHelper.MissingOptionsMessage);
+                throw new PlaywrightException(AddInitScriptHelper.MissingOptionsMessage);
             }
 
             string captured = script;

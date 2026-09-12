@@ -22,6 +22,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
+using Microsoft.Playwright;
 using PlaywrightNative.Helpers;
 using PlaywrightNative.Transport;
 
@@ -259,7 +260,7 @@ namespace PlaywrightNative.WebKit
                         exited = false;
                     }
 
-                    throw new PlaywrightNativeException(
+                    throw new PlaywrightException(
                         $"Failed to launch WebKit (processExited={exited}, exitCode={exitCode?.ToString() ?? "<n/a>"}).\n" +
                         $"Executable: {executablePath}\n" +
                         $"Args: {string.Join(" ", launchArgs)}\n" +

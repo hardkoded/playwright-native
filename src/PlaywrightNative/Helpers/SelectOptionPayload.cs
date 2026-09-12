@@ -17,6 +17,7 @@
 using System.Collections.Generic;
 using System.Globalization;
 using System.Text.Json;
+using Microsoft.Playwright;
 using PlaywrightNative.Input;
 
 namespace PlaywrightNative.Helpers
@@ -44,7 +45,7 @@ namespace PlaywrightNative.Helpers
                 {
                     if (value == null)
                     {
-                        throw new PlaywrightNativeException(
+                        throw new PlaywrightException(
                             "options[" + index.ToString(CultureInfo.InvariantCulture) + "]: expected object, got null");
                     }
 
@@ -79,7 +80,7 @@ namespace PlaywrightNative.Helpers
                 {
                     if (value == null)
                     {
-                        throw new PlaywrightNativeException(
+                        throw new PlaywrightException(
                             "options[" + index.ToString(CultureInfo.InvariantCulture) + "]: expected object, got null");
                     }
 
@@ -111,7 +112,7 @@ namespace PlaywrightNative.Helpers
                 {
                     if (value == null)
                     {
-                        throw new PlaywrightNativeException(
+                        throw new PlaywrightException(
                             "options[" + index.ToString(CultureInfo.InvariantCulture) + "]: expected object, got null");
                     }
 

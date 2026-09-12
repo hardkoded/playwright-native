@@ -60,7 +60,7 @@ namespace PlaywrightNative
             bool? ignoreCase = default,
             bool? useInnerText = default)
             => assertions is LocatorAssertions sharp
-                ? sharp.ToHaveTextAsync(expected, timeout, ignoreCase, useInnerText)
+                ? sharp.ToHaveTextAsync((IEnumerable<object>)expected, timeout, ignoreCase, useInnerText)
                 : throw new System.NotSupportedException("ToHaveTextAsync requires PlaywrightNative assertions.");
 
         /// <summary>Legacy contain-class assertion with regex.</summary>
@@ -81,15 +81,61 @@ namespace PlaywrightNative
                 ? sharp.ToContainClassAsync((System.Collections.Generic.IEnumerable<object>)expected, timeout)
                 : throw new System.NotSupportedException("ToContainClassAsync requires PlaywrightNative assertions.");
 
-        /// <summary>Legacy text assertion with a single object value.</summary>
+        /// <summary>
+        /// Legacy text assertion with named <paramref name="timeout"/>.
+        /// Dispatches to the matching <see cref="LocatorAssertions"/> overload.
+        /// </summary>
+        /// <remarks>
+        /// Calls such as <c>ToHaveTextAsync("x", timeout: 1000)</c> bind here because
+        /// <see cref="ILocatorAssertions"/> only exposes an options-bag overload for
+        /// strings. The previous body called <c>ToHaveTextAsync(object, …)</c> again and
+        /// overflowed the stack.
+        /// </remarks>
         public static Task ToHaveTextAsync(
             this ILocatorAssertions assertions,
             object expected,
             float? timeout = default,
             bool? ignoreCase = default,
             bool? useInnerText = default)
+        {
+            if (assertions is not LocatorAssertions sharp)
+            {
+                throw new System.NotSupportedException("ToHaveTextAsync requires PlaywrightNative assertions.");
+            }
+
+            return expected switch
+            {
+                null => throw new ArgumentNullException(nameof(expected)),
+                string text => sharp.ToHaveTextAsync(
+                    text,
+                    timeout: timeout,
+                    ignoreCase: ignoreCase,
+                    useInnerText: useInnerText),
+                Regex regex => sharp.ToHaveTextAsync(regex, timeout, ignoreCase, useInnerText),
+                IEnumerable<string> strings => sharp.ToHaveTextAsync(strings, timeout, ignoreCase, useInnerText),
+                IEnumerable<Regex> regexes => sharp.ToHaveTextAsync(regexes, timeout, ignoreCase, useInnerText),
+                IEnumerable<object> objects => sharp.ToHaveTextAsync(objects, timeout, ignoreCase, useInnerText),
+                _ => sharp.ToHaveTextAsync(
+                    Convert.ToString(expected, System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty,
+                    timeout: timeout,
+                    ignoreCase: ignoreCase,
+                    useInnerText: useInnerText),
+            };
+        }
+
+        /// <summary>Legacy text assertion with a string and named timeout.</summary>
+        public static Task ToHaveTextAsync(
+            this ILocatorAssertions assertions,
+            string expected,
+            float? timeout = default,
+            bool? ignoreCase = default,
+            bool? useInnerText = default)
             => assertions is LocatorAssertions sharp
-                ? sharp.ToHaveTextAsync(expected, timeout, ignoreCase, useInnerText)
+                ? sharp.ToHaveTextAsync(
+                    expected,
+                    timeout: timeout,
+                    ignoreCase: ignoreCase,
+                    useInnerText: useInnerText)
                 : throw new System.NotSupportedException("ToHaveTextAsync requires PlaywrightNative assertions.");
 
         /// <summary>Legacy text assertion with regex.</summary>
@@ -110,9 +156,15 @@ namespace PlaywrightNative
             float? timeout = default,
             bool? ignoreCase = default,
             bool? useInnerText = default)
-            => assertions is LocatorAssertions sharp
-                ? sharp.ToHaveTextAsync(predicate, timeout, ignoreCase, useInnerText)
-                : throw new System.NotSupportedException("ToHaveTextAsync requires PlaywrightNative assertions.");
+        {
+            _ = timeout;
+            _ = ignoreCase;
+            _ = useInnerText;
+            _ = assertions;
+            _ = predicate;
+            throw new System.NotSupportedException(
+                "ToHaveTextAsync(Func<string, bool>) is not supported; pass a string or Regex expected value.");
+        }
 
         /// <summary>Legacy CSS assertion with string pseudo-element.</summary>
         public static Task ToHaveCSSAsync(

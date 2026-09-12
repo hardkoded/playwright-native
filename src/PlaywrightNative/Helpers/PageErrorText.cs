@@ -86,6 +86,22 @@ namespace PlaywrightNative.Helpers
                 return string.Empty;
             }
 
+            // Empty Error.name must survive IPage.PageError's string wire and
+            // PageErrorText.Parse round-trip. Chromium's exception description
+            // still starts with "Error:" even when name is "", so prefer the
+            // message as the first line (matching the preview stack).
+            if (error.Name != null && error.Name.Length == 0)
+            {
+                if (string.IsNullOrEmpty(error.Stack))
+                {
+                    return error.Message ?? string.Empty;
+                }
+
+                int newline = error.Stack.IndexOf('\n');
+                string rest = newline >= 0 ? error.Stack.Substring(newline) : string.Empty;
+                return (error.Message ?? string.Empty) + rest;
+            }
+
             if (!string.IsNullOrEmpty(error.Stack))
             {
                 return error.Stack;

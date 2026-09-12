@@ -17,6 +17,7 @@
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using PlaywrightNative.Chromium;
 using PlaywrightNative.WebKit;
 
@@ -44,7 +45,7 @@ namespace PlaywrightNative.Helpers
             IFrame parent = frame.ParentFrame;
             if (parent == null || frame.IsDetached)
             {
-                throw new PlaywrightNativeException("Frame has been detached.");
+                throw new PlaywrightException("Frame has been detached.");
             }
 
             if (frame is ChromiumFrame crFrame && frame.Page is Page crPage)
@@ -72,7 +73,7 @@ namespace PlaywrightNative.Helpers
                 await candidate.DisposeAsync().ConfigureAwait(false);
             }
 
-            throw new PlaywrightNativeException("Frame has been detached.");
+            throw new PlaywrightException("Frame has been detached.");
         }
     }
 }

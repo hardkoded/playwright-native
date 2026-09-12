@@ -16,6 +16,7 @@
  */
 using System;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -72,7 +73,7 @@ namespace PlaywrightNative.Helpers
             }
             catch (Exception ex)
             {
-                throw new PlaywrightNativeException(NavigationError, ex);
+                throw new PlaywrightException(NavigationError, ex);
             }
         }
     }

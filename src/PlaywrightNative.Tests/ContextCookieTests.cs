@@ -272,10 +272,13 @@ namespace PlaywrightNative.Tests
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
             await page.GoToAsync(TestConstants.EmptyPage).ConfigureAwait(false);
 
+            // Cookie API is url XOR domain/path (upstream network.py). Path-only
+            // cookies must use an explicit domain/path pair.
+            Uri empty = new Uri(TestConstants.EmptyPage);
             await context.AddCookiesAsync(new[]
             {
-                new Cookie { Name = "wave427-keep", Value = "yes", Url = TestConstants.EmptyPage, Path = "/", SameSite = SameSiteAttribute.Lax },
-                new Cookie { Name = "wave427-drop", Value = "no", Url = TestConstants.EmptyPage, Path = "/grid.html", SameSite = SameSiteAttribute.Lax },
+                new Cookie { Name = "wave427-keep", Value = "yes", Domain = empty.Host, Path = "/", SameSite = SameSiteAttribute.Lax },
+                new Cookie { Name = "wave427-drop", Value = "no", Domain = empty.Host, Path = "/grid.html", SameSite = SameSiteAttribute.Lax },
             }).ConfigureAwait(false);
 
             await context.ClearCookiesAsync(null, null, new Regex("grid\\.html$")).ConfigureAwait(false);

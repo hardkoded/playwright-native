@@ -40,10 +40,17 @@ namespace PlaywrightNative.Helpers
     const tag = Object.prototype.toString.call(value);
     throw new Error('Expected a Node but got ' + tag);
   }";
+            string asNodeArray = @"(values) => {
+    for (const value of values) {
+      if (!value || !('nodeName' in value))
+        throw new Error('Expected a Node but got ' + Object.prototype.toString.call(value));
+    }
+    return values;
+  }";
             DocumentQueryExpression = "(() => { const engine = " + engine + "; const asNode = " + asNode + "; return asNode(engine.query(document, " + bodyJson + ")); })()";
-            DocumentQueryAllExpression = "(() => { const engine = " + engine + "; return Array.from(engine.queryAll(document, " + bodyJson + ") || []); })()";
+            DocumentQueryAllExpression = "(() => { const engine = " + engine + "; const asNodeArray = " + asNodeArray + "; return asNodeArray(Array.from(engine.queryAll(document, " + bodyJson + ") || [])); })()";
             ElementQueryFunction = "(el) => { const engine = " + engine + "; const asNode = " + asNode + "; return asNode(engine.query(el, " + bodyJson + ")); }";
-            ElementQueryAllFunction = "(el) => { const engine = " + engine + "; return Array.from(engine.queryAll(el, " + bodyJson + ") || []); }";
+            ElementQueryAllFunction = "(el) => { const engine = " + engine + "; const asNodeArray = " + asNodeArray + "; return asNodeArray(Array.from(engine.queryAll(el, " + bodyJson + ") || [])); }";
         }
 
         /// <summary>IIFE that queries <c>document</c> and returns the first match.</summary>

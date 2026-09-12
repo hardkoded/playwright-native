@@ -47,7 +47,7 @@ namespace PlaywrightNative.Helpers
         /// <returns>The YAML text, or an empty string when <paramref name="node"/> is null.</returns>
         internal static string Format(
             AccessibilitySnapshotResult node,
-            AriaSnapshotMode mode = default,
+            AriaSnapshotMode mode = AriaSnapshotMode.Default,
             int? depth = default,
             IReadOnlyList<int[]> boxes = null,
             bool omitDescendantNames = false)

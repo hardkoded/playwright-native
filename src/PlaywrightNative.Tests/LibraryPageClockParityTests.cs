@@ -20,6 +20,7 @@ using System.Globalization;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 using PlaywrightNative.TestServer;
@@ -196,7 +197,7 @@ namespace PlaywrightNative.Tests
             await _page.EvaluateAsync(
                     "() => { setTimeout(() => { throw new Error(); }, 100); setTimeout(window.stub, 120); }")
                 .ConfigureAwait(false);
-            Assert.ThrowsAsync<PlaywrightNativeException>(
+            Assert.ThrowsAsync<PlaywrightException>(
                 async () => await _page.Clock.RunForAsync(120).ConfigureAwait(false));
             Assert.That(_calls, Has.Count.EqualTo(1));
         }
@@ -254,7 +255,7 @@ namespace PlaywrightNative.Tests
         {
             await InstallPausedAsync().ConfigureAwait(false);
             await _page.EvaluateAsync("() => { setInterval(window.stub, 10000); }").ConfigureAwait(false);
-            Assert.ThrowsAsync<PlaywrightNativeException>(
+            Assert.ThrowsAsync<PlaywrightException>(
                 async () => await _page.Clock.RunForAsync("12:02:34:10").ConfigureAwait(false));
             Assert.That(_calls, Is.Empty);
         }
@@ -322,10 +323,10 @@ namespace PlaywrightNative.Tests
         public async Task ShouldThrowForInvalidDate()
         {
             await InstallPausedAsync().ConfigureAwait(false);
-            PlaywrightNativeException invalidDate = Assert.ThrowsAsync<PlaywrightNativeException>(
+            PlaywrightException invalidDate = Assert.ThrowsAsync<PlaywrightException>(
                 async () => await _page.Clock.SetSystemTimeAsync("Invalid Date").ConfigureAwait(false));
             Assert.That(invalidDate.Message, Does.Contain("Invalid date: Invalid Date"));
-            PlaywrightNativeException invalid = Assert.ThrowsAsync<PlaywrightNativeException>(
+            PlaywrightException invalid = Assert.ThrowsAsync<PlaywrightException>(
                 async () => await _page.Clock.SetSystemTimeAsync("invalid").ConfigureAwait(false));
             Assert.That(invalid.Message, Does.Contain("Invalid date: invalid"));
         }
@@ -621,7 +622,7 @@ namespace PlaywrightNative.Tests
                 .ConfigureAwait(false);
             double now = await _page.EvaluateAsync<double>("() => Date.now()").ConfigureAwait(false);
             long invalidTime = (long)(now * 1_000_000);
-            PlaywrightNativeException error = Assert.ThrowsAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.ThrowsAsync<PlaywrightException>(
                 async () => await _page.Clock.PauseAtAsync(invalidTime).ConfigureAwait(false));
             Assert.That(error.Message, Does.Contain("Invalid date: " + invalidTime.ToString(CultureInfo.InvariantCulture)));
         }

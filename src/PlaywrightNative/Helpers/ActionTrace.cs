@@ -130,6 +130,10 @@ namespace PlaywrightNative.Helpers
 
         private static async Task RunInsideAsync(Func<Task> body)
         {
+            // Yield first so Depth is not set on the caller's ExecutionContext
+            // (AsyncLocal sync-portion leak would suppress sibling waitForEvent
+            // recording while an in-flight evaluate is pending).
+            await Task.Yield();
             Depth.Value++;
             try
             {
@@ -143,6 +147,7 @@ namespace PlaywrightNative.Helpers
 
         private static async Task<T> RunInsideAsync<T>(Func<Task<T>> body)
         {
+            await Task.Yield();
             Depth.Value++;
             try
             {

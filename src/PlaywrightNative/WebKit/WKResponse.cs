@@ -186,9 +186,12 @@ namespace PlaywrightNative.WebKit
         public async Task<IReadOnlyList<Header>> HeadersArrayAsync()
         {
             await WaitForExtraHeadersAsync().ConfigureAwait(false);
-            return HeaderMap.Array(Headers)
-                .Select(e => new Header { Name = e.Name, Value = e.Value })
-                .ToList();
+
+            // Build from the raw pairs, not the Headers dictionary: Headers
+            // collapses repeated header names (e.g. multiple Set-Cookie) into
+            // one comma-joined value, which would merge what should be
+            // separate entries in the array form.
+            return EquatableHeader.FromEntries(_headerPairs);
         }
 
         /// <inheritdoc/>
@@ -248,7 +251,27 @@ namespace PlaywrightNative.WebKit
         /// </summary>
         /// <returns>A task that resolves to the response body as a byte array.</returns>
         internal Task<byte[]> PrefetchBodyAsync()
-            => GetBodyBytesAsync();
+            => PrefetchBodyAsync(forceRetry: false);
+
+        /// <summary>
+        /// Fetches the response body, optionally discarding a prior empty result so
+        /// HAR flush can retry after <c>loadingFinished</c> under load.
+        /// </summary>
+        /// <param name="forceRetry">When <see langword="true"/>, retry after an empty read.</param>
+        /// <returns>A task that resolves to the response body as a byte array.</returns>
+        internal Task<byte[]> PrefetchBodyAsync(bool forceRetry)
+        {
+            if (forceRetry && (_body == null || _body.Length == 0))
+            {
+                Task<byte[]> current = _bodyTask;
+                if (current == null || current.IsCompleted)
+                {
+                    _bodyTask = null;
+                }
+            }
+
+            return GetBodyBytesAsync();
+        }
 
         internal Task<byte[]> GetBodyBytesAsync()
         {
@@ -263,6 +286,8 @@ namespace PlaywrightNative.WebKit
                 return current;
             }
 
+            // A prior empty completion must not block later retries after the
+            // inspector buffer is populated by loadingFinished.
             Task<byte[]> next = LoadBodyAsync();
             _bodyTask = next;
             return next;
@@ -271,24 +296,27 @@ namespace PlaywrightNative.WebKit
         private async Task<byte[]> LoadBodyAsync()
         {
             await WKRequest.WaitUntilFinishedAsync().ConfigureAwait(false);
-            await Task.Delay(50).ConfigureAwait(false);
 
             if (ResponseHeaders.IsRedirectStatus(Status))
             {
-                throw new PlaywrightNativeException(ResponseHeaders.RedirectBodyUnavailable);
+                throw new PlaywrightException(ResponseHeaders.RedirectBodyUnavailable);
             }
 
             if (WKRequest.FulfilledBody != null && RouteFulfill.ShouldOverrideBody(Status))
             {
+                _body = WKRequest.FulfilledBody;
                 return WKRequest.FulfilledBody;
             }
 
             if (WKRequest.Fulfilled && WKRequest.FulfilledBody != null)
             {
+                _body = WKRequest.FulfilledBody;
                 return WKRequest.FulfilledBody;
             }
 
-            for (int attempt = 0; attempt < 20; attempt++)
+            // Prefer an immediate read: Ubuntu WebKit clears the inspector
+            // buffer quickly after loadingFinished (especially under CI load).
+            for (int attempt = 0; attempt < 30; attempt++)
             {
                 try
                 {
@@ -300,11 +328,11 @@ namespace PlaywrightNative.WebKit
                         return bytes;
                     }
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
 
-                await Task.Delay(100).ConfigureAwait(false);
+                await Task.Delay(attempt < 5 ? 20 : 40).ConfigureAwait(false);
             }
 
             return Array.Empty<byte>();

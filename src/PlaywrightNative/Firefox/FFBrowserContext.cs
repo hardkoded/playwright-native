@@ -19,6 +19,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Text.Json;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Firefox
 {
@@ -109,7 +110,7 @@ namespace PlaywrightNative.Firefox
 
             if (string.IsNullOrEmpty(targetId))
             {
-                throw new PlaywrightNativeException("Browser.newPage did not return a targetId.");
+                throw new PlaywrightException("Browser.newPage did not return a targetId.");
             }
 
             _pendingPageCreations.TryAdd(targetId, tcs);

@@ -1,11 +1,12 @@
 using System;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative
 {
     /// <summary>
     /// Exception thrown by a connection when it detects that the target was closed.
     /// </summary>
-    public class TargetClosedException : PlaywrightNativeException
+    public class TargetClosedException : PlaywrightException
     {
         /// <inheritdoc cref="Exception"/>
         public TargetClosedException()

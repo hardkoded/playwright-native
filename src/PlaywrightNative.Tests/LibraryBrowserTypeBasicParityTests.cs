@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 using System.IO;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 
@@ -61,7 +62,7 @@ namespace PlaywrightNative.Tests
                 Assert.Ignore("official skip: browserName === 'chromium' || browserName === 'webkit'");
             }
 
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => CurrentBrowserType().ConnectOverCDPAsync("ws://foo"));
             Assert.That(error.Message, Is.EqualTo("Connecting over CDP is only supported in Chromium and WebKit."));
         }

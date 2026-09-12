@@ -20,6 +20,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 using PlaywrightNative.TestServer;
@@ -168,14 +169,14 @@ namespace PlaywrightNative.Tests
             await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
 
-            PlaywrightNativeException caught = null;
+            PlaywrightException caught = null;
             await page.RouteAsync("**/route-fetch-hop1", async route =>
             {
                 try
                 {
                     await route.FetchAsync(new() { MaxRedirects = 1 }).ConfigureAwait(false);
                 }
-                catch (PlaywrightNativeException ex)
+                catch (PlaywrightException ex)
                 {
                     caught = ex;
                 }
@@ -256,20 +257,20 @@ namespace PlaywrightNative.Tests
             await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
 
-            PlaywrightNativeException caught = null;
+            PlaywrightException caught = null;
             await page.RouteAsync("**/route-fetch-reset-once", async route =>
             {
                 try
                 {
                     await route.FetchAsync().ConfigureAwait(false);
                 }
-                catch (PlaywrightNativeException ex)
+                catch (PlaywrightException ex)
                 {
                     caught = ex;
                 }
                 catch (HttpRequestException ex)
                 {
-                    caught = new PlaywrightNativeException(ex.Message, ex);
+                    caught = new PlaywrightException(ex.Message, ex);
                 }
 
                 await route.FulfillAsync(new() { Status = 200, Body = "failed", ContentType = "text/html" }).ConfigureAwait(false);

@@ -78,15 +78,22 @@ namespace PlaywrightNative.Chromium
             };
 
 #pragma warning disable SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
-        Task IMouse.ClickAsync(float x, float y, MouseClickOptions options) => Task.CompletedTask;
+        // Official IMouse is options-only. Compat extensions (MoveAsync(x,y,steps), …)
+        // call these; stubs here made every options-path click a silent no-op.
+        Task IMouse.ClickAsync(float x, float y, MouseClickOptions options)
+            => ClickAsync(x, y, options?.Button ?? default, options?.ClickCount, options?.Delay);
 
-        Task IMouse.DblClickAsync(float x, float y, MouseDblClickOptions options) => Task.CompletedTask;
+        Task IMouse.DblClickAsync(float x, float y, MouseDblClickOptions options)
+            => DblClickAsync(x, y, options?.Button ?? default, options?.Delay);
 
-        Task IMouse.DownAsync(MouseDownOptions options) => Task.CompletedTask;
+        Task IMouse.DownAsync(MouseDownOptions options)
+            => DownAsync(options?.Button ?? default, options?.ClickCount);
 
-        Task IMouse.MoveAsync(float x, float y, MouseMoveOptions options) => Task.CompletedTask;
+        Task IMouse.MoveAsync(float x, float y, MouseMoveOptions options)
+            => MoveAsync(x, y, options?.Steps);
 
-        Task IMouse.UpAsync(MouseUpOptions options) => Task.CompletedTask;
+        Task IMouse.UpAsync(MouseUpOptions options)
+            => UpAsync(options?.Button ?? default, options?.ClickCount);
 #pragma warning restore SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
     }
 }

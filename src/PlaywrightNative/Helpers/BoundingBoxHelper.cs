@@ -68,7 +68,7 @@ namespace PlaywrightNative.Helpers
                 return (0, 0);
             }
 
-            IElementHandle frameElement = await frame.FrameElementAsync().ConfigureAwait(false);
+            IElementHandle frameElement = await FrameElementHelper.ResolveAsync(frame).ConfigureAwait(false);
             try
             {
                 ElementHandleBoundingBoxResult box = await frameElement.BoundingBoxAsync().ConfigureAwait(false);
