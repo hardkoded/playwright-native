@@ -235,6 +235,7 @@ namespace PlaywrightNative
                     "chromium" => SupportedBrowser.Chromium,
                     "firefox" => SupportedBrowser.Firefox,
                     "webkit" => SupportedBrowser.Webkit,
+                    "ffmpeg" => SupportedBrowser.Ffmpeg,
                     _ => (SupportedBrowser)(-1),
                 };
                 if ((int)browser < 0)

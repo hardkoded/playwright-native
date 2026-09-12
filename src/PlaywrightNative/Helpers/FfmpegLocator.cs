@@ -58,10 +58,11 @@ namespace PlaywrightNative.Helpers
                     }
                 }
 
-                string homeCache = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-                    ".cache",
-                    "ms-playwright");
+                // BrowserData.DefaultCacheDir() already knows the per-OS convention
+                // (~/Library/Caches/ms-playwright on macOS, %LOCALAPPDATA%/ms-playwright
+                // on Windows, $XDG_CACHE_HOME or ~/.cache/ms-playwright on Linux) —
+                // don't re-derive it here and get it wrong for non-Linux hosts.
+                string homeCache = BrowserData.DefaultCacheDir();
                 if (Directory.Exists(homeCache))
                 {
                     string bundled = FindBundled(homeCache);
@@ -79,7 +80,12 @@ namespace PlaywrightNative.Helpers
 
         private static string FindBundled(string root)
         {
-            string exeName = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "ffmpeg.exe" : "ffmpeg";
+            // Playwright's downloaded ffmpeg build isn't named "ffmpeg" on disk —
+            // it's ffmpeg-linux / ffmpeg-mac / ffmpeg-win64.exe (see BrowserData's
+            // FfmpegExecutablePaths), so a literal "ffmpeg" search never matches it.
+            string exeName = RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
+                ? "ffmpeg-win64.exe"
+                : RuntimeInformation.IsOSPlatform(OSPlatform.OSX) ? "ffmpeg-mac" : "ffmpeg-linux";
             try
             {
                 foreach (string path in Directory.EnumerateFiles(root, exeName, SearchOption.AllDirectories))
