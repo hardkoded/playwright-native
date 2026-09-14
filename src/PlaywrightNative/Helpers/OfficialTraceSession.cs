@@ -39,6 +39,7 @@ namespace PlaywrightNative.Helpers
         private readonly Dictionary<string, byte[]> _resources = new();
         private readonly Dictionary<string, byte[]> _networkResources = new();
         private readonly HashSet<string> _chunkCallIds = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, string> _callMethods = new(StringComparer.Ordinal);
         private readonly Stack<string> _openGroups = new();
         private readonly List<string> _consoleLines = new();
         private readonly List<string> _wsLines = new();
@@ -170,6 +171,7 @@ namespace PlaywrightNative.Helpers
                 _traceLines.Clear();
                 _resources.Clear();
                 _chunkCallIds.Clear();
+                _callMethods.Clear();
                 _consoleLines.Clear();
                 _wsLines.Clear();
                 _stacks.Clear();
@@ -239,17 +241,34 @@ namespace PlaywrightNative.Helpers
                 throw new ArgumentNullException(nameof(body));
             }
 
-            if (!IsRecording)
+            string callId = TryBeginAction(title, className, method, parameters);
+            if (callId == null)
             {
                 return await body().ConfigureAwait(false);
             }
 
-            string callId;
+            return await ContinueActionAsync(callId, body, result).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Synchronously writes the trace <c>before</c> event. Used by
+        /// <see cref="ActionTrace"/> so fire-and-forget actions that race
+        /// <c>Tracing.StopAsync</c> still appear as interrupted.
+        /// </summary>
+        /// <returns>The call id, or <see langword="null"/> when not recording.</returns>
+        internal string TryBeginAction(string title, string className, string method, object parameters = null)
+        {
             lock (_gate)
             {
+                if (!_recording)
+                {
+                    return null;
+                }
+
                 _callId++;
-                callId = "call@" + _callId.ToString(CultureInfo.InvariantCulture);
+                string callId = "call@" + _callId.ToString(CultureInfo.InvariantCulture);
                 _chunkCallIds.Add(callId);
+                _callMethods[callId] = method ?? "unknown";
                 var before = new Dictionary<string, object>
                 {
                     ["type"] = "before",
@@ -267,6 +286,48 @@ namespace PlaywrightNative.Helpers
 
                 _traceLines.Add(Serialize(before));
                 WriteStack(callId);
+                return callId;
+            }
+        }
+
+        /// <summary>
+        /// Completes an action started with <see cref="TryBeginAction"/>.
+        /// </summary>
+        internal async Task ContinueActionAsync(string callId, Func<Task> body, object result = null)
+        {
+            await ContinueActionAsync<object>(
+                callId,
+                async () =>
+                {
+                    await body().ConfigureAwait(false);
+                    return null;
+                },
+                result).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Completes an action started with <see cref="TryBeginAction"/>.
+        /// </summary>
+        internal async Task<T> ContinueActionAsync<T>(string callId, Func<Task<T>> body, object result = null)
+        {
+            if (body == null)
+            {
+                throw new ArgumentNullException(nameof(body));
+            }
+
+            if (string.IsNullOrEmpty(callId))
+            {
+                return await body().ConfigureAwait(false);
+            }
+
+            // Prefer the method stamped in TryBeginAction for snapshot phases.
+            string method = "unknown";
+            lock (_gate)
+            {
+                if (_callMethods.TryGetValue(callId, out string stored))
+                {
+                    method = stored;
+                }
             }
 
             await CapturePhaseAsync(callId, "before", method).ConfigureAwait(false);
@@ -755,6 +816,7 @@ namespace PlaywrightNative.Helpers
                 _traceLines.Clear();
                 _resources.Clear();
                 _chunkCallIds.Clear();
+                _callMethods.Clear();
                 _wsLines.Clear();
                 _stacks.Clear();
                 if (!keepRecording)

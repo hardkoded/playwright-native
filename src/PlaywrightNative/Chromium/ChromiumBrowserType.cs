@@ -76,7 +76,10 @@ namespace PlaywrightNative.Chromium
             // parity tests fail with net::ERR_BLOCKED_BY_CLIENT.
             // LocalNetworkAccessChecks: Chrome 148+ otherwise blocks
             // localhost↔127.0.0.1 iframe navigations that official allows.
-            "--disable-features=ThirdPartyStoragePartitioning,LocalNetworkAccessChecks,HttpsUpgrades",
+            // BlockOriginHeaderModificationOnRedirect: Chrome 149+ rejects
+            // re-applying Origin on intercepted redirects (issue 41690), which
+            // breaks route.Continue through cross-origin 307 form posts.
+            "--disable-features=ThirdPartyStoragePartitioning,LocalNetworkAccessChecks,HttpsUpgrades,BlockOriginHeaderModificationOnRedirect",
 
             // Locale handshake proxy must see localhost WebSocket upgrades.
             // Chromium otherwise bypasses loopback (Chrome < 151 ignores locale on WS).
@@ -235,6 +238,22 @@ namespace PlaywrightNative.Chromium
             string proxyServer = ProxySettings.FormatServer(proxy, includeCredentials: false);
             if (!string.IsNullOrEmpty(proxyServer))
             {
+                // Official chromium.ts: SOCKS must not resolve DNS in-process —
+                // MAP * ~NOTFOUND and EXCLUDE the proxy host so Chromium sends
+                // hostnames to the SOCKS server (and Windows localhost→::1 RSTs
+                // against an IPv4-only mock do not bypass the proxy).
+                if (Uri.TryCreate(proxyServer, UriKind.Absolute, out Uri proxyUri)
+                    && (string.Equals(proxyUri.Scheme, "socks5", StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(proxyUri.Scheme, "socks4", StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(proxyUri.Scheme, "socks", StringComparison.OrdinalIgnoreCase)))
+                {
+                    string proxyHost = proxyUri.IdnHost;
+                    if (!string.IsNullOrEmpty(proxyHost))
+                    {
+                        launchArgs.Add("--host-resolver-rules=\"MAP * ~NOTFOUND , EXCLUDE " + proxyHost + "\"");
+                    }
+                }
+
                 launchArgs.Add("--proxy-server=" + proxyServer);
 
                 // Official always prefixes <-loopback> so localhost / link-local

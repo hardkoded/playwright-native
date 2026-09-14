@@ -34,6 +34,8 @@ namespace PlaywrightNative.Chromium
         private ScreencastVideoWriter _video;
         private ScreencastVideoWriter _artifactsVideo;
         private bool _started;
+        private int _maxWidth;
+        private int _maxHeight;
 
         internal CRScreencast(Page page)
         {
@@ -55,8 +57,22 @@ namespace PlaywrightNative.Chromium
                 _onFrame = onFrame;
             }
 
+            // Chromium screencast sizes are even (upstream screencast.ts).
             int maxWidth = width > 0 ? width : 800;
             int maxHeight = height > 0 ? height : 800;
+            maxWidth &= ~1;
+            maxHeight &= ~1;
+            _maxWidth = maxWidth;
+            _maxHeight = maxHeight;
+
+            // Re-apply device metrics before the first frame so early about:blank
+            // captures are not letterboxed to the wrong aspect ratio.
+            PageViewportSizeResult viewport = _page.ViewportSize;
+            if (viewport != null && viewport.Width > 0 && viewport.Height > 0)
+            {
+                await _page.SetViewportSizeAsync(viewport.Width, viewport.Height).ConfigureAwait(false);
+            }
+
             if (!string.IsNullOrEmpty(path))
             {
                 _video = ScreencastVideoWriter.Start(path, maxWidth, maxHeight);
@@ -169,6 +185,39 @@ namespace PlaywrightNative.Chromium
         /// <inheritdoc/>
         public Task HideOverlaysAsync() => ScreencastOverlay.SetVisibleAsync(_page, visible: false);
 
+        private static bool JpegMatchesSize(byte[] buffer, int expectedWidth, int expectedHeight)
+        {
+            int i = 2;
+            while (i < buffer.Length - 8)
+            {
+                if (buffer[i] != 0xFF)
+                {
+                    break;
+                }
+
+                byte marker = buffer[i + 1];
+                int segmentLength = (buffer[i + 2] << 8) | buffer[i + 3];
+                if ((marker >= 0xC0 && marker <= 0xC3)
+                    || (marker >= 0xC5 && marker <= 0xC7)
+                    || (marker >= 0xC9 && marker <= 0xCB)
+                    || (marker >= 0xCD && marker <= 0xCF))
+                {
+                    int height = (buffer[i + 5] << 8) | buffer[i + 6];
+                    int width = (buffer[i + 7] << 8) | buffer[i + 8];
+                    return width == expectedWidth && height == expectedHeight;
+                }
+
+                if (segmentLength < 2)
+                {
+                    break;
+                }
+
+                i += 2 + segmentLength;
+            }
+
+            return false;
+        }
+
         private void ThrowIfClosed()
         {
             if (_page.IsClosed)
@@ -257,6 +306,21 @@ namespace PlaywrightNative.Chromium
                 ViewportWidth = viewportWidth,
                 ViewportHeight = viewportHeight,
             };
+
+            // Drop frames captured before the emulated viewport settled (wrong
+            // aspect → wrong JPEG size). Still ack so Chrome keeps streaming.
+            if (_maxWidth > 0 && _maxHeight > 0 && viewportWidth > 0 && viewportHeight > 0)
+            {
+                double scale = Math.Min(1.0, Math.Min((double)_maxWidth / viewportWidth, (double)_maxHeight / viewportHeight));
+                int expectedWidth = (int)Math.Floor(viewportWidth * scale) & ~1;
+                int expectedHeight = (int)Math.Floor(viewportHeight * scale) & ~1;
+                if (expectedWidth > 0 && expectedHeight > 0
+                    && !JpegMatchesSize(jpeg, expectedWidth, expectedHeight))
+                {
+                    _ = AckAsync(sessionId);
+                    return;
+                }
+            }
 
             _ = DeliverFrameAsync(frame, jpeg, sessionId);
         }

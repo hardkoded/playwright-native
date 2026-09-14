@@ -43,7 +43,16 @@ namespace PlaywrightNative.Helpers
                 return body();
             }
 
-            return RunInsideAsync(() => session.RecordActionAsync(title, className, method, body, parameters, result));
+            // Stamp "before" synchronously so fire-and-forget actions that race
+            // Tracing.StopAsync still appear as interrupted (ShouldIncludeInterruptedActions).
+            // Depth stays 0 until RunInsideAsync so sibling waitForEvent recording is not suppressed.
+            string callId = session.TryBeginAction(title, className, method, parameters);
+            if (callId == null)
+            {
+                return body();
+            }
+
+            return RunInsideAsync(() => session.ContinueActionAsync(callId, body, result));
         }
 
         internal static Task<T> RunAsync<T>(IBrowserContext context, string title, string className, string method, Func<Task<T>> body, object parameters = null, object result = null)
@@ -54,7 +63,13 @@ namespace PlaywrightNative.Helpers
                 return body();
             }
 
-            return RunInsideAsync(() => session.RecordActionAsync(title, className, method, body, parameters, result));
+            string callId = session.TryBeginAction(title, className, method, parameters);
+            if (callId == null)
+            {
+                return body();
+            }
+
+            return RunInsideAsync(() => session.ContinueActionAsync(callId, body, result));
         }
 
         internal static Task<T> EvaluateUserAsync<T>(IBrowserContext context, Func<Task<T>> body)
@@ -70,7 +85,13 @@ namespace PlaywrightNative.Helpers
                 return body();
             }
 
-            return RunInsideAsync(() => session.RecordActionAsync(null, "Page", "evaluate", body));
+            string callId = session.TryBeginAction(null, "Page", "evaluate", null);
+            if (callId == null)
+            {
+                return body();
+            }
+
+            return RunInsideAsync(() => session.ContinueActionAsync(callId, body, null));
         }
 
         internal static Task<T> EvaluateHandleUserAsync<T>(IBrowserContext context, Func<Task<T>> body)
@@ -86,7 +107,13 @@ namespace PlaywrightNative.Helpers
                 return body();
             }
 
-            return RunInsideAsync(() => session.RecordActionAsync(null, "Page", "evaluateHandle", body));
+            string callId = session.TryBeginAction(null, "Page", "evaluateHandle", null);
+            if (callId == null)
+            {
+                return body();
+            }
+
+            return RunInsideAsync(() => session.ContinueActionAsync(callId, body, null));
         }
 
         internal static string NavigateTitle(string url)

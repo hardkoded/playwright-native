@@ -1835,6 +1835,12 @@ namespace PlaywrightNative.Chromium
                     overwrite: false);
             }
 
+            // Prefetch bodies while Chromium still holds them. Without this,
+            // ShouldReturnLastRequests later hits getResponseBody→loadNetworkResource
+            // and can get a stale 404 ("File not found: /fetch") under load.
+            // Matches WKNetworkManager's PrefetchBodyAsync on response.
+            _ = response.PrefetchBodyAsync();
+
             _page.OnResponseReceived(response);
         }
 

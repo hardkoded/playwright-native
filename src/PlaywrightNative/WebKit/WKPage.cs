@@ -8866,7 +8866,7 @@ namespace PlaywrightNative.WebKit
         }
 
         Task<IResponse> IPage.WaitForNavigationAsync(PageWaitForNavigationOptions options)
-            => WaitForNavigationAsync(options?.Url, null, null, options?.Timeout, options?.WaitUntil ?? default);
+            => WaitForNavigationAsync(options?.Url, options?.UrlRegex, options?.UrlFunc, options?.Timeout, options?.WaitUntil ?? default);
 
         Task<IPage> IPage.WaitForPopupAsync(PageWaitForPopupOptions options)
             => WaitForEventAsync(PageEvent.Popup, options?.Predicate, options?.Timeout);

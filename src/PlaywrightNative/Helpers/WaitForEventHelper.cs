@@ -42,7 +42,8 @@ namespace PlaywrightNative.Helpers
         /// <param name="waitingLog">Optional official <c>waiting for …</c> timeout line.</param>
         /// <param name="waitForEventName">
         /// Official lowercase event name. When set, the timeout text is
-        /// <c>Timeout Nms exceeded.</c> with a waiting-for-event log line.
+        /// <c>Timeout Nms exceeded while waiting for event "name"</c> (Node
+        /// <c>page._waitForEvent</c>) plus a waiting-for-event log line.
         /// </param>
         /// <param name="abortOnPageClose">
         /// When set, page close rejects the wait with the official target-closed
@@ -156,7 +157,8 @@ namespace PlaywrightNative.Helpers
         /// <param name="waitingLog">Optional official <c>waiting for …</c> timeout line.</param>
         /// <param name="waitForEventName">
         /// Official lowercase event name. When set, the timeout text is
-        /// <c>Timeout Nms exceeded.</c> with a waiting-for-event log line.
+        /// <c>Timeout Nms exceeded while waiting for event "name"</c> (Node
+        /// <c>page._waitForEvent</c>) plus a waiting-for-event log line.
         /// </param>
         /// <param name="abortOnPageClose">
         /// When set, page close rejects the wait with the official target-closed
@@ -416,17 +418,33 @@ namespace PlaywrightNative.Helpers
         {
             string timeoutText = timeoutMs.ToString(System.Globalization.CultureInfo.InvariantCulture);
 
-            // Keep the canonical "Timeout Nms exceeded." substring for parity asserts,
-            // and put the event name in the waiting log (upstream Node call-log style).
-            string message = apiName + ": Timeout " + timeoutText + "ms exceeded.";
-            if (!string.IsNullOrEmpty(waitForEventName)
-                && (string.IsNullOrEmpty(waitingLog)
-                    || waitingLog.IndexOf(waitForEventName, StringComparison.Ordinal) < 0))
+            // Node page._waitForEvent:
+            //   `Timeout Nms exceeded while waiting for event "${event}"`
+            // then appends call logs (including `waiting for event "..."`) and
+            // ChannelOwner prefixes `page.waitForEvent: `.
+            string message;
+            if (!string.IsNullOrEmpty(waitForEventName))
             {
-                string eventLine = "waiting for event \"" + waitForEventName + "\"";
-                waitingLog = string.IsNullOrEmpty(waitingLog)
-                    ? eventLine
-                    : eventLine + System.Environment.NewLine + waitingLog;
+                message = "Timeout " + timeoutText + "ms exceeded while waiting for event \"" + waitForEventName + "\"";
+                if (!string.IsNullOrEmpty(apiName))
+                {
+                    message = apiName + ": " + message;
+                }
+
+                if (string.IsNullOrEmpty(waitingLog)
+                    || waitingLog.IndexOf(waitForEventName, StringComparison.Ordinal) < 0)
+                {
+                    string eventLine = "waiting for event \"" + waitForEventName + "\"";
+                    waitingLog = string.IsNullOrEmpty(waitingLog)
+                        ? eventLine
+                        : eventLine + System.Environment.NewLine + waitingLog;
+                }
+            }
+            else
+            {
+                // Keep the canonical "Timeout Nms exceeded." substring for
+                // waitForRequest / waitForResponse / action parity asserts.
+                message = apiName + ": Timeout " + timeoutText + "ms exceeded.";
             }
 
             if (!string.IsNullOrEmpty(waitingLog))
