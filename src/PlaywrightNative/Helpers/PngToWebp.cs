@@ -18,6 +18,7 @@ using System;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
+using System.Text;
 using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
@@ -76,10 +77,30 @@ namespace PlaywrightNative.Helpers
                     throw new PlaywrightException("Failed to start ffmpeg for WebP screenshot.");
                 }
 
+                // Drain stderr via the event-based reader (not a blocking ReadToEnd after
+                // WaitForExit) so a chatty ffmpeg can't deadlock by filling the redirected
+                // pipe's OS buffer, and bound the wait itself: a misbehaving ffmpeg build
+                // that hangs instead of exiting once stalled an entire macOS WebKit CI shard
+                // for the rest of its budget with no further test output.
+                StringBuilder errorBuilder = new();
+                process.ErrorDataReceived += (sender, e) =>
+                {
+                    if (e.Data != null)
+                    {
+                        errorBuilder.AppendLine(e.Data);
+                    }
+                };
+                process.BeginErrorReadLine();
+                if (!process.WaitForExit(15_000))
+                {
+                    TryKill(process);
+                    throw new PlaywrightException("Timed out waiting for ffmpeg to encode WebP screenshot.");
+                }
+
                 process.WaitForExit();
                 if (process.ExitCode != 0 || !File.Exists(output))
                 {
-                    string error = process.StandardError.ReadToEnd();
+                    string error = errorBuilder.ToString();
                     throw new PlaywrightException(
                         "Failed to encode WebP screenshot." + (string.IsNullOrEmpty(error) ? string.Empty : " " + error.Trim()));
                 }
@@ -103,6 +124,17 @@ namespace PlaywrightNative.Helpers
                 }
             }
             catch (IOException)
+            {
+            }
+        }
+
+        private static void TryKill(Process process)
+        {
+            try
+            {
+                process.Kill();
+            }
+            catch (InvalidOperationException)
             {
             }
         }

@@ -159,7 +159,19 @@ namespace PlaywrightNative.Helpers
                 {
                 }
 
-                await Task.Run(() => ffmpeg.WaitForExit()).ConfigureAwait(false);
+                // Bound the wait: a misbehaving ffmpeg build that hangs instead of
+                // exiting once stalled an entire CI shard for the rest of its budget.
+                if (!await Task.Run(() => ffmpeg.WaitForExit(15_000)).ConfigureAwait(false))
+                {
+                    try
+                    {
+                        ffmpeg.Kill();
+                    }
+                    catch (InvalidOperationException)
+                    {
+                    }
+                }
+
                 if (stderrTask != null)
                 {
                     await stderrTask.ConfigureAwait(false);
@@ -260,7 +272,16 @@ namespace PlaywrightNative.Helpers
             }
 
             await process.StandardError.ReadToEndAsync().ConfigureAwait(false);
-            await Task.Run(() => process.WaitForExit()).ConfigureAwait(false);
+            if (!await Task.Run(() => process.WaitForExit(15_000)).ConfigureAwait(false))
+            {
+                try
+                {
+                    process.Kill();
+                }
+                catch (InvalidOperationException)
+                {
+                }
+            }
         }
     }
 }
