@@ -6748,6 +6748,12 @@ namespace PlaywrightNative.WebKit
                 await ApplyExtraHttpHeadersOnAsync(target).ConfigureAwait(false);
                 await SyncBootstrapScriptOnAsync(target).ConfigureAwait(false);
                 await ApplyBypassCspOnAsync(target).ConfigureAwait(false);
+
+                // Upstream provisional init uses full _initializeSession, which reapplies
+                // emulated media so COOP / process-swap navigations keep reducedMotion,
+                // colorScheme, and forcedColors (page-emulate-media after "reload").
+                AdoptContextMedia();
+                await ApplyEmulatedMediaToSessionAsync(target).ConfigureAwait(false);
             }
 #pragma warning disable RCS1075
             catch (Exception)

@@ -83,10 +83,19 @@ namespace PlaywrightNative.Helpers
                 {
                     double expires = rewritten.Expires.Value;
 
-                    // Do not BitDecrement on write: exact float32 expires must round-trip
-                    // (ShouldRoundtripCookie). Read-side ToExpiresFloat already nudges values
-                    // that float-cast rounded above the protocol double (400-day cookies).
-                    item["expires"] = webKit && expires != -1 ? expires * 1000d : expires;
+                    // Upstream wkBrowser addCookies:
+                    //   expires && expires !== -1 ? expires * 1000 : expires
+                    // Falsy 0 must stay 0 (clearCookies expire-in-place). Multiplying is
+                    // harmless for 0 but keep the JS truthiness so session cookies and
+                    // deletions round-trip the same as Playwright.
+                    if (webKit)
+                    {
+                        item["expires"] = expires != 0 && expires != -1 ? expires * 1000d : expires;
+                    }
+                    else
+                    {
+                        item["expires"] = expires;
+                    }
                 }
 
                 if (rewritten.HttpOnly.HasValue)
@@ -117,6 +126,9 @@ namespace PlaywrightNative.Helpers
 
                 if (webKit)
                 {
+                    // Upstream always sends session with setCookies. For expires:0
+                    // (clearCookies), session must be false so WebKit replaces the
+                    // live cookie with an already-expired row instead of a session cookie.
                     item["session"] = session;
                 }
 

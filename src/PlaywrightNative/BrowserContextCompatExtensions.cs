@@ -161,7 +161,7 @@ namespace PlaywrightNative
 
         /// <summary>Legacy clear cookies by name, domain, and path.</summary>
         public static Task ClearCookiesAsync(this IBrowserContext context, string name, string domain, string path)
-            => context.ClearCookiesAsync(new BrowserContextClearCookiesOptions { Name = name, Domain = domain, Path = path });
+            => CookieClearFilter.ClearAsync(context, name, domain, path);
 
         /// <summary>Legacy route-from-HAR with expanded parameters.</summary>
         public static Task RouteFromHARAsync(

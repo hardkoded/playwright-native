@@ -132,6 +132,8 @@ namespace PlaywrightNative.Helpers
                 // (expires: 0) so cookieStore.change does not see a wipe of
                 // the cookies that should remain. Preserve partitionKey and
                 // _crHasCrossSiteAncestor so CDP overwrites the same CHIPS row.
+                // Use the store's path string as-is so WebKit replaces the same
+                // row (trailing-slash variants are matched above).
                 Cookie expired = new Cookie
                 {
                     Name = cookie.Name,
@@ -204,7 +206,7 @@ namespace PlaywrightNative.Helpers
             }
 
             if (!string.IsNullOrEmpty(path)
-                && !string.Equals(cookie.Path, path, StringComparison.Ordinal))
+                && !PathEquals(cookie.Path, path))
             {
                 return false;
             }
@@ -215,6 +217,28 @@ namespace PlaywrightNative.Helpers
             }
 
             return true;
+        }
+
+        private static bool PathEquals(string left, string right)
+            => string.Equals(NormalizeCookiePath(left), NormalizeCookiePath(right), StringComparison.Ordinal);
+
+        /// <summary>
+        /// WebKit/soup sometimes reports directory cookie paths with a trailing
+        /// slash. Compare paths with a single trailing slash trimmed (except root).
+        /// </summary>
+        private static string NormalizeCookiePath(string path)
+        {
+            if (string.IsNullOrEmpty(path))
+            {
+                return "/";
+            }
+
+            if (path.Length > 1 && path.EndsWith('/'))
+            {
+                return path.TrimEnd('/');
+            }
+
+            return path;
         }
 
         private static bool DomainEquals(string left, string right)
