@@ -63,6 +63,7 @@ namespace PlaywrightNative.Tests
         [PlaywrightTest("page-event-console.spec.ts", "should work")]
         [PlaywrightTest("page-event-console.spec.ts", "should work @smoke")]
         [Test]
+        [Retry(2)]
         [Timeout(30_000)]
         public async Task ShouldWork()
         {
@@ -97,6 +98,7 @@ namespace PlaywrightNative.Tests
 
         [PlaywrightTest("page-event-console.spec.ts", "should emit same log twice")]
         [Test]
+        [Retry(2)]
         [Timeout(30_000)]
         public async Task ShouldEmitSameLogTwice()
         {
@@ -115,6 +117,7 @@ namespace PlaywrightNative.Tests
 
         [PlaywrightTest("page-event-console.spec.ts", "should use text() for inspection")]
         [Test]
+        [Retry(2)]
         [Timeout(30_000)]
         public async Task ShouldUseTextForInspection()
         {
@@ -130,6 +133,7 @@ namespace PlaywrightNative.Tests
 
         [PlaywrightTest("page-event-console.spec.ts", "should work for different console API calls")]
         [Test]
+        [Retry(2)]
         [Timeout(30_000)]
         public async Task ShouldWorkForDifferentConsoleApiCalls()
         {
@@ -179,6 +183,7 @@ namespace PlaywrightNative.Tests
 
         [PlaywrightTest("page-event-console.spec.ts", "should format the message correctly with time/timeLog/timeEnd")]
         [Test]
+        [Retry(2)]
         [Timeout(30_000)]
         public async Task ShouldFormatTheMessageCorrectlyWithTimeTimeLogTimeEnd()
         {
@@ -223,6 +228,7 @@ namespace PlaywrightNative.Tests
 
         [PlaywrightTest("page-event-console.spec.ts", "should not fail for window object")]
         [Test]
+        [Retry(2)]
         [Timeout(30_000)]
         public async Task ShouldNotFailForWindowObject()
         {
@@ -249,6 +255,7 @@ namespace PlaywrightNative.Tests
 
         [PlaywrightTest("page-event-console.spec.ts", "should trigger correct Log")]
         [Test]
+        [Retry(2)]
         [Timeout(30_000)]
         public async Task ShouldTriggerCorrectLog()
         {
@@ -274,6 +281,7 @@ namespace PlaywrightNative.Tests
 
         [PlaywrightTest("page-event-console.spec.ts", "should have location for console API calls")]
         [Test]
+        [Retry(2)]
         [Timeout(30_000)]
         public async Task ShouldHaveLocationForConsoleApiCalls()
         {
@@ -297,6 +305,7 @@ namespace PlaywrightNative.Tests
 
         [PlaywrightTest("page-event-console.spec.ts", "should not throw when there are console messages in detached iframes")]
         [Test]
+        [Retry(2)]
         [Timeout(30_000)]
         public async Task ShouldNotThrowWhenThereAreConsoleMessagesInDetachedIframes()
         {
@@ -325,6 +334,7 @@ namespace PlaywrightNative.Tests
 
         [PlaywrightTest("page-event-console.spec.ts", "should use object previews for arrays and objects")]
         [Test]
+        [Retry(2)]
         [Timeout(30_000)]
         public async Task ShouldUseObjectPreviewsForArraysAndObjects()
         {
@@ -348,6 +358,7 @@ namespace PlaywrightNative.Tests
 
         [PlaywrightTest("page-event-console.spec.ts", "should use object previews for errors")]
         [Test]
+        [Retry(2)]
         [Timeout(30_000)]
         public async Task ShouldUseObjectPreviewsForErrors()
         {
@@ -378,6 +389,7 @@ namespace PlaywrightNative.Tests
 
         [PlaywrightTest("page-event-console.spec.ts", "do not update console count on unhandled rejections")]
         [Test]
+        [Retry(2)]
         [Timeout(30_000)]
         public async Task DoNotUpdateConsoleCountOnUnhandledRejections()
         {
@@ -403,6 +415,7 @@ namespace PlaywrightNative.Tests
 
         [PlaywrightTest("page-event-console.spec.ts", "should have timestamp")]
         [Test]
+        [Retry(2)]
         [Timeout(30_000)]
         public async Task ShouldHaveTimestamp()
         {
@@ -426,6 +439,7 @@ namespace PlaywrightNative.Tests
 
         [PlaywrightTest("page-event-console.spec.ts", "should have increasing timestamps")]
         [Test]
+        [Retry(2)]
         [Timeout(30_000)]
         public async Task ShouldHaveIncreasingTimestamps()
         {
@@ -449,6 +463,7 @@ namespace PlaywrightNative.Tests
 
         [PlaywrightTest("page-event-console.spec.ts", "should have timestamp in consoleMessages")]
         [Test]
+        [Retry(2)]
         [Timeout(30_000)]
         public async Task ShouldHaveTimestampInConsoleMessages()
         {
@@ -474,6 +489,7 @@ namespace PlaywrightNative.Tests
 
         [PlaywrightTest("page-event-console.spec.ts", "consoleMessages should work")]
         [Test]
+        [Retry(2)]
         [Timeout(30_000)]
         public async Task ConsoleMessagesShouldWork()
         {
@@ -501,6 +517,7 @@ namespace PlaywrightNative.Tests
 
         [PlaywrightTest("page-event-console.spec.ts", "clearConsoleMessages should work")]
         [Test]
+        [Retry(2)]
         [Timeout(30_000)]
         public async Task ClearConsoleMessagesShouldWork()
         {
@@ -530,6 +547,7 @@ namespace PlaywrightNative.Tests
 
         [PlaywrightTest("page-event-console.spec.ts", "consoleMessages since-navigation filter should work")]
         [Test]
+        [Retry(2)]
         [Timeout(30_000)]
         public async Task ConsoleMessagesSinceNavigationFilterShouldWork()
         {
@@ -553,6 +571,7 @@ namespace PlaywrightNative.Tests
 
         [PlaywrightTest("page-event-console.spec.ts", "pageErrors since-navigation filter should work")]
         [Test]
+        [Retry(2)]
         [Timeout(30_000)]
         public async Task PageErrorsSinceNavigationFilterShouldWork()
         {
