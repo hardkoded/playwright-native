@@ -712,6 +712,16 @@ namespace PlaywrightNative
         {
             if (!string.IsNullOrEmpty(options.ExecutablePath))
             {
+                // Official resolveExecutablePath throws immediately when the path is
+                // missing. Without this check we spawn a dead process and hang on the
+                // first protocol handshake ("Failed to launch" never appears).
+                if (!File.Exists(options.ExecutablePath))
+                {
+                    throw new PlaywrightException(
+                        "Failed to launch " + browser + " because executable doesn't exist at "
+                        + options.ExecutablePath);
+                }
+
                 return options.ExecutablePath;
             }
 

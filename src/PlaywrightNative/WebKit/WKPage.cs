@@ -5604,6 +5604,24 @@ namespace PlaywrightNative.WebKit
                 await Task.Yield();
                 WKExecutionContext context = await WaitForMainExecutionContextAsync().ConfigureAwait(false);
 
+                // Primitive / unserializable EvaluateHandle results are ImmediateJSHandle
+                // (no objectId). Chromium accepts those via ToCallArgument; WebKit must too
+                // (ShouldAcceptObjectHandleToPrimitiveTypes / UnserializableValue).
+                if (arg is ImmediateJSHandle immediate)
+                {
+                    string immediateWrapped =
+                        "function () {" +
+                        "  const s = (" + EvaluateSerialization.SerializeJs + ");" +
+                        "  const v = (" + expression + ").apply(null, arguments);" +
+                        "  if (v && typeof v.then === 'function') return v.then(s);" +
+                        "  return s(v);" +
+                        "}";
+                    JsonElement immediateTagged = await context
+                        .EvaluateFunctionAsync<JsonElement>(immediateWrapped, immediate.ToCallArgument())
+                        .ConfigureAwait(false);
+                    return JsonValueHelper.Parse<T>(immediateTagged);
+                }
+
                 // WebKit accepts objectId arguments only on the objectId-bound form of
                 // Runtime.callFunctionOn (not executionContextId). Adopt into this world
                 // then evaluate with the handle as `this`/first argument.

@@ -83,28 +83,9 @@ namespace PlaywrightNative.Helpers
                 {
                     double expires = rewritten.Expires.Value;
 
-                    // Cookie.Expires is float32. Callers often pass (float)doubleSeconds for
-                    // long-lived cookies; when that cast rounds up, a faithful round-trip
-                    // exceeds the original double (ShouldAllowAddingCookiesWithMoreThan400DaysExpiration).
-                    // Only nudge long-lived values so short exact-equality expires tests stay intact.
-                    if (expires > 0)
-                    {
-                        double nowSec = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-                        const double fourHundredDaysSec = 400d * 24 * 3600;
-                        if (expires > nowSec + fourHundredDaysSec)
-                        {
-                            float asFloat = (float)expires;
-                            if ((double)asFloat == expires)
-                            {
-                                float previous = MathF.BitDecrement(asFloat);
-                                if (previous > nowSec)
-                                {
-                                    expires = previous;
-                                }
-                            }
-                        }
-                    }
-
+                    // Do not BitDecrement on write: exact float32 expires must round-trip
+                    // (ShouldRoundtripCookie). Read-side ToExpiresFloat already nudges values
+                    // that float-cast rounded above the protocol double (400-day cookies).
                     item["expires"] = webKit && expires != -1 ? expires * 1000d : expires;
                 }
 

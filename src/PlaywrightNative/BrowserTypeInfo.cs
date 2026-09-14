@@ -101,7 +101,10 @@ namespace PlaywrightNative
                     }
                 }
 
-                return computed;
+                // Official browserType.executablePath is empty until the browser is
+                // installed. Returning a missing path makes BrowserTypeExecutablePathShouldWork
+                // fail File.Exists and confuses launch-error messaging.
+                return string.Empty;
             }
         }
 

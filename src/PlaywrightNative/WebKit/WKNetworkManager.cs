@@ -46,6 +46,7 @@ namespace PlaywrightNative.WebKit
         private readonly ConcurrentDictionary<string, JsonElement> _pendingIntercepts = new();
         private readonly ConcurrentDictionary<string, byte> _handledIntercepts = new();
         private bool _interceptingEnabled;
+        private bool _interceptionPatternInstalled;
         private int _inFlightRouteHandlers;
         private bool _popupMainRequestEmitted;
         private IReadOnlyList<HttpCredentials> _httpCredentials = Array.Empty<HttpCredentials>();
@@ -314,9 +315,16 @@ namespace PlaywrightNative.WebKit
                 _interceptingEnabled = true;
                 await _session.SendAsync("Network.setInterceptionEnabled", new { enabled = true }).ConfigureAwait(false);
                 await _session.SendAsync("Network.setResourceCachingDisabled", new { disabled = true }).ConfigureAwait(false);
-                await _session.SendAsync(
-                    "Network.addInterception",
-                    new { url = ".*", stage = "request", isRegex = true }).ConfigureAwait(false);
+
+                // WebKit errors if the same intercept is added twice. Install the
+                // pattern once per session; toggles only flip setInterceptionEnabled.
+                if (!_interceptionPatternInstalled)
+                {
+                    await _session.SendAsync(
+                        "Network.addInterception",
+                        new { url = ".*", stage = "request", isRegex = true }).ConfigureAwait(false);
+                    _interceptionPatternInstalled = true;
+                }
             }
             else if (!needIntercept && _interceptingEnabled)
             {
