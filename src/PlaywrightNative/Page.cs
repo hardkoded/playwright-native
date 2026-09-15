@@ -2086,7 +2086,9 @@ namespace PlaywrightNative
                         id => context.ReleaseHandleAsync(id)).ConfigureAwait(false);
                 }
                 catch (PlaywrightException ex) when (
-                    DestroyedContext.IsDestroyedContext(ex) && attempt < maxAttempts - 1)
+                    DestroyedContext.IsDestroyedContext(ex)
+                    && !(ex.Message?.Contains("most likely because of a navigation", StringComparison.Ordinal) ?? false)
+                    && attempt < maxAttempts - 1)
                 {
                     _crPage.InvalidateExecutionContext(context);
                     await Task.Delay(50).ConfigureAwait(false);

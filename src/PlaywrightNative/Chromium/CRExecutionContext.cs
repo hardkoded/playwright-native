@@ -32,6 +32,8 @@ namespace PlaywrightNative.Chromium
     {
         private readonly CRSession _client;
         private readonly int _contextId;
+        private readonly TaskCompletionSource<bool> _destroyed =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         /// <summary>
         /// Initializes a new instance of the <see cref="CRExecutionContext"/> class.
@@ -55,6 +57,17 @@ namespace PlaywrightNative.Chromium
         internal CRSession Session => _client;
 
         /// <summary>
+        /// Completes when this context is destroyed (navigation, detach, or target swap).
+        /// </summary>
+        internal Task Destroyed => _destroyed.Task;
+
+        /// <summary>
+        /// Marks the context destroyed so in-flight <c>awaitPromise</c> evaluates fail with a
+        /// navigation error instead of hanging on CDP.
+        /// </summary>
+        internal void MarkDestroyed() => _destroyed.TrySetResult(true);
+
+        /// <summary>
         /// Evaluates a JavaScript expression and deserializes the result to <typeparamref name="T"/>.
         /// The expression is evaluated with <c>returnByValue: true</c> so the full value is
         /// serialized over the protocol.
@@ -67,14 +80,14 @@ namespace PlaywrightNative.Chromium
         /// </exception>
         internal async Task<T> EvaluateAsync<T>(string expression)
         {
-            JsonElement? response = await _client.SendAsync("Runtime.evaluate", new
+            JsonElement? response = await RaceDestroyedAsync(_client.SendAsync("Runtime.evaluate", new
             {
                 expression,
                 returnByValue = true,
                 awaitPromise = true,
                 userGesture = true,
                 contextId = _contextId,
-            }).ConfigureAwait(false);
+            })).ConfigureAwait(false);
 
             if (response == null)
             {
@@ -112,14 +125,14 @@ namespace PlaywrightNative.Chromium
         /// </exception>
         internal async Task<JsonElement?> EvaluateAsync(string expression)
         {
-            JsonElement? response = await _client.SendAsync("Runtime.evaluate", new
+            JsonElement? response = await RaceDestroyedAsync(_client.SendAsync("Runtime.evaluate", new
             {
                 expression,
                 returnByValue = true,
                 awaitPromise = true,
                 userGesture = true,
                 contextId = _contextId,
-            }).ConfigureAwait(false);
+            })).ConfigureAwait(false);
 
             if (response == null)
             {
@@ -154,14 +167,14 @@ namespace PlaywrightNative.Chromium
         /// </exception>
         internal async Task<JsonElement?> EvaluateHandleAsync(string expression)
         {
-            JsonElement? response = await _client.SendAsync("Runtime.evaluate", new
+            JsonElement? response = await RaceDestroyedAsync(_client.SendAsync("Runtime.evaluate", new
             {
                 expression,
                 returnByValue = false,
                 awaitPromise = true,
                 userGesture = true,
                 contextId = _contextId,
-            }).ConfigureAwait(false);
+            })).ConfigureAwait(false);
 
             if (response == null)
             {
@@ -193,7 +206,7 @@ namespace PlaywrightNative.Chromium
         internal async Task<T> EvaluateFunctionAsync<T>(string functionDeclaration, params object[] args)
         {
             object[] prepared = await PrepareCallArgumentsAsync(args).ConfigureAwait(false);
-            JsonElement? response = await _client.SendAsync("Runtime.callFunctionOn", new
+            JsonElement? response = await RaceDestroyedAsync(_client.SendAsync("Runtime.callFunctionOn", new
             {
                 functionDeclaration,
                 executionContextId = _contextId,
@@ -201,7 +214,7 @@ namespace PlaywrightNative.Chromium
                 returnByValue = true,
                 awaitPromise = true,
                 userGesture = true,
-            }).ConfigureAwait(false);
+            })).ConfigureAwait(false);
 
             if (response == null)
             {
@@ -233,7 +246,7 @@ namespace PlaywrightNative.Chromium
         internal async Task<JsonElement?> EvaluateFunctionAsync(string functionDeclaration, params object[] args)
         {
             object[] prepared = await PrepareCallArgumentsAsync(args).ConfigureAwait(false);
-            JsonElement? response = await _client.SendAsync("Runtime.callFunctionOn", new
+            JsonElement? response = await RaceDestroyedAsync(_client.SendAsync("Runtime.callFunctionOn", new
             {
                 functionDeclaration,
                 executionContextId = _contextId,
@@ -241,7 +254,7 @@ namespace PlaywrightNative.Chromium
                 returnByValue = true,
                 awaitPromise = true,
                 userGesture = true,
-            }).ConfigureAwait(false);
+            })).ConfigureAwait(false);
 
             if (response == null)
             {
@@ -272,7 +285,7 @@ namespace PlaywrightNative.Chromium
         internal async Task<JsonElement?> EvaluateFunctionHandleAsync(string functionDeclaration, params object[] args)
         {
             object[] prepared = await PrepareCallArgumentsAsync(args).ConfigureAwait(false);
-            JsonElement? response = await _client.SendAsync("Runtime.callFunctionOn", new
+            JsonElement? response = await RaceDestroyedAsync(_client.SendAsync("Runtime.callFunctionOn", new
             {
                 functionDeclaration,
                 executionContextId = _contextId,
@@ -280,7 +293,7 @@ namespace PlaywrightNative.Chromium
                 returnByValue = false,
                 awaitPromise = true,
                 userGesture = true,
-            }).ConfigureAwait(false);
+            })).ConfigureAwait(false);
 
             if (response == null)
             {
@@ -311,7 +324,7 @@ namespace PlaywrightNative.Chromium
         /// <exception cref="PlaywrightException">When the evaluation throws in the browser.</exception>
         internal async Task<T> EvaluateFunctionOnHandleAsync<T>(string objectId, string functionDeclaration, params object[] args)
         {
-            JsonElement? response = await _client.SendAsync("Runtime.callFunctionOn", new
+            JsonElement? response = await RaceDestroyedAsync(_client.SendAsync("Runtime.callFunctionOn", new
             {
                 functionDeclaration,
                 objectId,
@@ -319,7 +332,7 @@ namespace PlaywrightNative.Chromium
                 returnByValue = true,
                 awaitPromise = true,
                 userGesture = true,
-            }).ConfigureAwait(false);
+            })).ConfigureAwait(false);
 
             if (response == null)
             {
@@ -353,7 +366,7 @@ namespace PlaywrightNative.Chromium
         /// <exception cref="PlaywrightException">When the evaluation throws in the browser.</exception>
         internal async Task<JsonElement?> EvaluateFunctionOnHandleAsync(string objectId, string functionDeclaration, params object[] args)
         {
-            JsonElement? response = await _client.SendAsync("Runtime.callFunctionOn", new
+            JsonElement? response = await RaceDestroyedAsync(_client.SendAsync("Runtime.callFunctionOn", new
             {
                 functionDeclaration,
                 objectId,
@@ -361,7 +374,7 @@ namespace PlaywrightNative.Chromium
                 returnByValue = true,
                 awaitPromise = true,
                 userGesture = true,
-            }).ConfigureAwait(false);
+            })).ConfigureAwait(false);
 
             if (response == null)
             {
@@ -389,7 +402,7 @@ namespace PlaywrightNative.Chromium
         /// <returns>The raw CDP <c>RemoteObject</c>, or <c>null</c>.</returns>
         internal async Task<JsonElement?> EvaluateHandleOnHandleAsync(string objectId, string functionDeclaration, params object[] args)
         {
-            JsonElement? response = await _client.SendAsync("Runtime.callFunctionOn", new
+            JsonElement? response = await RaceDestroyedAsync(_client.SendAsync("Runtime.callFunctionOn", new
             {
                 functionDeclaration,
                 objectId,
@@ -397,7 +410,7 @@ namespace PlaywrightNative.Chromium
                 returnByValue = false,
                 awaitPromise = true,
                 userGesture = true,
-            }).ConfigureAwait(false);
+            })).ConfigureAwait(false);
 
             if (response == null)
             {
@@ -594,6 +607,40 @@ namespace PlaywrightNative.Chromium
             }
 
             throw new PlaywrightException(EvaluateSerialization.RewriteError(message));
+        }
+
+        /// <summary>
+        /// Races a CDP evaluate against context destruction so navigations fail
+        /// pending <c>awaitPromise</c> calls with the official navigation message.
+        /// </summary>
+        /// <typeparam name="T">The CDP response type.</typeparam>
+        /// <param name="task">The in-flight protocol call.</param>
+        /// <returns>The protocol response when the context survives.</returns>
+        private async Task<T> RaceDestroyedAsync<T>(Task<T> task)
+        {
+            if (_destroyed.Task.IsCompleted)
+            {
+                throw new PlaywrightException(EvaluateSerialization.NavigationMessage);
+            }
+
+            Task completed = await Task.WhenAny(task, _destroyed.Task).ConfigureAwait(false);
+            if (completed == _destroyed.Task)
+            {
+                throw new PlaywrightException(EvaluateSerialization.NavigationMessage);
+            }
+
+            try
+            {
+                return await task.ConfigureAwait(false);
+            }
+            catch (PlaywrightException ex) when (
+                ex.Message != null
+                && (ex.Message.Contains("Cannot find context with specified id", StringComparison.Ordinal)
+                    || ex.Message.Contains("Inspected target navigated or closed", StringComparison.Ordinal)
+                    || ex.Message.Contains("Execution context was destroyed", StringComparison.Ordinal)))
+            {
+                throw new PlaywrightException(EvaluateSerialization.NavigationMessage);
+            }
         }
 
         private async Task<object[]> PrepareCallArgumentsAsync(object[] args)

@@ -4541,6 +4541,7 @@ namespace PlaywrightNative.Chromium
 
             if (_contextIdToContext.TryRemove(contextId, out CRExecutionContext context))
             {
+                context.MarkDestroyed();
                 foreach (Frame frame in _frameManager.Frames)
                 {
                     if (frame.ExecutionContext == context)
@@ -4553,6 +4554,11 @@ namespace PlaywrightNative.Chromium
 
         private void OnExecutionContextsCleared()
         {
+            foreach (KeyValuePair<int, CRExecutionContext> entry in _contextIdToContext)
+            {
+                entry.Value.MarkDestroyed();
+            }
+
             _contextIdToContext.Clear();
             foreach (Frame frame in _frameManager.Frames)
             {
