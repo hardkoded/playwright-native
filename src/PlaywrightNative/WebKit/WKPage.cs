@@ -8428,7 +8428,6 @@ namespace PlaywrightNative.WebKit
             // makes document.hasFocus() true inside newly attached iframes before
             // FocusAsync (ShouldChangeFocusedIframe). requestStorageAccess re-asserts
             // activity from the evaluate / BringToFront paths instead.
-
             if (string.IsNullOrEmpty(parentId)
                 || string.Equals(id, _mainFrameId, StringComparison.Ordinal))
             {
