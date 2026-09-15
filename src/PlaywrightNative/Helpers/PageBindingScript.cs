@@ -175,7 +175,7 @@ namespace PlaywrightNative
             return promise;
         };
     };
-})();";
+})()";
 
         /// <summary>
         /// Parks a returned handle at <c>globalThis.__pw_result_handles__[index]</c>
@@ -248,13 +248,15 @@ namespace PlaywrightNative
 
         /// <summary>
         /// Init-script / evaluate expression that installs <c>window[name]</c>.
+        /// Must be expression-shaped (no trailing <c>;</c>) so WebKit's evaluate stash
+        /// wrap — <c>(() =&gt; { const __pw_r = (EXPR); ... })()</c> — stays valid.
         /// </summary>
         /// <param name="name">The JS global name.</param>
         /// <returns>A JavaScript expression.</returns>
         internal static string InstallExpression(string name)
         {
             string nameJson = JsonSerializer.Serialize(name);
-            return "(() => { if (globalThis.__pw_install_binding__) globalThis.__pw_install_binding__(" + nameJson + "); })();";
+            return "(() => { if (globalThis.__pw_install_binding__) globalThis.__pw_install_binding__(" + nameJson + "); })()";
         }
 
         /// <summary>
@@ -265,7 +267,7 @@ namespace PlaywrightNative
         internal static string InstallHandleExpression(string name)
         {
             string nameJson = JsonSerializer.Serialize(name);
-            return "(() => { if (globalThis.__pw_install_binding_handle__) globalThis.__pw_install_binding_handle__(" + nameJson + "); })();";
+            return "(() => { if (globalThis.__pw_install_binding_handle__) globalThis.__pw_install_binding_handle__(" + nameJson + "); })()";
         }
 
         /// <summary>
@@ -276,7 +278,7 @@ namespace PlaywrightNative
         internal static string RemoveExpression(string name)
         {
             string nameJson = JsonSerializer.Serialize(name);
-            return "(() => { if (globalThis.__pw_remove_binding__) globalThis.__pw_remove_binding__(" + nameJson + "); })();";
+            return "(() => { if (globalThis.__pw_remove_binding__) globalThis.__pw_remove_binding__(" + nameJson + "); })()";
         }
 
         /// <summary>
@@ -287,7 +289,7 @@ namespace PlaywrightNative
         internal static string RemoveEvalFnExpression(string name)
         {
             string nameJson = JsonSerializer.Serialize(name);
-            return "(() => { if (globalThis.__pw_remove_eval_fn__) globalThis.__pw_remove_eval_fn__(" + nameJson + "); })();";
+            return "(() => { if (globalThis.__pw_remove_eval_fn__) globalThis.__pw_remove_eval_fn__(" + nameJson + "); })()";
         }
 
         /// <summary>
