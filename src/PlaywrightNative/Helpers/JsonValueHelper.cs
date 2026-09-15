@@ -521,6 +521,20 @@ namespace PlaywrightNative.Helpers
                 return parsed;
             }
 
+            // System.String has no public parameterless constructor; never fall
+            // through to Activator.CreateInstance(typeof(string)).
+            if (underlying == typeof(string))
+            {
+                return parsed switch
+                {
+                    string s => s,
+                    JsonElement je when je.ValueKind == JsonValueKind.String => je.GetString(),
+                    JsonElement je => je.ToString(),
+                    IConvertible convertible => Convert.ToString(convertible, CultureInfo.InvariantCulture),
+                    _ => parsed.ToString(),
+                };
+            }
+
             if (parsed is Array parsedArray && t.IsArray)
             {
                 Type elementType = t.GetElementType();

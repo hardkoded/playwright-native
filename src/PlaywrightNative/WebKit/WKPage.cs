@@ -3198,10 +3198,23 @@ namespace PlaywrightNative.WebKit
                 previousUrl = _mainFrameUrl;
                 if (!allowSameDocument)
                 {
+                    // Reload/cross-document history must re-arm pending navigation
+                    // markers the same way NavigateAsync does. Leaving
+                    // _emittedPendingNavigationRequest true after the prior goto
+                    // makes ShouldSuppressDuplicateNavigationRequest drop the
+                    // reload document response, so ReloadAsync returns the stale
+                    // 200 instead of a fresh 304/200 from the network.
+                    _pendingNavigationUrl = previousUrl;
+                    _emittedPendingNavigationRequest = false;
+                    _emittedPendingNavigationFinished = false;
+                    _firstPendingNavigationRequest = null;
+                    _pendingNavigationCommitted = false;
+                    _pendingRedirectTarget = null;
+                    _pendingRedirectSource = null;
                     _pendingLoadTcs = loadTcs;
                     _pendingDomContentTcs = domTcs;
                     _lifecycleEvents.Clear();
-                    _frameManager.MainFrame.ClearLifecycleEvents();
+                    _frameManager.MainFrame?.ClearLifecycleEvents();
                 }
             }
 
@@ -8438,15 +8451,16 @@ namespace PlaywrightNative.WebKit
             JsonElement[] args,
             Func<JsonElement[], Task<object>> handler)
         {
-            // After a WebKit process-swap, one page-side call can emit two
-            // Runtime.bindingCalled events with the same seq envelope. Key by
-            // execution context + payload so main/child frames that both start
-            // seq at 1 with the same args are not collapsed into one host call.
-            // Clear the map on navigation so a new document restarting seq at 1
-            // is not coalesced with the previous document's identical call.
-            string key = contextId.ToString(System.Globalization.CultureInfo.InvariantCulture)
-                + "\n"
-                + (argument ?? string.Empty);
+            // After a WebKit process-swap (and on some frame-session builds), one
+            // page-side call can emit two Runtime.bindingCalled events with the
+            // same seq envelope but different executionContextIds (main vs
+            // isolated world). Key by the JSON payload alone so those duplicates
+            // share one host invocation; delivering the result to each contextId
+            // still happens at the call site. Clear the map on navigation so a
+            // new document restarting seq at 1 is not coalesced with the previous
+            // document's identical call.
+            _ = contextId;
+            string key = argument ?? string.Empty;
             long now = DateTime.UtcNow.Ticks;
             if (_recentBindingInvocations.TryGetValue(key, out (long Ticks, Task<object> Task) recent)
                 && now - recent.Ticks < TimeSpan.FromMilliseconds(100).Ticks)
