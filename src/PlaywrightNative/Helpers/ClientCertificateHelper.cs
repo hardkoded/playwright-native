@@ -455,10 +455,12 @@ namespace PlaywrightNative.Helpers
             }
 
             string host = uri.IdnHost;
-            bool isLocalPlaywright = string.Equals(host, "local.playwright", StringComparison.OrdinalIgnoreCase);
-            bool isLocalhost = string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase);
-            bool isLoopbackIp = string.Equals(host, "127.0.0.1", StringComparison.Ordinal);
-            if (!isLocalPlaywright && !isLocalhost && !isLoopbackIp)
+
+            // Only expand local.playwright → localhost/127.0.0.1. The reverse would
+            // make a 127.0.0.1-registered cert also match local.playwright and break
+            // fixtures that intentionally omit the client cert on the fake hostname
+            // (BrowserSupportHttp2).
+            if (!string.Equals(host, "local.playwright", StringComparison.OrdinalIgnoreCase))
             {
                 yield break;
             }
@@ -466,20 +468,8 @@ namespace PlaywrightNative.Helpers
             int port = EffectivePort(uri);
             string scheme = uri.Scheme;
             string portSuffix = ":" + port.ToString(CultureInfo.InvariantCulture);
-            if (!isLocalPlaywright)
-            {
-                yield return scheme + "://local.playwright" + portSuffix;
-            }
-
-            if (!isLocalhost)
-            {
-                yield return scheme + "://localhost" + portSuffix;
-            }
-
-            if (!isLoopbackIp)
-            {
-                yield return scheme + "://127.0.0.1" + portSuffix;
-            }
+            yield return scheme + "://localhost" + portSuffix;
+            yield return scheme + "://127.0.0.1" + portSuffix;
         }
 
         private static bool HasBytes(byte[] bytes) => bytes != null && bytes.Length > 0;

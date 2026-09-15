@@ -1130,7 +1130,29 @@ namespace PlaywrightNative.Helpers
                         return;
                     }
 
-                    byte[] hello = await ReadTlsClientHelloAsync(browser, _cts.Token).ConfigureAwait(false);
+                    // Darwin HTTP CONNECT can deliver a truncated ClientHello prefix
+                    // that blocks AuthenticateAsServer — read a full TLS record there.
+                    // Linux SOCKS keeps a single buffered read so SslStream can pull
+                    // any remainder (HTTP/2 ClientHellos hung under ReadExact).
+                    byte[] hello;
+                    if (request.Kind == BrowserProxyKind.HttpsConnect)
+                    {
+                        hello = await ReadTlsClientHelloAsync(browser, _cts.Token).ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        byte[] first = new byte[16 * 1024];
+                        int n = await browser.ReadAsync(first.AsMemory(0, first.Length), _cts.Token)
+                            .ConfigureAwait(false);
+                        if (n <= 0)
+                        {
+                            return;
+                        }
+
+                        hello = new byte[n];
+                        Buffer.BlockCopy(first, 0, hello, 0, n);
+                    }
+
                     if (hello == null || hello.Length == 0)
                     {
                         return;
@@ -1378,21 +1400,14 @@ namespace PlaywrightNative.Helpers
                 return true;
             }
 
-            // Darwin CFNetwork may CONNECT with the resolved IP while fixtures
-            // register https://local.playwright; accept localhost / 127.0.0.1 aliases.
-            string rewritten = RewriteToLocalhostIfNeeded(host);
-            if (!string.Equals(rewritten, host, StringComparison.OrdinalIgnoreCase)
-                && TryGetCertForHost(rewritten, portText, out clientCert))
-            {
-                return true;
-            }
-
+            // Darwin CFNetwork may CONNECT as 127.0.0.1/localhost while the fixture
+            // registered https://local.playwright — look up that origin only when the
+            // CONNECT host is the loopback alias, never the reverse (HTTP/2 fixtures
+            // register 127.0.0.1 and intentionally omit the cert on local.playwright).
             if (string.Equals(host, "127.0.0.1", StringComparison.Ordinal)
-                || string.Equals(rewritten, "localhost", StringComparison.OrdinalIgnoreCase))
+                || string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase))
             {
-                return TryGetCertForHost("local.playwright", portText, out clientCert)
-                    || TryGetCertForHost("localhost", portText, out clientCert)
-                    || TryGetCertForHost("127.0.0.1", portText, out clientCert);
+                return TryGetCertForHost("local.playwright", portText, out clientCert);
             }
 
             return false;
