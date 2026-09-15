@@ -88,18 +88,22 @@ namespace PlaywrightNative.Helpers
             switch (name)
             {
                 case "Console":
-                    // Upstream waitForEvent('console') waits only for future events.
+                    // Subscribe before ActionTrace yields. evaluate() also yields before
+                    // its body; if waitForEvent delayed subscribe until after that yield,
+                    // console.log from a racing evaluate could fire with no listener
+                    // (tracing "should not emit after w/o before" hangs 30s).
+                    Task<T> consoleWait = WaitTypedAsync<T, IConsoleMessage>(
+                        page,
+                        h => page.Console += h,
+                        h => page.Console -= h,
+                        matches,
+                        timeout);
                     return ActionTrace.RunAsync(
                         page.Context,
                         "Wait for event \"console\"",
                         "Page",
                         "waitForEvent",
-                        () => WaitTypedAsync<T, IConsoleMessage>(
-                            page,
-                            h => page.Console += h,
-                            h => page.Console -= h,
-                            matches,
-                            timeout));
+                        () => consoleWait);
                 case "Dialog":
                     return WaitTypedAsync<T, IDialog>(
                         page,

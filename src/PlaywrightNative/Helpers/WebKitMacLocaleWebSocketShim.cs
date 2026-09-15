@@ -23,7 +23,9 @@ namespace PlaywrightNative.Helpers
     /// same reason. This init script rewrites loopback WebSocket URLs (and Blob
     /// worker sources that embed them) to <c>local.playwright</c> so the
     /// handshake proxy sees the upgrade; the proxy maps that host back to
-    /// localhost when connecting.
+    /// localhost when connecting. <c>WebSocket.url</c> and message
+    /// <c>origin</c> are restored to the caller-facing loopback URL so page
+    /// scripts still observe <c>ws://localhost</c>.
     /// </summary>
     internal static class WebKitMacLocaleWebSocketShim
     {
@@ -43,15 +45,27 @@ namespace PlaywrightNative.Helpers
   globalThis.__pw_mac_locale_ws_shim__ = true;
   const fake = 'local.playwright';
   const isLoopback = (host) => host === 'localhost' || host === '127.0.0.1' || host === '[::1]' || host === '::1';
-  const rewriteUrl = (url) => {
+  const parseWs = (url) => {
     try {
-      const u = new URL(String(url), location.href);
-      if ((u.protocol === 'ws:' || u.protocol === 'wss:') && isLoopback(u.hostname)) {
-        u.hostname = fake;
-        return u.toString();
-      }
-    } catch (e) {}
-    return url;
+      return new URL(String(url), location.href);
+    } catch (e) {
+      return null;
+    }
+  };
+  const rewriteUrl = (url) => {
+    const original = parseWs(url);
+    if (!original || (original.protocol !== 'ws:' && original.protocol !== 'wss:') || !isLoopback(original.hostname))
+      return { wire: url, publicUrl: String(url), publicOrigin: null, fakeOrigin: null };
+    const publicOrigin = original.protocol + '//' + original.host;
+    const publicUrl = original.toString();
+    const wireUrl = new URL(publicUrl);
+    wireUrl.hostname = fake;
+    return {
+      wire: wireUrl.toString(),
+      publicUrl,
+      publicOrigin,
+      fakeOrigin: wireUrl.protocol + '//' + wireUrl.host,
+    };
   };
   const rewriteText = (text) => {
     if (typeof text !== 'string') return text;
@@ -59,11 +73,74 @@ namespace PlaywrightNative.Helpers
       .replace(/ws:\/\/(localhost|127\.0\.0\.1|\[::1\]|::1)/gi, 'ws://' + fake)
       .replace(/wss:\/\/(localhost|127\.0\.0\.1|\[::1\]|::1)/gi, 'wss://' + fake);
   };
+  const wrapMessageEvent = (event, publicOrigin, fakeOrigin) => {
+    if (!publicOrigin || !fakeOrigin || event.origin !== fakeOrigin)
+      return event;
+    try {
+      return new Proxy(event, {
+        get(target, prop, receiver) {
+          if (prop === 'origin') return publicOrigin;
+          const value = Reflect.get(target, prop, receiver);
+          return typeof value === 'function' ? value.bind(target) : value;
+        }
+      });
+    } catch (e) {
+      return event;
+    }
+  };
   const OrigWS = globalThis.WebSocket;
   if (typeof OrigWS === 'function') {
     const Wrapped = function(url, protocols) {
-      const next = rewriteUrl(url);
-      return protocols === undefined ? new OrigWS(next) : new OrigWS(next, protocols);
+      const rewritten = rewriteUrl(url);
+      const ws = protocols === undefined ? new OrigWS(rewritten.wire) : new OrigWS(rewritten.wire, protocols);
+      if (!rewritten.publicOrigin || rewritten.wire === rewritten.publicUrl)
+        return ws;
+      try {
+        Object.defineProperty(ws, 'url', {
+          configurable: true,
+          enumerable: true,
+          get: () => rewritten.publicUrl,
+        });
+      } catch (e) {}
+      const wrapListener = (listener) => {
+        if (typeof listener !== 'function') return listener;
+        const wrapped = function(event) {
+          return listener.call(this, wrapMessageEvent(event, rewritten.publicOrigin, rewritten.fakeOrigin));
+        };
+        wrapped.__pw_orig_listener = listener;
+        listener.__pw_wrapped_listener = wrapped;
+        return wrapped;
+      };
+      const origAdd = ws.addEventListener.bind(ws);
+      ws.addEventListener = function(type, listener, options) {
+        if (type === 'message')
+          return origAdd(type, wrapListener(listener), options);
+        return origAdd(type, listener, options);
+      };
+      const origRemove = ws.removeEventListener.bind(ws);
+      ws.removeEventListener = function(type, listener, options) {
+        if (type === 'message' && listener && listener.__pw_wrapped_listener)
+          return origRemove(type, listener.__pw_wrapped_listener, options);
+        return origRemove(type, listener, options);
+      };
+      let userOnMessage = null;
+      let wrappedOnMessage = null;
+      try {
+        Object.defineProperty(ws, 'onmessage', {
+          configurable: true,
+          enumerable: true,
+          get: () => userOnMessage,
+          set: (listener) => {
+            if (wrappedOnMessage)
+              origRemove('message', wrappedOnMessage);
+            userOnMessage = listener;
+            wrappedOnMessage = typeof listener === 'function' ? wrapListener(listener) : null;
+            if (wrappedOnMessage)
+              origAdd('message', wrappedOnMessage);
+          }
+        });
+      } catch (e) {}
+      return ws;
     };
     Wrapped.prototype = OrigWS.prototype;
     Object.defineProperty(Wrapped, 'name', { value: 'WebSocket' });

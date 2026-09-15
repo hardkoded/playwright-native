@@ -134,8 +134,8 @@ namespace PlaywrightNative.WebKit
             {
                 Dictionary<string, string> merged = RouteContinue.ApplyHeadersOverrides(Request.Headers, headers);
                 headersAreNoOp = RouteContinue.HeaderMapsEqual(
-                    RouteContinue.RemoveCookie(merged),
-                    RouteContinue.RemoveCookie(Request.Headers));
+                    WithoutTransferSizing(RouteContinue.RemoveCookie(merged)),
+                    WithoutTransferSizing(RouteContinue.RemoveCookie(Request.Headers)));
             }
 
             Request.ApplyContinueOverrides(url, method, headers, body);
@@ -167,6 +167,14 @@ namespace PlaywrightNative.WebKit
             // it onto the protocol continue payload so auto-continue (locale /
             // extras interception) does not drop credentials.
             protocolHeaders = WithProxyAuthorization(protocolHeaders);
+
+            // Header-only interceptWithRequest on macOS WebKit invents
+            // Content-Length: 0 for GET/HEAD. Strip transfer sizing headers unless
+            // we are also overriding the body (WithContentLength above).
+            if (protocolHeaders != null && sendBody == null)
+            {
+                protocolHeaders = WithoutTransferSizing(protocolHeaders);
+            }
 
             if (sendUrl == null && sendMethod == null && protocolHeaders == null && sendBody == null)
             {
@@ -388,6 +396,27 @@ namespace PlaywrightNative.WebKit
                 : new Dictionary<string, string>(headers, StringComparer.OrdinalIgnoreCase);
             result["content-length"] = length.ToString(CultureInfo.InvariantCulture);
             return result;
+        }
+
+        private static IDictionary<string, string> WithoutTransferSizing(IDictionary<string, string> headers)
+        {
+            if (headers == null)
+            {
+                return null;
+            }
+
+            Dictionary<string, string> result = null;
+            foreach (KeyValuePair<string, string> header in headers)
+            {
+                if (string.Equals(header.Key, "content-length", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(header.Key, "transfer-encoding", StringComparison.OrdinalIgnoreCase))
+                {
+                    result ??= new Dictionary<string, string>(headers, StringComparer.OrdinalIgnoreCase);
+                    result.Remove(header.Key);
+                }
+            }
+
+            return result ?? headers;
         }
 
         private static bool IsCancelledInterception(Exception ex)
