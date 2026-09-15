@@ -61,8 +61,11 @@ namespace PlaywrightNative.Helpers
         /// When <see langword="true"/> (default), predicates run on a background
         /// continuation so sync-over-async filters cannot stall the transport
         /// read loop. Lifecycle events (<c>load</c> / <c>DOMContentLoaded</c>)
-        /// pass <see langword="false"/> so <c>waitForEvent</c> resolves in the
-        /// same turn as the public event (autowait ordering).
+        /// pass <see langword="false"/> so the match runs inside the public
+        /// event invoke; continuations still use
+        /// <see cref="TaskCreationOptions.RunContinuationsAsynchronously"/> to
+        /// avoid transport-thread deadlocks (autowait ordering relies on
+        /// <c>LifecycleWaiter</c>'s delay drain).
         /// </param>
         /// <param name="cancellationToken">Cancels the wait (Node <c>signal</c>).</param>
         /// <returns>The matching event payload.</returns>
@@ -95,13 +98,13 @@ namespace PlaywrightNative.Helpers
                 throw new ArgumentNullException(nameof(matches));
             }
 
-            // Lifecycle waits (load / DOMContentLoaded) use synchronous continuations so
-            // waitForEvent resumes inside Load.Invoke — before RecordLifecycle notifies
-            // waitForLoadState. Async continuations race those waiters and flip
-            // page-autowaiting-basic order to route|clickload|load.
-            TaskCompletionSource<T> tcs = deferPredicateEvaluation
-                ? new(TaskCreationOptions.RunContinuationsAsynchronously)
-                : new();
+            // Always run continuations asynchronously. A synchronous TCS would resume
+            // waitForEvent awaiters inside Load.Invoke on the transport read thread;
+            // any follow-up protocol call from that continuation deadlocks the pipe
+            // (macOS WebKit CI: mass 30s timeouts after deferPredicateEvaluation:false).
+            // Autowait ordering (route|load|clickload) is preserved by LifecycleWaiter's
+            // Task.Delay(1) drain when the load state is already recorded.
+            TaskCompletionSource<T> tcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
             // The predicate must not run on the transport's read loop: an official
             // sync-predicate wait like page.waitForResponse(r => r.TextAsync().Result...)
@@ -109,7 +112,7 @@ namespace PlaywrightNative.Helpers
             // read by the very loop this handler would otherwise be blocking. Chain
             // matches() onto a background task per event, in arrival order, so events
             // are still evaluated one at a time (preserving "predicate called once")
-            // without stalling the reader. Lifecycle waits skip the hop.
+            // without stalling the reader. Lifecycle waits skip the hop (predicate only).
             Task chain = Task.CompletedTask;
 
             void Handler(object sender, T payload)
