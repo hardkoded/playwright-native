@@ -5529,28 +5529,12 @@ namespace PlaywrightNative.WebKit
                     return;
                 }
 
-                // Competing document navigation (e.g. JS redirect while goto is in
-                // flight). Fail the pending waiter now — do not wait for the original
-                // request's cancel, which can race with the competitor's load event
-                // and otherwise complete goto successfully (JsRedirectOverridesUrlBarNavigation).
+                // Record the competitor now; do not fail the waiter until the
+                // competing document commits (OnFrameNavigated) or the original
+                // request is cancelled (FailPendingNavigationIfNeeded). Failing
+                // here left page.Url on the pre-goto document (JsRedirect flake:
+                // interrupt thrown while still on /a instead of /c).
                 _lastCompetingNavigationUrl = requestUrl;
-                if (_pendingLoadTcs == null && _pendingDomContentTcs == null && _pendingCommitTcs == null)
-                {
-                    return;
-                }
-
-                string interrupt =
-                    "page.goto: Navigation to \"" + pendingUrl +
-                    "\" is interrupted by another navigation to \"" + requestUrl + "\"";
-                NavigationException exception = new(interrupt, pendingUrl);
-                _awaitingReplacementTarget = false;
-                _pendingLoadTcs?.TrySetException(exception);
-                _pendingDomContentTcs?.TrySetException(exception);
-                _pendingCommitTcs?.TrySetException(exception);
-                _pendingLoadTcs = null;
-                _pendingDomContentTcs = null;
-                _pendingCommitTcs = null;
-                _pendingNavigationUrl = null;
             }
         }
 
