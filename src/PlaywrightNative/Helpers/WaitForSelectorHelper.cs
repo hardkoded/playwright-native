@@ -77,7 +77,12 @@ namespace PlaywrightNative.Helpers
             int timeoutMs = TimeoutSettings.TimeoutMs(timeout);
             Stopwatch sw = Stopwatch.StartNew();
             List<string> logs = new List<string>();
-            string lastPreview = null;
+
+            // Every distinct resolved preview observed while waiting. Darwin WebKit
+            // can miss AppendResolvedLog when a node is removed between preview and
+            // visibility probes; replaying this list on timeout keeps earlier
+            // snapshots (e.g. #mydiv) even after a later node (#another) logs.
+            List<(bool Visible, string Preview)> resolvedSnapshots = new List<(bool, string)>();
 
             while (true)
             {
@@ -124,7 +129,6 @@ namespace PlaywrightNative.Helpers
                             if (!string.IsNullOrEmpty(previewValue))
                             {
                                 eagerPreview = previewValue;
-                                lastPreview = previewValue;
                             }
                         }
                         catch (PlaywrightException)
@@ -176,10 +180,17 @@ namespace PlaywrightNative.Helpers
 
                 if (!done && !string.IsNullOrEmpty(eagerPreview))
                 {
+                    RememberResolvedSnapshot(resolvedSnapshots, visible, eagerPreview);
                     AppendResolvedLog(logs, visible, eagerPreview);
                 }
                 else if (!done && handle != null)
                 {
+                    string preview = await TryPreviewAsync(handle).ConfigureAwait(false);
+                    if (!string.IsNullOrEmpty(preview))
+                    {
+                        RememberResolvedSnapshot(resolvedSnapshots, visible, preview);
+                    }
+
                     await AppendResolvedLogAsync(logs, visible, handle).ConfigureAwait(false);
                 }
 
@@ -205,9 +216,13 @@ namespace PlaywrightNative.Helpers
 
                 if (timeoutMs != Timeout.Infinite && sw.ElapsedMilliseconds >= timeoutMs)
                 {
-                    if (logs.Count == 0 && !string.IsNullOrEmpty(lastPreview))
+                    if (resolvedSnapshots.Count > 0)
                     {
-                        AppendResolvedLog(logs, visible: false, lastPreview);
+                        logs = new List<string>();
+                        foreach ((bool snapshotVisible, string snapshotPreview) in resolvedSnapshots)
+                        {
+                            AppendResolvedLog(logs, snapshotVisible, snapshotPreview);
+                        }
                     }
 
                     string message = apiName +
@@ -259,20 +274,45 @@ namespace PlaywrightNative.Helpers
 
         private static async Task AppendResolvedLogAsync(List<string> logs, bool visible, IElementHandle handle)
         {
-            string preview = "element";
+            string preview = await TryPreviewAsync(handle).ConfigureAwait(false);
+            AppendResolvedLog(logs, visible, string.IsNullOrEmpty(preview) ? "element" : preview);
+        }
+
+        private static async Task<string> TryPreviewAsync(IElementHandle handle)
+        {
             try
             {
                 string value = await handle.EvaluateAsync<string>(RemoteObject.PreviewNodeFunction).ConfigureAwait(false);
-                if (!string.IsNullOrEmpty(value))
-                {
-                    preview = value;
-                }
+                return string.IsNullOrEmpty(value) ? null : value;
             }
             catch (PlaywrightException)
             {
+                return null;
+            }
+        }
+
+        private static void RememberResolvedSnapshot(
+            List<(bool Visible, string Preview)> snapshots,
+            bool visible,
+            string preview)
+        {
+            if (string.IsNullOrEmpty(preview) || snapshots == null)
+            {
+                return;
             }
 
-            AppendResolvedLog(logs, visible, preview);
+            string line = "locator resolved to " + (visible ? "visible" : "hidden") + " " + preview;
+            if (snapshots.Count > 0)
+            {
+                (bool lastVisible, string lastPreview) = snapshots[snapshots.Count - 1];
+                string lastLine = "locator resolved to " + (lastVisible ? "visible" : "hidden") + " " + lastPreview;
+                if (string.Equals(lastLine, line, StringComparison.Ordinal))
+                {
+                    return;
+                }
+            }
+
+            snapshots.Add((visible, preview));
         }
 
         private static void AppendResolvedLog(List<string> logs, bool visible, string preview)

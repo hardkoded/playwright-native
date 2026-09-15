@@ -53,6 +53,7 @@ namespace PlaywrightNative.WebKit
         private readonly string _targetId;
         private readonly ConcurrentDictionary<int, TaskCompletionSource<JsonElement?>> _callbacks = new();
         private bool _disposed;
+        private bool _closing;
         private string _closeReason;
 
         /// <summary>
@@ -85,12 +86,28 @@ namespace PlaywrightNative.WebKit
         internal bool IsDisposed => _disposed;
 
         /// <summary>
+        /// Gets a value indicating whether the underlying browser connection is closed.
+        /// </summary>
+        internal bool IsConnectionClosed => _connection.IsClosed;
+
+        /// <summary>
+        /// Gets a value indicating whether the owning page/browser recorded a close.
+        /// </summary>
+        internal bool IsClosing => _closing;
+
+        /// <summary>
         /// Gets or sets the reason recorded when the owning page was closed.
+        /// Assigning (including <see langword="null"/>) marks the session as closing so
+        /// in-flight evaluates prefer TargetClosed messaging over navigation errors.
         /// </summary>
         internal string CloseReason
         {
             get => _closeReason;
-            set => _closeReason = value;
+            set
+            {
+                _closeReason = value;
+                _closing = true;
+            }
         }
 
         /// <inheritdoc/>

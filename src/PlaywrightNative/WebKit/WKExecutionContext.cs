@@ -1011,18 +1011,22 @@ namespace PlaywrightNative.WebKit
         {
             if (_destroyed.Task.IsCompleted)
             {
-                throw new PlaywrightException(EvaluateSerialization.NavigationMessage);
+                throw DestroyedEvaluateException();
             }
 
             Task completed = await Task.WhenAny(task, _destroyed.Task).ConfigureAwait(false);
             if (completed == _destroyed.Task)
             {
-                throw new PlaywrightException(EvaluateSerialization.NavigationMessage);
+                throw DestroyedEvaluateException();
             }
 
             try
             {
                 return await task.ConfigureAwait(false);
+            }
+            catch (TargetClosedException)
+            {
+                throw;
             }
             catch (PlaywrightException ex) when (
                 ex.Message != null
@@ -1031,8 +1035,26 @@ namespace PlaywrightNative.WebKit
                     || ex.Message.Contains("Execution context was destroyed", StringComparison.Ordinal)
                     || ex.Message.Contains("Inspected target navigated or closed", StringComparison.Ordinal)))
             {
-                throw new PlaywrightException(EvaluateSerialization.NavigationMessage);
+                throw DestroyedEvaluateException();
             }
+        }
+
+        private Exception DestroyedEvaluateException()
+        {
+            // Browser/page close marks contexts destroyed before (or instead of)
+            // surfacing TargetClosedException on the in-flight awaitPromise. Prefer
+            // the official "… has been closed" wording so browsertype-launch.spec
+            // can match " closed".
+            if (_session.IsDisposed
+                || _session.IsConnectionClosed
+                || _session.IsClosing)
+            {
+                return ClosedTarget.Exception(
+                    DriverMessages.BrowserOrContextClosedExceptionMessage,
+                    _session.CloseReason);
+            }
+
+            return new PlaywrightException(EvaluateSerialization.NavigationMessage);
         }
 
         private bool HasForeignElementArgument(object[] args)
