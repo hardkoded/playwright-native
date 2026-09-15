@@ -304,11 +304,12 @@ namespace PlaywrightNative.WebKit
                 routeCount = _routes.Count;
             }
 
-            // Locale (and context extra headers via LocaleAndAuthHeaders) must
-            // intercept WebSocket handshakes: LocaleHandshakeProxy bypasses
-            // loopback to avoid truncating chunked localhost HTTP, so WS to the
-            // test server never hits the proxy. Network interception is the
-            // only path that rewrites Accept-Language / ExtraHTTPHeaders there.
+            // Locale (and context extra headers via LocaleAndAuthHeaders) should
+            // also intercept when possible. WebKit Network interception does not
+            // rewrite WebSocket upgrades on macOS; LocaleHandshakeProxy (without
+            // <-loopback> bypass on WebKit) rewrites localhost WS handshakes.
+            // Interception still covers Accept-Language / ExtraHTTPHeaders on
+            // regular HTTP when routes or credentials are absent.
             bool needIntercept = routeCount > 0
                 || _page.WKContext?.HasContextRoutes == true
                 || HttpBasicAuth.HasCredentials(_httpCredentials)
