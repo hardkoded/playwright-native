@@ -1585,6 +1585,13 @@ namespace PlaywrightNative.WebKit
 
             if (page is WKPage wkPage)
             {
+                // Create-time HttpCredentials must reach the page network managers and
+                // enable interception (HeadersWithAuth). Match SetHttpCredentialsAsync:
+                // store credentials, cancel the HTTP auth dialog, then update interception.
+                wkPage.SetHttpCredentials(_httpCredentials);
+                await wkPage.ApplyAuthCredentialsAsync().ConfigureAwait(false);
+                await wkPage.UpdateNetworkInterceptionAsync().ConfigureAwait(false);
+
                 List<WKRouteEntry> routes;
                 lock (_routes)
                 {
