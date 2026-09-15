@@ -18,6 +18,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Playwright;
 using PlaywrightNative.Helpers;
@@ -39,6 +40,10 @@ namespace PlaywrightNative.WebKit
     /// </remarks>
     internal class WKTargetSession : IDisposable
     {
+        // Match WKSession: unbound inner commands (e.g. DOM.describeNode on a lazy
+        // iframe) used to hang Darwin AI aria snapshots until the NUnit 30s kill.
+        private const int CommandTimeoutMs = 20_000;
+
         // WIP argument validators (e.g. Page.snapshotRect's integer "quality") reject
         // an explicit JSON null for an optional field with "can't be processed" rather
         // than treating it the same as an omitted field, so omit nulls anywhere in the
@@ -146,6 +151,19 @@ namespace PlaywrightNative.WebKit
 
             (int id, TaskCompletionSource<JsonElement?> tcs) = EnqueueCommand();
             string innerJson = SerializeInnerMessage(id, method, parameters);
+
+            // Bound the wait: a stuck inner command (lost response or browser hang)
+            // faults with a labelled timeout rather than blocking the target forever.
+            CancellationTokenSource timeoutCts = new(CommandTimeoutMs);
+            timeoutCts.Token.Register(() =>
+            {
+                if (_callbacks.TryRemove(id, out TaskCompletionSource<JsonElement?> timedOut))
+                {
+                    timedOut.TrySetException(new TimeoutException(
+                        $"WebKit command '{method}' (id {id}) on target '{_targetId}' did not respond within {CommandTimeoutMs}ms."));
+                }
+            });
+            _ = tcs.Task.ContinueWith(_ => timeoutCts.Dispose(), TaskScheduler.Default);
 
             // Fire-and-forget the outer wrap. We never await the parent's ack — if the wrap
             // fails (e.g. unknown targetId), the inner TCS will be drained by the connection

@@ -100,6 +100,8 @@ namespace PlaywrightNative.WebKit
         private int _reportedAsNew;
         private IConsoleMessage _lastConsoleMessage;
         private int _lastConsoleRepeatCount;
+        private string _lastPageErrorText;
+        private long _lastPageErrorTicks;
 
         private WKTargetSession _targetSession;
         private WKTargetSession _provisionalSession;
@@ -3689,6 +3691,16 @@ namespace PlaywrightNative.WebKit
                 if (frame?.ParentFrame != null)
                 {
                     await EnsureActiveAndFocusedAsync().ConfigureAwait(false);
+                    if (expression != null
+                        && expression.Contains("requestStorageAccess", StringComparison.Ordinal))
+                    {
+                        // macOS WebKit also requires a trusted input gesture on the
+                        // iframe (emulateUserGesture alone is not enough after OOPIF
+                        // load). Pulse via Input.dispatchMouseEvent — not window.focus
+                        // / synthetic click inside callFunctionOn (those break
+                        // document.hasFocus() for unrelated child-frame evaluates).
+                        await PulseTrustedGestureOnFrameAsync(frame).ConfigureAwait(false);
+                    }
                 }
 
                 if (EvaluateSerialization.CanWrapExpression(expression))
@@ -7311,6 +7323,95 @@ namespace PlaywrightNative.WebKit
             }
         }
 
+        /// <summary>
+        /// Dispatches a trusted mouse click centered on the iframe element that hosts
+        /// <paramref name="frame"/> so macOS WebKit grants transient activation for
+        /// <c>document.requestStorageAccess()</c>. Does not run in-page
+        /// <c>window.focus()</c> (that breaks <c>document.hasFocus()</c> checks).
+        /// </summary>
+        /// <param name="frame">The child frame about to evaluate.</param>
+        /// <returns>A task that completes when the gesture has been sent or skipped.</returns>
+        private async Task PulseTrustedGestureOnFrameAsync(WKFrame frame)
+        {
+            WKFrame parent = frame?.ParentFrame;
+            if (parent == null)
+            {
+                return;
+            }
+
+            try
+            {
+                WKExecutionContext parentContext = await WaitForFrameContextAsync(parent).ConfigureAwait(false);
+                string frameNameJson = JsonSerializer.Serialize(frame.Name ?? string.Empty);
+                string frameUrlJson = JsonSerializer.Serialize(frame.Url ?? string.Empty);
+
+                // Prefer matching by name/src, then the first iframe.
+                double[] point = await parentContext.EvaluateAsync<double[]>(
+                    "(() => {" +
+                    "const frames = Array.from(document.querySelectorAll('iframe'));" +
+                    "let el = null;" +
+                    "const wantName = " + frameNameJson + ";" +
+                    "const wantUrl = " + frameUrlJson + ";" +
+                    "for (const f of frames) {" +
+                    "  try {" +
+                    "    if (wantName && f.name === wantName) { el = f; break; }" +
+                    "    if (wantUrl && (f.src === wantUrl || (f.contentWindow && f.contentWindow.location.href === wantUrl))) { el = f; break; }" +
+                    "  } catch (e) {}" +
+                    "}" +
+                    "if (!el && frames.length) el = frames[0];" +
+                    "if (!el) return null;" +
+                    "const r = el.getBoundingClientRect();" +
+                    "if (!r.width || !r.height) return null;" +
+                    "return [r.left + (r.width / 2), r.top + (r.height / 2)];" +
+                    "})()").ConfigureAwait(false);
+
+                if (point == null || point.Length < 2)
+                {
+                    return;
+                }
+
+                double x = point[0];
+                double y = point[1];
+                await _session.SendAsync("Input.dispatchMouseEvent", new
+                {
+                    type = "move",
+                    button = 0,
+                    buttons = 0,
+                    x,
+                    y,
+                    modifiers = 0,
+                }).ConfigureAwait(false);
+                await _session.SendAsync("Input.dispatchMouseEvent", new
+                {
+                    type = "down",
+                    button = 0,
+                    buttons = 1,
+                    x,
+                    y,
+                    modifiers = 0,
+                    clickCount = 1,
+                }).ConfigureAwait(false);
+                await _session.SendAsync("Input.dispatchMouseEvent", new
+                {
+                    type = "up",
+                    button = 0,
+                    buttons = 0,
+                    x,
+                    y,
+                    modifiers = 0,
+                    clickCount = 1,
+                }).ConfigureAwait(false);
+
+                // Re-assert page activity after the click (iframe focus is expected
+                // for requestStorageAccess; page-proxy active flag must stay set).
+                await EnsureActiveAndFocusedAsync().ConfigureAwait(false);
+            }
+            catch (PlaywrightException ex)
+            {
+                _logger?.LogDebug(ex, "Trusted gesture pulse failed for requestStorageAccess on {PageProxyId}", _pageProxyId);
+            }
+        }
+
         private async Task ReplayExposedBindingsAsync()
         {
             await EvaluateInAllFramesAsync(PageBindingScript.InitScript).ConfigureAwait(false);
@@ -7364,6 +7465,24 @@ namespace PlaywrightNative.WebKit
                 await ApplySafariOverrideSettingsOnAsync(target, isMobile).ConfigureAwait(false);
                 JsonElement? tree = await target.SendAsync("Page.getResourceTree").ConfigureAwait(false);
                 _provisionalMainFrameId = ReadMainFrameId(tree);
+
+                // Mirror main-target init: Console before Runtime so sync pageerrors
+                // during provisional document parse are delivered on Darwin.
+                if (EnableFrameSessions)
+                {
+                    await InitializeFrameSessionsAsync(tree).ConfigureAwait(false);
+                }
+                else
+                {
+                    try
+                    {
+                        await target.SendAsync("Console.enable").ConfigureAwait(false);
+                    }
+                    catch (PlaywrightException)
+                    {
+                    }
+                }
+
                 await target.SendAsync("Runtime.enable").ConfigureAwait(false);
                 await EnsureUtilityWorldAsync(target).ConfigureAwait(false);
                 if (_bindingReady != null || !_exposedFunctions.IsEmpty || !_handleBindings.IsEmpty)
@@ -7459,6 +7578,18 @@ namespace PlaywrightNative.WebKit
                 CaptureResourceTree(tree);
                 CompletePendingAfterTargetReplacement();
 
+                // Enable Console before Runtime so sync throws during the first
+                // document parse (data: <script>throw…) are not missed. On
+                // frame-session Darwin builds Console lives on frame targets.
+                if (EnableFrameSessions)
+                {
+                    await InitializeFrameSessionsAsync(tree).ConfigureAwait(false);
+                }
+                else
+                {
+                    await target.SendAsync("Console.enable").ConfigureAwait(false);
+                }
+
                 await target.SendAsync("Runtime.enable").ConfigureAwait(false);
                 await EnsureUtilityWorldAsync(target).ConfigureAwait(false);
                 if (_bindingReady != null || !_exposedFunctions.IsEmpty || !_handleBindings.IsEmpty)
@@ -7486,20 +7617,6 @@ namespace PlaywrightNative.WebKit
 
                 await ApplyExtraHttpHeadersOnAsync(target).ConfigureAwait(false);
                 await ApplyScreenSizeOverrideOnAsync(target).ConfigureAwait(false);
-
-                // On the frame-session builds (WebKit 2245–2255, e.g. the macOS-14 2251)
-                // build) the Console domain lives on the per-frame sessions, not the page
-                // session — sending Console.enable here yields "'Console' domain was not
-                // found". Upstream wkPage gates Console.enable behind !enableFrameSessions
-                // and initializes WKFrame Console instead.
-                if (EnableFrameSessions)
-                {
-                    await InitializeFrameSessionsAsync(tree).ConfigureAwait(false);
-                }
-                else
-                {
-                    await target.SendAsync("Console.enable").ConfigureAwait(false);
-                }
 
                 AdoptContextMedia();
                 await ApplyEmulatedMediaToSessionAsync(target).ConfigureAwait(false);
@@ -8329,15 +8446,65 @@ namespace PlaywrightNative.WebKit
         private void RaisePageError(PageErrorEventArgs error, WebErrorLocation location = null)
         {
             LastPageErrorLocation = location ?? new WebErrorLocation();
-            _pageErrors.Add(error.ToString());
-            PageError?.Invoke(this, error.ToString());
+            string text = error.ToString();
+
+            // Console javascript errors and Runtime.exceptionThrown can both fire for
+            // the same sync throw (especially after enabling Runtime.exceptionThrown
+            // as a Darwin frame-session fallback). Drop near-duplicate raises.
+            long now = Environment.TickCount64;
+            if (!string.IsNullOrEmpty(text)
+                && string.Equals(text, _lastPageErrorText, StringComparison.Ordinal)
+                && now - _lastPageErrorTicks < 1000)
+            {
+                return;
+            }
+
+            _lastPageErrorText = text;
+            _lastPageErrorTicks = now;
+            _pageErrors.Add(text);
+            PageError?.Invoke(this, text);
         }
 
         private void OnExceptionThrown(JsonElement? parameters)
         {
             // Official wkPage maps Console javascript errors to pageerror and does
             // not also raise from Runtime.exceptionThrown (avoids duplicate entries).
-            _ = parameters;
+            // On frame-session Darwin builds, Console.enable can still race past sync
+            // throws in navigating documents (data: inline <script>throw). Raise from
+            // Runtime.exceptionThrown as a fallback; RaisePageError dedups.
+            if (!EnableFrameSessions)
+            {
+                _ = parameters;
+                return;
+            }
+
+            if (!parameters.HasValue
+                || !parameters.Value.TryGetProperty("exceptionDetails", out JsonElement details))
+            {
+                return;
+            }
+
+            PageErrorEventArgs error = PageErrorText.FromExceptionDetails(details);
+            string url = details.TryGetProperty("url", out JsonElement urlEl)
+                && urlEl.ValueKind == JsonValueKind.String
+                ? urlEl.GetString()
+                : string.Empty;
+            int line = details.TryGetProperty("lineNumber", out JsonElement lineEl)
+                && lineEl.TryGetInt32(out int ln)
+                ? ln
+                : 0;
+            int column = details.TryGetProperty("columnNumber", out JsonElement colEl)
+                && colEl.TryGetInt32(out int cn)
+                ? cn
+                : 0;
+            RaisePageError(
+                error,
+                new WebErrorLocation
+                {
+                    Url = url ?? string.Empty,
+                    Line = line,
+                    Column = column,
+                });
         }
 
         private void OnFrameAttached(JsonElement? parameters)

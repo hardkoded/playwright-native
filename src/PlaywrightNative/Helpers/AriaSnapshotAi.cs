@@ -54,6 +54,29 @@ namespace PlaywrightNative.Helpers
 
         internal const string WritePrefixFunction = @"(p) => { window.__pwAriaFramePrefix = String(p); return true; }";
 
+        /// <summary>
+        /// True when the iframe has a same-origin document that is past
+        /// <c>loading</c>. Lazy-unloaded and redirect-loop frames return
+        /// false so AI stitch can skip <c>DOM.describeNode</c> (which hangs
+        /// indefinitely on Darwin WebKit target sessions).
+        /// Cross-origin frames throw on <c>contentDocument</c> access and
+        /// return true so protocol ContentFrame still runs.
+        /// </summary>
+        private const string IframeCaptureReadyFunction = @"(el) => {
+  try {
+    const doc = el.contentDocument;
+    if (!doc || !doc.documentElement) {
+      return false;
+    }
+    if (doc.readyState === 'loading') {
+      return false;
+    }
+    return true;
+  } catch (e) {
+    return true;
+  }
+}";
+
         private static readonly ConditionalWeakTable<IPage, State> PageState = new ConditionalWeakTable<IPage, State>();
 
         /// <summary>
@@ -590,6 +613,16 @@ namespace PlaywrightNative.Helpers
 
             try
             {
+                // Avoid DOM.describeNode on unloaded / still-loading iframes:
+                // Darwin WebKit target sessions have no command timeout, so a
+                // stuck describeNode blocks CaptureYaml evaluates behind it.
+                bool ready = await iframeEl.EvaluateAsync<bool>(IframeCaptureReadyFunction)
+                    .ConfigureAwait(false);
+                if (!ready)
+                {
+                    return null;
+                }
+
                 return await iframeEl.ContentFrameAsync().ConfigureAwait(false);
             }
             catch (PlaywrightException)
