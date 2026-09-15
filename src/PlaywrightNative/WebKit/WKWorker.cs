@@ -96,7 +96,7 @@ namespace PlaywrightNative.WebKit
 
             if (method == "Console.messageAdded")
             {
-                ConsoleMessage added = WorkerConsole.ParseMessageAdded(parameters.Value);
+                ConsoleMessage added = WorkerConsole.ParseMessageAdded(parameters.Value, WrapConsoleRemote);
                 if (added != null)
                 {
                     Console?.Invoke(this, added);

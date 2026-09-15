@@ -303,12 +303,10 @@ namespace PlaywrightNative.WebKit
                 routeCount = _routes.Count;
             }
 
-            bool extra = HasExtraHttpHeaders();
             bool needIntercept = routeCount > 0
                 || _page.WKContext?.HasContextRoutes == true
                 || HttpBasicAuth.HasCredentials(_httpCredentials)
                 || !string.IsNullOrEmpty(_locale)
-                || extra
                 || _inFlightRouteHandlers > 0;
             if (needIntercept && !_interceptingEnabled)
             {
@@ -1200,12 +1198,6 @@ namespace PlaywrightNative.WebKit
             }
 
             return merged;
-        }
-
-        private bool HasExtraHttpHeaders()
-        {
-            Dictionary<string, string> merged = ExtraHttpHeaders.Merged(_page.Context, _page.PageExtraHttpHeaders);
-            return merged != null && merged.Count > 0;
         }
 
         private IDictionary<string, string> MergeExtraHttpHeaders(IEnumerable<KeyValuePair<string, string>> headers)

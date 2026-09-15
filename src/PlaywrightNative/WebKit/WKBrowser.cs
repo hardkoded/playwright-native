@@ -258,12 +258,15 @@ namespace PlaywrightNative.WebKit
                     proxy,
                     out Proxy browserProxy);
 
-                // Only attach when locale (or force via extra headers below) needs WS
-                // Accept-Language rewriting. Unconditional force:true put every WebKit
-                // context behind an HTTP proxy, and MiniBrowser then skips HTTP/2 —
-                // hanging h2-only HAR hosts (should contain http2 for http2 requests).
-                bool forceHandshake = extraHTTPHeaders != null
-                    && extraHTTPHeaders.Any(h => !string.IsNullOrEmpty(h.Key));
+                // Only attach when locale, context-level extra headers, or (for WebKit)
+                // page-level SetExtraHttpHeaders later need WS handshake rewriting.
+                // Unconditional force on HAR-recording contexts makes MiniBrowser skip
+                // HTTP/2 and hang h2-only hosts (should contain http2 for http2 requests).
+                // Non-HAR contexts keep LocaleHandshakeProxy so page.SetExtraHttpHeaders
+                // can stamp headers onto WebSocket upgrades that ignore Network.setExtraHTTPHeaders.
+                bool forceHandshake = string.IsNullOrEmpty(recordHarPath)
+                    || (extraHTTPHeaders != null
+                        && extraHTTPHeaders.Any(h => !string.IsNullOrEmpty(h.Key)));
                 LocaleHandshakeProxy handshake = certsProxy == null
                     ? LocaleHandshakeProxy.TryStart(locale, browserProxy, force: forceHandshake, out browserProxy)
                     : null;

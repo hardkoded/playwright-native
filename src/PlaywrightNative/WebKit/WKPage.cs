@@ -4425,9 +4425,30 @@ namespace PlaywrightNative.WebKit
                 ?? throw new InvalidOperationException("Page has no target session.");
 
             // Do not await: Page.crash kills the renderer before an ack arrives.
-            // Crash is raised from Inspector.targetCrashed (if present), main-target
-            // teardown, or page-proxy destruction.
+            // Crash is raised from Inspector.targetCrashed (if present),
+            // Target.targetDestroyed(crashed:true), main-target teardown, or
+            // page-proxy destruction. Fall back if the protocol stays silent.
             _ = session.SendAsync("Page.crash");
+            async Task EnsureCrashReportedAsync()
+            {
+                // Official relies on Target.targetDestroyed({crashed:true}). Some builds
+                // destroy the page proxy without that flag; wait briefly then synthesize.
+                try
+                {
+                    await Task.Delay(750).ConfigureAwait(false);
+                }
+                catch (ObjectDisposedException)
+                {
+                    return;
+                }
+
+                if (!_crashed && _crashRequested && !_closed)
+                {
+                    FireCrash();
+                }
+            }
+
+            _ = EnsureCrashReportedAsync();
             return Task.CompletedTask;
         }
 
@@ -5397,7 +5418,8 @@ namespace PlaywrightNative.WebKit
                 return null;
             }
 
-            IResponse found = null;
+            IResponse exact = null;
+            IResponse hashOnly = null;
             foreach (IRequest request in _requests.Snapshot())
             {
                 if (request == null
@@ -5414,14 +5436,26 @@ namespace PlaywrightNative.WebKit
                 }
 
                 if (string.Equals(response.Url, url, StringComparison.Ordinal)
-                    || string.Equals(request.Url, url, StringComparison.Ordinal)
-                    || (response.Url != null && response.Url.StartsWith(url, StringComparison.Ordinal)))
+                    || string.Equals(request.Url, url, StringComparison.Ordinal))
                 {
-                    found = response;
+                    exact = response;
+                    continue;
+                }
+
+                // Allow a hash-only suffix (same document), but never a query-string
+                // match — otherwise /page would wrongly resolve to /page?foo from a
+                // later history entry (bfcache goBack/goForward).
+                if (hashOnly == null
+                    && response.Url != null
+                    && response.Url.StartsWith(url, StringComparison.Ordinal)
+                    && response.Url.Length > url.Length
+                    && response.Url[url.Length] == '#')
+                {
+                    hashOnly = response;
                 }
             }
 
-            return found;
+            return exact ?? hashOnly;
         }
 
         private async Task SyncBootstrapScriptAsync()
@@ -6685,7 +6719,7 @@ namespace PlaywrightNative.WebKit
             }
         }
 
-        private void OnMainTargetDestroyed(string targetId)
+        private void OnMainTargetDestroyed(string targetId, bool crashed = false)
         {
             if (_targetSession != null && _targetSession.TargetId == targetId)
             {
@@ -6698,7 +6732,7 @@ namespace PlaywrightNative.WebKit
                 _targetSession = null;
                 ClearWorkers();
                 ClearExecutionContexts();
-                if (_crashRequested)
+                if (crashed || _crashRequested)
                 {
                     FireCrash();
                 }
@@ -7275,6 +7309,15 @@ namespace PlaywrightNative.WebKit
             }
 
             string targetId = idEl.GetString();
+            bool crashed = false;
+            if (parameters.Value.TryGetProperty("crashed", out JsonElement crashedEl))
+            {
+                crashed = crashedEl.ValueKind == JsonValueKind.True
+                    || (crashedEl.ValueKind == JsonValueKind.Number && crashedEl.TryGetInt32(out int flag) && flag != 0)
+                    || (crashedEl.ValueKind == JsonValueKind.String
+                        && bool.TryParse(crashedEl.GetString(), out bool parsed)
+                        && parsed);
+            }
 
             if (!string.IsNullOrEmpty(targetId) && _workers.TryRemove(targetId, out WKWorker worker))
             {
@@ -7303,7 +7346,8 @@ namespace PlaywrightNative.WebKit
             // triggers a process swap. The replacement comes in as a fresh non-provisional
             // Target.targetCreated, but in the gap between destroy and create we must
             // tear down the current session so stale events from it stop dispatching.
-            OnMainTargetDestroyed(targetId);
+            // Official wkPage: Target.targetDestroyed with crashed:true → page._didCrash().
+            OnMainTargetDestroyed(targetId, crashed);
         }
 
         private void OnInnerMessage(string method, JsonElement? parameters)
@@ -8665,7 +8709,8 @@ namespace PlaywrightNative.WebKit
 
         Task IPage.PauseAsync() => PauseInternalAsync();
 
-        Task<byte[]> IPage.PdfAsync(PagePdfOptions options) => Task.FromResult<byte[]>(default!);
+        Task<byte[]> IPage.PdfAsync(PagePdfOptions options)
+            => throw new NotSupportedException("PDF generation is only supported for Headless Chromium");
 
         Task<ILocator> IPage.PickLocatorAsync() => Task.FromResult<ILocator>(default!);
 
