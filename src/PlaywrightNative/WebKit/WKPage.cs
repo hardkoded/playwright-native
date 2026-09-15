@@ -760,7 +760,19 @@ namespace PlaywrightNative.WebKit
             ThrowIfClosed();
             return ActionTrace.EvaluateUserAsync(Context, () =>
             {
-                // Bare handles must use callFunctionOn with only objectId arguments.
+                // Primitive EvaluateHandle results are ImmediateJSHandle (no objectId).
+                // WebKit rejects {value}/{unserializableValue} on callFunctionOn with
+                // executionContextId — inline via the handle-tree revive path instead.
+                if (arg is ImmediateJSHandle)
+                {
+                    EvaluateWithArg.ThrowIfDisposedHandle(arg);
+                    if (EvaluateHandleArg.TryPrepareHandleCall(expression, arg, out string immFn, out object[] immArgs))
+                    {
+                        return EvaluatePreparedAsync<T>(immFn, immArgs);
+                    }
+                }
+
+                // Bare remote handles must use callFunctionOn with only objectId arguments.
                 // WebKit rejects mixed value/objectId lists used by the nested-handle tree path.
                 if (arg is IJSHandle)
                 {
@@ -786,6 +798,15 @@ namespace PlaywrightNative.WebKit
             ThrowIfClosed();
             return ActionTrace.EvaluateUserAsync(Context, () =>
             {
+                if (arg is ImmediateJSHandle)
+                {
+                    EvaluateWithArg.ThrowIfDisposedHandle(arg);
+                    if (EvaluateHandleArg.TryPrepareHandleCall(expression, arg, out string immFn, out object[] immArgs))
+                    {
+                        return EvaluatePreparedAsync<JsonElement?>(immFn, immArgs);
+                    }
+                }
+
                 if (arg is IJSHandle)
                 {
                     EvaluateWithArg.ThrowIfDisposedHandle(arg);
@@ -817,6 +838,20 @@ namespace PlaywrightNative.WebKit
                         .EvaluateHandleOnHandleAsync(objectId, EvaluateWithArg.AsFunction(expression))
                         .ConfigureAwait(false);
                     return WrapRemoteObject(context, direct);
+                }
+
+                // Immediate (value-only) handles: revive via the JSON tree path.
+                if (arg is ImmediateJSHandle)
+                {
+                    EvaluateWithArg.ThrowIfDisposedHandle(arg);
+                    if (EvaluateHandleArg.TryPrepareHandleCall(expression, arg, out string immFn, out object[] immArgs))
+                    {
+                        await StashAdoptedHandlesAsync(context, immArgs).ConfigureAwait(false);
+                        JsonElement? immBound = await context
+                            .EvaluateHandleAsync(EvaluateHandleArg.PreparedExpression(immFn, immArgs))
+                            .ConfigureAwait(false);
+                        return WrapRemoteObject(context, immBound);
+                    }
                 }
 
                 if (arg is IJSHandle)
@@ -5707,23 +5742,20 @@ namespace PlaywrightNative.WebKit
                 WKExecutionContext context = await WaitForMainExecutionContextAsync().ConfigureAwait(false);
 
                 // Primitive / unserializable EvaluateHandle results are ImmediateJSHandle
-                // (no objectId). Pass the handle itself — PrepareArgumentAsync already
-                // calls ToCallArgument(). Passing ToCallArgument() here double-wraps
-                // via SerializeHandleArgument and WebKit rejects the payload
-                // (ShouldAcceptObjectHandleToPrimitiveTypes / UnserializableValue).
+                // (no objectId). WebKit rejects {value}/{unserializableValue} on
+                // callFunctionOn with executionContextId — inline via tree revive.
                 if (arg is ImmediateJSHandle immediate)
                 {
-                    string immediateWrapped =
-                        "function () {" +
-                        "  const s = (" + EvaluateSerialization.SerializeJs + ");" +
-                        "  const v = (" + expression + ").apply(null, arguments);" +
-                        "  if (v && typeof v.then === 'function') return v.then(s);" +
-                        "  return s(v);" +
-                        "}";
-                    JsonElement immediateTagged = await context
-                        .EvaluateFunctionAsync<JsonElement>(immediateWrapped, immediate)
-                        .ConfigureAwait(false);
-                    return JsonValueHelper.Parse<T>(immediateTagged);
+                    if (!EvaluateHandleArg.TryPrepareHandleCall(
+                            expression,
+                            immediate,
+                            out string handleFn,
+                            out object[] handleArgs))
+                    {
+                        throw new PlaywrightException(DispatchEventScript.DifferentContextMessage);
+                    }
+
+                    return await EvaluatePreparedAsync<T>(handleFn, handleArgs).ConfigureAwait(false);
                 }
 
                 // WebKit accepts objectId arguments only on the objectId-bound form of
