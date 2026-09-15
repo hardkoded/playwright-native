@@ -711,22 +711,45 @@ namespace PlaywrightNative.Transport
                 {
                     StringBuilder output = new StringBuilder();
 
+                    void FailStartup(string message)
+                        => p._startCompletionSource.TrySetException(new PlaywrightException(
+                            BrowserTypeLaunchGuard.RewriteStartupLog(message)));
+
                     void OnProcessDataReceivedWhileStarting(object sender, DataReceivedEventArgs e)
                     {
-                        if (e.Data != null)
+                        if (e.Data == null)
                         {
-                            output.AppendLine(e.Data);
-                            string endpoint = p._endpointExtractor(e.Data);
-                            if (endpoint != null)
-                            {
-                                p._startCompletionSource.TrySetResult(endpoint);
-                            }
+                            return;
+                        }
+
+                        output.AppendLine(e.Data);
+
+                        // Official chromium waitForReadyState / profileInUseError:
+                        // reject as soon as stderr reports a profile lock so the
+                        // message is not lost if Exited races ahead of drain.
+                        if (BrowserTypeLaunchGuard.TryGetProfileInUseError(e.Data) != null)
+                        {
+                            FailStartup($"Failed to launch browser! {output}");
+                            return;
+                        }
+
+                        string endpoint = p._endpointExtractor(e.Data);
+                        if (endpoint != null)
+                        {
+                            p._startCompletionSource.TrySetResult(endpoint);
                         }
                     }
 
                     void OnProcessExitedWhileStarting(object sender, EventArgs e)
-                        => p._startCompletionSource.TrySetException(new PlaywrightException(
-                            BrowserTypeLaunchGuard.RewriteStartupLog($"Failed to launch browser! {output}")));
+                    {
+                        // ErrorDataReceived is asynchronous; give stderr a brief
+                        // chance to flush before building the launch failure.
+                        _ = Task.Run(async () =>
+                        {
+                            await Task.Delay(100).ConfigureAwait(false);
+                            FailStartup($"Failed to launch browser! {output}");
+                        });
+                    }
 
                     void OnProcessExited(object sender, EventArgs e) => _exited.EnterFrom(p, p._currentState);
 
@@ -738,12 +761,26 @@ namespace PlaywrightNative.Transport
                     {
                         p.StartProcess();
 
+                        // Start stderr async read immediately so a fast profile-lock
+                        // exit still delivers ProcessSingleton / SingletonLock lines
+                        // into |output| before (or as) Exited fires.
+                        p.Process.BeginErrorReadLine();
+
                         int timeout = p._timeout;
                         if (timeout > 0)
                         {
                             cts = new CancellationTokenSource(timeout);
-                            cts.Token.Register(() => p._startCompletionSource.TrySetException(
-                                new PlaywrightException($"Timed out after {timeout} ms while trying to connect to the browser!")));
+                            cts.Token.Register(() =>
+                            {
+                                string buffered = output.ToString();
+                                string detail = $"Timed out after {timeout} ms while trying to connect to the browser!";
+                                if (!string.IsNullOrEmpty(buffered))
+                                {
+                                    detail = detail + " " + buffered;
+                                }
+
+                                FailStartup(detail);
+                            });
                         }
 
                         // PipeStdio (Firefox): the ready banner is written on stdout, then
@@ -763,8 +800,6 @@ namespace PlaywrightNative.Transport
                         }
 
                         await _started.EnterFromAsync(p, _starting).ConfigureAwait(false);
-
-                        p.Process.BeginErrorReadLine();
 
                         // PipeFd34 has no stderr "ready" line to wait for — the inspector pipe
                         // is usable as soon as the process is alive.

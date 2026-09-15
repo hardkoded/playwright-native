@@ -35,6 +35,13 @@ namespace PlaywrightNative.Helpers
             "Set either 'headless: true' or use 'xvfb-run ' before running Playwright.\n\n<3 Playwright Team";
 
         /// <summary>
+        /// Official Chromium profile-in-use sentence from <c>chromium.ts</c>
+        /// <c>profileInUseError</c>.
+        /// </summary>
+        internal const string ProfileInUseMessage =
+            "This usually means that the profile is already in use by another instance of Chromium.";
+
+        /// <summary>
         /// Rejects <c>userDataDir</c>, <c>port</c>, profile args, and page URLs
         /// on <c>browserType.launch</c>.
         /// </summary>
@@ -184,36 +191,72 @@ namespace PlaywrightNative.Helpers
             return RewriteProfileInUse(logs);
         }
 
+        /// <summary>
+        /// Official <c>profileInUseError</c>: returns a short exception message when
+        /// Chromium stderr reports a profile lock, otherwise <see langword="null"/>.
+        /// </summary>
+        /// <param name="logs">One or more browser log lines.</param>
+        /// <returns>The official profile-in-use message, or <see langword="null"/>.</returns>
+        internal static string TryGetProfileInUseError(string logs)
+        {
+            string marker = FindProfileInUseMarker(logs);
+            if (marker == null)
+            {
+                return null;
+            }
+
+            return marker + " " + ProfileInUseMessage;
+        }
+
         private static string RewriteProfileInUse(string logs)
         {
-            const string profileInUse =
-                "This usually means that the profile is already in use by another instance of Chromium.";
-            if (logs.Contains(profileInUse, StringComparison.Ordinal))
+            if (logs.Contains(ProfileInUseMessage, StringComparison.Ordinal))
             {
                 return logs;
             }
 
-            string marker = null;
-            if (logs.Contains("Failed to create a ProcessSingleton for your profile directory.", StringComparison.Ordinal))
-            {
-                marker = "Failed to create a ProcessSingleton for your profile directory.";
-            }
-            else if (logs.Contains("Opening in existing browser session.", StringComparison.Ordinal))
-            {
-                marker = "Opening in existing browser session.";
-            }
-            else if (logs.Contains("SingletonLock", StringComparison.Ordinal)
-                && logs.Contains("Failed to create", StringComparison.Ordinal))
-            {
-                marker = "Failed to create a ProcessSingleton for your profile directory.";
-            }
-
+            string marker = FindProfileInUseMarker(logs);
             if (marker == null)
             {
                 return logs;
             }
 
-            return logs + "\n" + marker + " " + profileInUse;
+            return logs + "\n" + marker + " " + ProfileInUseMessage;
+        }
+
+        private static string FindProfileInUseMarker(string logs)
+        {
+            if (string.IsNullOrEmpty(logs))
+            {
+                return null;
+            }
+
+            // Official markers from chromium.ts profileInUseError, plus
+            // SingletonLock lines printed by process_singleton_posix.cc /
+            // process_singleton_win.cc before the ProcessSingleton summary.
+            if (logs.Contains("Failed to create a ProcessSingleton for your profile directory.", StringComparison.Ordinal))
+            {
+                return "Failed to create a ProcessSingleton for your profile directory.";
+            }
+
+            if (logs.Contains("Opening in existing browser session.", StringComparison.Ordinal))
+            {
+                return "Opening in existing browser session.";
+            }
+
+            if (logs.Contains("SingletonLock", StringComparison.Ordinal))
+            {
+                return "Failed to create a ProcessSingleton for your profile directory.";
+            }
+
+            if (logs.Contains("ProcessSingleton", StringComparison.Ordinal)
+                && (logs.Contains("profile directory", StringComparison.OrdinalIgnoreCase)
+                    || logs.Contains("profile is already in use", StringComparison.OrdinalIgnoreCase)))
+            {
+                return "Failed to create a ProcessSingleton for your profile directory.";
+            }
+
+            return null;
         }
 
         private static string ResolveDisplay(BrowserTypeLaunchOptions options)
