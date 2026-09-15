@@ -1172,11 +1172,17 @@ namespace PlaywrightNative.WebKit
             => RunHistoryNavigationAsync(() => TryGoHistoryAsync("Page.goForward"), waitUntil, timeout);
 
         /// <inheritdoc/>
-        public Task BringToFrontAsync()
+        public async Task BringToFrontAsync()
         {
             WKTargetSession target = _targetSession
                 ?? throw PageClosedException();
-            return _session.SendAsync("Target.activate", new { targetId = target.TargetId });
+            await _session.SendAsync("Target.activate", new { targetId = target.TargetId })
+                .ConfigureAwait(false);
+
+            // Upstream keeps the page focused via Emulation.setActiveAndFocused at
+            // page-proxy init; re-assert after activate so requestStorageAccess and
+            // other user-activation APIs see an active focused document (macOS).
+            await EnsureActiveAndFocusedAsync().ConfigureAwait(false);
         }
 
         /// <inheritdoc/>
@@ -6683,6 +6689,9 @@ namespace PlaywrightNative.WebKit
 
             if (!isPaused)
             {
+                // Re-assert focus after init so requestStorageAccess sees an
+                // active/focused document (macOS WebKit rejects otherwise).
+                await EnsureActiveAndFocusedAsync().ConfigureAwait(false);
                 return;
             }
 
@@ -6709,6 +6718,45 @@ namespace PlaywrightNative.WebKit
                 catch (PlaywrightException)
                 {
                 }
+            }
+
+            await EnsureActiveAndFocusedAsync().ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Upstream <c>_initializePageProxySession</c>: enable dialogs, mark the page
+        /// active/focused for automation, and apply HTTP credentials.
+        /// </summary>
+        /// <returns>A task that completes when page-proxy session setup finishes.</returns>
+        private async Task InitializePageProxySessionAsync()
+        {
+            // Match upstream Promise.all([Dialog.enable, Emulation.setActiveAndFocused]).
+            Task dialogTask = _session.SendAsync("Dialog.enable");
+            Task focusTask = EnsureActiveAndFocusedAsync();
+            await Task.WhenAll(dialogTask, focusTask).ConfigureAwait(false);
+            _dialogEnabled = true;
+
+            // Official always applies auth credentials during page-proxy
+            // init, including empty ones so 401s do not hang on a dialog.
+            await ApplyAuthCredentialsAsync().ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Sends <c>Emulation.setActiveAndFocused</c> so WebKit treats the page as
+        /// focused/active (required for <c>document.requestStorageAccess()</c> on macOS).
+        /// </summary>
+        /// <returns>A task that completes when the command is acknowledged or safely ignored.</returns>
+        private async Task EnsureActiveAndFocusedAsync()
+        {
+            try
+            {
+                await _session.SendAsync("Emulation.setActiveAndFocused", new { active = true })
+                    .ConfigureAwait(false);
+            }
+            catch (PlaywrightException ex)
+            {
+                // Older or exotic builds may lack the command; do not fail page init.
+                _logger?.LogDebug(ex, "Emulation.setActiveAndFocused failed for page proxy {PageProxyId}", _pageProxyId);
             }
         }
 
@@ -6813,23 +6861,11 @@ namespace PlaywrightNative.WebKit
 
             try
             {
-                // Dialog lives on the page-proxy session (upstream _initializePageProxySession).
+                // Dialog / focus / auth live on the page-proxy session
+                // (upstream _initializePageProxySession). Run once per page.
                 if (isMain && !_dialogEnabled)
                 {
-                    await _session.SendAsync("Dialog.enable").ConfigureAwait(false);
-                    _dialogEnabled = true;
-                    try
-                    {
-                        await _session.SendAsync("Emulation.setActiveAndFocused", new { active = true })
-                            .ConfigureAwait(false);
-                    }
-                    catch (PlaywrightException)
-                    {
-                    }
-
-                    // Official always applies auth credentials during page-proxy
-                    // init, including empty ones so 401s do not hang on a dialog.
-                    await ApplyAuthCredentialsAsync().ConfigureAwait(false);
+                    await InitializePageProxySessionAsync().ConfigureAwait(false);
                 }
 
                 // Order mirrors upstream wkPage.ts: Page.enable + getResourceTree first so
