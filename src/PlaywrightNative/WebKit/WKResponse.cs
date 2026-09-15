@@ -45,6 +45,16 @@ namespace PlaywrightNative.WebKit
         private byte[] _body;
 
         /// <summary>
+        /// Set once a public <see cref="BodyAsync"/> / <see cref="TextAsync"/> /
+        /// <see cref="JsonAsync{T}"/> caller successfully obtained the body while
+        /// still on the producing document. Prefetch alone must not count: otherwise
+        /// <c>response.body()</c> after navigation returns the cached buffer instead of
+        /// the upstream "navigated away" error (macOS/Linux WebKit keep the inspector
+        /// body available long enough for <see cref="PrefetchBodyAsync"/> to win).
+        /// </summary>
+        private bool _bodyDeliveredToCaller;
+
+        /// <summary>
         /// Initializes a new instance of the <see cref="WKResponse"/> class.
         /// </summary>
         /// <param name="session">The target session used to fetch the response body.</param>
@@ -147,7 +157,7 @@ namespace PlaywrightNative.WebKit
 
         /// <inheritdoc/>
         public Task<byte[]> BodyAsync()
-            => GetBodyBytesAsync();
+            => GetBodyBytesForCallerAsync();
 
         /// <inheritdoc/>
         public Task<string> FinishedAsync()
@@ -155,11 +165,11 @@ namespace PlaywrightNative.WebKit
 
         /// <inheritdoc/>
         public Task<T> JsonAsync<T>()
-            => ResponseContent.ReadJsonAsync<T>(GetBodyBytesAsync);
+            => ResponseContent.ReadJsonAsync<T>(GetBodyBytesForCallerAsync);
 
         /// <inheritdoc/>
         public Task<string> TextAsync()
-            => ResponseContent.ReadTextAsync(GetBodyBytesAsync);
+            => ResponseContent.ReadTextAsync(GetBodyBytesForCallerAsync);
 
         /// <inheritdoc/>
         public async Task<Dictionary<string, string>> AllHeadersAsync()
@@ -241,7 +251,7 @@ namespace PlaywrightNative.WebKit
         /// <returns>A task that resolves to the response body as a string.</returns>
         internal async Task<string> GetBodyTextAsync()
         {
-            byte[] bytes = await GetBodyBytesAsync().ConfigureAwait(false);
+            byte[] bytes = await GetBodyBytesForCallerAsync().ConfigureAwait(false);
             return Encoding.UTF8.GetString(bytes);
         }
 
@@ -271,6 +281,39 @@ namespace PlaywrightNative.WebKit
             }
 
             return GetBodyBytesAsync();
+        }
+
+        /// <summary>
+        /// Public body read: matches Chromium's navigated-away abort. Prefetch may
+        /// already hold bytes; callers that never read before navigation still get
+        /// <see cref="ResponseHeaders.NavigatedAway"/>.
+        /// </summary>
+        /// <returns>The response body bytes.</returns>
+        internal async Task<byte[]> GetBodyBytesForCallerAsync()
+        {
+            if (_bodyDeliveredToCaller)
+            {
+                return await GetBodyBytesAsync().ConfigureAwait(false);
+            }
+
+            // Redirect responses must keep the dedicated redirect error even though
+            // the frame URL no longer matches the redirect hop's DocumentUrl.
+            if (ResponseHeaders.IsRedirectStatus(Status))
+            {
+                throw new PlaywrightException(ResponseHeaders.RedirectBodyUnavailable);
+            }
+
+            // Prefetch caches the inspector body while the document is still live.
+            // Once the frame has moved on, public reads must fail like Chromium —
+            // even when those cached bytes remain available (macOS WebKit).
+            if (WKRequest.HasNavigatedAway())
+            {
+                throw new PlaywrightException(ResponseHeaders.NavigatedAway);
+            }
+
+            byte[] bytes = await GetBodyBytesAsync().ConfigureAwait(false);
+            _bodyDeliveredToCaller = true;
+            return bytes;
         }
 
         internal Task<byte[]> GetBodyBytesAsync()
@@ -316,8 +359,16 @@ namespace PlaywrightNative.WebKit
 
             // Prefer an immediate read: Ubuntu WebKit clears the inspector
             // buffer quickly after loadingFinished (especially under CI load).
+            // Stop once the frame navigates away — further getResponseBody
+            // attempts cannot restore the producing document's buffer, and the
+            // public API maps that to NavigatedAway.
             for (int attempt = 0; attempt < 30; attempt++)
             {
+                if (WKRequest.HasNavigatedAway())
+                {
+                    return Array.Empty<byte>();
+                }
+
                 try
                 {
                     JsonElement? result = await _session.SendAsync("Network.getResponseBody", new { requestId = _requestId }).ConfigureAwait(false);
@@ -330,6 +381,10 @@ namespace PlaywrightNative.WebKit
                 }
                 catch (PlaywrightException)
                 {
+                    if (WKRequest.HasNavigatedAway())
+                    {
+                        return Array.Empty<byte>();
+                    }
                 }
 
                 await Task.Delay(attempt < 5 ? 20 : 40).ConfigureAwait(false);
