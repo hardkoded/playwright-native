@@ -282,8 +282,13 @@ namespace PlaywrightNative.Helpers
                 return false;
             }
 
+            // WebKit/mac client-certificate fixtures use local.playwright while
+            // APIRequest rewrites the connect host to localhost; treat them as
+            // the same origin for certificate selection.
+            string requestHost = ClientCertificatesProxy.RewriteToLocalhostIfNeeded(request.Host);
+            string configuredHost = ClientCertificatesProxy.RewriteToLocalhostIfNeeded(configured.Host);
             return string.Equals(request.Scheme, configured.Scheme, StringComparison.OrdinalIgnoreCase)
-                && string.Equals(request.Host, configured.Host, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(requestHost, configuredHost, StringComparison.OrdinalIgnoreCase)
                 && EffectivePort(request) == EffectivePort(configured);
         }
 

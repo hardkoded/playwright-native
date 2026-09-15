@@ -1034,14 +1034,20 @@ namespace PlaywrightNative.Helpers
             SslStream tls = new(browser, leaveInnerStreamOpen: false);
             try
             {
+                // Origin handshake already failed — mirror upstream's error path
+                // (ALPN http/1.1 only). Pin TLS 1.2|1.3 so AuthenticateAsServer
+                // accepts a TLS 1.2-only ClientHello from WebKit on macOS
+                // (BrowserShouldNotHangOnTlsErrorsDuringTls12Handshake).
+#pragma warning disable CA5398
                 SslServerAuthenticationOptions options = new()
                 {
                     ServerCertificate = _dummyCert,
                     ClientCertificateRequired = false,
                     CertificateRevocationCheckMode = X509RevocationMode.NoCheck,
-                    EnabledSslProtocols = SslProtocols.None,
+                    EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13,
                     ApplicationProtocols = new List<SslApplicationProtocol> { SslApplicationProtocol.Http11 },
                 };
+#pragma warning restore CA5398
 #pragma warning disable CA5359
                 options.RemoteCertificateValidationCallback = (_, _, _, _) => true;
 #pragma warning restore CA5359
@@ -1101,7 +1107,26 @@ namespace PlaywrightNative.Helpers
                 => _inner.FlushAsync(cancellationToken);
 
             public override int Read(byte[] buffer, int offset, int count)
-                => throw new NotSupportedException();
+            {
+                // SslStream.AuthenticateAsServer may read synchronously while
+                // completing a TLS 1.2 error-page handshake; the ClientHello
+                // prefix must still be replayed.
+                if (_prefix != null && _offset < _prefix.Length)
+                {
+                    int remaining = _prefix.Length - _offset;
+                    int take = Math.Min(remaining, count);
+                    Buffer.BlockCopy(_prefix, _offset, buffer, offset, take);
+                    _offset += take;
+                    if (_offset >= _prefix.Length)
+                    {
+                        _prefix = null;
+                    }
+
+                    return take;
+                }
+
+                return _inner.Read(buffer, offset, count);
+            }
 
             public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
             {
