@@ -266,6 +266,7 @@ namespace PlaywrightNative.Firefox
                 return;
             }
 
+            APIRequestContext.AbortFor(this);
             await HarRecorder.FlushAsync(this).ConfigureAwait(false);
             await VideoRecorder.FlushAsync(this).ConfigureAwait(false);
             _closed = true;

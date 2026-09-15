@@ -771,6 +771,7 @@ namespace PlaywrightNative.WebKit
             }
 
             _closeReason = reason;
+            APIRequestContext.AbortFor(this);
 
             // Flush HAR before stamping close reasons onto pages/sessions so
             // page-body fallbacks and getResponseBody can still run under load.
@@ -849,6 +850,7 @@ namespace PlaywrightNative.WebKit
             }
 
             _closed = true;
+            APIRequestContext.AbortFor(this);
             Close?.Invoke(this, this);
         }
 

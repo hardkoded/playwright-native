@@ -46,6 +46,11 @@ namespace PlaywrightNative.Helpers
         private readonly ITracing _tracing;
         private readonly List<IAPIResponse> _responses = new();
         private readonly CancellationTokenSource _lifetime = new CancellationTokenSource();
+        private readonly TaskCompletionSource<object> _abortGate =
+            new TaskCompletionSource<object>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        private readonly object _clientGate = new object();
+        private readonly List<HttpClient> _activeClients = new List<HttpClient>();
         private bool _disposed;
         private string _closeReason;
         private string _cachedUserAgent;
@@ -225,102 +230,114 @@ namespace PlaywrightNative.Helpers
                     uri.Host,
                     tlsCapture,
                     captureRawHeaders: true);
-
-                (HttpResponseMessage response, string finalUrl, byte[] body) = await SendWithRetriesAsync(
-                    client,
-                    uri,
-                    url,
-                    verb,
-                    payload,
-                    dataBytes,
-                    contentType,
-                    form,
-                    multipart,
-                    contextHeaders,
-                    headers,
-                    redirectLimit,
-                    maxRetries,
-                    timeoutMs,
-                    timing,
-                    tlsCapture).ConfigureAwait(false);
-
-                using (response)
+                RegisterClient(client);
+                try
                 {
-                    if (_disposed || _lifetime.IsCancellationRequested)
+                    if (IsAborted())
                     {
                         throw DisposedException(inFlight: true);
                     }
 
-                    timing.MarkResponseEnd();
-                    IReadOnlyList<NameValueEntry> rawHeaders = tlsCapture.RawHeaders.Count > 0
-                        ? tlsCapture.RawHeaders
-                        : ReadRawHeaders(response);
-                    IReadOnlyDictionary<string, string> responseHeaders = ToHeaderMap(rawHeaders);
-                    if (_context != null)
-                    {
-                        await IngestSetCookiesAsync(_context, finalUrl ?? url, response).ConfigureAwait(false);
-                    }
-                    else
-                    {
-                        IngestStandaloneSetCookies(finalUrl ?? url, response);
-                    }
+                    (HttpResponseMessage response, string finalUrl, byte[] body) = await SendWithRetriesAsync(
+                        client,
+                        uri,
+                        url,
+                        verb,
+                        payload,
+                        dataBytes,
+                        contentType,
+                        form,
+                        multipart,
+                        contextHeaders,
+                        headers,
+                        redirectLimit,
+                        maxRetries,
+                        timeoutMs,
+                        timing,
+                        tlsCapture).ConfigureAwait(false);
 
-                    try
+                    using (response)
                     {
-                        body = RouteFulfill.DecodeEncodedBody(body, responseHeaders);
-                    }
-                    catch (Exception ex) when (ex is not PlaywrightException)
-                    {
-                        throw new PlaywrightException(
-                            "failed to decompress '" + (HeaderMap.Value(responseHeaders, "content-encoding") ?? string.Empty).Trim() + "' encoding",
-                            ex);
-                    }
+                        if (IsAborted())
+                        {
+                            throw DisposedException(inFlight: true);
+                        }
 
-                    // Ownership of the response transfers to the caller.
-                    APIResponse result = new APIResponse(
-                        (int)response.StatusCode,
-                        response.ReasonPhrase ?? string.Empty,
-                        finalUrl ?? response.RequestMessage?.RequestUri?.AbsoluteUri ?? url,
-                        responseHeaders,
-                        body,
-                        tlsCapture.Details,
-                        timing.Result,
-                        rawHeaders);
+                        timing.MarkResponseEnd();
+                        IReadOnlyList<NameValueEntry> rawHeaders = tlsCapture.RawHeaders.Count > 0
+                            ? tlsCapture.RawHeaders
+                            : ReadRawHeaders(response);
+                        IReadOnlyDictionary<string, string> responseHeaders = ToHeaderMap(rawHeaders);
+                        if (_context != null)
+                        {
+                            await IngestSetCookiesAsync(_context, finalUrl ?? url, response).ConfigureAwait(false);
+                        }
+                        else
+                        {
+                            IngestStandaloneSetCookies(finalUrl ?? url, response);
+                        }
 
-                    bool fail = failOnStatusCode ?? _standalone?.FailOnStatusCode ?? false;
-                    if (fail && !result.Ok)
-                    {
-                        string bodyText = Encoding.UTF8.GetString(body ?? Array.Empty<byte>());
-                        await result.DisposeAsync().ConfigureAwait(false);
-                        throw new PlaywrightException(
-                            result.Status + " " + result.StatusText + "\nResponse text:\n" + bodyText);
+                        try
+                        {
+                            body = RouteFulfill.DecodeEncodedBody(body, responseHeaders);
+                        }
+                        catch (Exception ex) when (ex is not PlaywrightException)
+                        {
+                            throw new PlaywrightException(
+                                "failed to decompress '" + (HeaderMap.Value(responseHeaders, "content-encoding") ?? string.Empty).Trim() + "' encoding",
+                                ex);
+                        }
+
+                        // Ownership of the response transfers to the caller.
+                        APIResponse result = new APIResponse(
+                            (int)response.StatusCode,
+                            response.ReasonPhrase ?? string.Empty,
+                            finalUrl ?? response.RequestMessage?.RequestUri?.AbsoluteUri ?? url,
+                            responseHeaders,
+                            body,
+                            tlsCapture.Details,
+                            timing.Result,
+                            rawHeaders);
+
+                        bool fail = failOnStatusCode ?? _standalone?.FailOnStatusCode ?? false;
+                        if (fail && !result.Ok)
+                        {
+                            string bodyText = Encoding.UTF8.GetString(body ?? Array.Empty<byte>());
+                            await result.DisposeAsync().ConfigureAwait(false);
+                            throw new PlaywrightException(
+                                result.Status + " " + result.StatusText + "\nResponse text:\n" + bodyText);
+                        }
+
+                        lock (_responses)
+                        {
+                            _responses.Add(result);
+                        }
+
+                        OfficialTraceSession apiTrace = (_tracing as EmptyTracing)?.OwnOfficialSession();
+                        if (apiTrace != null && apiTrace.IsRecording)
+                        {
+                            string pathAndQuery = uri.PathAndQuery;
+                            apiTrace.RecordAction(
+                                verb.ToUpperInvariant() + " " + pathAndQuery,
+                                "APIRequestContext",
+                                "fetch");
+                            byte[] postBytes = dataBytes ?? (payload != null ? Encoding.UTF8.GetBytes(payload) : null);
+                            apiTrace.AddApiResource(
+                                verb.ToUpperInvariant(),
+                                finalUrl ?? url,
+                                result.Status,
+                                result.StatusText,
+                                result.Headers,
+                                postBytes,
+                                body);
+                        }
+
+                        return result;
                     }
-
-                    lock (_responses)
-                    {
-                        _responses.Add(result);
-                    }
-
-                    OfficialTraceSession apiTrace = (_tracing as EmptyTracing)?.OwnOfficialSession();
-                    if (apiTrace != null && apiTrace.IsRecording)
-                    {
-                        string pathAndQuery = uri.PathAndQuery;
-                        apiTrace.RecordAction(
-                            verb.ToUpperInvariant() + " " + pathAndQuery,
-                            "APIRequestContext",
-                            "fetch");
-                        byte[] postBytes = dataBytes ?? (payload != null ? Encoding.UTF8.GetBytes(payload) : null);
-                        apiTrace.AddApiResource(
-                            verb.ToUpperInvariant(),
-                            finalUrl ?? url,
-                            result.Status,
-                            result.StatusText,
-                            result.Headers,
-                            postBytes,
-                            body);
-                    }
-
-                    return result;
+                }
+                finally
+                {
+                    UnregisterClient(client);
                 }
             }
             finally
@@ -362,10 +379,13 @@ namespace PlaywrightNative.Helpers
         {
             if (_disposed)
             {
+                // Still tear down clients if a prior MarkOwnerClosed left them.
+                AbortActiveClients();
                 return;
             }
 
             _disposed = true;
+            _abortGate.TrySetResult(null);
             if (!_lifetime.IsCancellationRequested)
             {
                 await _lifetime.CancelAsync().ConfigureAwait(false);
@@ -375,6 +395,8 @@ namespace PlaywrightNative.Helpers
             {
                 _context.Close -= OnOwningContextClosed;
             }
+
+            AbortActiveClients();
 
             IAPIResponse[] copy;
             lock (_responses)
@@ -414,6 +436,28 @@ namespace PlaywrightNative.Helpers
             }
 
             return request;
+        }
+
+        /// <summary>
+        /// Aborts in-flight <see cref="IBrowserContext.APIRequest"/> fetches for
+        /// <paramref name="context"/> as soon as the context begins closing.
+        /// Upstream destroys fetch agents on <c>BrowserContext.Events.Close</c>; we
+        /// also abort at the start of <c>CloseAsync</c> so mid-fetch work does not
+        /// wait for HAR/video flush before failing.
+        /// </summary>
+        /// <param name="context">The browser context being closed.</param>
+        internal static void AbortFor(IBrowserContext context)
+        {
+            if (context == null)
+            {
+                return;
+            }
+
+            if (_contexts.TryGetValue(context, out APIRequestContext request))
+            {
+                request.MarkOwnerClosed();
+                request.DisposeResponses();
+            }
         }
 
         /// <summary>
@@ -1797,6 +1841,12 @@ namespace PlaywrightNative.Helpers
                         headers).ConfigureAwait(false);
                     try
                     {
+                        if (IsAborted())
+                        {
+                            request.Dispose();
+                            throw DisposedException(inFlight: true);
+                        }
+
                         return await SendFollowingRedirectsAsync(
                             client,
                             request,
@@ -1814,14 +1864,16 @@ namespace PlaywrightNative.Helpers
                             tlsCapture,
                             token).ConfigureAwait(false);
                     }
+                    catch (Exception) when (IsAborted())
+                    {
+                        // Upstream rejects in-flight fetches on Dispose before classifying
+                        // transport errors (Windows often surfaces cancel as reset/OCE).
+                        request.Dispose();
+                        throw DisposedException(inFlight: true);
+                    }
                     catch (OperationCanceledException ex)
                     {
                         request.Dispose();
-                        if (_disposed || _lifetime.IsCancellationRequested)
-                        {
-                            throw DisposedException(inFlight: true);
-                        }
-
                         throw new PlaywrightException(
                             "apiRequestContext." + MethodLabel(verb) + ": Timeout " + timeoutMs + "ms exceeded",
                             ex);
@@ -2159,10 +2211,25 @@ namespace PlaywrightNative.Helpers
                         // Buffer the full response in one shot. ResponseHeadersRead + a
                         // later ReadAsByteArrayAsync races HeaderCaptureStream disposal on
                         // some CI hosts and surfaces as HttpIOException ResponseEnded.
-                        response = await client.SendAsync(
+                        // Race SendAsync against dispose: upstream rejects on Dispose even
+                        // when the HTTP stack is slow to honor CancellationToken (Windows).
+                        Task<HttpResponseMessage> sendTask = client.SendAsync(
                             current,
                             HttpCompletionOption.ResponseContentRead,
-                            token).ConfigureAwait(false);
+                            token);
+                        Task finished = await Task.WhenAny(sendTask, _abortGate.Task).ConfigureAwait(false);
+                        if (finished != sendTask || IsAborted())
+                        {
+                            // AbortActiveClients disposes the HttpClient; do not sync-block
+                            // on sendTask.Result (VSTHRD103) while racing dispose.
+                            throw DisposedException(inFlight: true);
+                        }
+
+                        response = await sendTask.ConfigureAwait(false);
+                    }
+                    catch (Exception) when (IsAborted())
+                    {
+                        throw DisposedException(inFlight: true);
                     }
                     catch (Exception ex) when (IsConnectionReset(ex) || IsPrematureResponseEnd(ex))
                     {
@@ -2174,7 +2241,7 @@ namespace PlaywrightNative.Helpers
                         throw;
                     }
 
-                    if (_disposed || _lifetime.IsCancellationRequested)
+                    if (IsAborted())
                     {
                         response.Dispose();
                         throw DisposedException(inFlight: true);
@@ -2495,6 +2562,7 @@ namespace PlaywrightNative.Helpers
             }
 
             _disposed = true;
+            _abortGate.TrySetResult(null);
             try
             {
                 if (!_lifetime.IsCancellationRequested)
@@ -2507,6 +2575,10 @@ namespace PlaywrightNative.Helpers
             catch (ObjectDisposedException)
             {
             }
+
+            // Upstream agent.destroy(): tear down active sockets so hanging
+            // SendAsync fails promptly instead of racing CancellationToken.
+            AbortActiveClients();
         }
 
         private void DisposeResponses()
@@ -2524,6 +2596,84 @@ namespace PlaywrightNative.Helpers
             }
         }
 
+        private void RegisterClient(HttpClient client)
+        {
+            if (client == null)
+            {
+                return;
+            }
+
+            lock (_clientGate)
+            {
+                if (_disposed)
+                {
+                    client.Dispose();
+                    return;
+                }
+
+                _activeClients.Add(client);
+            }
+        }
+
+        private void UnregisterClient(HttpClient client)
+        {
+            if (client == null)
+            {
+                return;
+            }
+
+            lock (_clientGate)
+            {
+                _activeClients.Remove(client);
+            }
+        }
+
+        private void AbortActiveClients()
+        {
+            HttpClient[] copy;
+            lock (_clientGate)
+            {
+                copy = _activeClients.ToArray();
+                _activeClients.Clear();
+            }
+
+            foreach (HttpClient client in copy)
+            {
+                try
+                {
+                    client.CancelPendingRequests();
+                }
+                catch (ObjectDisposedException)
+                {
+                }
+
+                try
+                {
+                    client.Dispose();
+                }
+                catch (ObjectDisposedException)
+                {
+                }
+            }
+        }
+
+        private bool IsAborted()
+        {
+            if (_disposed)
+            {
+                return true;
+            }
+
+            try
+            {
+                return _lifetime.IsCancellationRequested;
+            }
+            catch (ObjectDisposedException)
+            {
+                return true;
+            }
+        }
+
         private async Task<byte[]> ReadBodyAsync(HttpResponseMessage response, CancellationToken token)
         {
             try
@@ -2531,9 +2681,9 @@ namespace PlaywrightNative.Helpers
                 byte[] body = await response.Content.ReadAsByteArrayAsync(token).ConfigureAwait(false);
                 return body;
             }
-            catch (Exception) when (_disposed || _lifetime.IsCancellationRequested)
+            catch (Exception) when (IsAborted())
             {
-                throw DisposedException();
+                throw DisposedException(inFlight: true);
             }
             catch (Exception ex) when (IsConnectionReset(ex) || IsPrematureResponseEnd(ex))
             {

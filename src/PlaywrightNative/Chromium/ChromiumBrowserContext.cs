@@ -426,6 +426,7 @@ namespace PlaywrightNative.Chromium
             }
 
             _closeReason = reason;
+            APIRequestContext.AbortFor(this);
             foreach (IPage page in Pages)
             {
                 if (page is Page instance)
@@ -919,6 +920,7 @@ namespace PlaywrightNative.Chromium
             }
 
             _closed = true;
+            APIRequestContext.AbortFor(this);
             Close?.Invoke(this, this);
         }
 
