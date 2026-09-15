@@ -264,11 +264,18 @@ namespace PlaywrightNative.WebKit
                 // HTTP/2 and hang h2-only hosts (should contain http2 for http2 requests).
                 // Non-HAR contexts keep LocaleHandshakeProxy so page.SetExtraHttpHeaders
                 // can stamp headers onto WebSocket upgrades that ignore Network.setExtraHTTPHeaders.
+                // Do not bypass loopback: WebKit Network interception does not rewrite WS
+                // upgrades, and tests use ws://localhost — <-loopback> left handshakes as en-US.
                 bool forceHandshake = string.IsNullOrEmpty(recordHarPath)
                     || (extraHTTPHeaders != null
                         && extraHTTPHeaders.Any(h => !string.IsNullOrEmpty(h.Key)));
                 LocaleHandshakeProxy handshake = certsProxy == null
-                    ? LocaleHandshakeProxy.TryStart(locale, browserProxy, force: forceHandshake, out browserProxy)
+                    ? LocaleHandshakeProxy.TryStart(
+                        locale,
+                        browserProxy,
+                        force: forceHandshake,
+                        bypassLoopback: false,
+                        out browserProxy)
                     : null;
                 WKBrowserContext context;
                 try

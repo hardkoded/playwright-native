@@ -108,6 +108,31 @@ namespace PlaywrightNative.Helpers
         /// <param name="effectiveProxy">Proxy to pass to createContext.</param>
         /// <returns>The proxy to dispose with the context, or <see langword="null"/>.</returns>
         internal static LocaleHandshakeProxy TryStart(string locale, Proxy userProxy, bool force, out Proxy effectiveProxy)
+            => TryStart(locale, userProxy, force, bypassLoopback: true, out effectiveProxy);
+
+        /// <summary>
+        /// Starts a handshake proxy when <paramref name="locale"/> is set,
+        /// <paramref name="force"/> is <see langword="true"/>, and the caller
+        /// did not already supply a proxy.
+        /// </summary>
+        /// <param name="locale">Context locale, or <see langword="null"/>.</param>
+        /// <param name="userProxy">Caller-supplied proxy, or <see langword="null"/>.</param>
+        /// <param name="force">Start even when no locale is configured.</param>
+        /// <param name="bypassLoopback">
+        /// When <see langword="true"/>, localhost bypasses the proxy (Chromium uses
+        /// Fetch to rewrite loopback WebSocket handshakes). WebKit Network
+        /// interception does not rewrite WebSocket upgrades, so WebKit must pass
+        /// <see langword="false"/> or localhost WS keeps the browser default
+        /// <c>Accept-Language</c>.
+        /// </param>
+        /// <param name="effectiveProxy">Proxy to pass to createContext.</param>
+        /// <returns>The proxy to dispose with the context, or <see langword="null"/>.</returns>
+        internal static LocaleHandshakeProxy TryStart(
+            string locale,
+            Proxy userProxy,
+            bool force,
+            bool bypassLoopback,
+            out Proxy effectiveProxy)
         {
             effectiveProxy = userProxy;
             if (userProxy != null || (string.IsNullOrEmpty(locale) && !force))
@@ -119,7 +144,7 @@ namespace PlaywrightNative.Helpers
             effectiveProxy = new Proxy
             {
                 Server = "http://127.0.0.1:" + handshake.Port.ToString(CultureInfo.InvariantCulture),
-                Bypass = "<-loopback>",
+                Bypass = bypassLoopback ? "<-loopback>" : null,
             };
             return handshake;
         }
