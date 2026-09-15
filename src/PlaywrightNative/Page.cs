@@ -2059,30 +2059,42 @@ namespace PlaywrightNative
 
         private async Task<T> EvaluateSerializedAsync<T>(string expression)
         {
-            try
-            {
-                // Yield so callers can subscribe to page events (waitForEvent)
-                // before Runtime.evaluate is sent — Node's event loop does this
-                // automatically between `page.evaluate(...)` and `await waitForEvent`.
-                await Task.Yield();
-                CRExecutionContext context = await _crPage.WaitForExecutionContextAsync().ConfigureAwait(false);
-                if (EvaluateSerialization.CanWrapExpression(expression))
-                {
-                    JsonElement? wrapped = await context
-                        .EvaluateAsync(EvaluateSerialization.WithSerializedResult(expression))
-                        .ConfigureAwait(false);
-                    return EvaluateSerialization.ParseRemote<T>(wrapped);
-                }
+            // Yield so callers can subscribe to page events (waitForEvent)
+            // before Runtime.evaluate is sent — Node's event loop does this
+            // automatically between `page.evaluate(...)` and `await waitForEvent`.
+            await Task.Yield();
 
-                JsonElement? remote = await context.EvaluateHandleAsync(expression).ConfigureAwait(false);
-                return await EvaluateSerialization.MaterializeAsync<T>(
-                    remote,
-                    id => context.EvaluateFunctionOnHandleAsync<JsonElement>(id, EvaluateSerialization.SerializeAwaitedJs),
-                    id => context.ReleaseHandleAsync(id)).ConfigureAwait(false);
-            }
-            catch (PlaywrightException ex)
+            const int maxAttempts = 20;
+            for (int attempt = 0; ; attempt++)
             {
-                throw EvaluateSerialization.RewriteException(ex);
+                CRExecutionContext context = null;
+                try
+                {
+                    context = await _crPage.WaitForExecutionContextAsync().ConfigureAwait(false);
+                    if (EvaluateSerialization.CanWrapExpression(expression))
+                    {
+                        JsonElement? wrapped = await context
+                            .EvaluateAsync(EvaluateSerialization.WithSerializedResult(expression))
+                            .ConfigureAwait(false);
+                        return EvaluateSerialization.ParseRemote<T>(wrapped);
+                    }
+
+                    JsonElement? remote = await context.EvaluateHandleAsync(expression).ConfigureAwait(false);
+                    return await EvaluateSerialization.MaterializeAsync<T>(
+                        remote,
+                        id => context.EvaluateFunctionOnHandleAsync<JsonElement>(id, EvaluateSerialization.SerializeAwaitedJs),
+                        id => context.ReleaseHandleAsync(id)).ConfigureAwait(false);
+                }
+                catch (PlaywrightException ex) when (
+                    DestroyedContext.IsDestroyedContext(ex) && attempt < maxAttempts - 1)
+                {
+                    _crPage.InvalidateExecutionContext(context);
+                    await Task.Delay(50).ConfigureAwait(false);
+                }
+                catch (PlaywrightException ex)
+                {
+                    throw EvaluateSerialization.RewriteException(ex);
+                }
             }
         }
 

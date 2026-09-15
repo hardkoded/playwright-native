@@ -78,6 +78,7 @@ namespace PlaywrightNative.WebKit
         private readonly ConcurrentDictionary<string, PageDownload> _downloads = new(StringComparer.Ordinal);
         private readonly ConcurrentDictionary<string, WKWorker> _workers = new(StringComparer.Ordinal);
         private readonly ConcurrentDictionary<WKWorker, WebKitWorker> _directWorkers = new();
+        private readonly ConcurrentDictionary<string, WKFrameSession> _frameSessions = new(StringComparer.Ordinal);
         private readonly PageConsoleLog _consoleLog = new();
         private readonly PageEventLog<string> _pageErrors = new();
         private readonly PageEventLog<IRequest> _requests = new(NetworkRequestEvents.RecentRequestLimit);
@@ -6274,14 +6275,21 @@ namespace PlaywrightNative.WebKit
 
             // WebKit reports both page and frame targets under the page proxy. Only page
             // targets drive the main/provisional session. Frame targets (e.g. the
-            // "frame-*" target the macOS-14 build emits) must be ignored here — falling
-            // through to the page path would dispose the live main session and orphan any
-            // in-flight command, producing a 30s hang. Mirrors upstream wkPage._onTargetCreated,
-            // which returns early for targetInfo.type === 'frame'. Frame sessions are not
-            // yet modelled in this port, so we simply skip them.
+            // "frame-*" target the macOS-14 build emits) must not fall through to the page
+            // path — that would dispose the live main session and orphan in-flight commands.
+            // On enableFrameSessions builds, adopt them as Console-only WKFrameSession
+            // (upstream wkPage._onTargetCreated + WKFrame).
             if (string.Equals(info.Type, "frame", StringComparison.Ordinal))
             {
-                _logger?.LogDebug("Ignoring frame target {TargetId} reported under the page proxy", targetId);
+                if (EnableFrameSessions)
+                {
+                    AdoptFrameSession(targetId);
+                }
+                else
+                {
+                    _logger?.LogDebug("Ignoring frame target {TargetId} reported under the page proxy", targetId);
+                }
+
                 return;
             }
 
@@ -6457,6 +6465,95 @@ namespace PlaywrightNative.WebKit
 
             _workers.Clear();
             _directWorkers.Clear();
+            ClearFrameSessions();
+        }
+
+        private void ClearFrameSessions()
+        {
+            foreach (System.Collections.Generic.KeyValuePair<string, WKFrameSession> entry in _frameSessions)
+            {
+                entry.Value.Dispose();
+            }
+
+            _frameSessions.Clear();
+        }
+
+        private void AdoptFrameSession(string targetId)
+        {
+            if (string.IsNullOrEmpty(targetId) || _frameSessions.ContainsKey(targetId))
+            {
+                return;
+            }
+
+            WKTargetSession session = new(_session, _browser.Connection, targetId);
+            WKFrameSession frameSession = new(
+                session,
+                _logger,
+                OnConsoleMessageAdded,
+                OnConsoleRepeatCountUpdated);
+            if (!_frameSessions.TryAdd(targetId, frameSession))
+            {
+                frameSession.Dispose();
+                return;
+            }
+
+            // Upstream awaits initialize and swallows errors; frame targets can appear
+            // before the page session finishes getResourceTree.
+            _ = frameSession.InitializeAsync();
+        }
+
+        private async Task InitializeFrameSessionsAsync(JsonElement? tree)
+        {
+            if (!tree.HasValue
+                || !tree.Value.TryGetProperty("frameTree", out JsonElement frameTree)
+                || frameTree.ValueKind != JsonValueKind.Object)
+            {
+                return;
+            }
+
+            List<Task> pending = new();
+            CollectFrameSessionInitializers(frameTree, pending);
+            if (pending.Count > 0)
+            {
+                await Task.WhenAll(pending).ConfigureAwait(false);
+            }
+        }
+
+        private void CollectFrameSessionInitializers(JsonElement frameTree, List<Task> pending)
+        {
+            if (frameTree.TryGetProperty("frame", out JsonElement frame)
+                && frame.ValueKind == JsonValueKind.Object
+                && frame.TryGetProperty("id", out JsonElement idEl)
+                && idEl.ValueKind == JsonValueKind.String)
+            {
+                string frameId = idEl.GetString();
+                if (!string.IsNullOrEmpty(frameId))
+                {
+                    // Upstream looks up sessions as `frame-${frame.id}`.
+                    string targetId = "frame-" + frameId;
+                    if (!_frameSessions.ContainsKey(targetId))
+                    {
+                        AdoptFrameSession(targetId);
+                    }
+
+                    if (_frameSessions.TryGetValue(targetId, out WKFrameSession session))
+                    {
+                        pending.Add(session.InitializeAsync());
+                    }
+                }
+            }
+
+            if (frameTree.TryGetProperty("childFrames", out JsonElement children)
+                && children.ValueKind == JsonValueKind.Array)
+            {
+                foreach (JsonElement child in children.EnumerateArray())
+                {
+                    if (child.ValueKind == JsonValueKind.Object)
+                    {
+                        CollectFrameSessionInitializers(child, pending);
+                    }
+                }
+            }
         }
 
         private Dictionary<string, string> WorkerExtraHeaders()
@@ -7055,9 +7152,12 @@ namespace PlaywrightNative.WebKit
                 // build) the Console domain lives on the per-frame sessions, not the page
                 // session — sending Console.enable here yields "'Console' domain was not
                 // found". Upstream wkPage gates Console.enable behind !enableFrameSessions
-                // for exactly this reason; mirror that. (We don't model frame sessions yet,
-                // so Console events are simply unavailable on those builds for now.)
-                if (!EnableFrameSessions)
+                // and initializes WKFrame Console instead.
+                if (EnableFrameSessions)
+                {
+                    await InitializeFrameSessionsAsync(tree).ConfigureAwait(false);
+                }
+                else
                 {
                     await target.SendAsync("Console.enable").ConfigureAwait(false);
                 }
@@ -7404,6 +7504,12 @@ namespace PlaywrightNative.WebKit
                 return;
             }
 
+            if (_frameSessions.TryGetValue(targetId, out WKFrameSession frameSession))
+            {
+                frameSession.Session.DispatchInboundMessage(rawJson);
+                return;
+            }
+
             _logger?.LogDebug("Dropping dispatchMessageFromTarget for unknown target {TargetId}", targetId);
         }
 
@@ -7507,6 +7613,12 @@ namespace PlaywrightNative.WebKit
                 return;
             }
 
+            if (!string.IsNullOrEmpty(targetId) && _frameSessions.TryRemove(targetId, out WKFrameSession frameSession))
+            {
+                frameSession.Dispose();
+                return;
+            }
+
             if (_provisionalSession != null && _provisionalSession.TargetId == targetId)
             {
                 _provisionalSession.MessageReceived -= OnInnerMessage;
@@ -7576,14 +7688,10 @@ namespace PlaywrightNative.WebKit
                     OnConsoleRepeatCountUpdated(parameters);
                     break;
                 case "Runtime.consoleAPICalled":
-                    // macOS-14 WebKit 2251 uses per-frame Console sessions, so
-                    // Console.enable is not sent on the page target. Runtime is
-                    // enabled there and still delivers consoleAPICalled.
-                    if (EnableFrameSessions)
-                    {
-                        OnConsoleAPICalled(parameters);
-                    }
-
+                    // Frame-session builds deliver console via Console.messageAdded on
+                    // WKFrameSession (upstream). Non-frame-session builds use Console on
+                    // the page target. Do not also raise from Runtime.consoleAPICalled —
+                    // that would duplicate messages once frame Console is enabled.
                     break;
                 case "Runtime.exceptionThrown":
                     OnExceptionThrown(parameters);
@@ -7818,29 +7926,6 @@ namespace PlaywrightNative.WebKit
         }
 
         private void EmitDialogClosed(IDialog dialog) => DialogClosed?.Invoke(this, dialog);
-
-        private void OnConsoleAPICalled(JsonElement? parameters)
-        {
-            if (!parameters.HasValue)
-            {
-                return;
-            }
-
-            JsonElement payload = parameters.Value;
-            string type = payload.TryGetProperty("type", out JsonElement typeEl) ? typeEl.GetString() : "log";
-            JsonElement? argsElement = payload.TryGetProperty("args", out JsonElement argsEl) ? argsEl : (JsonElement?)null;
-            string text = argsElement.HasValue
-                ? RemoteObject.JoinConsoleArgs(argsElement.Value)
-                : string.Empty;
-            string location = RemoteObject.FormatStackLocation(payload);
-            IReadOnlyCollection<IJSHandle> args = ConsoleArgs.Wrap(
-                argsElement,
-                remote => _executionContext == null ? null : WrapRemoteObject(_executionContext, remote));
-            double timestamp = payload.TryGetProperty("timestamp", out JsonElement tsEl) && tsEl.TryGetDouble(out double ts)
-                ? ts
-                : 0;
-            RaiseConsole(new ConsoleMessage(type, text, location, CompatCollections.AsList(args), this, timestamp));
-        }
 
         private void RaiseConsole(IConsoleMessage message)
         {

@@ -1013,6 +1013,24 @@ namespace PlaywrightNative.Chromium
         }
 
         /// <summary>
+        /// Clears <paramref name="context"/> from the main frame when it is the
+        /// current main-world context so the next wait observes a fresh one.
+        /// </summary>
+        /// <param name="context">The destroyed context, or <see langword="null"/>.</param>
+        internal void InvalidateExecutionContext(CRExecutionContext context)
+        {
+            if (context == null)
+            {
+                return;
+            }
+
+            if (MainFrame != null && ReferenceEquals(MainFrame.ExecutionContext, context))
+            {
+                MainFrame.ExecutionContext = null;
+            }
+        }
+
+        /// <summary>
         /// Waits until the main frame has an execution context available.
         /// </summary>
         /// <param name="timeout">Maximum time to wait in milliseconds.</param>
@@ -3564,6 +3582,9 @@ namespace PlaywrightNative.Chromium
         /// <summary>
         /// Official popup <c>reportAsNew</c>: wait for init, then for a
         /// non-blank URL so <c>target=_blank</c> reports the navigated page.
+        /// Chromium noopener + URL attaches with an empty URL and navigates
+        /// afterward; do not emit until a live main-world context exists for
+        /// that document (otherwise evaluate races <c>executionContextDestroyed</c>).
         /// </summary>
         /// <returns>A task that completes when the popup can be reported.</returns>
         internal async Task PrepareForPopupReportAsync()
@@ -3584,16 +3605,30 @@ namespace PlaywrightNative.Chromium
                 return;
             }
 
-            if (!PopupOpenedHelper.IsBlankUrl(_frameManager.MainFrame?.Url))
+            if (PopupOpenedHelper.IsBlankUrl(_frameManager.MainFrame?.Url))
+            {
+                await Task.WhenAny(
+                        _firstNonBlankNavigationTcs.Task,
+                        _closedTcs.Task,
+                        Task.Delay(5_000))
+                    .ConfigureAwait(false);
+            }
+
+            if (_closedTcs.Task.IsCompleted)
             {
                 return;
             }
 
-            await Task.WhenAny(
-                    _firstNonBlankNavigationTcs.Task,
-                    _closedTcs.Task,
-                    Task.Delay(5_000))
-                .ConfigureAwait(false);
+            try
+            {
+                await WaitForExecutionContextAsync(5_000).ConfigureAwait(false);
+            }
+#pragma warning disable RCS1075
+            catch (Exception)
+#pragma warning restore RCS1075
+            {
+                // Closed or never got a context — still report (closed popups emit).
+            }
         }
 
         /// <summary>
@@ -5121,7 +5156,12 @@ namespace PlaywrightNative.Chromium
                 return;
             }
 
-            await Task.WhenAny(_firstNonInitialNavigationTcs.Task, Task.Delay(500)).ConfigureAwait(false);
+            // Popups (especially noopener + URL) resume then navigate; under
+            // load the first commit can land after 500ms. Wait longer before
+            // synthesizing about:blank so reportAsNew does not race the real
+            // document's execution context swap.
+            int waitMs = Opener != null ? 5_000 : 500;
+            await Task.WhenAny(_firstNonInitialNavigationTcs.Task, Task.Delay(waitMs)).ConfigureAwait(false);
             if (_firstNonInitialNavigationTcs.Task.IsCompleted)
             {
                 return;
