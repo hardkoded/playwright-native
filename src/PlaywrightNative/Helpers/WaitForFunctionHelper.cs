@@ -251,13 +251,15 @@ namespace PlaywrightNative.Helpers
             where THandle : class
         {
             ValidatePollingInterval(pollingInterval);
-            _ = rafAsync;
             float? resolvedTimeout = timeout ?? _ambientTimeout.Value;
             int timeoutMs = TimeoutSettings.TimeoutMs(resolvedTimeout);
             Stopwatch sw = Stopwatch.StartNew();
             Task timeoutTask = timeoutMs == Timeout.Infinite
                 ? new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously).Task
                 : Task.Delay(timeoutMs);
+            Func<Task> delayAsync = pollingInterval.HasValue && pollingInterval.Value > 0
+                ? () => Task.Delay((int)pollingInterval.Value)
+                : rafAsync ?? (() => Task.Delay(16));
 
             while (true)
             {
@@ -310,9 +312,7 @@ namespace PlaywrightNative.Helpers
 
                 ThrowIfTimedOut(sw, timeoutMs, timeoutTask, apiName);
 
-                Task delay = pollingInterval.HasValue && pollingInterval.Value > 0
-                    ? Task.Delay((int)pollingInterval.Value)
-                    : Task.Delay(16);
+                Task delay = delayAsync();
                 if (signal != null)
                 {
                     await Task.WhenAny(delay, signal.WhenAbortedAsync(), timeoutTask).ConfigureAwait(false);
