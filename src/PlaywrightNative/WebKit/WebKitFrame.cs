@@ -373,10 +373,11 @@ namespace PlaywrightNative.WebKit
                     () => IsDetached);
             }
 
+            // Sync !!() poll — same WebKit awaitPromise caveat as WKPage.WaitForFunctionAsync.
             return WaitForFunctionHelper.WaitAsync<IJSHandle>(
                 async wrapped =>
                 {
-                    bool truthy = await EvaluateInOwnFrameAsync<bool>("(async () => !!(await Promise.resolve(" + wrapped + ")))()", null).ConfigureAwait(false);
+                    bool truthy = await EvaluateInOwnFrameAsync<bool>("!!(" + wrapped + ")", null).ConfigureAwait(false);
                     return truthy ? await EvaluateHandleAsync(wrapped).ConfigureAwait(false) : null;
                 },
                 expression,

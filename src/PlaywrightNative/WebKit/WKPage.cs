@@ -1832,10 +1832,15 @@ namespace PlaywrightNative.WebKit
         /// <inheritdoc/>
         public Task<IJSHandle> WaitForFunctionAsync(string expression, object arg = default, float? pollingInterval = default, float? timeout = default)
         {
+            // Poll with a sync !!() check. WebKit Runtime.evaluate does not reliably
+            // honor awaitPromise, so an async IIFE truthiness probe can hang until the
+            // session command timeout (and blow past page.ariaSnapshot timeouts on macOS).
+            // BuildPredicateExpression already boxes sync predicates as { v } / null.
+            float? resolvedTimeout = timeout ?? DefaultTimeout;
             return WaitForFunctionHelper.WaitAsync(
                 async wrapped =>
                 {
-                    bool truthy = await EvaluateExpressionAsync<bool>("(async () => !!(await Promise.resolve(" + wrapped + ")))()").ConfigureAwait(false);
+                    bool truthy = await EvaluateExpressionAsync<bool>("!!(" + wrapped + ")").ConfigureAwait(false);
                     if (!truthy)
                     {
                         return null;
@@ -1848,7 +1853,7 @@ namespace PlaywrightNative.WebKit
                 },
                 expression,
                 pollingInterval,
-                timeout,
+                resolvedTimeout,
                 () => EvaluateExpressionAsync("new Promise(r => requestAnimationFrame(() => r(true)))"));
         }
 
@@ -2327,6 +2332,12 @@ namespace PlaywrightNative.WebKit
             }
             catch (PlaywrightException)
             {
+                return (null, null);
+            }
+            catch (TimeoutException)
+            {
+                // Unloaded lazy iframes can stall DOM.describeNode until the session
+                // command timeout; treat as "no content frame" for ContentFrameAsync.
                 return (null, null);
             }
 
