@@ -8393,39 +8393,43 @@ namespace PlaywrightNative.WebKit
                 _pendingLoadTcs = null;
             }
 
-            // Fire the public event first so user handlers run before the awaiter
-            // resuming on TrySetResult sees the task complete. Otherwise, the threadpool
-            // continuation can resume the test's await before Load.Invoke finishes on
-            // the transport thread — racing the assertion. Skip when readyState seed
-            // already raised Load for this document.
+            // Capture before offload: readyState seed may have already raised Load.
             bool alreadyRecorded;
             lock (_lifecycleEvents)
             {
                 alreadyRecorded = _lifecycleEvents.Contains("load");
             }
 
-            if (!alreadyRecorded)
+            // Raise public Load + record lifecycle off the transport reader thread.
+            // OnMessage dispatches synchronously; running Load.Invoke (and any
+            // waitForEvent / user handlers) on that thread deadlocks the pipe when a
+            // handler does sync-over-async protocol I/O (macOS WebKit CI: mass 30s
+            // timeouts). Keep raise-before-record ordering inside the worker.
+            ThreadPool.QueueUserWorkItem(_ =>
             {
-                Load?.Invoke(this, this);
-            }
+                if (!alreadyRecorded)
+                {
+                    Load?.Invoke(this, this);
+                }
 
-            RecordLifecycle("load");
+                RecordLifecycle("load");
 
-            // Drop stale pending-navigation markers once the main frame has loaded so
-            // later same-URL navigations (reload, iframe) are not treated as duplicates
-            // of the completed goto.
-            lock (_navigationLock)
-            {
-                _pendingNavigationUrl = null;
-                _emittedPendingNavigationRequest = false;
-                _emittedPendingNavigationFinished = false;
-                _firstPendingNavigationRequest = null;
-                _pendingNavigationCommitted = false;
-                _pendingRedirectTarget = null;
-                _pendingRedirectSource = null;
-            }
+                // Drop stale pending-navigation markers once the main frame has loaded so
+                // later same-URL navigations (reload, iframe) are not treated as duplicates
+                // of the completed goto.
+                lock (_navigationLock)
+                {
+                    _pendingNavigationUrl = null;
+                    _emittedPendingNavigationRequest = false;
+                    _emittedPendingNavigationFinished = false;
+                    _firstPendingNavigationRequest = null;
+                    _pendingNavigationCommitted = false;
+                    _pendingRedirectTarget = null;
+                    _pendingRedirectSource = null;
+                }
 
-            tcs?.TrySetResult(true);
+                tcs?.TrySetResult(true);
+            });
         }
 
         private void OnDomContentEventFired()
@@ -8443,13 +8447,16 @@ namespace PlaywrightNative.WebKit
                 alreadyRecorded = _lifecycleEvents.Contains("DOMContentLoaded");
             }
 
-            if (!alreadyRecorded)
+            ThreadPool.QueueUserWorkItem(_ =>
             {
-                DOMContentLoaded?.Invoke(this, this);
-            }
+                if (!alreadyRecorded)
+                {
+                    DOMContentLoaded?.Invoke(this, this);
+                }
 
-            RecordLifecycle("DOMContentLoaded");
-            tcs?.TrySetResult(true);
+                RecordLifecycle("DOMContentLoaded");
+                tcs?.TrySetResult(true);
+            });
         }
 
         private void OnExecutionContextCreated(JsonElement? parameters)
