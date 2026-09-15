@@ -275,10 +275,16 @@ namespace PlaywrightNative.WebKit
             responseHeaders.Remove("content-encoding");
             responseHeaders.Remove("transfer-encoding");
 
-            // Upstream wkInterceptableRequest.fulfill does not invent Content-Length.
-            // WebKit already receives the body via |content|; auto-adding
-            // content-length: 0 makes default fulfills expose two headers while
-            // page-request-intercept expects only content-type: text/plain.
+            // Upstream wkInterceptableRequest.fulfill does not invent Content-Length
+            // for empty default fulfills (page-request-intercept expects only
+            // content-type). Non-empty bodies still need content-length so
+            // response.allHeaders() matches route.fulfill({ body }) on macOS/Linux.
+            if (rawBody.Length > 0
+                && !responseHeaders.ContainsKey("content-length"))
+            {
+                responseHeaders["content-length"] = rawBody.Length.ToString(CultureInfo.InvariantCulture);
+            }
+
             string mimeType = MimeTypeFor(contentType, responseHeaders);
             string statusText = HttpStatusText.For(statusCode);
             Request.ApplyFulfill(rawBody);
