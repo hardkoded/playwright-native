@@ -1,0 +1,4 @@
+{
+  "name": "PlaywrightNative",
+  "install": "bash .cursor/install.sh"
+}
