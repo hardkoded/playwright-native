@@ -39,7 +39,9 @@ namespace PlaywrightNative.Helpers
         // Blur the focused field (caret cannot paint without focus) and force
         // caret-color transparent. Resolve after two animation frames so WebKit's
         // snapshot sees the post-blur frame.
-        internal const string HideCaretJs = @"() => {
+        // Must be an IIFE: a bare `() => { ... }` expression only returns the
+        // function object and never runs (unlike FinishAnimationsJs / SyncAnimationsJs).
+        internal const string HideCaretJs = @"(() => {
   const collectRoots = (root, roots) => {
     roots.push(root);
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
@@ -93,7 +95,7 @@ namespace PlaywrightNative.Helpers
   return new Promise(resolve => {
     requestAnimationFrame(() => requestAnimationFrame(resolve));
   });
-}";
+})()";
 
         internal const string RestoreCaretJs = "window.__pwRestoreCaret && window.__pwRestoreCaret()";
 

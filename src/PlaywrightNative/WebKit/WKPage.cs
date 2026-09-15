@@ -4654,8 +4654,9 @@ namespace PlaywrightNative.WebKit
         }
 
         /// <summary>
-        /// Official <c>handleProvisionalLoadFailed</c>: an initial popup/page load
-        /// that fails before <see cref="InitializedTask"/> must unblock waiters.
+        /// Official <c>handleProvisionalLoadFailed</c>: fails the in-flight
+        /// cross-process navigation (or the initial page load when still
+        /// initializing).
         /// </summary>
         /// <param name="errorText">The protocol error string.</param>
         internal void HandleProvisionalLoadFailed(string errorText)
@@ -4665,7 +4666,23 @@ namespace PlaywrightNative.WebKit
                 _initializedTcs.TrySetException(
                     new PlaywrightException(
                         string.IsNullOrEmpty(errorText) ? "Initial load failed" : errorText));
+                return;
             }
+
+            if (_provisionalSession == null)
+            {
+                return;
+            }
+
+            string reason = string.IsNullOrEmpty(errorText) ? "Navigation failed" : errorText;
+            if (reason.Contains("cancelled", StringComparison.OrdinalIgnoreCase)
+                || reason.Contains("canceled", StringComparison.OrdinalIgnoreCase))
+            {
+                reason += "; maybe frame was detached?";
+            }
+
+            _awaitingReplacementTarget = false;
+            FailPendingWithReason(reason, _pendingNavigationUrl);
         }
 
         /// <summary>
@@ -4996,14 +5013,16 @@ namespace PlaywrightNative.WebKit
                     else if (redirectInFlight
                         || _harRedirectInProgress
                         || !string.IsNullOrEmpty(redirectUrl)
-                        || !string.IsNullOrEmpty(_pendingRedirectTarget)
-                        || _awaitingReplacementTarget)
+                        || !string.IsNullOrEmpty(_pendingRedirectTarget))
                     {
-                        // Redirect / cross-process swap cancelled this document
-                        // while a replacement is expected — keep waiters armed.
-                        // Do not key off _provisionalSession alone: a provisional
-                        // that fails before commit (cross-process abort) must
-                        // fail pending goto waiters rather than hang.
+                        // Redirect cancelled this document while a replacement
+                        // navigation is expected — keep waiters armed.
+                        // Do not keep them armed for _awaitingReplacementTarget
+                        // alone: this method only runs when the failing request
+                        // already matches the pending URL, so a cancelled /
+                        // interrupted provisional load is the navigation itself
+                        // failing (e.g. proxy bypass connection drop after a
+                        // cross-process swap). Keeping waiters armed hangs goto.
                         return;
                     }
 
@@ -5012,6 +5031,7 @@ namespace PlaywrightNative.WebKit
                 }
 
                 NavigationException exception = new(reason, errorUrl);
+                _awaitingReplacementTarget = false;
                 _pendingLoadTcs?.TrySetException(exception);
                 _pendingDomContentTcs?.TrySetException(exception);
                 _pendingCommitTcs?.TrySetException(exception);
@@ -5481,6 +5501,7 @@ namespace PlaywrightNative.WebKit
 
                 reason = WebKitNavigationErrors.Normalize(reason);
                 NavigationException exception = new(reason, url);
+                _awaitingReplacementTarget = false;
                 _pendingLoadTcs?.TrySetException(exception);
                 _pendingDomContentTcs?.TrySetException(exception);
                 _pendingCommitTcs?.TrySetException(exception);
@@ -7865,14 +7886,18 @@ namespace PlaywrightNative.WebKit
                 // WebKit also drops the first cross-process provisional during a
                 // normal HTTP redirect (reload/goto). That is not a failed
                 // navigation — wait for the replacement target instead.
-                // When no replacement is expected (cross-process abort before
-                // commit), fail pending waiters so goto does not hang.
+                //
+                // Do not treat _awaitingReplacementTarget as "expect another
+                // target": that flag means we are waiting for THIS provisional
+                // to commit. If it is destroyed without commit, the navigation
+                // failed (e.g. proxy-bypass connection drop) and goto must
+                // reject rather than hang until timeout.
                 bool expectReplacement = IsHarRedirectPending()
-                    || _awaitingReplacementTarget
                     || _harRedirectInProgress
                     || !string.IsNullOrEmpty(_pendingRedirectTarget);
                 if (!expectReplacement)
                 {
+                    _awaitingReplacementTarget = false;
                     FailPendingWithReason("Navigation failed", _pendingNavigationUrl);
                 }
 

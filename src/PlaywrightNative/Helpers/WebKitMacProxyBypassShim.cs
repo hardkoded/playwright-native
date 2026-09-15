@@ -27,11 +27,10 @@ using Microsoft.Playwright;
 namespace PlaywrightNative.Helpers
 {
     /// <summary>
-    /// macOS WebKit CFNetwork treats any <c>proxyBypassList</c> as also
-    /// excluding localhost / link-local from the proxy (same reason upstream
-    /// skips those hosts when bypass rules are set). This shim is the browser
-    /// proxy with an empty bypass list so loopback and link-local stay
-    /// proxied; listed bypass hosts are connected directly here instead.
+    /// WebKit (CFNetwork on Darwin, libsoup on Linux) stops proxying localhost /
+    /// link-local once any <c>proxyBypassList</c> / <c>--ignore-host</c> entry is
+    /// set. This shim is the browser proxy with an empty bypass list so those
+    /// hosts stay proxied; listed bypass hosts are connected directly here.
     /// </summary>
     internal sealed class WebKitMacProxyBypassShim : IDisposable
     {
@@ -119,7 +118,10 @@ namespace PlaywrightNative.Helpers
                 return null;
             }
 
-            if (!RuntimeInformation.IsOSPlatform(OSPlatform.OSX)
+            // WebKit on Darwin (CFNetwork) and Linux (libsoup) both stop
+            // proxying localhost / link-local once any bypass host is set.
+            // Windows uses curl's noproxy and does not need this shim.
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
                 && Environment.GetEnvironmentVariable("PW_FORCE_MAC_PROXY_BYPASS_SHIM") != "1")
             {
                 return null;
@@ -161,7 +163,7 @@ namespace PlaywrightNative.Helpers
             }
         }
 
-        private static async Task<byte[]> ReadHeadersAsync(NetworkStream stream, CancellationToken token)
+        private static async Task<(byte[] Headers, byte[] Leftover)> ReadHeadersAsync(NetworkStream stream, CancellationToken token)
         {
             using MemoryStream buffer = new();
             byte[] chunk = new byte[4096];
@@ -185,12 +187,21 @@ namespace PlaywrightNative.Helpers
                         int headerLen = i + 4;
                         byte[] headers = new byte[headerLen];
                         Buffer.BlockCopy(data, 0, headers, 0, headerLen);
-                        return headers;
+                        int leftoverLen = data.Length - headerLen;
+                        byte[] leftover = leftoverLen == 0 ? Array.Empty<byte>() : new byte[leftoverLen];
+                        if (leftoverLen > 0)
+                        {
+                            Buffer.BlockCopy(data, headerLen, leftover, 0, leftoverLen);
+                        }
+
+                        return (headers, leftover);
                     }
                 }
             }
 
-            return buffer.Length == 0 ? null : buffer.ToArray();
+            return buffer.Length == 0
+                ? (null, Array.Empty<byte>())
+                : (buffer.ToArray(), Array.Empty<byte>());
         }
 
         private static bool TryParseHostPort(string target, int defaultPort, out string host, out int port)
@@ -289,20 +300,138 @@ namespace PlaywrightNative.Helpers
             => stream.WriteAsync(Latin1.GetBytes(text)).AsTask();
 
         /// <summary>
-        /// Copies one HTTP response (upstream → client). Unlike a full duplex
-        /// pipe, this completes when the upstream closes after
-        /// <see cref="ForceConnectionClose"/>.
+        /// Copies a single framed HTTP response (upstream → client). Must not
+        /// wait for upstream EOF: the test / upstream proxy keeps connections
+        /// alive, so <see cref="Stream.CopyToAsync(Stream)"/> would hang after
+        /// the first document response.
         /// </summary>
-        private static async Task CopyResponseAsync(NetworkStream upstream, NetworkStream client)
+        private static async Task CopyOneHttpResponseAsync(NetworkStream upstream, NetworkStream client, CancellationToken token)
         {
-            try
+            (byte[] headerBytes, byte[] leftover) = await ReadHeadersAsync(upstream, token).ConfigureAwait(false);
+            if (headerBytes == null || headerBytes.Length == 0)
             {
-                await upstream.CopyToAsync(client).ConfigureAwait(false);
+                return;
             }
-#pragma warning disable RCS1075
-            catch (Exception)
-#pragma warning restore RCS1075
+
+            // Tell WebKit not to reuse this proxy connection so the next
+            // navigation opens a fresh socket and re-runs ShouldBypass.
+            byte[] clientHeaders = ForceConnectionClose(headerBytes);
+            await client.WriteAsync(clientHeaders, token).ConfigureAwait(false);
+
+            LeftoverReader body = new(upstream, leftover);
+            string headerText = Latin1.GetString(headerBytes);
+            if (headerText.Contains("Transfer-Encoding: chunked", StringComparison.OrdinalIgnoreCase)
+                || headerText.Contains("Transfer-Encoding:chunked", StringComparison.OrdinalIgnoreCase))
             {
+                await CopyChunkedBodyAsync(body, client, token).ConfigureAwait(false);
+                return;
+            }
+
+            int contentLength = ParseContentLength(headerText);
+            if (contentLength < 0)
+            {
+                // No length and not chunked — read until upstream closes.
+                await body.CopyToAsync(client, token).ConfigureAwait(false);
+                return;
+            }
+
+            if (contentLength == 0)
+            {
+                return;
+            }
+
+            await CopyExactAsync(body, client, contentLength, token).ConfigureAwait(false);
+        }
+
+        private static int ParseContentLength(string headerText)
+        {
+            const string key = "Content-Length:";
+            int idx = headerText.IndexOf(key, StringComparison.OrdinalIgnoreCase);
+            if (idx < 0)
+            {
+                return -1;
+            }
+
+            int start = idx + key.Length;
+            int end = headerText.IndexOf("\r\n", start, StringComparison.Ordinal);
+            if (end < 0)
+            {
+                end = headerText.Length;
+            }
+
+            return int.TryParse(
+                headerText.AsSpan(start, end - start).Trim(),
+                NumberStyles.Integer,
+                CultureInfo.InvariantCulture,
+                out int length)
+                ? Math.Max(length, 0)
+                : -1;
+        }
+
+        private static async Task CopyExactAsync(LeftoverReader source, NetworkStream dest, int length, CancellationToken token)
+        {
+            byte[] buffer = new byte[Math.Min(length, 8192)];
+            int remaining = length;
+            while (remaining > 0)
+            {
+                int read = await source.ReadAsync(buffer.AsMemory(0, Math.Min(buffer.Length, remaining)), token)
+                    .ConfigureAwait(false);
+                if (read == 0)
+                {
+                    return;
+                }
+
+                await dest.WriteAsync(buffer.AsMemory(0, read), token).ConfigureAwait(false);
+                remaining -= read;
+            }
+        }
+
+        private static async Task CopyChunkedBodyAsync(LeftoverReader source, NetworkStream dest, CancellationToken token)
+        {
+            // Relay chunk-size lines + payload + trailers until the 0-chunk.
+            while (true)
+            {
+                string sizeLine = await source.ReadLineAsync(token).ConfigureAwait(false);
+                if (sizeLine == null)
+                {
+                    return;
+                }
+
+                byte[] sizeBytes = Latin1.GetBytes(sizeLine + "\r\n");
+                await dest.WriteAsync(sizeBytes, token).ConfigureAwait(false);
+
+                int semi = sizeLine.IndexOf(';');
+                string hex = semi >= 0 ? sizeLine.Substring(0, semi) : sizeLine;
+                if (!int.TryParse(hex.Trim(), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out int size))
+                {
+                    return;
+                }
+
+                if (size > 0)
+                {
+                    await CopyExactAsync(source, dest, size, token).ConfigureAwait(false);
+
+                    // Trailing CRLF after chunk data.
+                    await CopyExactAsync(source, dest, 2, token).ConfigureAwait(false);
+                    continue;
+                }
+
+                // Final chunk: copy trailers until blank line.
+                while (true)
+                {
+                    string trailer = await source.ReadLineAsync(token).ConfigureAwait(false);
+                    if (trailer == null)
+                    {
+                        return;
+                    }
+
+                    byte[] trailerBytes = Latin1.GetBytes(trailer + "\r\n");
+                    await dest.WriteAsync(trailerBytes, token).ConfigureAwait(false);
+                    if (trailer.Length == 0)
+                    {
+                        return;
+                    }
+                }
             }
         }
 
@@ -341,7 +470,8 @@ namespace PlaywrightNative.Helpers
                 {
                     client.NoDelay = true;
                     NetworkStream clientStream = client.GetStream();
-                    byte[] headerBytes = await ReadHeadersAsync(clientStream, _cts.Token).ConfigureAwait(false);
+                    (byte[] headerBytes, byte[] requestLeftover) = await ReadHeadersAsync(clientStream, _cts.Token)
+                        .ConfigureAwait(false);
                     if (headerBytes == null || headerBytes.Length == 0)
                     {
                         return;
@@ -364,7 +494,8 @@ namespace PlaywrightNative.Helpers
                         return;
                     }
 
-                    await HandleHttpAsync(clientStream, headerBytes, method, target).ConfigureAwait(false);
+                    await HandleHttpAsync(clientStream, headerBytes, requestLeftover, method, target)
+                        .ConfigureAwait(false);
                 }
 #pragma warning disable RCS1075
                 catch (Exception)
@@ -402,7 +533,8 @@ namespace PlaywrightNative.Helpers
                     + " HTTP/1.1\r\nHost: " + host + ":" + port.ToString(CultureInfo.InvariantCulture)
                     + "\r\n\r\n";
                 await WriteAsciiAsync(upStream, connectRequest).ConfigureAwait(false);
-                byte[] responseHeaders = await ReadHeadersAsync(upStream, _cts.Token).ConfigureAwait(false);
+                (byte[] responseHeaders, byte[] leftover) = await ReadHeadersAsync(upStream, _cts.Token)
+                    .ConfigureAwait(false);
                 if (responseHeaders == null)
                 {
                     await WriteAsciiAsync(clientStream, "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n")
@@ -411,6 +543,14 @@ namespace PlaywrightNative.Helpers
                 }
 
                 await clientStream.WriteAsync(responseHeaders).ConfigureAwait(false);
+                if (leftover.Length > 0)
+                {
+                    // Bytes that arrived with the CONNECT response (TLS ClientHello
+                    // from upstream is rare here; more often empty) must not be
+                    // discarded before the bidirectional tunnel starts.
+                    await clientStream.WriteAsync(leftover).ConfigureAwait(false);
+                }
+
                 string status = Latin1.GetString(responseHeaders);
                 if (status.StartsWith("HTTP/1.1 200", StringComparison.Ordinal)
                     || status.StartsWith("HTTP/1.0 200", StringComparison.Ordinal))
@@ -424,7 +564,12 @@ namespace PlaywrightNative.Helpers
             }
         }
 
-        private async Task HandleHttpAsync(NetworkStream clientStream, byte[] headerBytes, string method, string target)
+        private async Task HandleHttpAsync(
+            NetworkStream clientStream,
+            byte[] headerBytes,
+            byte[] requestLeftover,
+            string method,
+            string target)
         {
             if (!Uri.TryCreate(target, UriKind.Absolute, out Uri uri)
                 || string.IsNullOrEmpty(uri.Host))
@@ -457,11 +602,15 @@ namespace PlaywrightNative.Helpers
                 }
 
                 await upStream.WriteAsync(outbound).ConfigureAwait(false);
+                if (requestLeftover != null && requestLeftover.Length > 0)
+                {
+                    await upStream.WriteAsync(requestLeftover).ConfigureAwait(false);
+                }
 
-                // One request / one response — do not keep-alive pipe, or a
-                // subsequent absolute-form request on this socket would skip
-                // ShouldBypass and hang in upstream DNS for excluded hosts.
-                await CopyResponseAsync(upStream, clientStream).ConfigureAwait(false);
+                // One framed response — do not pipe until EOF (upstream keep-alive
+                // would hang), and do not keep-alive pipe (a later absolute-form
+                // request would skip ShouldBypass and hang in upstream DNS).
+                await CopyOneHttpResponseAsync(upStream, clientStream, _cts.Token).ConfigureAwait(false);
             }
 #pragma warning disable RCS1075
             catch (Exception)
@@ -487,6 +636,83 @@ namespace PlaywrightNative.Helpers
             finally
             {
                 upstream.Dispose();
+            }
+        }
+
+        /// <summary>
+        /// Reads from a <see cref="NetworkStream"/> after an optional prefix that
+        /// was already pulled while scanning for HTTP header terminators.
+        /// </summary>
+        private sealed class LeftoverReader
+        {
+            private readonly NetworkStream _stream;
+            private byte[] _leftover;
+            private int _offset;
+
+            internal LeftoverReader(NetworkStream stream, byte[] leftover)
+            {
+                _stream = stream;
+                _leftover = leftover == null || leftover.Length == 0 ? null : leftover;
+            }
+
+            internal async Task<int> ReadAsync(Memory<byte> buffer, CancellationToken token)
+            {
+                if (_leftover != null)
+                {
+                    int available = _leftover.Length - _offset;
+                    int take = Math.Min(available, buffer.Length);
+                    _leftover.AsSpan(_offset, take).CopyTo(buffer.Span);
+                    _offset += take;
+                    if (_offset >= _leftover.Length)
+                    {
+                        _leftover = null;
+                    }
+
+                    return take;
+                }
+
+                return await _stream.ReadAsync(buffer, token).ConfigureAwait(false);
+            }
+
+            internal async Task CopyToAsync(NetworkStream dest, CancellationToken token)
+            {
+                if (_leftover != null)
+                {
+                    await dest.WriteAsync(_leftover.AsMemory(_offset), token).ConfigureAwait(false);
+                    _leftover = null;
+                }
+
+                await _stream.CopyToAsync(dest, token).ConfigureAwait(false);
+            }
+
+            internal async Task<string> ReadLineAsync(CancellationToken token)
+            {
+                using MemoryStream buffer = new();
+                byte[] one = new byte[1];
+                while (buffer.Length < 64 * 1024)
+                {
+                    int n = await ReadAsync(one.AsMemory(0, 1), token).ConfigureAwait(false);
+                    if (n == 0)
+                    {
+                        return buffer.Length == 0 ? null : Latin1.GetString(buffer.ToArray());
+                    }
+
+                    if (one[0] == (byte)'\n')
+                    {
+                        byte[] data = buffer.ToArray();
+                        int len = data.Length;
+                        if (len > 0 && data[len - 1] == (byte)'\r')
+                        {
+                            len--;
+                        }
+
+                        return Latin1.GetString(data, 0, len);
+                    }
+
+                    await buffer.WriteAsync(one.AsMemory(0, 1), token).ConfigureAwait(false);
+                }
+
+                return Latin1.GetString(buffer.ToArray());
             }
         }
     }
