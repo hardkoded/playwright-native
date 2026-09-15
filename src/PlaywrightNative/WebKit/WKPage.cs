@@ -3554,6 +3554,13 @@ namespace PlaywrightNative.WebKit
         {
             try
             {
+                // Child-frame evaluates (e.g. requestStorageAccess) need the page
+                // active/focused on macOS after iframe navigations.
+                if (frame?.ParentFrame != null)
+                {
+                    await EnsureActiveAndFocusedAsync().ConfigureAwait(false);
+                }
+
                 WKExecutionContext context = await WaitForFrameContextAsync(frame).ConfigureAwait(false);
                 if (EvaluateSerialization.CanWrapExpression(expression))
                 {
@@ -6999,12 +7006,30 @@ namespace PlaywrightNative.WebKit
         }
 
         /// <summary>
-        /// Sends <c>Emulation.setActiveAndFocused</c> so WebKit treats the page as
+        /// Activates the page target (when present) and sends
+        /// <c>Emulation.setActiveAndFocused</c> so WebKit treats the page as
         /// focused/active (required for <c>document.requestStorageAccess()</c> on macOS).
         /// </summary>
         /// <returns>A task that completes when the command is acknowledged or safely ignored.</returns>
         private async Task EnsureActiveAndFocusedAsync()
         {
+            // macOS WebKit gates requestStorageAccess on an active, focused page.
+            // Upstream relies on setActiveAndFocused at page-proxy init; activating
+            // the target first matches BringToFront and re-applies activity state
+            // after cross-process iframe navigations steal focus.
+            WKTargetSession target = _targetSession;
+            if (target != null)
+            {
+                try
+                {
+                    await _session.SendAsync("Target.activate", new { targetId = target.TargetId })
+                        .ConfigureAwait(false);
+                }
+                catch (PlaywrightException)
+                {
+                }
+            }
+
             try
             {
                 await _session.SendAsync("Emulation.setActiveAndFocused", new { active = true })
