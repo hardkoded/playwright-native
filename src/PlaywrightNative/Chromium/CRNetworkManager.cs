@@ -626,6 +626,19 @@ namespace PlaywrightNative.Chromium
 
         private static IReadOnlyList<NameValueEntry> ParseExtraHeaders(JsonElement payload)
         {
+            // Match official: headersObjectToArray(extraInfo.headers, '\n').
+            // Prefer the headers object over headersText so duplicate values
+            // stay as separate entries (ShouldReportAllHeaders).
+            if (payload.TryGetProperty("headers", out JsonElement headersEl)
+                && headersEl.ValueKind == JsonValueKind.Object)
+            {
+                IReadOnlyList<NameValueEntry> fromObject = RawNetworkHeaders.FromObject(headersEl);
+                if (fromObject.Count > 0)
+                {
+                    return fromObject;
+                }
+            }
+
             if (payload.TryGetProperty("headersText", out JsonElement textElement))
             {
                 IReadOnlyList<NameValueEntry> fromText = ResponseHeaders.ParseHeadersText(textElement.GetString());
