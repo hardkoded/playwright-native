@@ -861,10 +861,17 @@ namespace PlaywrightNative.WebKit
                 return;
             }
 
-            // Popups (Opener != null) must receive context init scripts and
-            // exposeFunctions bindings too. NewPageAsync does not set
-            // ContextChromeTask (CreatePageIsInFlight), so this is the only
-            // install path for window.open popups.
+            // Opener popups already receive context expose/init scripts in
+            // ApplyEmulationToPageAsync before Target.resume (so bootstrap runs
+            // once). Re-applying here plus EvaluateOnCurrentAsync doubles
+            // init-script execution and exposeFunction deliveries.
+            // noopener / inferred siblings (Opener == null) skip that early
+            // path, so they still need the full install after init.
+            if (page.Opener != null)
+            {
+                return;
+            }
+
             await context.ApplyInitScriptsAsync(page).ConfigureAwait(false);
         }
 

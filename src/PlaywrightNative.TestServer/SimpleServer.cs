@@ -274,13 +274,16 @@ namespace PlaywrightNative.TestServer
                                     ? X509CertificateLoader.LoadPkcs12FromFile(fullPath, null, X509KeyStorageFlags.Exportable)
                                     : X509CertificateLoader.LoadPkcs12FromFile(fullPath, certificatePassword, X509KeyStorageFlags.Exportable);
 
-                                // Official Node https negotiates TLS 1.3 with
-                                // WebKit/mac for playwright-test. Kestrel's
-                                // platform default can otherwise settle on 1.2.
+                                // Prefer TLS 1.3 (HAR/securityDetails assert it) but
+                                // also offer 1.2. Kestrel SslProtocols.Tls13 alone
+                                // fails the handshake on WebKit/mac ("An SSL error
+                                // has occurred"), which breaks every HTTPS cookie
+                                // third-party parity test. With both versions
+                                // offered, capable clients still negotiate 1.3.
                                 listenOptions.UseHttps(new HttpsConnectionAdapterOptions
                                 {
                                     ServerCertificate = certificate,
-                                    SslProtocols = SslProtocols.Tls13,
+                                    SslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13,
                                 });
                             }
                             else
