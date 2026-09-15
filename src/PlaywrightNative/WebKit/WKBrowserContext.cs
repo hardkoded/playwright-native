@@ -986,6 +986,10 @@ namespace PlaywrightNative.WebKit
             {
                 await page.SetUserAgentAsync(_userAgent).ConfigureAwait(false);
             }
+            else
+            {
+                await EnsureDefaultUserAgentHasSafariTokenAsync(page).ConfigureAwait(false);
+            }
 
             if (!string.IsNullOrEmpty(_timezoneId))
             {
@@ -1651,6 +1655,10 @@ namespace PlaywrightNative.WebKit
                 if (!string.IsNullOrEmpty(_userAgent))
                 {
                     await wkPage.SetUserAgentAsync(_userAgent).ConfigureAwait(false);
+                }
+                else
+                {
+                    await EnsureDefaultUserAgentHasSafariTokenAsync(wkPage).ConfigureAwait(false);
                 }
 
                 if (!string.IsNullOrEmpty(_timezoneId))
@@ -2410,6 +2418,46 @@ namespace PlaywrightNative.WebKit
             return result;
         }
 
+        /// <summary>
+        /// macOS WebKit's default <c>navigator.userAgent</c> often omits the
+        /// trailing <c>Safari/…</c> token that upstream Playwright and the
+        /// page-basic sanity check expect. Append one derived from AppleWebKit
+        /// when the context did not set an explicit user agent.
+        /// </summary>
+        /// <param name="page">The page to normalize.</param>
+        /// <returns>A task that completes when the override is applied or skipped.</returns>
+        private async Task EnsureDefaultUserAgentHasSafariTokenAsync(WKPage page)
+        {
+            if (page == null
+                || !RuntimeInformation.IsOSPlatform(OSPlatform.OSX)
+                || !string.IsNullOrEmpty(_userAgent))
+            {
+                return;
+            }
+
+            string ua;
+            try
+            {
+                ua = await page.EvaluateAsync<string>("() => navigator.userAgent").ConfigureAwait(false);
+            }
+#pragma warning disable RCS1075
+            catch (Exception)
+#pragma warning restore RCS1075
+            {
+                return;
+            }
+
+            if (string.IsNullOrEmpty(ua)
+                || ua.Contains("Safari/", StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            Match match = Regex.Match(ua, @"AppleWebKit/([\d.]+)");
+            string version = match.Success ? match.Groups[1].Value : "605.1.15";
+            await page.SetUserAgentAsync(ua.TrimEnd() + " Safari/" + version).ConfigureAwait(false);
+        }
+
         private sealed class NoopContextDisposable : IAsyncDisposable
         {
             internal static readonly NoopContextDisposable Instance = new();
@@ -2418,5 +2466,6 @@ namespace PlaywrightNative.WebKit
         }
 
 #pragma warning restore SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
+
     }
 }

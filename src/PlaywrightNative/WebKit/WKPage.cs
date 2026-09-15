@@ -4973,6 +4973,8 @@ namespace PlaywrightNative.WebKit
                     reason = "Download is starting";
                 }
 
+                reason = WebKitNavigationErrors.Normalize(reason);
+
                 if (IsSupersededNavigationFailure(reason))
                 {
                     string startUrl = NavigationTimeout.WithoutHash(_navigationStartUrl);
@@ -5468,6 +5470,7 @@ namespace PlaywrightNative.WebKit
                     return;
                 }
 
+                reason = WebKitNavigationErrors.Normalize(reason);
                 NavigationException exception = new(reason, url);
                 _pendingLoadTcs?.TrySetException(exception);
                 _pendingDomContentTcs?.TrySetException(exception);
@@ -7770,6 +7773,29 @@ namespace PlaywrightNative.WebKit
             {
                 oldSession.MessageReceived -= OnInnerMessage;
                 oldSession.Dispose();
+            }
+
+            // Cross-process commit resets screen.orientation on macOS WebKit unless
+            // page-proxy Emulation.setOrientationOverride is re-asserted after swap.
+            _ = ReapplyEmulationAfterProvisionalCommitAsync();
+        }
+
+        private async Task ReapplyEmulationAfterProvisionalCommitAsync()
+        {
+            try
+            {
+                await ApplyEmulatedViewportFromContextAsync().ConfigureAwait(false);
+                WKTargetSession target = _targetSession;
+                if (target != null)
+                {
+                    await ApplyScreenSizeOverrideOnAsync(target).ConfigureAwait(false);
+                }
+            }
+#pragma warning disable RCS1075
+            catch (Exception)
+#pragma warning restore RCS1075
+            {
+                // Emulation reapply is best-effort; navigation already committed.
             }
         }
 
