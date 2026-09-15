@@ -275,18 +275,21 @@ namespace PlaywrightNative.TestServer
                                     ? X509CertificateLoader.LoadPkcs12FromFile(fullPath, null, X509KeyStorageFlags.Exportable)
                                     : X509CertificateLoader.LoadPkcs12FromFile(fullPath, certificatePassword, X509KeyStorageFlags.Exportable);
 
-                                // Official Node https negotiates TLS 1.3 with
-                                // WebKit/mac for playwright-test HAR/securityDetails.
-                                // Offering TLS 1.2|1.3 lets WebKit/mac settle on
-                                // 1.2. Restrict to TLS 1.3 and HTTP/1.1 only —
-                                // Kestrel's default h2 ALPN with Tls13-only caused
-                                // "An SSL error has occurred" on WebKit/mac cookie
-                                // third-party tests.
+                                // Prefer TLS 1.3 (HAR/securityDetails assert it) but
+                                // also offer 1.2. Kestrel SslProtocols.Tls13 alone
+                                // fails the handshake on WebKit/mac ("An SSL error
+                                // has occurred"), which breaks every HTTPS cookie
+                                // third-party parity test. With both versions
+                                // offered, capable clients still negotiate 1.3;
+                                // WebKit/mac that cannot complete Kestrel's TLS 1.3
+                                // falls back to 1.2 (and empty securityConnection
+                                // protocol still defaults to TLS 1.3 for HAR).
+                                // Keep HTTP/1.1-only to avoid h2 ALPN quirks.
                                 listenOptions.Protocols = HttpProtocols.Http1;
                                 listenOptions.UseHttps(new HttpsConnectionAdapterOptions
                                 {
                                     ServerCertificate = certificate,
-                                    SslProtocols = SslProtocols.Tls13,
+                                    SslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13,
                                 });
                             }
                             else
