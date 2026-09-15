@@ -861,10 +861,11 @@ namespace PlaywrightNative.WebKit
                 return;
             }
 
-            if (page.Opener == null)
-            {
-                await context.ApplyInitScriptsAsync(page).ConfigureAwait(false);
-            }
+            // Popups (Opener != null) must receive context init scripts and
+            // exposeFunctions bindings too. NewPageAsync does not set
+            // ContextChromeTask (CreatePageIsInFlight), so this is the only
+            // install path for window.open popups.
+            await context.ApplyInitScriptsAsync(page).ConfigureAwait(false);
         }
 
         private void OnWindowOpen(JsonElement? parameters)

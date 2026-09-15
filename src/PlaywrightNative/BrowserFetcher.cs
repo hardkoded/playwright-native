@@ -128,7 +128,7 @@ namespace PlaywrightNative
 
             if (Directory.Exists(installDir) && File.Exists(markerPath))
             {
-                return new InstalledBrowser
+                InstalledBrowser existing = new InstalledBrowser
                 {
                     Browser = Browser,
                     BuildId = buildId,
@@ -136,6 +136,14 @@ namespace PlaywrightNative
                     InstallationDir = installDir,
                     PermissionsFixed = !RuntimeInformation.IsOSPlatform(OSPlatform.Windows),
                 };
+
+                // Cached trees can keep INSTALLATION_COMPLETE after a broken extract
+                // (missing pw_run.sh / chrome binary). Treat that as not installed so
+                // BrowserType.ExecutablePath and relaunch agree on a real binary.
+                if (File.Exists(existing.GetExecutablePath()))
+                {
+                    return existing;
+                }
             }
 
             Directory.CreateDirectory(CacheDir);

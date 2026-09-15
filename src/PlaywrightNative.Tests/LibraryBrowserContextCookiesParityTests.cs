@@ -218,6 +218,10 @@ namespace PlaywrightNative.Tests
         {
             EnsureServer();
             double expire = (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() / 1000d) + (401d * 24 * 3600);
+            // Cookie.Expires is float32 (Microsoft.Playwright). Upstream Node compares the
+            // same JS number used for addCookies; after the float cast we must compare
+            // against that float — (float)expire can round above the original double.
+            float expireFloat = (float)expire;
             await _context.AddCookiesAsync(new[]
             {
                 new Cookie
@@ -226,7 +230,7 @@ namespace PlaywrightNative.Tests
                     Value = "John Doe",
                     Domain = Hostname,
                     Path = "/",
-                    Expires = (float?)expire,
+                    Expires = expireFloat,
                     HttpOnly = false,
                     Secure = false,
                     SameSite = SameSiteAttribute.Lax,
@@ -240,7 +244,7 @@ namespace PlaywrightNative.Tests
             Assert.That(cookies[0].Domain, Is.EqualTo(Hostname));
             Assert.That(cookies[0].Path, Is.EqualTo("/"));
             Assert.That(cookies[0].Expires, Is.GreaterThan(0d));
-            Assert.That(cookies[0].Expires, Is.LessThanOrEqualTo(expire));
+            Assert.That(cookies[0].Expires, Is.LessThanOrEqualTo(expireFloat));
         }
 
         [PlaywrightTest("browsercontext-cookies.spec.ts", "should properly report httpOnly cookie")]

@@ -68,6 +68,7 @@ namespace PlaywrightNative
                 };
 
                 BrowserFetcher fetcher = new(browser);
+                string fallbackInstalled = null;
                 foreach (InstalledBrowser installed in fetcher.GetInstalledBrowsers())
                 {
                     if (installed.Browser != browser)
@@ -80,6 +81,11 @@ namespace PlaywrightNative
                     {
                         return installedPath;
                     }
+
+                    // Prefer a completed install's path even when File.Exists is false
+                    // (broken symlink / race during extract). Launch can still use it via
+                    // BrowserExecutable, and browsertype-basic expects a non-empty path.
+                    fallbackInstalled ??= installedPath;
                 }
 
                 string playwrightKey = BrowserData.PlaywrightPlatformKey(browser, fetcher.Platform);
@@ -99,6 +105,11 @@ namespace PlaywrightNative
                             return candidate;
                         }
                     }
+                }
+
+                if (!string.IsNullOrEmpty(fallbackInstalled))
+                {
+                    return fallbackInstalled;
                 }
 
                 // Official browserType.executablePath is empty until the browser is
