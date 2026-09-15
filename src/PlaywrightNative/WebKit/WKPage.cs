@@ -4997,11 +4997,13 @@ namespace PlaywrightNative.WebKit
                         || _harRedirectInProgress
                         || !string.IsNullOrEmpty(redirectUrl)
                         || !string.IsNullOrEmpty(_pendingRedirectTarget)
-                        || _awaitingReplacementTarget
-                        || _provisionalSession != null)
+                        || _awaitingReplacementTarget)
                     {
                         // Redirect / cross-process swap cancelled this document
                         // while a replacement is expected — keep waiters armed.
+                        // Do not key off _provisionalSession alone: a provisional
+                        // that fails before commit (cross-process abort) must
+                        // fail pending goto waiters rather than hang.
                         return;
                     }
 
@@ -7796,6 +7798,16 @@ namespace PlaywrightNative.WebKit
                 if (target != null)
                 {
                     await ApplyScreenSizeOverrideOnAsync(target).ConfigureAwait(false);
+                }
+
+                // Page.overrideUserAgent is bound to the previous target; re-apply
+                // the context UA after a cross-process commit.
+                string userAgent = (_context ?? OwnerContext as WKBrowserContext) is WKBrowserContext ctx
+                    ? ((IHasUserAgent)ctx).UserAgent
+                    : null;
+                if (!string.IsNullOrEmpty(userAgent))
+                {
+                    await SetUserAgentAsync(userAgent).ConfigureAwait(false);
                 }
             }
 #pragma warning disable RCS1075

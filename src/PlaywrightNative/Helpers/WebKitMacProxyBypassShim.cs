@@ -402,15 +402,21 @@ namespace PlaywrightNative.Helpers
             catch (Exception)
 #pragma warning restore RCS1075
             {
-                try
+                // For bypassed hosts, close without an HTTP response so WebKit
+                // surfaces a connection failure (DNS / refused), matching a
+                // direct browser connect. A 502 would make page.goto succeed.
+                if (!ProxySettings.ShouldBypass(requestHost, _bypass))
                 {
-                    await WriteAsciiAsync(clientStream, "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n")
-                        .ConfigureAwait(false);
-                }
+                    try
+                    {
+                        await WriteAsciiAsync(clientStream, "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n")
+                            .ConfigureAwait(false);
+                    }
 #pragma warning disable RCS1075
-                catch (Exception)
+                    catch (Exception)
 #pragma warning restore RCS1075
-                {
+                    {
+                    }
                 }
             }
             finally

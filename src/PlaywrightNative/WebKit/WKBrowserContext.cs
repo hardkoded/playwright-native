@@ -2445,7 +2445,7 @@ namespace PlaywrightNative.WebKit
                 return;
             }
 
-            string ua;
+            string ua = null;
             try
             {
                 ua = await page.EvaluateAsync<string>("() => navigator.userAgent").ConfigureAwait(false);
@@ -2454,18 +2454,31 @@ namespace PlaywrightNative.WebKit
             catch (Exception)
 #pragma warning restore RCS1075
             {
-                return;
+                // Fall through and install a Safari-shaped default UA.
             }
 
-            if (string.IsNullOrEmpty(ua)
-                || ua.Contains("Safari/", StringComparison.Ordinal))
+            if (!string.IsNullOrEmpty(ua) && ua.Contains("Safari/", StringComparison.Ordinal))
             {
                 return;
             }
 
-            Match match = Regex.Match(ua, @"AppleWebKit/([\d.]+)");
-            string version = match.Success ? match.Groups[1].Value : "605.1.15";
-            await page.SetUserAgentAsync(ua.TrimEnd() + " Safari/" + version).ConfigureAwait(false);
+            // Persist as the context default so later pages and cross-process
+            // swaps re-apply the same override (Page.overrideUserAgent is
+            // per-target and is lost when the provisional commits).
+            if (string.IsNullOrEmpty(ua))
+            {
+                ua = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                    + "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15";
+            }
+            else
+            {
+                Match match = Regex.Match(ua, @"AppleWebKit/([\d.]+)");
+                string version = match.Success ? match.Groups[1].Value : "605.1.15";
+                ua = ua.TrimEnd() + " Safari/" + version;
+            }
+
+            _userAgent = ua;
+            await page.SetUserAgentAsync(ua).ConfigureAwait(false);
         }
 
         private sealed class NoopContextDisposable : IAsyncDisposable

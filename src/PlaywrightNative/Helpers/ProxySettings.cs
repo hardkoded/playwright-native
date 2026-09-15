@@ -105,6 +105,8 @@ namespace PlaywrightNative.Helpers
         /// <summary>
         /// Official <c>shouldBypassProxy</c>: comma-separated tokens, optional
         /// leading <c>*</c>, and a leading <c>.</c> matches a host suffix.
+        /// Matches both <c>URL.host</c> (may include a non-default port) and
+        /// <c>URL.hostname</c>, same as upstream Playwright.
         /// </summary>
         /// <param name="host">Official <c>URL.host</c> (port only when non-default).</param>
         /// <param name="bypass">Raw bypass list, or <see langword="null"/>.</param>
@@ -116,6 +118,7 @@ namespace PlaywrightNative.Helpers
                 return false;
             }
 
+            string hostname = HostnameWithoutPort(host);
             string[] parts = bypass.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
             foreach (string raw in parts)
             {
@@ -126,13 +129,15 @@ namespace PlaywrightNative.Helpers
                 }
 
                 if (token[0] == '.'
-                    && (host.EndsWith(token, StringComparison.Ordinal)
-                        || string.Equals(host, token.Substring(1), StringComparison.Ordinal)))
+                    && (hostname.EndsWith(token, StringComparison.Ordinal)
+                        || string.Equals(hostname, token.Substring(1), StringComparison.Ordinal)))
                 {
                     return true;
                 }
 
-                if (string.Equals(host, token, StringComparison.Ordinal))
+                // Upstream: url.host === domain || url.hostname === domain
+                if (string.Equals(host, token, StringComparison.Ordinal)
+                    || string.Equals(hostname, token, StringComparison.Ordinal))
                 {
                     return true;
                 }
@@ -207,6 +212,28 @@ namespace PlaywrightNative.Helpers
 
             merged.Add(new KeyValuePair<string, string>("Proxy-Authorization", "Basic " + token));
             return merged;
+        }
+
+        /// <summary>
+        /// Strips a non-default port from <paramref name="host"/> (IPv6-safe).
+        /// </summary>
+        /// <param name="host">Official <c>URL.host</c>.</param>
+        /// <returns>The hostname portion.</returns>
+        private static string HostnameWithoutPort(string host)
+        {
+            if (string.IsNullOrEmpty(host))
+            {
+                return host ?? string.Empty;
+            }
+
+            if (host[0] == '[')
+            {
+                int end = host.IndexOf(']');
+                return end > 0 ? host.Substring(0, end + 1) : host;
+            }
+
+            int colon = host.LastIndexOf(':');
+            return colon > 0 ? host.Substring(0, colon) : host;
         }
     }
 }
