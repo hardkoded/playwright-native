@@ -4934,7 +4934,15 @@ namespace PlaywrightNative.WebKit
                     return;
                 }
 
-                if (_harRedirectInProgress
+                // Cross-process HTTP redirects (reload/goto) cancel the original
+                // document with "Frame load interrupted" / "cancelled". Keep the
+                // pending waiter armed for the redirect target — same as HAR
+                // redirectNavigation — instead of failing Reload/GoTo early.
+                bool redirectInFlight = _harRedirectInProgress
+                    || !string.IsNullOrEmpty(redirectUrl)
+                    || (request.Response != null
+                        && ResponseHeaders.IsRedirectStatus(request.Response.Status));
+                if (redirectInFlight
                     && (string.IsNullOrEmpty(request.FailureText)
                         || IsSupersededNavigationFailure(request.FailureText)))
                 {
@@ -4977,10 +4985,18 @@ namespace PlaywrightNative.WebKit
                     }
 
                     if (!string.IsNullOrEmpty(competing)
-                        && !string.Equals(competing, pendingUrl, StringComparison.Ordinal))
+                        && !string.Equals(competing, pendingUrl, StringComparison.Ordinal)
+                        && !string.Equals(competing, redirectUrl, StringComparison.Ordinal))
                     {
                         reason = "page.goto: Navigation to \"" + pendingUrl +
                             "\" is interrupted by another navigation to \"" + competing + "\"";
+                    }
+                    else
+                    {
+                        // Superseded without a true competitor means redirect /
+                        // cross-process swap cancelled this document. Keep the
+                        // history/goto waiter armed for the replacement load.
+                        return;
                     }
                 }
 
@@ -7795,9 +7811,13 @@ namespace PlaywrightNative.WebKit
                 _provisionalSession = null;
 
                 // Official HAR redirectNavigation starts a second document load.
-                // WebKit drops the first cross-process provisional; that is not
-                // a failed goto — wait for the restarted navigation instead.
-                if (!IsHarRedirectPending())
+                // WebKit also drops the first cross-process provisional during a
+                // normal HTTP redirect (reload/goto). That is not a failed
+                // navigation — wait for the replacement target instead.
+                if (!IsHarRedirectPending()
+                    && _pendingLoadTcs == null
+                    && _pendingDomContentTcs == null
+                    && _pendingCommitTcs == null)
                 {
                     FailPendingWithReason("Navigation failed", _pendingNavigationUrl);
                 }
