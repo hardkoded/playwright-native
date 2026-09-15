@@ -947,7 +947,7 @@ namespace PlaywrightNative.Chromium
             socket.NotifyError(WebSocketProtocol.FormatSocketError(message, socket.Har.Status));
         }
 
-        private void OnRequestWillBeSent(JsonElement? parameters, CRSession session, bool force = false)
+        private void OnRequestWillBeSent(JsonElement? parameters, CRSession session, bool force = false, bool allowRoute = true)
         {
             if (!parameters.HasValue)
             {
@@ -963,25 +963,25 @@ namespace PlaywrightNative.Chromium
             }
 
             string requestId = RequestKey(session, rawId);
-            string holdType = GetString(p, "type");
+            string holdUrl = p.TryGetProperty("request", out JsonElement holdRequest)
+                ? GetString(holdRequest, "url")
+                : null;
 
-            // A CORS preflight's own requestWillBeSent reports type "Other", not
-            // "Fetch"/"XHR" -- but it still gets its own Fetch.requestPaused, paired
-            // by requestId the same way. Without buffering it here too, its paused
-            // event finds nothing under its own id and falls back to matching by
-            // URL, where it collides with the real request's buffered entry (both
-            // target the identical URL by definition). That steals the real
-            // request's pairing and leaves its own paused event -- and the whole
-            // connection -- waiting on a reply that never comes.
-            bool isPreflightWillBeSent = p.TryGetProperty("initiator", out JsonElement wbsInitiator)
-                && string.Equals(GetString(wbsInitiator, "type"), "preflight", StringComparison.OrdinalIgnoreCase);
+            // Official crNetworkManager: while protocol interception is enabled,
+            // buffer every non-data requestWillBeSent until Fetch.requestPaused
+            // pairs with it — or until responseReceived(fromServiceWorker) /
+            // loadingFailed releases it without creating a route. Service-worker
+            // handled frame fetches never get requestPaused; creating the request
+            // early would leave Fetch paused with no continue.
+            //
+            // Preflight requestWillBeSent reports type "Other", so buffering by
+            // resource type alone is not enough — buffer all types here.
             if (!force
-                && (string.Equals(holdType, "Fetch", StringComparison.Ordinal)
-                    || string.Equals(holdType, "XHR", StringComparison.Ordinal)
-                    || isPreflightWillBeSent)
+                && _interceptingEnabled
+                && !string.IsNullOrEmpty(holdUrl)
+                && !holdUrl.StartsWith("data:", StringComparison.OrdinalIgnoreCase)
                 && !_networkIdToFetchRequestPaused.ContainsKey(rawId)
-                && !_networkIdToFetchRequestPaused.ContainsKey(requestId)
-                && HasUserRoutes())
+                && !_networkIdToFetchRequestPaused.ContainsKey(requestId))
             {
                 _pendingRequestWillBeSent[rawId] = new BufferedWillBeSent(session, p);
                 return;
@@ -1105,12 +1105,32 @@ namespace PlaywrightNative.Chromium
             // (Chrome 130+), while Network.requestWillBeSent arrives on the worker
             // session. Correlate by the raw networkId, and continue/fulfill on the
             // Fetch session that paused the request.
+            //
+            // Official fromServiceWorker / loadingFailed release passes no paused
+            // event (allowRoute: false): materialize the request without a route so
+            // page.RouteAsync does not see SW-handled fetches.
             if (_networkIdToFetchRequestPaused.TryRemove(rawId, out BufferedFetch buffered)
                 || _networkIdToFetchRequestPaused.TryRemove(requestId, out buffered))
             {
                 string interceptionId = GetString(buffered.Parameters, "requestId");
-                if (!string.IsNullOrEmpty(interceptionId)
-                    && _handledFetchIds.TryAdd(interceptionId, 0))
+                if (string.IsNullOrEmpty(interceptionId))
+                {
+                    return;
+                }
+
+                if (!allowRoute)
+                {
+                    // Orphaned pause after SW/loadingFailed release: continue so
+                    // Fetch does not hang, but do not invoke user routes.
+                    if (_handledFetchIds.TryAdd(interceptionId, 0))
+                    {
+                        ContinueFetchMayFail(buffered.Session ?? session, interceptionId);
+                    }
+
+                    return;
+                }
+
+                if (_handledFetchIds.TryAdd(interceptionId, 0))
                 {
                     ApplyPausedRequestDetails(request, buffered.Parameters);
                     OnInterceptedRequest(interceptionId, request, buffered.Session ?? session);
@@ -1141,9 +1161,12 @@ namespace PlaywrightNative.Chromium
                 string responseUrl = p.TryGetProperty("response", out swResponse)
                     ? GetString(swResponse, "url")
                     : null;
+
+                // Official: SW-handled frame responses never get requestPaused —
+                // release the buffered willBeSent without creating a route.
                 if (swResponse.ValueKind == JsonValueKind.Object
                     && ResponseNetworkInfo.ParseFromServiceWorker(swResponse)
-                    && TryReleaseHeldFetch(rawId, responseUrl))
+                    && TryReleaseHeldFetch(rawId, responseUrl, allowRoute: false))
                 {
                     if (!_requestsById.TryGetValue(requestId, out request)
                         && !_requestsByRawId.TryGetValue(rawId, out request))
@@ -1322,10 +1345,11 @@ namespace PlaywrightNative.Chromium
             string requestId = RequestKey(session, rawId);
 
             // Official: release buffered requestWillBeSent when the request fails
-            // before Fetch.requestPaused (common for SW-handled / cancelled fetches).
+            // before Fetch.requestPaused (common for SW-handled / cancelled fetches),
+            // without creating a route — same as responseReceived(fromServiceWorker).
             if (!_requestsById.ContainsKey(requestId) && !_requestsByRawId.ContainsKey(rawId))
             {
-                TryReleaseHeldFetch(rawId, url: null);
+                TryReleaseHeldFetch(rawId, url: null, allowRoute: false);
             }
 
             if (TryTakeRequest(session, rawId, out CRRequest request))
@@ -2073,20 +2097,31 @@ namespace PlaywrightNative.Chromium
             return child;
         }
 
-        private bool HasUserRoutes()
+        private void ContinueFetchMayFail(CRSession session, string interceptionId)
         {
-            if (_handleAuthRequests)
+            if (session == null || string.IsNullOrEmpty(interceptionId))
             {
-                return true;
+                return;
             }
 
-            lock (_routes)
-            {
-                return _routes.Count > 0;
-            }
+            _ = session.SendAsync("Fetch.continueRequest", new { requestId = interceptionId })
+                .ContinueWith(
+                    t =>
+                    {
+                        if (t.IsFaulted)
+                        {
+                            LogRouteHandlerError(t.Exception?.GetBaseException() ?? t.Exception);
+                        }
+                    },
+                    TaskScheduler.Default);
         }
 
-        private bool TryReleaseHeldFetch(string rawId, string url, CRSession session = null, JsonElement? paused = null)
+        private bool TryReleaseHeldFetch(
+            string rawId,
+            string url,
+            CRSession session = null,
+            JsonElement? paused = null,
+            bool allowRoute = true)
         {
             BufferedWillBeSent pending = null;
             if (!string.IsNullOrEmpty(rawId))
@@ -2112,12 +2147,12 @@ namespace PlaywrightNative.Chromium
                 return false;
             }
 
-            if (paused.HasValue && !string.IsNullOrEmpty(rawId))
+            if (allowRoute && paused.HasValue && !string.IsNullOrEmpty(rawId))
             {
                 _networkIdToFetchRequestPaused[rawId] = new BufferedFetch(session, paused.Value);
             }
 
-            OnRequestWillBeSent(pending.Parameters, pending.Session, force: true);
+            OnRequestWillBeSent(pending.Parameters, pending.Session, force: true, allowRoute: allowRoute);
             return true;
         }
 
