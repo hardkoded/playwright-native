@@ -660,7 +660,7 @@ namespace PlaywrightNative.Helpers
 
         private static async Task<TcpClient> ConnectAsync(string host, int port, CancellationToken token)
         {
-            // macOS WebKit may route loopback WS via local.playwright (see
+            // macOS WebKit routes loopback WS via local.playwright (see
             // WebKitMacLocaleWebSocketShim); map back to localhost for the
             // real test-server socket, matching ClientCertificatesProxy.
             string connectHost = ClientCertificatesProxy.RewriteToLocalhostIfNeeded(host);

@@ -327,6 +327,7 @@ namespace PlaywrightNative.WebKit
                 await context.ApplyIgnoreCertificateErrorsAsync().ConfigureAwait(false);
                 await context.ApplyDownloadBehaviorAsync().ConfigureAwait(false);
                 await context.ApplyLanguagesAsync().ConfigureAwait(false);
+                await context.ApplyMacLocaleWebSocketShimAsync().ConfigureAwait(false);
                 await context.ApplyWebKitPageShimsAsync().ConfigureAwait(false);
                 await context.ApplyEphemeralStorageShimsAsync().ConfigureAwait(false);
                 await StorageStateHelper.ApplyAsync(context, storageState, storageStatePath).ConfigureAwait(false);

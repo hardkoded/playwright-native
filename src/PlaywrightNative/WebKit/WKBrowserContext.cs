@@ -19,6 +19,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -1106,6 +1107,26 @@ namespace PlaywrightNative.WebKit
         /// <param name="handshake">Proxy started for this context, or <see langword="null"/>.</param>
         internal void AttachLocaleHandshake(LocaleHandshakeProxy handshake)
             => _localeHandshake = handshake;
+
+        /// <summary>
+        /// On macOS WebKit, loopback WebSockets bypass HTTP proxies. When a
+        /// <see cref="LocaleHandshakeProxy"/> is attached, install an init
+        /// script that rewrites <c>ws://localhost</c> to <c>local.playwright</c>
+        /// so Accept-Language rewriting still applies.
+        /// </summary>
+        /// <returns>A task that completes when the shim is registered.</returns>
+        internal async Task ApplyMacLocaleWebSocketShimAsync()
+        {
+            if (_localeHandshake == null
+                || (!RuntimeInformation.IsOSPlatform(OSPlatform.OSX)
+                    && Environment.GetEnvironmentVariable("PW_FORCE_MAC_WS_SHIM") != "1"))
+            {
+                return;
+            }
+
+            await AddInitScriptAsync(WebKitMacLocaleWebSocketShim.Source, scriptPath: null)
+                .ConfigureAwait(false);
+        }
 
         /// <summary>
         /// Owns the official client-certificate SOCKS MITM for this context.
