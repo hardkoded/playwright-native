@@ -5265,14 +5265,6 @@ namespace PlaywrightNative.WebKit
                 return false;
             }
 
-            // Pending main-frame goto markers must not suppress iframe navigations
-            // to the same URL (page-network-request "subframe navigation request").
-            if (request.Frame != null
-                && request.Frame.ParentFrame != null)
-            {
-                return false;
-            }
-
             if (request.WKRedirectedFrom != null)
             {
                 string redirectedUrl = NavigationTimeout.WithoutHash(request.Url);
