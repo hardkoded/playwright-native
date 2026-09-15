@@ -1694,12 +1694,15 @@ namespace PlaywrightNative.WebKit
         /// <inheritdoc/>
         public async Task SetViewportSizeAsync(int width, int height)
         {
+            // Official page.setViewportSize always sets screen = viewport
+            // (packages/playwright-core/src/server/page.ts), so orientation and
+            // screen.orientation.type follow the new aspect ratio.
             await SetEmulatedViewportAsync(
                 width,
                 height,
                 _emulatedDeviceScaleFactor,
                 _emulatedIsMobile,
-                _independentScreen ?? new ScreenSize { Width = width, Height = height },
+                new ScreenSize { Width = width, Height = height },
                 rememberIndependentScreen: false).ConfigureAwait(false);
         }
 
@@ -4406,16 +4409,49 @@ namespace PlaywrightNative.WebKit
                             $"(() => {{ delete window[{sentinelLiteral}]; delete window[{elementLiteral}]; }})()").ConfigureAwait(false);
                         return handle;
                     }
+                    else
+                    {
+                        // Official addStyleContent waits for load/error so CSP-blocked
+                        // inline styles reject. WebKit awaitPromise is unreliable, so
+                        // poll a sentinel; if neither load nor error arrives quickly,
+                        // fall through so RaceWithCspError's console drain can win.
+                        string contentSentinel = "__pwStyleContent_" + Guid.NewGuid().ToString("N");
+                        string contentElementKey = contentSentinel + "El";
+                        string contentSentinelLiteral = JsonSerializer.Serialize(contentSentinel);
+                        string contentElementLiteral = JsonSerializer.Serialize(contentElementKey);
+                        string contentLiteral = JsonSerializer.Serialize(content);
+                        string contentInject = $@"(() => {{
+                            window[{contentSentinelLiteral}] = 0;
+                            const style = document.createElement('style');
+                            style.type = 'text/css';
+                            style.appendChild(document.createTextNode({contentLiteral}));
+                            window[{contentElementLiteral}] = style;
+                            style.onload = () => {{ window[{contentSentinelLiteral}] = 1; }};
+                            style.onerror = () => {{ window[{contentSentinelLiteral}] = 2; }};
+                            document.head.appendChild(style);
+                            return true;
+                        }})()";
+                        await EvaluateExpressionAsync(contentInject).ConfigureAwait(false);
+                        try
+                        {
+                            await WaitForSentinelInFrameAsync(
+                                _frameManager.MainFrame,
+                                contentSentinel,
+                                "Failed to apply style content",
+                                timeoutMs: 500).ConfigureAwait(false);
+                        }
+                        catch (TimeoutException)
+                        {
+                            // Inline style may not fire load on some WebKit builds; the
+                            // CSP console race (with drain) still covers blocked styles.
+                            await EvaluateExpressionAsync("true").ConfigureAwait(false);
+                        }
 
-                    string contentLiteral = JsonSerializer.Serialize(content);
-                    string expression = $@"(() => {{
-                        const style = document.createElement('style');
-                        style.type = 'text/css';
-                        style.appendChild(document.createTextNode({contentLiteral}));
-                        document.head.appendChild(style);
-                        return style;
-                    }})()";
-                    return await EvaluateElementHandleAsync(expression).ConfigureAwait(false);
+                        IElementHandle styleHandle = await EvaluateElementHandleAsync($"window[{contentElementLiteral}]").ConfigureAwait(false);
+                        await EvaluateExpressionAsync(
+                            $"(() => {{ delete window[{contentSentinelLiteral}]; delete window[{contentElementLiteral}]; }})()").ConfigureAwait(false);
+                        return styleHandle;
+                    }
                 }).ConfigureAwait(false);
         }
 
@@ -5491,13 +5527,18 @@ namespace PlaywrightNative.WebKit
         private Task WaitForSentinelAsync(string sentinel, string errorMessage)
             => WaitForSentinelInFrameAsync(_frameManager.MainFrame, sentinel, errorMessage);
 
-        private async Task WaitForSentinelInFrameAsync(WKFrame frame, string sentinel, string errorMessage)
+        private async Task WaitForSentinelInFrameAsync(
+            WKFrame frame,
+            string sentinel,
+            string errorMessage,
+            int? timeoutMs = null)
         {
             string sentinelLiteral = JsonSerializer.Serialize(sentinel);
             string expression = $"window[{sentinelLiteral}]";
 
             // Poll the in-page sentinel: 0 = pending, 1 = loaded, 2 = error.
-            using System.Threading.CancellationTokenSource cts = new((int)_defaultNavigationTimeout);
+            int timeout = timeoutMs ?? (int)_defaultNavigationTimeout;
+            using System.Threading.CancellationTokenSource cts = new(timeout);
             while (true)
             {
                 int state = await EvaluateInFrameAsync<int>(frame, expression).ConfigureAwait(false);
@@ -6725,20 +6766,118 @@ namespace PlaywrightNative.WebKit
 
         /// <summary>
         /// Upstream <c>_initializePageProxySession</c>: enable dialogs, mark the page
-        /// active/focused for automation, and apply HTTP credentials.
+        /// active/focused for automation, apply HTTP credentials, and update the
+        /// emulated viewport (including <c>Emulation.setOrientationOverride</c>).
         /// </summary>
         /// <returns>A task that completes when page-proxy session setup finishes.</returns>
         private async Task InitializePageProxySessionAsync()
         {
-            // Match upstream Promise.all([Dialog.enable, Emulation.setActiveAndFocused]).
+            // Match upstream Promise.all([Dialog.enable, Emulation.setActiveAndFocused, _updateViewport]).
             Task dialogTask = _session.SendAsync("Dialog.enable");
             Task focusTask = EnsureActiveAndFocusedAsync();
-            await Task.WhenAll(dialogTask, focusTask).ConfigureAwait(false);
+            Task viewportTask = ApplyEmulatedViewportFromContextAsync();
+            await Task.WhenAll(dialogTask, focusTask, viewportTask).ConfigureAwait(false);
             _dialogEnabled = true;
 
             // Official always applies auth credentials during page-proxy
             // init, including empty ones so 401s do not hang on a dialog.
             await ApplyAuthCredentialsAsync().ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Official <c>_updateViewport</c> during page-proxy init so
+        /// <c>deviceOrientationOverride</c> is set before the first document and
+        /// process creation parameters pick it up on navigations.
+        /// </summary>
+        /// <returns>A task that completes when the override is applied or skipped.</returns>
+        private async Task ApplyEmulatedViewportFromContextAsync()
+        {
+            // Page.setScreenSizeOverride needs Page.enable on the target session; that
+            // runs later in InitializeTargetAsync. Here only send page-proxy Emulation
+            // commands (device metrics + orientation) so orientation is set early.
+            WKBrowserContext context = _context ?? OwnerContext as WKBrowserContext;
+            int width;
+            int height;
+            float deviceScaleFactor;
+            bool isMobile;
+
+            if (_viewportSize != null)
+            {
+                width = _viewportSize.Width;
+                height = _viewportSize.Height;
+                deviceScaleFactor = _emulatedDeviceScaleFactor;
+                isMobile = _emulatedIsMobile;
+            }
+            else if (context != null)
+            {
+                ViewportSize viewport = WindowOpenViewport ?? context.EmulatedViewport;
+                if (viewport == null
+                    && !context.EmulatedDeviceScaleFactor.HasValue
+                    && !context.IsMobile
+                    && context.EmulatedScreenSize == null)
+                {
+                    return;
+                }
+
+                width = viewport?.Width ?? ViewportSizeHelper.Default.Width;
+                height = viewport?.Height ?? ViewportSizeHelper.Default.Height;
+                deviceScaleFactor = context.EmulatedDeviceScaleFactor ?? 1;
+                isMobile = context.IsMobile;
+                _emulatedDeviceScaleFactor = deviceScaleFactor;
+                _emulatedIsMobile = isMobile;
+                if (context.EmulatedScreenSize != null)
+                {
+                    _independentScreen = context.EmulatedScreenSize;
+                }
+
+                _viewportSize = new PageViewportSizeResult { Width = width, Height = height };
+            }
+            else
+            {
+                return;
+            }
+
+            Task deviceMetricsTask = _session.SendAsync("Emulation.setDeviceMetricsOverride", new
+            {
+                width,
+                height,
+                fixedLayout = isMobile,
+                deviceScaleFactor,
+            });
+
+            if (isMobile)
+            {
+                int angle = width > height ? 90 : 0;
+                await Task.WhenAll(
+                    deviceMetricsTask,
+                    _session.SendAsync("Emulation.setOrientationOverride", new { angle })).ConfigureAwait(false);
+            }
+            else
+            {
+                await deviceMetricsTask.ConfigureAwait(false);
+            }
+        }
+
+        /// <summary>
+        /// Re-applies <c>Page.setScreenSizeOverride</c> on a target session
+        /// (official <c>_initializeSessionMayThrow</c>).
+        /// </summary>
+        /// <param name="target">Target session to configure.</param>
+        /// <returns>A task that completes when the override is sent or skipped.</returns>
+        private async Task ApplyScreenSizeOverrideOnAsync(WKTargetSession target)
+        {
+            if (target == null || _viewportSize == null)
+            {
+                return;
+            }
+
+            int screenWidth = _independentScreen?.Width ?? _viewportSize.Width;
+            int screenHeight = _independentScreen?.Height ?? _viewportSize.Height;
+            await target.SendAsync("Page.setScreenSizeOverride", new
+            {
+                width = screenWidth,
+                height = screenHeight,
+            }).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -6835,6 +6974,7 @@ namespace PlaywrightNative.WebKit
                 await ApplyExtraHttpHeadersOnAsync(target).ConfigureAwait(false);
                 await SyncBootstrapScriptOnAsync(target).ConfigureAwait(false);
                 await ApplyBypassCspOnAsync(target).ConfigureAwait(false);
+                await ApplyScreenSizeOverrideOnAsync(target).ConfigureAwait(false);
 
                 // Upstream provisional init uses full _initializeSession, which reapplies
                 // emulated media so COOP / process-swap navigations keep reducedMotion,
@@ -6909,6 +7049,7 @@ namespace PlaywrightNative.WebKit
                 }
 
                 await ApplyExtraHttpHeadersOnAsync(target).ConfigureAwait(false);
+                await ApplyScreenSizeOverrideOnAsync(target).ConfigureAwait(false);
 
                 // On the frame-session builds (WebKit 2245–2255, e.g. the macOS-14 2251)
                 // build) the Console domain lives on the per-frame sessions, not the page

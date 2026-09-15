@@ -321,6 +321,21 @@ namespace PlaywrightNative.WebKit
         internal bool IsMobile => _isMobile;
 
         /// <summary>
+        /// Context viewport override, or <see langword="null"/> for no default viewport.
+        /// </summary>
+        internal ViewportSize EmulatedViewport => _viewport;
+
+        /// <summary>
+        /// Context device scale factor, or <see langword="null"/>.
+        /// </summary>
+        internal float? EmulatedDeviceScaleFactor => _deviceScaleFactor;
+
+        /// <summary>
+        /// Context <c>screen</c> size override, or <see langword="null"/>.
+        /// </summary>
+        internal ScreenSize EmulatedScreenSize => _screenSize;
+
+        /// <summary>
         /// Official <c>browser.newPage()</c> marks the context so a second
         /// <see cref="NewPageAsync"/> throws.
         /// </summary>
