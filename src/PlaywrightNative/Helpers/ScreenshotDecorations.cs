@@ -17,7 +17,6 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
-using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Playwright;
@@ -31,8 +30,12 @@ namespace PlaywrightNative.Helpers
     /// </summary>
     internal static class ScreenshotDecorations
     {
-        internal const string HideCaretCss = "* { caret-color: transparent !important; }";
+        internal const string NavigatingMessage = "Cannot take a screenshot while page is navigating";
 
+        // Attribute/type selectors beat page rules like `div { caret-color: #000 !important; }`.
+        // A bare `*` loses that specificity battle and leaves the caret visible.
+        // Inject via evaluate (not AddStyleTag) so a navigation race becomes a
+        // swallowed evaluate error instead of a raw CDP context-id failure.
         internal const string HideCaretJs = @"(function() {
   const collectRoots = (root, roots) => {
     roots.push(root);
@@ -47,6 +50,16 @@ namespace PlaywrightNative.Helpers
   };
   const roots = collectRoots(document, []);
   const restore = [];
+  const styleTags = [];
+  for (const root of roots) {
+    const styleTag = document.createElement('style');
+    styleTag.textContent = 'input, textarea, [contenteditable] { caret-color: transparent !important; }';
+    if (root === document)
+      document.documentElement.append(styleTag);
+    else
+      root.append(styleTag);
+    styleTags.push(styleTag);
+  }
   const active = document.activeElement;
   let refocus = null;
   if (active && active.matches && active.matches('input,textarea,[contenteditable]')) {
@@ -63,7 +76,10 @@ namespace PlaywrightNative.Helpers
       element.style.setProperty('caret-color', 'transparent', 'important');
     });
   }
+  document.documentElement.getBoundingClientRect();
   window.__pwRestoreCaret = () => {
+    for (const tag of styleTags)
+      tag.remove();
     for (const item of restore)
       item.element.style.setProperty('caret-color', item.value, item.priority);
     if (refocus && typeof refocus.focus === 'function') {
@@ -142,29 +158,29 @@ namespace PlaywrightNative.Helpers
 
         /// <summary>
         /// Builds the stylesheet injected for the given screenshot options.
+        /// Caret hiding is applied via <see cref="HideCaretJs"/> (matching upstream
+        /// <c>inPagePrepareForScreenshots</c>), not this sheet: a global
+        /// <c>* { caret-color }</c> loses to page rules like
+        /// <c>div { caret-color: #000 !important }</c>, and <c>AddStyleTag</c>
+        /// during a redirect loop surfaces raw CDP context-id errors.
         /// Animations are frozen via <see cref="FinishAnimationsJs"/> (matching
         /// upstream), not CSS: forcing <c>animation-duration: 0s</c> here snaps
         /// a running CSS animation to completion and drops it from
         /// <c>getAnimations()</c> before that script can cancel/finish it,
         /// which suppresses the finish/cancel events official tests assert on.
         /// </summary>
-        /// <param name="caret">The screenshot caret option.</param>
+        /// <param name="caret">The screenshot caret option (unused; kept for call-site compatibility).</param>
         /// <param name="style">Optional caller stylesheet.</param>
         /// <returns>The combined CSS, or an empty string.</returns>
         internal static string BuildCss(string caret, string style)
         {
-            StringBuilder builder = new StringBuilder();
-            if (IsHideCaret(caret))
+            _ = caret;
+            if (string.IsNullOrEmpty(style))
             {
-                builder.Append(HideCaretCss);
+                return string.Empty;
             }
 
-            if (!string.IsNullOrEmpty(style))
-            {
-                builder.Append(style);
-            }
-
-            return builder.ToString();
+            return style;
         }
 
         /// <summary>
@@ -201,43 +217,63 @@ namespace PlaywrightNative.Helpers
             await gate.WaitAsync().ConfigureAwait(false);
             string css = BuildCss(caret, style);
             List<IElementHandle> tags = new List<IElementHandle>();
+            bool hideCaret = IsHideCaret(caret);
+            bool disableAnimations = IsDisabled(animations);
             try
             {
-                if (css.Length > 0)
+                try
                 {
-                    await InjectStyleAsync(page, css, tags).ConfigureAwait(false);
-                }
+                    if (css.Length > 0)
+                    {
+                        await InjectStyleAsync(page, css, tags).ConfigureAwait(false);
+                    }
 
-                if (IsHideCaret(caret))
+                    if (hideCaret)
+                    {
+                        await EvaluateInFramesAsync(page, HideCaretJs).ConfigureAwait(false);
+                    }
+
+                    if (disableAnimations)
+                    {
+                        await FinishAnimationsAsync(page).ConfigureAwait(false);
+                    }
+
+                    await ScreenshotMask.ApplyAsync(page, mask, maskColor, tags).ConfigureAwait(false);
+                    await WaitForFontsAsync(page).ConfigureAwait(false);
+
+                    return await capture().ConfigureAwait(false);
+                }
+                catch (Exception ex) when (DestroyedContext.IsDestroyedContext(ex))
                 {
-                    await EvaluateInFramesAsync(page, HideCaretJs).ConfigureAwait(false);
+                    // Official screenshotter surfaces navigation races as this message
+                    // rather than raw CDP "Cannot find context with specified id".
+                    throw new PlaywrightException(NavigatingMessage);
                 }
-
-                if (IsDisabled(animations))
-                {
-                    await FinishAnimationsAsync(page).ConfigureAwait(false);
-                }
-
-                await ScreenshotMask.ApplyAsync(page, mask, maskColor, tags).ConfigureAwait(false);
-                await WaitForFontsAsync(page).ConfigureAwait(false);
-
-                return await capture().ConfigureAwait(false);
             }
             finally
             {
-                if (IsDisabled(animations))
-                {
-                    await EvaluateInFramesAsync(page, RestoreAnimationsJs).ConfigureAwait(false);
-                }
-
-                if (IsHideCaret(caret))
-                {
-                    await EvaluateInFramesAsync(page, RestoreCaretJs).ConfigureAwait(false);
-                }
-
-                await RemoveStyleAsync(tags).ConfigureAwait(false);
+                await CleanupDecorationsAsync(page, tags, hideCaret, disableAnimations).ConfigureAwait(false);
                 gate.Release();
             }
+        }
+
+        private static async Task CleanupDecorationsAsync(
+            IPage page,
+            List<IElementHandle> tags,
+            bool hideCaret,
+            bool disableAnimations)
+        {
+            if (disableAnimations)
+            {
+                await EvaluateInFramesAsync(page, RestoreAnimationsJs).ConfigureAwait(false);
+            }
+
+            if (hideCaret)
+            {
+                await EvaluateInFramesAsync(page, RestoreCaretJs).ConfigureAwait(false);
+            }
+
+            await RemoveStyleAsync(tags).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -269,10 +305,17 @@ namespace PlaywrightNative.Helpers
 
         private static async Task InjectStyleAsync(IPage page, string css, List<IElementHandle> tags)
         {
-            IElementHandle pageTag = await page.AddStyleTagAsync(new() { Content = css }).ConfigureAwait(false);
-            if (pageTag != null)
+            try
             {
-                tags.Add(pageTag);
+                IElementHandle pageTag = await page.AddStyleTagAsync(new() { Content = css }).ConfigureAwait(false);
+                if (pageTag != null)
+                {
+                    tags.Add(pageTag);
+                }
+            }
+            catch (Exception ex) when (DestroyedContext.IsDestroyedContext(ex))
+            {
+                throw new PlaywrightException(NavigatingMessage);
             }
 
             IReadOnlyCollection<IFrame> frames = page.Frames;
@@ -295,6 +338,10 @@ namespace PlaywrightNative.Helpers
                     {
                         tags.Add(tag);
                     }
+                }
+                catch (Exception ex) when (DestroyedContext.IsDestroyedContext(ex))
+                {
+                    throw new PlaywrightException(NavigatingMessage);
                 }
                 catch (PlaywrightException)
                 {
