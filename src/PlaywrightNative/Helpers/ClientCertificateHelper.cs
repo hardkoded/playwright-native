@@ -16,6 +16,7 @@
  */
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
@@ -363,7 +364,20 @@ namespace PlaywrightNative.Helpers
                 string origin = NormalizeOrigin(certificate.Origin);
                 try
                 {
-                    map[origin] = Load(certificate);
+                    X509Certificate2 loaded = Load(certificate);
+                    map[origin] = loaded;
+
+                    // Darwin CFNetwork may CONNECT as 127.0.0.1 / localhost while
+                    // fixtures register https://local.playwright (and the reverse).
+                    // Alias loopback origins onto the same certificate so the MITM
+                    // still intercepts TLS error-page navigations.
+                    foreach (string alias in LoopbackOriginAliases(origin))
+                    {
+                        if (!map.ContainsKey(alias))
+                        {
+                            map[alias] = loaded;
+                        }
+                    }
                 }
                 catch (PlaywrightException ex)
                 {
@@ -430,6 +444,42 @@ namespace PlaywrightNative.Helpers
             return string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)
                 ? 443
                 : 80;
+        }
+
+        private static IEnumerable<string> LoopbackOriginAliases(string origin)
+        {
+            if (string.IsNullOrEmpty(origin)
+                || !Uri.TryCreate(origin, UriKind.Absolute, out Uri uri))
+            {
+                yield break;
+            }
+
+            string host = uri.IdnHost;
+            bool isLocalPlaywright = string.Equals(host, "local.playwright", StringComparison.OrdinalIgnoreCase);
+            bool isLocalhost = string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase);
+            bool isLoopbackIp = string.Equals(host, "127.0.0.1", StringComparison.Ordinal);
+            if (!isLocalPlaywright && !isLocalhost && !isLoopbackIp)
+            {
+                yield break;
+            }
+
+            int port = EffectivePort(uri);
+            string scheme = uri.Scheme;
+            string portSuffix = ":" + port.ToString(CultureInfo.InvariantCulture);
+            if (!isLocalPlaywright)
+            {
+                yield return scheme + "://local.playwright" + portSuffix;
+            }
+
+            if (!isLocalhost)
+            {
+                yield return scheme + "://localhost" + portSuffix;
+            }
+
+            if (!isLoopbackIp)
+            {
+                yield return scheme + "://127.0.0.1" + portSuffix;
+            }
         }
 
         private static bool HasBytes(byte[] bytes) => bytes != null && bytes.Length > 0;
