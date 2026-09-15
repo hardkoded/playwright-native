@@ -29,6 +29,8 @@ namespace PlaywrightNative.WebKit
     {
         private readonly WKWorkerSession _session;
         private readonly WKExecutionContext _context;
+        private readonly TaskCompletionSource<bool> _readyTcs =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         internal WKWorker(WKWorkerSession session, string workerId, string url)
         {
@@ -51,6 +53,12 @@ namespace PlaywrightNative.WebKit
 
         internal WKWorkerSession Session => _session;
 
+        /// <summary>
+        /// Completes after <c>Runtime.enable</c> / <c>Console.enable</c> /
+        /// <c>Worker.initialized</c> finish so the worker script has been allowed to run.
+        /// </summary>
+        internal Task Ready => _readyTcs.Task;
+
         internal async Task InitializeAsync()
         {
             await _session.SendAsync("Runtime.enable").ConfigureAwait(false);
@@ -64,11 +72,21 @@ namespace PlaywrightNative.WebKit
             }
         }
 
-        internal Task<T> EvaluateAsync<T>(string expression)
-            => _context.EvaluateAsync<T>(expression);
+        /// <summary>
+        /// Marks the worker ready for evaluation after protocol init completes (or fails).
+        /// </summary>
+        internal void MarkReady()
+            => _readyTcs.TrySetResult(true);
+
+        internal async Task<T> EvaluateAsync<T>(string expression)
+        {
+            await Ready.ConfigureAwait(false);
+            return await _context.EvaluateAsync<T>(expression).ConfigureAwait(false);
+        }
 
         internal async Task<IJSHandle> EvaluateHandleAsync(string expression)
         {
+            await Ready.ConfigureAwait(false);
             JsonElement? handleValue = await _context.EvaluateHandleAsync(expression).ConfigureAwait(false);
             string objectId = RemoteObject.GetObjectId(handleValue);
             return string.IsNullOrEmpty(objectId) ? null : new WKJSHandle(_context, objectId);
@@ -76,6 +94,7 @@ namespace PlaywrightNative.WebKit
 
         internal void NotifyClosed()
         {
+            _readyTcs.TrySetResult(true);
             _session.MessageReceived -= OnMessage;
             Closed?.Invoke(this, EventArgs.Empty);
             _session.Dispose();
@@ -96,6 +115,30 @@ namespace PlaywrightNative.WebKit
 
             if (method == "Console.messageAdded")
             {
+                // Match page Console: WebKit reports uncaught worker exceptions as
+                // Console.messageAdded with level=error and source=javascript. Upstream
+                // page mapping raises pageerror; without this, macOS only gets a console
+                // message and ShouldReportErrors times out on PageError.
+                if (parameters.Value.TryGetProperty("message", out JsonElement message)
+                    && message.ValueKind == JsonValueKind.Object)
+                {
+                    string level = message.TryGetProperty("level", out JsonElement levelEl)
+                        ? levelEl.GetString()
+                        : string.Empty;
+                    string source = message.TryGetProperty("source", out JsonElement sourceEl)
+                        ? sourceEl.GetString()
+                        : string.Empty;
+                    if (string.Equals(level, "error", StringComparison.Ordinal)
+                        && string.Equals(source, "javascript", StringComparison.Ordinal))
+                    {
+                        string protocolText = message.TryGetProperty("text", out JsonElement rawTextEl)
+                            ? rawTextEl.GetString() ?? string.Empty
+                            : string.Empty;
+                        ExceptionThrown?.Invoke(this, PageErrorText.FromWebKitConsole(protocolText, message));
+                        return;
+                    }
+                }
+
                 ConsoleMessage added = WorkerConsole.ParseMessageAdded(parameters.Value, WrapConsoleRemote);
                 if (added != null)
                 {

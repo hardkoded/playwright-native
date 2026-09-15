@@ -200,6 +200,17 @@ namespace PlaywrightNative.Helpers
             finally
             {
                 ClickAction.ApiName.Value = previousApiName;
+
+                // Release the remote object so RequestGC can collect DOM nodes that were
+                // only retained by the locator action handle (page-request-gc hit-target
+                // interceptor parity).
+                try
+                {
+                    await handle.DisposeAsync().ConfigureAwait(false);
+                }
+                catch (PlaywrightException)
+                {
+                }
             }
         }
 

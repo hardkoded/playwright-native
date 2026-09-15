@@ -6345,9 +6345,14 @@ namespace PlaywrightNative.WebKit
                 return;
             }
 
+            // Upstream wkPage asserts only page targets under the page proxy; dedicated
+            // workers are owned by the Worker domain (Worker.workerCreated), not Target.
+            // Handling Target worker targets (including Target.resume) races
+            // Worker.initialized / Console and can stall page console delivery while a
+            // worker is alive — observed as 30s timeouts on macOS CI.
             if (string.Equals(info.Type, "worker", StringComparison.Ordinal))
             {
-                OnWorkerTargetCreated(info, info.IsPaused);
+                _logger?.LogDebug("Ignoring worker target {TargetId}; workers use the Worker domain", targetId);
                 return;
             }
 
@@ -6400,37 +6405,13 @@ namespace PlaywrightNative.WebKit
                     _targetSession.MessageReceived -= OnInnerMessage;
                     _targetSession.Dispose();
                     ClearWorkers();
+                    ClearFrameSessions();
                     ClearExecutionContexts();
                 }
 
                 _targetSession = target;
                 _ = InitializeAndMaybeResumeAsync(target, isMain: true, isPaused);
             }
-        }
-
-        private void OnWorkerTargetCreated(WKTargetInfo info, bool isPaused)
-        {
-            WKTargetSession pageSession = _targetSession ?? _provisionalSession;
-            if (pageSession == null)
-            {
-                return;
-            }
-
-            string targetId = info.TargetId;
-            WKWorkerSession session = new(_session, pageSession, _browser.Connection, targetId);
-            WKWorker worker = new(session, targetId, info.Url);
-            if (!_workers.TryAdd(targetId, worker))
-            {
-                session.Dispose();
-                return;
-            }
-
-            worker.ExceptionThrown += (_, error) => RaisePageError(error);
-            WebKitWorker created = GetOrCreateWorker(worker);
-            Worker?.Invoke(this, created);
-#pragma warning disable CA2025 // Worker session is retained on WKWorker until NotifyClosed
-            _ = InitializeWorkerAsync(worker, pageSession, isPaused);
-#pragma warning restore CA2025
         }
 
         private void OnWorkerDomainCreated(JsonElement? parameters)
@@ -6468,7 +6449,7 @@ namespace PlaywrightNative.WebKit
             WebKitWorker domainWorker = GetOrCreateWorker(worker);
             Worker?.Invoke(this, domainWorker);
 #pragma warning disable CA2025 // Worker session is retained on WKWorker until NotifyClosed
-            _ = InitializeWorkerAsync(worker, pageSession, resumeTarget: false);
+            _ = InitializeWorkerAsync(worker, pageSession);
 #pragma warning restore CA2025
         }
 
@@ -6510,14 +6491,14 @@ namespace PlaywrightNative.WebKit
 
         private void ClearWorkers()
         {
-            foreach (System.Collections.Generic.KeyValuePair<string, WKWorker> entry in _workers)
-            {
-                entry.Value.NotifyClosed();
-            }
-
+            // Snapshot first: NotifyClosed must not race concurrent Worker.workerTerminated.
+            List<WKWorker> closing = new List<WKWorker>(_workers.Values);
             _workers.Clear();
             _directWorkers.Clear();
-            ClearFrameSessions();
+            foreach (WKWorker worker in closing)
+            {
+                worker.NotifyClosed();
+            }
         }
 
         private void ClearFrameSessions()
@@ -6649,13 +6630,13 @@ namespace PlaywrightNative.WebKit
             }
         }
 
-        private async Task InitializeWorkerAsync(WKWorker worker, WKTargetSession pageSession, bool resumeTarget)
+        private async Task InitializeWorkerAsync(WKWorker worker, WKTargetSession pageSession)
         {
             try
             {
                 // Worker.initialized unpauses the worker; Runtime.enable must be in-flight
                 // at the same time or the enable response never arrives. Mirrors upstream
-                // wkWorkers Promise.all([Runtime.enable, Worker.initialized]).
+                // wkWorkers Promise.all([Runtime.enable, Console.enable, Worker.initialized]).
                 Task enableTask = worker.InitializeAsync();
                 Task initializedTask = pageSession != null
                     ? pageSession.SendAsync("Worker.initialized", new { workerId = worker.WorkerId })
@@ -6673,15 +6654,15 @@ namespace PlaywrightNative.WebKit
                     {
                     }
                 }
-
-                if (resumeTarget)
-                {
-                    await _session.SendAsync("Target.resume", new { targetId = worker.WorkerId }).ConfigureAwait(false);
-                }
             }
             catch (Exception ex)
             {
                 _logger?.LogDebug(ex, "Worker initialize failed for {WorkerId}", worker.WorkerId);
+            }
+            finally
+            {
+                // Unblock EvaluateAsync even when init fails — otherwise callers hang.
+                worker.MarkReady();
             }
         }
 
@@ -7090,6 +7071,7 @@ namespace PlaywrightNative.WebKit
                 _targetSession.Dispose();
                 _targetSession = null;
                 ClearWorkers();
+                ClearFrameSessions();
                 ClearExecutionContexts();
                 if (crashed || _crashRequested)
                 {
@@ -7138,9 +7120,27 @@ namespace PlaywrightNative.WebKit
                     await enabledManager.UpdateInterceptionAsync().ConfigureAwait(false);
                 }
 
+                // Upstream provisional init runs full _initializeSession, including Worker.enable
+                // so Worker.workerCreated keeps working after COOP / process-swap commit.
+                try
+                {
+                    await target.SendAsync("Worker.enable").ConfigureAwait(false);
+                }
+                catch (PlaywrightException)
+                {
+                }
+
                 await ApplyExtraHttpHeadersOnAsync(target).ConfigureAwait(false);
                 await SyncBootstrapScriptOnAsync(target).ConfigureAwait(false);
                 await ApplyBypassCspOnAsync(target).ConfigureAwait(false);
+
+                // Upstream _initializeSessionMayThrow also sets file-chooser interception on
+                // provisional sessions. Cross-process navigations (localhost ↔ 127.0.0.1)
+                // promote this session to main; without re-enable, Page.fileChooserOpened
+                // never fires after the swap (page-filechooser "listener added before
+                // navigation").
+                await target.SendAsync("Page.setInterceptFileChooserDialog", new { enabled = true })
+                    .ConfigureAwait(false);
                 await ApplyScreenSizeOverrideOnAsync(target).ConfigureAwait(false);
 
                 // Upstream provisional init uses full _initializeSession, which reapplies
@@ -7609,6 +7609,10 @@ namespace PlaywrightNative.WebKit
             WKTargetSession oldSession = _targetSession;
             _targetSession = _provisionalSession;
             _provisionalSession = null;
+
+            // Upstream wkWorkers.setSession clears workers when the committed session
+            // swaps in (cross-process / COOP navigations).
+            ClearWorkers();
 
             // Drop the execution context — a new Runtime.executionContextCreated will
             // arrive on the now-main session.
@@ -8138,6 +8142,30 @@ namespace PlaywrightNative.WebKit
                 }
 
                 MarkReportAsNewNavigation(_mainFrameUrl);
+
+                // Match Chromium Page: re-assert file-chooser interception on each new
+                // main document so listeners subscribed before a navigation still work
+                // after same-process navigations that recreate page state.
+                WKTargetSession interceptTarget = _targetSession;
+                if (interceptTarget != null && !interceptTarget.IsDisposed)
+                {
+                    _ = SendFileChooserInterceptIgnoreClosedAsync(interceptTarget);
+                }
+            }
+        }
+
+        private async Task SendFileChooserInterceptIgnoreClosedAsync(WKTargetSession target)
+        {
+            try
+            {
+                await target.SendAsync("Page.setInterceptFileChooserDialog", new { enabled = true })
+                    .ConfigureAwait(false);
+            }
+            catch (PlaywrightException)
+            {
+            }
+            catch (InvalidOperationException)
+            {
             }
         }
 
