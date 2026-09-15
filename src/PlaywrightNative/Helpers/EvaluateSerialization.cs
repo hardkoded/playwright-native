@@ -252,6 +252,10 @@ namespace PlaywrightNative.Helpers
         /// Returns whether <paramref name="expression"/> can be parenthesized as a
         /// JavaScript expression (function IIFEs and wrapped calls). Programs such as
         /// <c>1 + 5;</c> must stay two-step so the completion value is preserved.
+        /// Thenables (<c>Promise</c>, <c>fetch(</c>, <c>.then(</c>, <c>await</c>) must
+        /// keep a handle so WebKit can <c>awaitPromise</c> via <c>callFunctionOn</c>;
+        /// wrapping them with <c>returnByValue:true</c> drops the objectId and a second
+        /// evaluate re-runs side effects.
         /// </summary>
         /// <param name="expression">The already-invoked evaluate expression.</param>
         /// <returns><see langword="true"/> when same-turn serialize wrapping is safe.</returns>
@@ -267,6 +271,7 @@ namespace PlaywrightNative.Helpers
                 || trimmed.Contains("await ", StringComparison.Ordinal)
                 || trimmed.Contains("new Promise", StringComparison.Ordinal)
                 || trimmed.Contains("Promise.", StringComparison.Ordinal)
+                || trimmed.Contains("fetch(", StringComparison.Ordinal)
                 || trimmed.StartsWith("(async", StringComparison.Ordinal)
                 || trimmed.StartsWith("async ", StringComparison.Ordinal)
                 || trimmed.StartsWith("async(", StringComparison.Ordinal))

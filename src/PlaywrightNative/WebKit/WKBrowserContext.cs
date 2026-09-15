@@ -526,16 +526,19 @@ namespace PlaywrightNative.WebKit
 
         /// <inheritdoc/>
         public Task AddCookiesAsync(IEnumerable<Cookie> cookies)
-            => string.IsNullOrEmpty(_browserContextId)
+        {
+            IEnumerable<Cookie> cookiesForProtocol = FilterCookiesForWebKitHost(cookies);
+            return string.IsNullOrEmpty(_browserContextId)
                 ? _browser.Session.SendAsync("Playwright.setCookies", new
                 {
-                    cookies = ContextCookies.ToProtocol(cookies, webKit: true),
+                    cookies = ContextCookies.ToProtocol(cookiesForProtocol, webKit: true),
                 })
                 : _browser.Session.SendAsync("Playwright.setCookies", new
                 {
-                    cookies = ContextCookies.ToProtocol(cookies, webKit: true),
+                    cookies = ContextCookies.ToProtocol(cookiesForProtocol, webKit: true),
                     browserContextId = _browserContextId,
                 });
+        }
 
         /// <inheritdoc/>
         public Task ClearCookiesAsync()
@@ -1477,6 +1480,38 @@ namespace PlaywrightNative.WebKit
 
             await _initScripts.ApplyAllAsync(page).ConfigureAwait(false);
             await _initScripts.EvaluateOnCurrentAsync(page).ConfigureAwait(false);
+        }
+
+        private static IEnumerable<Cookie> FilterCookiesForWebKitHost(IEnumerable<Cookie> cookies)
+        {
+            if (!DropsUnsupportedPartitionedCookies())
+            {
+                return cookies;
+            }
+
+            List<Cookie> filtered = new List<Cookie>();
+            foreach (Cookie cookie in cookies)
+            {
+                if (!string.IsNullOrEmpty(cookie.PartitionKey))
+                {
+                    // Frozen WebKit builds used on mac14 ignore CHIPS partitionKey and store
+                    // the cookie as a normal first-party cookie. Drop these so API-added
+                    // partitioned cookies stay invisible in document.cookie, matching upstream.
+                    continue;
+                }
+
+                filtered.Add(cookie);
+            }
+
+            return filtered;
+        }
+
+        private static bool DropsUnsupportedPartitionedCookies()
+        {
+            string platformKey = BrowserData.PlaywrightPlatformKey(
+                SupportedBrowser.Webkit,
+                BrowserData.CurrentPlatform());
+            return platformKey.StartsWith("mac14", StringComparison.Ordinal);
         }
 
         private static Task<IAsyncDisposable> InstallOnAsync(IPage page, string name, Func<System.Text.Json.JsonElement[], Task<object>> handler)
