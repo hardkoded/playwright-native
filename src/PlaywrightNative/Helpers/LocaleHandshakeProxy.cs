@@ -592,26 +592,82 @@ namespace PlaywrightNative.Helpers
         {
             await client.FlushUnreadAsync(server.Stream, token).ConfigureAwait(false);
             await server.FlushUnreadAsync(client.Stream, token).ConfigureAwait(false);
-            Task copyA = client.Stream.CopyToAsync(server.Stream, token);
-            Task copyB = server.Stream.CopyToAsync(client.Stream, token);
+
+            // Half-close aware tunnel: when one side EOFs (e.g. macOS cfNetwork after a
+            // client WebSocket close frame), shut down only that write direction and keep
+            // copying the opposite way so the close echo can still reach the browser.
+            // Task.WhenAny + dispose aborted application close codes as 1006.
+            using CancellationTokenSource tunnelCts = CancellationTokenSource.CreateLinkedTokenSource(token);
+            Task copyA = CopyAndShutdownAsync(client.Stream, server.Stream, tunnelCts.Token);
+            Task copyB = CopyAndShutdownAsync(server.Stream, client.Stream, tunnelCts.Token);
             try
             {
-                await Task.WhenAny(copyA, copyB).ConfigureAwait(false);
+                await Task.WhenAll(copyA, copyB).ConfigureAwait(false);
             }
             catch (IOException)
+            {
+            }
+            catch (ObjectDisposedException)
             {
             }
             catch (OperationCanceledException)
             {
             }
+            finally
+            {
+                try
+                {
+                    await tunnelCts.CancelAsync().ConfigureAwait(false);
+                }
+                catch (ObjectDisposedException)
+                {
+                }
+            }
+        }
+
+        private static async Task CopyAndShutdownAsync(
+            NetworkStream source,
+            NetworkStream destination,
+            CancellationToken token)
+        {
+            try
+            {
+                await source.CopyToAsync(destination, token).ConfigureAwait(false);
+            }
+            catch (IOException)
+            {
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            finally
+            {
+                try
+                {
+                    destination.Socket?.Shutdown(SocketShutdown.Send);
+                }
+                catch (SocketException)
+                {
+                }
+                catch (ObjectDisposedException)
+                {
+                }
+            }
         }
 
         private static async Task<TcpClient> ConnectAsync(string host, int port, CancellationToken token)
         {
+            // macOS WebKit may route loopback WS via local.playwright (see
+            // WebKitMacLocaleWebSocketShim); map back to localhost for the
+            // real test-server socket, matching ClientCertificatesProxy.
+            string connectHost = ClientCertificatesProxy.RewriteToLocalhostIfNeeded(host);
             TcpClient server = new() { NoDelay = true };
             try
             {
-                await server.ConnectAsync(host, port, token).ConfigureAwait(false);
+                await server.ConnectAsync(connectHost, port, token).ConfigureAwait(false);
                 return server;
             }
             catch

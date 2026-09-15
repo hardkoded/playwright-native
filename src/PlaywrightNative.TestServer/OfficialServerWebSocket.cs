@@ -25,17 +25,33 @@ namespace PlaywrightNative.TestServer
         private bool _receiveStarted;
         private bool _closed;
         private readonly SemaphoreSlim _writeLock = new SemaphoreSlim(1, 1);
+        private readonly TaskCompletionSource<bool> _closedTcs =
+            new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
         internal OfficialServerWebSocket(WebSocket socket, Stream stream = null)
         {
             _socket = socket;
             _stream = stream;
+
+            // When we own the raw upgraded stream, start the receive loop immediately so
+            // ping/close frames are handled even before the test registers listeners.
+            // Deferred start raced macOS WebKit client closes (page saw 1006).
+            if (_stream != null)
+            {
+                EnsureReceive();
+            }
         }
 
         internal OfficialServerWebSocket(Stream stream)
         {
             _stream = stream ?? throw new ArgumentNullException(nameof(stream));
+            EnsureReceive();
         }
+
+        /// <summary>
+        /// Completes when the peer close handshake finishes or the stream drops.
+        /// </summary>
+        internal Task WaitUntilClosedAsync() => _closedTcs.Task;
 
         /// <summary>
         /// Registers a one-shot text-or-binary message listener. Binary frames
@@ -522,6 +538,7 @@ namespace PlaywrightNative.TestServer
                 listeners = new List<Action<int, byte[]>>(_closeListeners);
             }
 
+            _closedTcs.TrySetResult(true);
             handler?.Invoke(code, reason ?? Array.Empty<byte>());
             foreach (Action<int, byte[]> listener in listeners)
             {
