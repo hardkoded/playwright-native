@@ -136,6 +136,9 @@ namespace PlaywrightNative.WebKit
 
             try
             {
+                // awaitPromise must stay true: macOS WebKit checks transient
+                // activation across the requestStorageAccess microtask chain.
+                // Upstream evaluateWithArguments uses the same pair of flags.
                 JsonElement? response = await _session.SendAsync(
                     "Runtime.callFunctionOn",
                     new
@@ -144,7 +147,7 @@ namespace PlaywrightNative.WebKit
                         functionDeclaration = "function() { return (" + expression + "); }",
                         returnByValue = false,
                         emulateUserGesture = true,
-                        awaitPromise = false,
+                        awaitPromise = true,
                     }).ConfigureAwait(false);
                 if (response == null)
                 {

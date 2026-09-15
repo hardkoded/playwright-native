@@ -149,6 +149,43 @@ namespace PlaywrightNative.Helpers
 }";
 
         /// <summary>
+        /// Computed ARIA role for <c>expect().toHaveRole</c>: explicit
+        /// <c>role</c> attribute, else the implicit HTML role (e.g. link for
+        /// <c>&lt;a href&gt;</c>). Avoids WebKit
+        /// <c>DOM.getAccessibilityPropertiesForNode</c> walks that can hang
+        /// the expect poll on Darwin.
+        /// </summary>
+        internal const string GetAriaRoleFunction = @"el => {
+    function implicitRole(node) {
+        const tag = node && node.nodeName;
+        if (tag === 'BUTTON') return 'button';
+        if (tag === 'H1' || tag === 'H2' || tag === 'H3' || tag === 'H4' || tag === 'H5' || tag === 'H6') return 'heading';
+        if (tag === 'A' && node.hasAttribute('href')) return 'link';
+        if (tag === 'SELECT') return node.hasAttribute('multiple') || Number(node.size) > 1 ? 'listbox' : 'combobox';
+        if (tag === 'TEXTAREA') return 'textbox';
+        if (tag === 'IMG') return 'img';
+        if (tag === 'INPUT') {
+            const t = String(node.type || '').toLowerCase();
+            if (t === 'checkbox') return 'checkbox';
+            if (t === 'radio') return 'radio';
+            if (t === 'button' || t === 'submit' || t === 'reset' || t === 'image' || t === 'file') return 'button';
+            if (t === 'hidden') return '';
+            return 'textbox';
+        }
+        return '';
+    }
+    if (!el) {
+        return '';
+    }
+    const roles = String(el.getAttribute('role') || '').split(' ');
+    for (let i = 0; i < roles.length; i++) {
+        const r = roles[i].trim();
+        if (r) return r;
+    }
+    return implicitRole(el);
+}";
+
+        /// <summary>
         /// Official <c>_activelyFocused</c>: the node is the active element of
         /// its root (document or shadow) and the document has focus.
         /// </summary>

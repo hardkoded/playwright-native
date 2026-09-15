@@ -1444,9 +1444,16 @@ namespace PlaywrightNative
                 throw new ArgumentNullException(nameof(role));
             }
 
+            // Prefer DOM-computed ARIA role over page.SnapshotAccessibilityAsync.
+            // WebKit's DOM.getAccessibilityPropertiesForNode walk can hang the
+            // expect poll on Darwin (ToHaveRoleShouldMatchAriaRoleLink).
             return ExpectBoolAsync(
-                () => UniqueAriaAsync(snapshot =>
-                    string.Equals(snapshot.Role, role, StringComparison.Ordinal)),
+                () => UniqueStateAsync(async handle =>
+                {
+                    string actual = await handle.EvaluateAsync<string>(ElementStateScript.GetAriaRoleFunction)
+                        .ConfigureAwait(false) ?? string.Empty;
+                    return string.Equals(actual, role, StringComparison.Ordinal);
+                }),
                 timeout,
                 "toHaveRole");
         }
@@ -2875,27 +2882,6 @@ namespace PlaywrightNative
                 }",
                 new { name, pseudo });
         }
-
-        private Task<bool> UniqueAriaAsync(Func<AccessibilitySnapshotResult, bool> check)
-            => UniqueStateAsync(async handle =>
-            {
-                IFrame owner = await handle.OwnerFrameAsync().ConfigureAwait(false);
-                IPage page = owner?.Page ?? _locator.Page;
-                if (page is not IHasPageExtras)
-                {
-                    return false;
-                }
-
-                AccessibilitySnapshotResult snapshot = await page
-                    .SnapshotAccessibilityAsync(root: handle)
-                    .ConfigureAwait(false);
-                if (snapshot == null)
-                {
-                    return false;
-                }
-
-                return check(snapshot);
-            });
 
         private PlaywrightException FormatVisibleSelectorError(Exception ex)
         {

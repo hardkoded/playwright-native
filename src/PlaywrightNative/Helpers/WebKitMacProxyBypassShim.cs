@@ -313,7 +313,7 @@ namespace PlaywrightNative.Helpers
             return true;
         }
 
-        private static byte[] RewriteRequestTarget(byte[] headerBytes, string method, string originForm)
+        private static byte[] RewriteRequestTarget(byte[] headerBytes, string method, string originForm, bool forceConnectionClose)
         {
             string text = Latin1.GetString(headerBytes);
             int lineEnd = text.IndexOf("\r\n", StringComparison.Ordinal);
@@ -326,7 +326,26 @@ namespace PlaywrightNative.Helpers
             int versionIdx = text.LastIndexOf(' ', lineEnd - 1);
             string version = versionIdx > 0 ? text.Substring(versionIdx + 1, lineEnd - versionIdx - 1) : "HTTP/1.1";
             string rewritten = method + " " + originForm + " " + version + rest;
-            return ForceConnectionClose(Latin1.GetBytes(rewritten));
+            byte[] rewrittenBytes = Latin1.GetBytes(rewritten);
+            return forceConnectionClose ? ForceConnectionClose(rewrittenBytes) : rewrittenBytes;
+        }
+
+        /// <summary>
+        /// Returns whether <paramref name="headerBytes"/> is a WebSocket upgrade
+        /// handshake (absolute-form or origin-form).
+        /// </summary>
+        /// <param name="headerBytes">HTTP request headers from the browser.</param>
+        /// <returns><see langword="true"/> when the request upgrades to WebSocket.</returns>
+        private static bool IsWebSocketUpgrade(byte[] headerBytes)
+        {
+            if (headerBytes == null || headerBytes.Length == 0)
+            {
+                return false;
+            }
+
+            string text = Latin1.GetString(headerBytes);
+            return text.Contains("Upgrade: websocket", StringComparison.OrdinalIgnoreCase)
+                || text.Contains("Sec-WebSocket-Key:", StringComparison.OrdinalIgnoreCase);
         }
 
         /// <summary>
@@ -661,6 +680,7 @@ namespace PlaywrightNative.Helpers
 
             int port = uri.IsDefaultPort ? 80 : uri.Port;
             string requestHost = ProxySettings.RequestHost(uri.Host, port);
+            bool webSocketUpgrade = IsWebSocketUpgrade(headerBytes);
             TcpClient upstream = new();
             try
             {
@@ -672,19 +692,30 @@ namespace PlaywrightNative.Helpers
                     await ConnectWithTimeoutAsync(upstream, uri.Host, port).ConfigureAwait(false);
                     upStream = upstream.GetStream();
                     string originForm = string.IsNullOrEmpty(uri.PathAndQuery) ? "/" : uri.PathAndQuery;
-                    outbound = RewriteRequestTarget(headerBytes, method, originForm);
+                    outbound = RewriteRequestTarget(headerBytes, method, originForm, forceConnectionClose: !webSocketUpgrade);
                 }
                 else
                 {
                     await ConnectWithTimeoutAsync(upstream, _upstreamHost, _upstreamPort).ConfigureAwait(false);
                     upStream = upstream.GetStream();
-                    outbound = ForceConnectionClose(InjectProxyAuthorization(headerBytes));
+                    byte[] authorized = InjectProxyAuthorization(headerBytes);
+                    outbound = webSocketUpgrade ? authorized : ForceConnectionClose(authorized);
                 }
 
                 await upStream.WriteAsync(outbound).ConfigureAwait(false);
                 if (requestLeftover != null && requestLeftover.Length > 0)
                 {
                     await upStream.WriteAsync(requestLeftover).ConfigureAwait(false);
+                }
+
+                // WebSocket upgrades must stay a bidirectional tunnel after the
+                // 101 response. One-shot HTTP framing + Connection: close (used
+                // for normal navigations so keep-alive cannot skip ShouldBypass)
+                // aborts the handshake and hangs page WebSocket evaluates.
+                if (webSocketUpgrade)
+                {
+                    await PipeBidirectionalAsync(clientStream, upStream).ConfigureAwait(false);
+                    return;
                 }
 
                 // One framed response — do not pipe until EOF (upstream keep-alive

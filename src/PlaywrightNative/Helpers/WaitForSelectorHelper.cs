@@ -105,15 +105,35 @@ namespace PlaywrightNative.Helpers
                 IElementHandle handle = null;
                 bool attached = false;
                 bool visible = false;
+                string eagerPreview = null;
                 try
                 {
                     handle = await querySelectorAsync(selector).ConfigureAwait(false);
                     attached = handle != null;
-                    if (attached
-                        && wanted != WaitForSelectorState.Attached
-                        && wanted != WaitForSelectorState.Detached)
+                    if (attached)
                     {
-                        visible = await handle.IsVisibleAsync().ConfigureAwait(false);
+                        // Snapshot the preview before IsVisibleAsync. A concurrent
+                        // remove between those two round-trips used to swallow the
+                        // "locator resolved to …" line on Darwin WebKit (mydiv race
+                        // in should report logs while waiting for visible).
+                        try
+                        {
+                            string previewValue = await handle.EvaluateAsync<string>(RemoteObject.PreviewNodeFunction)
+                                .ConfigureAwait(false);
+                            if (!string.IsNullOrEmpty(previewValue))
+                            {
+                                eagerPreview = previewValue;
+                            }
+                        }
+                        catch (PlaywrightException)
+                        {
+                        }
+
+                        if (wanted != WaitForSelectorState.Attached
+                            && wanted != WaitForSelectorState.Detached)
+                        {
+                            visible = await handle.IsVisibleAsync().ConfigureAwait(false);
+                        }
                     }
                 }
                 catch (PlaywrightException ex) when (IsFrameDetachedError(ex) || (isDetached != null && isDetached()))
@@ -152,7 +172,11 @@ namespace PlaywrightNative.Helpers
                     _ => visible,
                 };
 
-                if (!done && handle != null)
+                if (!done && !string.IsNullOrEmpty(eagerPreview))
+                {
+                    AppendResolvedLog(logs, visible, eagerPreview);
+                }
+                else if (!done && handle != null)
                 {
                     await AppendResolvedLogAsync(logs, visible, handle).ConfigureAwait(false);
                 }
@@ -241,6 +265,11 @@ namespace PlaywrightNative.Helpers
             {
             }
 
+            AppendResolvedLog(logs, visible, preview);
+        }
+
+        private static void AppendResolvedLog(List<string> logs, bool visible, string preview)
+        {
             string line = "locator resolved to " + (visible ? "visible" : "hidden") + " " + preview;
             if (logs.Count == 0 || !string.Equals(logs[logs.Count - 1], line, StringComparison.Ordinal))
             {
