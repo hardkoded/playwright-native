@@ -123,6 +123,21 @@ namespace PlaywrightNative.WebKit
         {
             RouteContinue.EnsureSameProtocol(Request.Url, url);
             byte[] body = postDataBytes ?? (postData == null ? null : Encoding.UTF8.GetBytes(postData));
+
+            // Restating the intercepted headers (page-request-fulfill "should not
+            // modify the headers sent to the server") must use interceptContinue.
+            // interceptWithRequest with a full header object makes macOS WebKit
+            // invent an extra wire header (commonly Content-Length: 0 on GET)
+            // that a natural continue never sends.
+            bool headersAreNoOp = false;
+            if (headers != null && url == null && method == null && body == null)
+            {
+                Dictionary<string, string> merged = RouteContinue.ApplyHeadersOverrides(Request.Headers, headers);
+                headersAreNoOp = RouteContinue.HeaderMapsEqual(
+                    RouteContinue.RemoveCookie(merged),
+                    RouteContinue.RemoveCookie(Request.Headers));
+            }
+
             Request.ApplyContinueOverrides(url, method, headers, body);
             _page.NoteContinuedNavigation(Request);
 
@@ -131,7 +146,7 @@ namespace PlaywrightNative.WebKit
             string sendUrl = url ?? Request.ContinuedUrl;
             string sendMethod = method ?? Request.ContinuedMethod;
             byte[] sendBody = body ?? Request.ContinuedPostData;
-            IDictionary<string, string> protocolHeaders = Request.ContinuedHeaders;
+            IDictionary<string, string> protocolHeaders = headersAreNoOp ? null : Request.ContinuedHeaders;
             if (sendBody != null)
             {
                 // WebKit's Network.interceptWithRequest replaces the full header

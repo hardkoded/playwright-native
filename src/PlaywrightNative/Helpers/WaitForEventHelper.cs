@@ -57,6 +57,13 @@ namespace PlaywrightNative.Helpers
         /// handler was attached. Replayed after subscribe so
         /// <c>evaluate</c>-then-<c>waitForEvent</c> matches Node's event loop.
         /// </param>
+        /// <param name="deferPredicateEvaluation">
+        /// When <see langword="true"/> (default), predicates run on a background
+        /// continuation so sync-over-async filters cannot stall the transport
+        /// read loop. Lifecycle events (<c>load</c> / <c>DOMContentLoaded</c>)
+        /// pass <see langword="false"/> so <c>waitForEvent</c> resolves in the
+        /// same turn as the public event (autowait ordering).
+        /// </param>
         /// <param name="cancellationToken">Cancels the wait (Node <c>signal</c>).</param>
         /// <returns>The matching event payload.</returns>
         internal static Task<T> WaitAsync<T>(
@@ -70,6 +77,7 @@ namespace PlaywrightNative.Helpers
             IPage abortOnPageClose = null,
             bool abortOnPageCrash = false,
             Func<Task<IReadOnlyList<T>>> existingAfterSubscribe = null,
+            bool deferPredicateEvaluation = true,
             CancellationToken cancellationToken = default)
         {
             if (addHandler == null)
@@ -95,13 +103,33 @@ namespace PlaywrightNative.Helpers
             // read by the very loop this handler would otherwise be blocking. Chain
             // matches() onto a background task per event, in arrival order, so events
             // are still evaluated one at a time (preserving "predicate called once")
-            // without stalling the reader.
+            // without stalling the reader. Lifecycle waits skip the hop.
             Task chain = Task.CompletedTask;
 
             void Handler(object sender, T payload)
             {
                 if (tcs.Task.IsCompleted)
                 {
+                    return;
+                }
+
+                if (!deferPredicateEvaluation)
+                {
+                    try
+                    {
+                        if (tcs.Task.IsCompleted || !matches(payload))
+                        {
+                            return;
+                        }
+
+                        removeHandler(Handler);
+                        tcs.TrySetResult(payload);
+                    }
+                    catch (Exception ex)
+                    {
+                        tcs.TrySetException(ex);
+                    }
+
                     return;
                 }
 
