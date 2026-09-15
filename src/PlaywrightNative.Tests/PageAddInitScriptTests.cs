@@ -205,7 +205,16 @@ namespace PlaywrightNative.Tests
             int injected = await page.EvaluateAsync<int>("(() => window['injected'])()").ConfigureAwait(false);
             Assert.That(injected, Is.EqualTo(123));
 
-            Assert.CatchAsync<PlaywrightException>(() => page.AddScriptTagAsync(new() { Content = "window.e = 10;" }));
+            // Make sure CSP works. Upstream / playwright-dotnet swallow addScriptTag errors
+            // and only assert the side effect was blocked.
+            try
+            {
+                await page.AddScriptTagAsync(new() { Content = "window.e = 10;" }).ConfigureAwait(false);
+            }
+            catch (PlaywrightException)
+            {
+            }
+
             object e = await page.EvaluateAsync<object>("(() => window['e'])()").ConfigureAwait(false);
             Assert.That(e, Is.Null);
         }

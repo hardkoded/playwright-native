@@ -91,6 +91,9 @@ namespace PlaywrightNative.Helpers
 
         internal const string RestoreCaretJs = "window.__pwRestoreCaret && window.__pwRestoreCaret()";
 
+        // Matches upstream screenshotter.inPagePrepareForScreenshots disableAnimations
+        // branch: finite endTime → finish(), infinite → cancel() + resume via play().
+        // Must run in the same JS world as RestoreAnimationsJs (utility on WebKit).
         internal const string FinishAnimationsJs = @"(() => {
   const collectRoots = (root, roots) => {
     roots.push(root);
@@ -103,39 +106,66 @@ namespace PlaywrightNative.Helpers
     } while (walker.nextNode());
     return roots;
   };
-  const infinite = [];
-  const handle = (root) => {
+  const infiniteAnimationsToResume = new Set();
+  const handleAnimations = (root) => {
     if (!root.getAnimations)
       return;
     for (const animation of root.getAnimations()) {
-      try {
-        if (!animation.effect || animation.playbackRate === 0)
-          continue;
-        const timing = animation.effect && animation.effect.getComputedTiming
-          ? animation.effect.getComputedTiming()
-          : null;
-        if (timing && (timing.iterations === Infinity || timing.duration === Infinity)) {
-          animation.cancel();
-          infinite.push(animation);
-        } else {
+      if (!animation.effect || animation.playbackRate === 0 || infiniteAnimationsToResume.has(animation))
+        continue;
+      const endTime = animation.effect.getComputedTiming().endTime;
+      if (Number.isFinite(endTime)) {
+        try {
           animation.finish();
+        } catch (e) {
         }
-      } catch (e) {
-        try { animation.cancel(); } catch (e2) {}
+      } else {
+        try {
+          animation.cancel();
+          infiniteAnimationsToResume.add(animation);
+        } catch (e) {
+        }
       }
     }
   };
-  for (const root of collectRoots(document, []))
-    handle(root);
-  window.__pwRestoreAnimations = () => {
-    for (const animation of infinite) {
-      try { animation.play(); } catch (e) {}
+  const roots = collectRoots(document, []);
+  const cleanupCallbacks = [];
+  for (const root of roots) {
+    const handleRootAnimations = handleAnimations.bind(null, root);
+    handleRootAnimations();
+    root.addEventListener('transitionrun', handleRootAnimations);
+    root.addEventListener('animationstart', handleRootAnimations);
+    cleanupCallbacks.push(() => {
+      root.removeEventListener('transitionrun', handleRootAnimations);
+      root.removeEventListener('animationstart', handleRootAnimations);
+    });
+  }
+  cleanupCallbacks.push(() => {
+    for (const animation of infiniteAnimationsToResume) {
+      try {
+        animation.play();
+      } catch (e) {
+      }
     }
+  });
+  window.__pwRestoreAnimations = () => {
+    for (const cleanupCallback of cleanupCallbacks)
+      cleanupCallback();
     delete window.__pwRestoreAnimations;
   };
 })()";
 
         internal const string RestoreAnimationsJs = "window.__pwRestoreAnimations && window.__pwRestoreAnimations()";
+
+        // Official WebKit screenshotter toggles an empty stylesheet so pending
+        // CSS animations sync before capture (shouldToggleStyleSheetToSyncAnimations).
+        internal const string SyncAnimationsJs = @"(() => {
+  const style = document.createElement('style');
+  style.textContent = 'body {}';
+  document.head.appendChild(style);
+  document.documentElement.getBoundingClientRect();
+  style.remove();
+})()";
 
         private static readonly ConcurrentDictionary<int, SemaphoreSlim> ScreenshotGates = new ConcurrentDictionary<int, SemaphoreSlim>();
 
@@ -223,6 +253,13 @@ namespace PlaywrightNative.Helpers
             {
                 try
                 {
+                    // WebKit: empty stylesheet toggle forces layout so CSS
+                    // animations are synchronized before capture (upstream).
+                    if (page is WKPage)
+                    {
+                        await EvaluateInFramesAsync(page, SyncAnimationsJs).ConfigureAwait(false);
+                    }
+
                     if (css.Length > 0)
                     {
                         await InjectStyleAsync(page, css, tags).ConfigureAwait(false);
@@ -279,7 +316,7 @@ namespace PlaywrightNative.Helpers
         /// <summary>
         /// Official screenshotter waits for <c>document.fonts.ready</c> and logs
         /// <c>waiting for fonts to load...</c> so a stalled webfont times out
-        /// with that text.
+        /// with that text via <see cref="ScreenshotTimeout"/>.
         /// </summary>
         /// <param name="page">The page being captured.</param>
         /// <returns>A task that completes when fonts are ready or the frame is gone.</returns>
@@ -287,18 +324,21 @@ namespace PlaywrightNative.Helpers
         {
             try
             {
-                await page.EvaluateAsync<object>(@"async () => {
-  if (!document.fonts || document.fonts.status !== 'loading')
-    return true;
-  await Promise.race([
-    document.fonts.ready,
-    new Promise((_, reject) => window.addEventListener('pagehide', () => reject(new Error('navigating')), { once: true })),
-    new Promise((_, reject) => setTimeout(() => reject(new Error('navigating')), 250))
-  ]);
-  return true;
-}").ConfigureAwait(false);
+                // Upstream: frame.nonStallingEvaluateInExistingContext('document.fonts.ready', 'utility')
+                // Do not race a short timer — ScreenshotTimeout owns the deadline.
+                if (page is WKPage webkit)
+                {
+                    await EvaluateInWebKitUtilityAsync(webkit, "document.fonts && document.fonts.ready").ConfigureAwait(false);
+                }
+                else
+                {
+                    await page.EvaluateAsync("document.fonts && document.fonts.ready").ConfigureAwait(false);
+                }
             }
             catch (PlaywrightException)
+            {
+            }
+            catch (TimeoutException)
             {
             }
         }
@@ -440,25 +480,11 @@ namespace PlaywrightNative.Helpers
             }
         }
 
-        private static async Task FinishAnimationsAsync(IPage page)
+        private static Task FinishAnimationsAsync(IPage page)
         {
-            IReadOnlyCollection<IFrame> frames = page.Frames;
-            if (frames == null || frames.Count == 0)
-            {
-                await page.EvaluateAsync(FinishAnimationsJs).ConfigureAwait(false);
-                return;
-            }
-
-            foreach (IFrame frame in frames)
-            {
-                try
-                {
-                    await frame.EvaluateAsync(FinishAnimationsJs).ConfigureAwait(false);
-                }
-                catch (PlaywrightException)
-                {
-                }
-            }
+            // Must share EvaluateInFramesAsync with RestoreAnimationsJs so
+            // window.__pwRestoreAnimations is visible on resume (WebKit utility).
+            return EvaluateInFramesAsync(page, FinishAnimationsJs);
         }
 
         private static async Task RemoveStyleAsync(List<IElementHandle> tags)

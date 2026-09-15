@@ -462,6 +462,13 @@ namespace PlaywrightNative.WebKit
             return ResponseHeaders.FromWebKitMap(ParseHeaders(responsePayload, caseInsensitive: true));
         }
 
+        private static JsonElement? CreateSyntheticLoadingFailed(string requestId, string errorText)
+            => JsonSerializer.SerializeToElement(new Dictionary<string, string>
+            {
+                ["requestId"] = requestId,
+                ["errorText"] = errorText,
+            });
+
         private static string GetString(JsonElement element, string propertyName)
         {
             return element.TryGetProperty(propertyName, out JsonElement prop)
@@ -1000,6 +1007,16 @@ namespace PlaywrightNative.WebKit
             }
 
             RaiseResponseReceived(response);
+
+            // WebKit does not abort document navigations that receive HTTP 204.
+            // Match upstream wkPage.ts: synthesize Network.loadingFailed so GoTo
+            // rejects promptly with "Aborted: 204 No Content".
+            if (status == 204 && publicRequest.IsNavigationRequest)
+            {
+                OnLoadingFailed(CreateSyntheticLoadingFailed(requestId, "Aborted: 204 No Content"));
+                return;
+            }
+
             if (publicRequest != request && publicRequest.Finished)
             {
                 _page.OnRequestFinished(request);
@@ -1112,7 +1129,14 @@ namespace PlaywrightNative.WebKit
             {
                 request = removed;
                 string errorText = GetString(p, "errorText");
-                if (request.Response != null && request.Response.Status == 204)
+
+                // Non-navigation 204 (e.g. fetch) may still surface as loadingFailed
+                // on some builds; treat those as finished so clients see requestfinished.
+                // Navigation 204 must fail (including the synthetic abort from
+                // OnResponseReceived) so pending GoTo waiters reject.
+                if (request.Response != null
+                    && request.Response.Status == 204
+                    && !request.IsNavigationRequest)
                 {
                     request.Finished = true;
                     RaiseRequestFinished(request);

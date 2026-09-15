@@ -37,9 +37,15 @@ namespace PlaywrightNative.Helpers
             }
 
             string message = ex.Message ?? string.Empty;
+
+            // WebKit reports stale remote objects / worlds as "Missing injected script for
+            // given objectId|executionContextId" on Runtime.callFunctionOn during navigation.
+            // That error is raised as a raw protocol failure (not rewritten by evaluate), so
+            // selector clicks must treat it like a destroyed context and re-query.
             return message.Contains("Cannot find context", StringComparison.Ordinal)
                 || message.Contains("Execution context was destroyed", StringComparison.Ordinal)
-                || message.Contains("Inspected target navigated", StringComparison.Ordinal);
+                || message.Contains("Inspected target navigated", StringComparison.Ordinal)
+                || message.Contains("Missing injected script", StringComparison.OrdinalIgnoreCase);
         }
     }
 }
