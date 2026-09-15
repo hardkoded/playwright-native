@@ -27,6 +27,8 @@ namespace PlaywrightNative.Helpers
     /// Recodes a PNG as WebP via ffmpeg <c>libwebp</c>. Official WebKit on
     /// Linux is supposed to encode natively; older builds still return PNG.
     /// Quality 100 or omitted is lossless, matching official WK.
+    /// Uses <see cref="FfmpegLocator.ResolveForWebp"/> — Playwright's bundled
+    /// ffmpeg has no libwebp encoder.
     /// </summary>
     internal static class PngToWebp
     {
@@ -64,7 +66,7 @@ namespace PlaywrightNative.Helpers
                     : "-quality " + q.ToString(CultureInfo.InvariantCulture);
                 ProcessStartInfo startInfo = new ProcessStartInfo
                 {
-                    FileName = FfmpegLocator.Resolve(),
+                    FileName = FfmpegLocator.ResolveForWebp(),
                     Arguments = "-hide_banner -loglevel error -y -i \"" + input + "\" -c:v libwebp " + qualityArg + " \"" + output + "\"",
                     RedirectStandardError = true,
                     UseShellExecute = false,

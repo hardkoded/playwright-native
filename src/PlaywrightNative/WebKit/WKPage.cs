@@ -5639,7 +5639,9 @@ namespace PlaywrightNative.WebKit
                 WKExecutionContext context = await WaitForMainExecutionContextAsync().ConfigureAwait(false);
 
                 // Primitive / unserializable EvaluateHandle results are ImmediateJSHandle
-                // (no objectId). Chromium accepts those via ToCallArgument; WebKit must too
+                // (no objectId). Pass the handle itself — PrepareArgumentAsync already
+                // calls ToCallArgument(). Passing ToCallArgument() here double-wraps
+                // via SerializeHandleArgument and WebKit rejects the payload
                 // (ShouldAcceptObjectHandleToPrimitiveTypes / UnserializableValue).
                 if (arg is ImmediateJSHandle immediate)
                 {
@@ -5651,7 +5653,7 @@ namespace PlaywrightNative.WebKit
                         "  return s(v);" +
                         "}";
                     JsonElement immediateTagged = await context
-                        .EvaluateFunctionAsync<JsonElement>(immediateWrapped, immediate.ToCallArgument())
+                        .EvaluateFunctionAsync<JsonElement>(immediateWrapped, immediate)
                         .ConfigureAwait(false);
                     return JsonValueHelper.Parse<T>(immediateTagged);
                 }
@@ -5752,9 +5754,12 @@ namespace PlaywrightNative.WebKit
 
         private TargetClosedException PageClosedException(string suffix = null)
         {
+            // Match Chromium / official Playwright: callers assert the stable
+            // DriverMessages string, not a page-proxy-id-specific message.
+            // Suffixes (e.g. " closed during navigation.") are kept as detail.
             string message = string.IsNullOrEmpty(suffix)
-                ? $"Page {_pageProxyId} is closed"
-                : $"Page {_pageProxyId}{suffix}";
+                ? DriverMessages.BrowserOrContextClosedExceptionMessage
+                : DriverMessages.BrowserOrContextClosedExceptionMessage + suffix;
             return ClosedTarget.Exception(message, _closeReason);
         }
 

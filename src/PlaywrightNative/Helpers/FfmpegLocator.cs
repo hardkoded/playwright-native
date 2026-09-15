@@ -26,9 +26,11 @@ namespace PlaywrightNative.Helpers
     {
         private static readonly object Gate = new();
         private static string _resolved;
+        private static string _resolvedWebp;
 
         /// <summary>
         /// Returns a path or bare command name suitable for <see cref="System.Diagnostics.ProcessStartInfo.FileName"/>.
+        /// Prefers Playwright's bundled screencast build when present.
         /// </summary>
         /// <returns>An ffmpeg path, or <c>ffmpeg</c> / <c>ffmpeg.exe</c> for PATH lookup.</returns>
         internal static string Resolve()
@@ -73,9 +75,82 @@ namespace PlaywrightNative.Helpers
                     }
                 }
 
-                _resolved = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "ffmpeg.exe" : "ffmpeg";
+                _resolved = BareCommandName();
                 return _resolved;
             }
+        }
+
+        /// <summary>
+        /// Returns an ffmpeg that can encode WebP via <c>libwebp</c>.
+        /// Playwright's bundled build is screencast-only (<c>--disable-everything</c>,
+        /// no libwebp) and rejects <c>-lossless</c>; prefer a system ffmpeg on PATH
+        /// (CI installs one via apt/brew/choco).
+        /// </summary>
+        /// <returns>An ffmpeg path, or <c>ffmpeg</c> / <c>ffmpeg.exe</c> for PATH lookup.</returns>
+        internal static string ResolveForWebp()
+        {
+            lock (Gate)
+            {
+                if (!string.IsNullOrEmpty(_resolvedWebp))
+                {
+                    return _resolvedWebp;
+                }
+
+                string onPath = FindOnPath(BareCommandName());
+                if (onPath != null)
+                {
+                    _resolvedWebp = onPath;
+                    return _resolvedWebp;
+                }
+
+                string fromEnv = Environment.GetEnvironmentVariable("PLAYWRIGHT_FFMPEG_PATH");
+                if (!string.IsNullOrEmpty(fromEnv) && File.Exists(fromEnv) && !IsBundledName(fromEnv))
+                {
+                    _resolvedWebp = fromEnv;
+                    return _resolvedWebp;
+                }
+
+                _resolvedWebp = BareCommandName();
+                return _resolvedWebp;
+            }
+        }
+
+        private static string BareCommandName()
+            => RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "ffmpeg.exe" : "ffmpeg";
+
+        private static bool IsBundledName(string path)
+        {
+            string name = Path.GetFileName(path);
+            return string.Equals(name, "ffmpeg-linux", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(name, "ffmpeg-mac", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(name, "ffmpeg-win64.exe", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string FindOnPath(string fileName)
+        {
+            string pathEnv = Environment.GetEnvironmentVariable("PATH");
+            if (string.IsNullOrEmpty(pathEnv))
+            {
+                return null;
+            }
+
+            char[] separators = { Path.PathSeparator };
+            foreach (string directory in pathEnv.Split(separators, StringSplitOptions.RemoveEmptyEntries))
+            {
+                try
+                {
+                    string candidate = Path.Combine(directory.Trim(), fileName);
+                    if (File.Exists(candidate))
+                    {
+                        return candidate;
+                    }
+                }
+                catch (ArgumentException)
+                {
+                }
+            }
+
+            return null;
         }
 
         private static string FindBundled(string root)
