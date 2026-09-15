@@ -66,6 +66,7 @@ namespace PlaywrightNative.WebKit
         private readonly object _navigationLock = new();
         private readonly HashSet<string> _lifecycleEvents = new();
         private readonly List<string> _initScripts = new() { WebKitFormDataScript.Source };
+        private readonly object _initScriptsLock = new();
         private readonly ConcurrentDictionary<string, Func<JsonElement[], Task<object>>> _exposedFunctions = new(StringComparer.Ordinal);
         private readonly ConcurrentDictionary<string, (long Ticks, Task<object> Task)> _recentBindingInvocations = new(StringComparer.Ordinal);
         private readonly object _bindingCoalesceLock = new();
@@ -4013,7 +4014,11 @@ namespace PlaywrightNative.WebKit
                 throw new ArgumentException("Script cannot be empty.", nameof(script));
             }
 
-            _initScripts.Add(script);
+            lock (_initScriptsLock)
+            {
+                _initScripts.Add(script);
+            }
+
             await SyncBootstrapScriptAsync().ConfigureAwait(false);
         }
 
@@ -4024,7 +4029,13 @@ namespace PlaywrightNative.WebKit
         /// <returns>A task that completes when evaluation has been attempted.</returns>
         internal async Task ReplayUserInitScriptsAsync()
         {
-            foreach (string script in _initScripts)
+            string[] scripts;
+            lock (_initScriptsLock)
+            {
+                scripts = _initScripts.ToArray();
+            }
+
+            foreach (string script in scripts)
             {
                 if (string.IsNullOrEmpty(script) || script == WebKitFormDataScript.Source)
                 {
@@ -4052,7 +4063,13 @@ namespace PlaywrightNative.WebKit
         /// <returns>A task that completes once the bootstrap script has been updated.</returns>
         internal async Task RemoveInitScriptInternalAsync(string script)
         {
-            if (string.IsNullOrEmpty(script) || !_initScripts.Remove(script))
+            bool removed;
+            lock (_initScriptsLock)
+            {
+                removed = !string.IsNullOrEmpty(script) && _initScripts.Remove(script);
+            }
+
+            if (!removed)
             {
                 return;
             }
@@ -5590,7 +5607,17 @@ namespace PlaywrightNative.WebKit
         }
 
         private Task SyncBootstrapScriptOnAsync(WKTargetSession target)
-            => target.SendAsync("Page.setBootstrapScript", new { source = AddInitScriptHelper.CombineBootstrap(_initScripts) });
+        {
+            // Snapshot under lock: concurrent ExposeBinding/AddInitScript can mutate
+            // _initScripts while CombineBootstrap enumerates (exposeBinding parallel).
+            string[] scripts;
+            lock (_initScriptsLock)
+            {
+                scripts = _initScripts.ToArray();
+            }
+
+            return target.SendAsync("Page.setBootstrapScript", new { source = AddInitScriptHelper.CombineBootstrap(scripts) });
+        }
 
         private async Task<IElementHandle> EvaluateElementHandleAsync(string expression)
         {
@@ -8160,11 +8187,12 @@ namespace PlaywrightNative.WebKit
             // Clear page-level lifecycle before FrameCommittedNavigation releases
             // click SignalBarrier. Otherwise waitForLoadState can observe the
             // previous document's "load" and resolve as clickload before Page.Load.
+            // Use the same lock as RecordLifecycle / SnapshotLifecycle.
             if (string.IsNullOrEmpty(parentId)
                 || string.Equals(id, _mainFrameId, StringComparison.Ordinal)
                 || string.Equals(id, _frameManager.MainFrame.FrameId, StringComparison.Ordinal))
             {
-                lock (_navigationLock)
+                lock (_lifecycleEvents)
                 {
                     _lifecycleEvents.Clear();
                 }

@@ -95,7 +95,13 @@ namespace PlaywrightNative.Helpers
                 throw new ArgumentNullException(nameof(matches));
             }
 
-            TaskCompletionSource<T> tcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            // Lifecycle waits (load / DOMContentLoaded) use synchronous continuations so
+            // waitForEvent resumes inside Load.Invoke — before RecordLifecycle notifies
+            // waitForLoadState. Async continuations race those waiters and flip
+            // page-autowaiting-basic order to route|clickload|load.
+            TaskCompletionSource<T> tcs = deferPredicateEvaluation
+                ? new(TaskCreationOptions.RunContinuationsAsynchronously)
+                : new();
 
             // The predicate must not run on the transport's read loop: an official
             // sync-predicate wait like page.waitForResponse(r => r.TextAsync().Result...)
