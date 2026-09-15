@@ -96,13 +96,20 @@ namespace PlaywrightNative.TestServer
         public void Send(string text)
         {
             byte[] bytes = Encoding.UTF8.GetBytes(text ?? string.Empty);
-            if (_socket != null)
+
+            // Prefer the upgraded stream when present. ManagedWebSocket shares that
+            // stream; mixing APIs corrupts framing, and CloseAsync has failed to echo
+            // application close codes (3000–4999) on macOS WebKit (page sees 1006).
+            if (_stream != null)
             {
-                _ = _socket.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, CancellationToken.None);
+                WriteFrame(opcode: 1, bytes);
                 return;
             }
 
-            WriteFrame(opcode: 1, bytes);
+            if (_socket != null)
+            {
+                _ = _socket.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, CancellationToken.None);
+            }
         }
 
         /// <summary>
@@ -112,13 +119,16 @@ namespace PlaywrightNative.TestServer
         public void Send(byte[] payload)
         {
             byte[] bytes = payload ?? Array.Empty<byte>();
-            if (_socket != null)
+            if (_stream != null)
             {
-                _ = _socket.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Binary, true, CancellationToken.None);
+                WriteFrame(opcode: 2, bytes);
                 return;
             }
 
-            WriteFrame(opcode: 2, bytes);
+            if (_socket != null)
+            {
+                _ = _socket.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Binary, true, CancellationToken.None);
+            }
         }
 
         /// <summary>
@@ -129,30 +139,29 @@ namespace PlaywrightNative.TestServer
         public void Close(int code, string reason)
         {
             string text = reason ?? string.Empty;
+            if (_stream != null)
+            {
+                byte[] reasonBytes = Encoding.UTF8.GetBytes(text);
+                byte[] payload = new byte[2 + reasonBytes.Length];
+                payload[0] = (byte)((code >> 8) & 0xFF);
+                payload[1] = (byte)(code & 0xFF);
+                Buffer.BlockCopy(reasonBytes, 0, payload, 2, reasonBytes.Length);
+                WriteFrame(opcode: 8, payload);
+                return;
+            }
+
             if (_socket != null)
             {
-                WebSocketCloseStatus status = Enum.IsDefined(typeof(WebSocketCloseStatus), code)
-                    ? (WebSocketCloseStatus)code
-                    : WebSocketCloseStatus.NormalClosure;
                 try
                 {
-                    status = (WebSocketCloseStatus)code;
+                    WebSocketCloseStatus status = (WebSocketCloseStatus)code;
                     _ = _socket.CloseAsync(status, text, CancellationToken.None);
                 }
                 catch (ArgumentException)
                 {
                     _ = _socket.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, text, CancellationToken.None);
                 }
-
-                return;
             }
-
-            byte[] reasonBytes = Encoding.UTF8.GetBytes(text);
-            byte[] payload = new byte[2 + reasonBytes.Length];
-            payload[0] = (byte)((code >> 8) & 0xFF);
-            payload[1] = (byte)(code & 0xFF);
-            Buffer.BlockCopy(reasonBytes, 0, payload, 2, reasonBytes.Length);
-            WriteFrame(opcode: 8, payload);
         }
 
         /// <summary>
@@ -222,15 +231,19 @@ namespace PlaywrightNative.TestServer
         {
             try
             {
-                if (_socket != null)
-                {
-                    await ReceiveSocketAsync().ConfigureAwait(false);
-                    return;
-                }
-
+                // Prefer raw frames when the upgraded stream is available so client
+                // close codes (e.g. 3002) are echoed byte-for-byte. ManagedWebSocket
+                // CloseAsync can fail to complete the handshake for application codes
+                // on some platforms; WebKit then reports error + close 1006.
                 if (_stream != null)
                 {
                     await ReceiveStreamAsync().ConfigureAwait(false);
+                    return;
+                }
+
+                if (_socket != null)
+                {
+                    await ReceiveSocketAsync().ConfigureAwait(false);
                 }
             }
             catch (IOException)
@@ -259,18 +272,33 @@ namespace PlaywrightNative.TestServer
                 {
                     int code = result.CloseStatus.HasValue ? (int)result.CloseStatus.Value : 1005;
                     byte[] reason = Encoding.UTF8.GetBytes(result.CloseStatusDescription ?? string.Empty);
+                    WebSocketCloseStatus status = result.CloseStatus ?? WebSocketCloseStatus.NormalClosure;
+                    string description = result.CloseStatusDescription ?? string.Empty;
                     try
                     {
-                        await _socket.CloseAsync(
-                            result.CloseStatus ?? WebSocketCloseStatus.NormalClosure,
-                            result.CloseStatusDescription,
-                            CancellationToken.None).ConfigureAwait(false);
+                        // Already received the peer close frame — only send ours.
+                        await _socket.CloseOutputAsync(status, description, CancellationToken.None)
+                            .ConfigureAwait(false);
                     }
                     catch (WebSocketException)
                     {
                     }
                     catch (ArgumentException)
                     {
+                        try
+                        {
+                            await _socket.CloseOutputAsync(
+                                    WebSocketCloseStatus.NormalClosure,
+                                    description,
+                                    CancellationToken.None)
+                                .ConfigureAwait(false);
+                        }
+                        catch (WebSocketException)
+                        {
+                        }
+                        catch (ArgumentException)
+                        {
+                        }
                     }
 
                     NotifyClose(code, reason);
@@ -303,6 +331,13 @@ namespace PlaywrightNative.TestServer
                     WriteFrame(opcode: 8, payload);
                     NotifyClose(code, reason);
                     return;
+                }
+
+                if (opcode == 9)
+                {
+                    // Respond to ping so the peer does not abort the connection.
+                    WriteFrame(opcode: 10, payload);
+                    continue;
                 }
 
                 if (opcode == 1 || opcode == 2)
