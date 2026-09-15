@@ -8578,13 +8578,14 @@ namespace PlaywrightNative.WebKit
             // After a WebKit process-swap (and on some frame-session builds), one
             // page-side call can emit two Runtime.bindingCalled events with the
             // same seq envelope but different executionContextIds (main vs
-            // isolated world). Key by the JSON payload alone so those duplicates
-            // share one host invocation; delivering the result to each contextId
-            // still happens at the call site. Clear the map on navigation so a
-            // new document restarting seq at 1 is not coalesced with the previous
-            // document's identical call.
-            _ = contextId;
-            string key = argument ?? string.Empty;
+            // isolated world) on the SAME frame. Key by frame + payload so those
+            // duplicates share one host invocation, while identical calls from
+            // different frames (addInitScript callbacks in main + child both
+            // restart seq at 1 with the same args) each invoke the handler.
+            // Delivering the result to each contextId still happens at the call
+            // site. Clear the map on navigation so a new document restarting seq
+            // at 1 is not coalesced with the previous document's identical call.
+            string key = ResolveBindingCoalesceKey(contextId, argument);
             long now = DateTime.UtcNow.Ticks;
             lock (_bindingCoalesceLock)
             {
@@ -8609,6 +8610,54 @@ namespace PlaywrightNative.WebKit
 
                 return invoked;
             }
+        }
+
+        /// <summary>
+        /// Builds the coalesce map key for a binding call. Same-frame main/utility
+        /// duplicates share a key; distinct frames do not.
+        /// </summary>
+        /// <param name="contextId">The <c>Runtime.bindingCalled</c> context id.</param>
+        /// <param name="argument">The JSON binding envelope.</param>
+        /// <returns>A coalesce key scoped to the originating frame when known.</returns>
+        private string ResolveBindingCoalesceKey(int contextId, string argument)
+        {
+            string frameScope = ResolveBindingFrameScope(contextId);
+            return frameScope + "\n" + (argument ?? string.Empty);
+        }
+
+        /// <summary>
+        /// Maps a binding <paramref name="contextId"/> to a stable frame scope so
+        /// main-world and utility-world contexts of the same frame coalesce, while
+        /// sibling frames stay distinct.
+        /// </summary>
+        /// <param name="contextId">Execution context id from the binding event.</param>
+        /// <returns>A frame-scoped or context-scoped identity string.</returns>
+        private string ResolveBindingFrameScope(int contextId)
+        {
+            if (contextId == 0)
+            {
+                return "ctx:0";
+            }
+
+            foreach (KeyValuePair<string, WKExecutionContext> entry in _frameContexts)
+            {
+                if (entry.Value != null && entry.Value.ContextId == contextId)
+                {
+                    return "frame:" + entry.Key;
+                }
+            }
+
+            foreach (KeyValuePair<string, WKExecutionContext> entry in _utilityContexts)
+            {
+                if (entry.Value != null && entry.Value.ContextId == contextId)
+                {
+                    return "frame:" + entry.Key;
+                }
+            }
+
+            // Unknown context: prefer contextId so distinct frames never share an
+            // invocation when frame maps are incomplete (safer than under-firing).
+            return "ctx:" + contextId.ToString(System.Globalization.CultureInfo.InvariantCulture);
         }
 
         private async Task DeliverInvokedBindingAsync(Task<object> invoked, int contextId, long seq)
