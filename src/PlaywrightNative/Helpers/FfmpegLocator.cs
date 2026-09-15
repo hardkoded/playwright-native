@@ -117,75 +117,12 @@ namespace PlaywrightNative.Helpers
             }
         }
 
-        private static string BareCommandName()
-            => RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "ffmpeg.exe" : "ffmpeg";
-
-        private static bool IsBundledName(string path)
-        {
-            string name = Path.GetFileName(path);
-            return string.Equals(name, "ffmpeg-linux", StringComparison.OrdinalIgnoreCase)
-                || string.Equals(name, "ffmpeg-mac", StringComparison.OrdinalIgnoreCase)
-                || string.Equals(name, "ffmpeg-win64.exe", StringComparison.OrdinalIgnoreCase);
-        }
-
-        private static System.Collections.Generic.IEnumerable<string> WebpCandidates()
-        {
-            // Prefer well-known package-manager locations before a PATH walk so a
-            // stale/bundled `ffmpeg` earlier on PATH cannot win.
-            if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
-            {
-                yield return "/opt/homebrew/bin/ffmpeg";
-                yield return "/usr/local/bin/ffmpeg";
-            }
-            else if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
-            {
-                yield return "/usr/bin/ffmpeg";
-                yield return "/usr/local/bin/ffmpeg";
-            }
-
-            string onPath = FindOnPath(BareCommandName());
-            if (onPath != null)
-            {
-                yield return onPath;
-            }
-
-            // Every PATH hit, in order — FindOnPath only returns the first.
-            string pathEnv = Environment.GetEnvironmentVariable("PATH");
-            if (!string.IsNullOrEmpty(pathEnv))
-            {
-                string fileName = BareCommandName();
-                foreach (string directory in pathEnv.Split(Path.PathSeparator))
-                {
-                    if (string.IsNullOrWhiteSpace(directory))
-                    {
-                        continue;
-                    }
-
-                    string candidate;
-                    try
-                    {
-                        candidate = Path.Combine(directory.Trim(), fileName);
-                    }
-                    catch (ArgumentException)
-                    {
-                        continue;
-                    }
-
-                    if (File.Exists(candidate))
-                    {
-                        yield return candidate;
-                    }
-                }
-            }
-
-            string fromEnv = Environment.GetEnvironmentVariable("PLAYWRIGHT_FFMPEG_PATH");
-            if (!string.IsNullOrEmpty(fromEnv) && File.Exists(fromEnv) && !IsBundledName(fromEnv))
-            {
-                yield return fromEnv;
-            }
-        }
-
-        private static bool SupportsLibWebp(string ffmpegPath)
+        /// <summary>
+        /// Whether <paramref name="ffmpegPath"/> lists a <c>libwebp</c> encoder.
+        /// </summary>
+        /// <param name="ffmpegPath">ffmpeg executable path or bare command name.</param>
+        /// <returns><see langword="true"/> when WebP encoding is available.</returns>
+        internal static bool SupportsLibWebp(string ffmpegPath)
         {
             if (string.IsNullOrEmpty(ffmpegPath))
             {
@@ -264,6 +201,74 @@ namespace PlaywrightNative.Helpers
             catch (Exception)
             {
                 return false;
+            }
+        }
+
+        private static string BareCommandName()
+            => RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "ffmpeg.exe" : "ffmpeg";
+
+        private static bool IsBundledName(string path)
+        {
+            string name = Path.GetFileName(path);
+            return string.Equals(name, "ffmpeg-linux", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(name, "ffmpeg-mac", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(name, "ffmpeg-win64.exe", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static System.Collections.Generic.IEnumerable<string> WebpCandidates()
+        {
+            // Prefer well-known package-manager locations before a PATH walk so a
+            // stale/bundled `ffmpeg` earlier on PATH cannot win.
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+            {
+                yield return "/opt/homebrew/bin/ffmpeg";
+                yield return "/usr/local/bin/ffmpeg";
+            }
+            else if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+            {
+                yield return "/usr/bin/ffmpeg";
+                yield return "/usr/local/bin/ffmpeg";
+            }
+
+            string onPath = FindOnPath(BareCommandName());
+            if (onPath != null)
+            {
+                yield return onPath;
+            }
+
+            // Every PATH hit, in order — FindOnPath only returns the first.
+            string pathEnv = Environment.GetEnvironmentVariable("PATH");
+            if (!string.IsNullOrEmpty(pathEnv))
+            {
+                string fileName = BareCommandName();
+                foreach (string directory in pathEnv.Split(Path.PathSeparator))
+                {
+                    if (string.IsNullOrWhiteSpace(directory))
+                    {
+                        continue;
+                    }
+
+                    string candidate;
+                    try
+                    {
+                        candidate = Path.Combine(directory.Trim(), fileName);
+                    }
+                    catch (ArgumentException)
+                    {
+                        continue;
+                    }
+
+                    if (File.Exists(candidate))
+                    {
+                        yield return candidate;
+                    }
+                }
+            }
+
+            string fromEnv = Environment.GetEnvironmentVariable("PLAYWRIGHT_FFMPEG_PATH");
+            if (!string.IsNullOrEmpty(fromEnv) && File.Exists(fromEnv) && !IsBundledName(fromEnv))
+            {
+                yield return fromEnv;
             }
         }
 
