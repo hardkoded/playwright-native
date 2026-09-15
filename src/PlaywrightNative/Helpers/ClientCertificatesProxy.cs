@@ -287,6 +287,19 @@ namespace PlaywrightNative.Helpers
                     RSASignaturePadding.Pkcs1);
                 request.CertificateExtensions.Add(
                     new X509BasicConstraintsExtension(false, false, 0, false));
+                request.CertificateExtensions.Add(
+                    new X509KeyUsageExtension(
+                        X509KeyUsageFlags.DigitalSignature | X509KeyUsageFlags.KeyEncipherment,
+                        critical: true));
+                request.CertificateExtensions.Add(
+                    new X509EnhancedKeyUsageExtension(
+                        new OidCollection { new Oid("1.3.6.1.5.5.7.3.1") },
+                        critical: true));
+                SubjectAlternativeNameBuilder san = new();
+                san.AddDnsName("localhost");
+                san.AddDnsName("local.playwright");
+                san.AddIpAddress(IPAddress.Loopback);
+                request.CertificateExtensions.Add(san.Build(critical: false));
                 using X509Certificate2 created = request.CreateSelfSigned(
                     DateTimeOffset.UtcNow.AddDays(-1),
                     DateTimeOffset.UtcNow.AddYears(1));
