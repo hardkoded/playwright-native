@@ -35,8 +35,6 @@ namespace PlaywrightNative.Helpers
   const suppress = (event) => {
     try { event.preventDefault(); } catch (e) {}
   };
-  const docs = globalThis.__pw_suppress_native_context_menu_docs
-    || (globalThis.__pw_suppress_native_context_menu_docs = new WeakSet());
   const install = (target) => {
     if (!target || typeof target.addEventListener !== 'function') return;
     try {
@@ -47,9 +45,10 @@ namespace PlaywrightNative.Helpers
     globalThis.__pw_suppress_native_context_menu__ = true;
     install(globalThis);
   }
-  // document.open/write/close creates a new Document; re-bind on that node.
-  if (globalThis.document && !docs.has(globalThis.document)) {
-    docs.add(globalThis.document);
+  // document.open/write/close keeps Document identity but clears listeners.
+  // Always re-bind on the current document when this script is replayed after
+  // SetContent (WeakSet-by-identity would skip and leave the native menu open).
+  if (globalThis.document) {
     install(globalThis.document);
   }
 })()";

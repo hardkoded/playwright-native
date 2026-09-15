@@ -5483,10 +5483,28 @@ namespace PlaywrightNative.WebKit
                     return;
                 }
 
-                // Same-origin document requests during an in-flight goto are usually
-                // redirect continuations. Renderer interrupts are reported as
-                // "Load request cancelled" and rewritten in NavigateAsync.
+                // Competing document navigation (e.g. JS redirect while goto is in
+                // flight). Fail the pending waiter now — do not wait for the original
+                // request's cancel, which can race with the competitor's load event
+                // and otherwise complete goto successfully (JsRedirectOverridesUrlBarNavigation).
                 _lastCompetingNavigationUrl = requestUrl;
+                if (_pendingLoadTcs == null && _pendingDomContentTcs == null && _pendingCommitTcs == null)
+                {
+                    return;
+                }
+
+                string interrupt =
+                    "page.goto: Navigation to \"" + pendingUrl +
+                    "\" is interrupted by another navigation to \"" + requestUrl + "\"";
+                NavigationException exception = new(interrupt, pendingUrl);
+                _awaitingReplacementTarget = false;
+                _pendingLoadTcs?.TrySetException(exception);
+                _pendingDomContentTcs?.TrySetException(exception);
+                _pendingCommitTcs?.TrySetException(exception);
+                _pendingLoadTcs = null;
+                _pendingDomContentTcs = null;
+                _pendingCommitTcs = null;
+                _pendingNavigationUrl = null;
             }
         }
 
@@ -8405,12 +8423,11 @@ namespace PlaywrightNative.WebKit
             }
 
             _frameManager.FrameCommittedNavigation(id, url, name, parentId);
-            if (!string.IsNullOrEmpty(parentId))
-            {
-                // Cross-process iframe navigations clear page activity on macOS WebKit;
-                // re-assert so a following requestStorageAccess evaluate sees focus.
-                _ = EnsureActiveAndFocusedAsync();
-            }
+
+            // Do not call EnsureActiveAndFocusedAsync on child-frame commits: that
+            // makes document.hasFocus() true inside newly attached iframes before
+            // FocusAsync (ShouldChangeFocusedIframe). requestStorageAccess re-asserts
+            // activity from the evaluate / BringToFront paths instead.
 
             if (string.IsNullOrEmpty(parentId)
                 || string.Equals(id, _mainFrameId, StringComparison.Ordinal))
@@ -8454,6 +8471,27 @@ namespace PlaywrightNative.WebKit
                     else if (!string.Equals(committedUrl, NavigationTimeout.WithoutHash(_navigationStartUrl), StringComparison.Ordinal))
                     {
                         _lastCompetingNavigationUrl = committedUrl;
+
+                        // JS redirect (or other competing document) committed while
+                        // a goto was still waiting — surface the official interrupt
+                        // instead of letting a later load resolve the waiter.
+                        if (!_harRedirectInProgress
+                            && (_pendingLoadTcs != null
+                                || _pendingDomContentTcs != null
+                                || _pendingCommitTcs != null))
+                        {
+                            PlaywrightException interrupted = new(
+                                "page.goto: Navigation to \"" + pendingUrl +
+                                "\" is interrupted by another navigation to \"" + committedUrl + "\"");
+                            _pendingLoadTcs?.TrySetException(interrupted);
+                            _pendingDomContentTcs?.TrySetException(interrupted);
+                            _pendingCommitTcs?.TrySetException(interrupted);
+                            _pendingLoadTcs = null;
+                            _pendingDomContentTcs = null;
+                            _pendingCommitTcs = null;
+                            _pendingNavigationUrl = null;
+                            _pendingNavigationCommitted = false;
+                        }
                     }
                 }
 
@@ -8593,10 +8631,39 @@ namespace PlaywrightNative.WebKit
             }
 
             TaskCompletionSource<bool> tcs;
+            Exception loadError = null;
             lock (_navigationLock)
             {
                 tcs = _pendingLoadTcs;
                 _pendingLoadTcs = null;
+
+                // If a competing document won (JS redirect overrides url-bar goto),
+                // do not resolve the original waiter as success on this load.
+                string pendingUrl = NavigationTimeout.WithoutHash(_pendingNavigationUrl);
+                string currentUrl = NavigationTimeout.WithoutHash(_mainFrameUrl);
+                string redirectUrl = NavigationTimeout.WithoutHash(_pendingRedirectTarget);
+                if (tcs != null
+                    && !string.IsNullOrEmpty(pendingUrl)
+                    && !_pendingNavigationCommitted
+                    && !_harRedirectInProgress
+                    && !string.IsNullOrEmpty(currentUrl)
+                    && !string.Equals(currentUrl, pendingUrl, StringComparison.Ordinal)
+                    && !string.Equals(currentUrl, redirectUrl, StringComparison.Ordinal)
+                    && !currentUrl.Equals("about:blank", StringComparison.OrdinalIgnoreCase))
+                {
+                    string competing = !string.IsNullOrEmpty(_lastCompetingNavigationUrl)
+                        ? _lastCompetingNavigationUrl
+                        : currentUrl;
+                    loadError = new PlaywrightException(
+                        "page.goto: Navigation to \"" + pendingUrl +
+                        "\" is interrupted by another navigation to \"" + competing + "\"");
+                    _pendingDomContentTcs?.TrySetException(loadError);
+                    _pendingCommitTcs?.TrySetException(loadError);
+                    _pendingDomContentTcs = null;
+                    _pendingCommitTcs = null;
+                    _pendingNavigationUrl = null;
+                    _pendingNavigationCommitted = false;
+                }
             }
 
             // Capture before offload: readyState seed may have already raised Load.
@@ -8634,7 +8701,14 @@ namespace PlaywrightNative.WebKit
                     _pendingRedirectSource = null;
                 }
 
-                tcs?.TrySetResult(true);
+                if (loadError != null)
+                {
+                    tcs?.TrySetException(loadError);
+                }
+                else
+                {
+                    tcs?.TrySetResult(true);
+                }
             });
         }
 
