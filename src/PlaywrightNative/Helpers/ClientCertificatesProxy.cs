@@ -120,9 +120,13 @@ namespace PlaywrightNative.Helpers
             (_listener as IDisposable)?.Dispose();
             _cts.Dispose();
             GC.KeepAlive(_acceptLoop);
+            HashSet<X509Certificate2> unique = new();
             foreach (X509Certificate2 cert in _certs.Values)
             {
-                cert.Dispose();
+                if (unique.Add(cert))
+                {
+                    cert.Dispose();
+                }
             }
 
             _certs.Clear();
@@ -661,6 +665,53 @@ namespace PlaywrightNative.Helpers
             return true;
         }
 
+        /// <summary>
+        /// Reads one complete TLS record (ClientHello) so AuthenticateAsServer
+        /// never blocks on a truncated prefix through the Darwin HTTP CONNECT shim.
+        /// </summary>
+        private static async Task<byte[]> ReadTlsClientHelloAsync(Stream browser, CancellationToken token)
+        {
+            byte[] header = new byte[5];
+            if (!await ReadExactAsync(browser, header, token).ConfigureAwait(false))
+            {
+                return null;
+            }
+
+            if (header[0] != 0x16)
+            {
+                // Not TLS — return whatever we have plus a small lookahead so
+                // plaintext tunnels still see the first application bytes.
+                byte[] extra = new byte[16 * 1024];
+                int n = await browser.ReadAsync(extra.AsMemory(0, extra.Length), token).ConfigureAwait(false);
+                if (n <= 0)
+                {
+                    return header;
+                }
+
+                byte[] combined = new byte[5 + n];
+                Buffer.BlockCopy(header, 0, combined, 0, 5);
+                Buffer.BlockCopy(extra, 0, combined, 5, n);
+                return combined;
+            }
+
+            int length = (header[3] << 8) | header[4];
+            if (length < 0 || length > 64 * 1024)
+            {
+                return header;
+            }
+
+            byte[] body = new byte[length];
+            if (!await ReadExactAsync(browser, body, token).ConfigureAwait(false))
+            {
+                return null;
+            }
+
+            byte[] record = new byte[5 + length];
+            Buffer.BlockCopy(header, 0, record, 0, 5);
+            Buffer.BlockCopy(body, 0, record, 5, length);
+            return record;
+        }
+
         private static async Task PipeAsync(Stream a, Stream b, CancellationToken token)
         {
             Task copyA = a.CopyToAsync(b, token);
@@ -1024,11 +1075,43 @@ namespace PlaywrightNative.Helpers
                         server = await ConnectOutboundAsync(request.Host, request.Port, _cts.Token)
                             .ConfigureAwait(false);
                     }
-                    catch (Exception)
+                    catch (Exception ex)
                     {
                         if (request.Kind == BrowserProxyKind.Socks)
                         {
                             await WriteSocksFailureAsync(browser, _cts.Token).ConfigureAwait(false);
+                            return;
+                        }
+
+                        if (request.Kind == BrowserProxyKind.HttpsConnect)
+                        {
+                            // CONNECT already returned 200 — wait for the browser
+                            // ClientHello, then paint the TLS error page (same path as
+                            // an origin handshake failure). Closing without a response
+                            // makes Darwin WebKit report "Could not connect".
+                            try
+                            {
+                                byte[] failedHello = await ReadTlsClientHelloAsync(browser, _cts.Token)
+                                    .ConfigureAwait(false);
+                                if (failedHello != null && failedHello.Length > 0 && failedHello[0] == 0x16)
+                                {
+                                    IReadOnlyList<string> failedAlpn =
+                                        ParseAlpnFromClientHello(failedHello) ?? new[] { "http/1.1" };
+                                    PrependStream prefixed = new(browser, failedHello);
+                                    string message = ClientCertificateHelper.RewriteTlsMessage(ex);
+                                    await WriteTlsErrorPageAsync(prefixed, failedAlpn, message)
+                                        .ConfigureAwait(false);
+                                }
+                            }
+                            catch (IOException)
+                            {
+                            }
+                            catch (ObjectDisposedException)
+                            {
+                            }
+                            catch (OperationCanceledException)
+                            {
+                            }
                         }
 
                         return;
@@ -1047,19 +1130,14 @@ namespace PlaywrightNative.Helpers
                         return;
                     }
 
-                    byte[] first = new byte[16 * 1024];
-                    int n = await browser.ReadAsync(first.AsMemory(0, first.Length), _cts.Token)
-                        .ConfigureAwait(false);
-                    if (n <= 0)
+                    byte[] hello = await ReadTlsClientHelloAsync(browser, _cts.Token).ConfigureAwait(false);
+                    if (hello == null || hello.Length == 0)
                     {
                         return;
                     }
 
-                    byte[] hello = new byte[n];
-                    Buffer.BlockCopy(first, 0, hello, 0, n);
-                    string originKey = ClientCertificateHelper.NormalizeOrigin(
-                        "https://" + request.Host + ":" + request.Port.ToString(CultureInfo.InvariantCulture));
-                    if (hello[0] == 0x16 && _certs.TryGetValue(originKey, out X509Certificate2 clientCert))
+                    if (hello[0] == 0x16
+                        && TryGetClientCert(request.Host, request.Port, out X509Certificate2 clientCert))
                     {
                         await EstablishTlsTunnelAsync(
                             browser, origin, hello, request.Host, request.Port, clientCert)
@@ -1228,6 +1306,23 @@ namespace PlaywrightNative.Helpers
                 catch (Exception ex)
                 {
                     string message = ClientCertificateHelper.RewriteTlsMessage(ex);
+
+                    // Match upstream: destroy the origin socket before upgrading
+                    // the browser side, so a mid-handshake RST cannot race the
+                    // error-page MITM (Darwin CFNetwork reports "Could not connect"
+                    // when the CONNECT tunnel dies during AuthenticateAsServer).
+                    try
+                    {
+                        await serverTls.DisposeAsync().ConfigureAwait(false);
+                    }
+                    catch (IOException)
+                    {
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                    }
+
+                    serverTls = null;
                     await WriteTlsErrorPageAsync(browserPrefixed, offered, message).ConfigureAwait(false);
                     return;
                 }
@@ -1269,19 +1364,64 @@ namespace PlaywrightNative.Helpers
             }
         }
 
+        private bool TryGetClientCert(string host, int port, out X509Certificate2 clientCert)
+        {
+            clientCert = null;
+            if (string.IsNullOrEmpty(host))
+            {
+                return false;
+            }
+
+            string portText = port.ToString(CultureInfo.InvariantCulture);
+            if (TryGetCertForHost(host, portText, out clientCert))
+            {
+                return true;
+            }
+
+            // Darwin CFNetwork may CONNECT with the resolved IP while fixtures
+            // register https://local.playwright; accept localhost / 127.0.0.1 aliases.
+            string rewritten = RewriteToLocalhostIfNeeded(host);
+            if (!string.Equals(rewritten, host, StringComparison.OrdinalIgnoreCase)
+                && TryGetCertForHost(rewritten, portText, out clientCert))
+            {
+                return true;
+            }
+
+            if (string.Equals(host, "127.0.0.1", StringComparison.Ordinal)
+                || string.Equals(rewritten, "localhost", StringComparison.OrdinalIgnoreCase))
+            {
+                return TryGetCertForHost("local.playwright", portText, out clientCert)
+                    || TryGetCertForHost("localhost", portText, out clientCert)
+                    || TryGetCertForHost("127.0.0.1", portText, out clientCert);
+            }
+
+            return false;
+        }
+
+        private bool TryGetCertForHost(string host, string portText, out X509Certificate2 clientCert)
+        {
+            string originKey = ClientCertificateHelper.NormalizeOrigin(
+                "https://" + host + ":" + portText);
+            return _certs.TryGetValue(originKey, out clientCert);
+        }
+
         private async Task WriteTlsErrorPageAsync(
             Stream browser,
             IReadOnlyList<string> offered,
             string message)
         {
             string body = EscapeHtml("Playwright client-certificate error: " + message);
-            SslStream tls = new(browser, leaveInnerStreamOpen: false);
+
+            // leaveInnerStreamOpen: the Darwin HTTP CONNECT shim must see a clean
+            // TLS close_notify after the HTML is fully written; disposing the
+            // NetworkStream underneath SslStream too early surfaces
+            // "Could not connect to the server" instead of the error document.
+            SslStream tls = new(browser, leaveInnerStreamOpen: true);
             try
             {
-                // Origin handshake already failed — mirror upstream's error path.
-                // Always include http/1.1 and keep any h2 the browser offered so
-                // AuthenticateAsServer can negotiate. Pin TLS 1.2|1.3 for TLS
-                // 1.2-only ClientHellos from WebKit on macOS
+                // Origin handshake already failed — mirror upstream's error path
+                // (ALPN http/1.1 only). Pin TLS 1.2|1.3 so AuthenticateAsServer
+                // accepts a TLS 1.2-only ClientHello from WebKit on macOS
                 // (BrowserShouldNotHangOnTlsErrorsDuringTls12Handshake).
 #pragma warning disable CA5398
                 SslServerAuthenticationOptions options = new()
@@ -1306,6 +1446,8 @@ namespace PlaywrightNative.Helpers
                 {
                     await WriteHttp11ErrorAsync(tls, body, _cts.Token).ConfigureAwait(false);
                 }
+
+                await tls.FlushAsync(_cts.Token).ConfigureAwait(false);
             }
             catch (IOException)
             {
@@ -1318,7 +1460,18 @@ namespace PlaywrightNative.Helpers
             }
             finally
             {
-                await tls.DisposeAsync().ConfigureAwait(false);
+                try
+                {
+                    // Send close_notify without tearing down the TCP socket the
+                    // Darwin bypass shim is still piping toward WebKit.
+                    await tls.DisposeAsync().ConfigureAwait(false);
+                }
+                catch (IOException)
+                {
+                }
+                catch (ObjectDisposedException)
+                {
+                }
             }
         }
 
