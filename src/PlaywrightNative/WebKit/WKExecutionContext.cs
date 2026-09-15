@@ -321,7 +321,10 @@ namespace PlaywrightNative.WebKit
         /// <returns>The deserialized result.</returns>
         internal async Task<T> EvaluateFunctionOnHandleAsync<T>(string objectId, string functionDeclaration, params object[] args)
         {
-            JsonElement? response = await _session.SendAsync("Runtime.callFunctionOn", new
+            // Race awaitPromise against context destruction — Promise evaluates
+            // (page-evaluate "nice error after navigation") hang on WebKit reload
+            // if callFunctionOn is not aborted when the old world goes away.
+            JsonElement? response = await RaceDestroyedAsync(_session.SendAsync("Runtime.callFunctionOn", new
             {
                 functionDeclaration,
                 objectId,
@@ -329,7 +332,7 @@ namespace PlaywrightNative.WebKit
                 returnByValue = true,
                 emulateUserGesture = true,
                 awaitPromise = true,
-            }).ConfigureAwait(false);
+            })).ConfigureAwait(false);
 
             if (response == null)
             {
@@ -357,7 +360,7 @@ namespace PlaywrightNative.WebKit
         /// <returns>The raw remote object, or <see langword="null"/>.</returns>
         internal async Task<JsonElement?> EvaluateHandleOnHandleAsync(string objectId, string functionDeclaration, params object[] args)
         {
-            JsonElement? response = await _session.SendAsync("Runtime.callFunctionOn", new
+            JsonElement? response = await RaceDestroyedAsync(_session.SendAsync("Runtime.callFunctionOn", new
             {
                 functionDeclaration,
                 objectId,
@@ -365,7 +368,7 @@ namespace PlaywrightNative.WebKit
                 returnByValue = false,
                 emulateUserGesture = true,
                 awaitPromise = true,
-            }).ConfigureAwait(false);
+            })).ConfigureAwait(false);
 
             if (response == null)
             {
@@ -936,9 +939,9 @@ namespace PlaywrightNative.WebKit
                 throw new PlaywrightException(EvaluateSerialization.NavigationMessage);
             }
 
-            JsonElement? dummyResponse = await _session.SendAsync(
+            JsonElement? dummyResponse = await RaceDestroyedAsync(_session.SendAsync(
                 "Runtime.evaluate",
-                BuildEvaluateParams("({})", returnByValue: false)).ConfigureAwait(false);
+                BuildEvaluateParams("({})", returnByValue: false))).ConfigureAwait(false);
             string dummyId = null;
             if (dummyResponse.HasValue
                 && dummyResponse.Value.TryGetProperty("result", out JsonElement dummyResult)
@@ -961,13 +964,7 @@ namespace PlaywrightNative.WebKit
                         emulateUserGesture = true,
                         awaitPromise = true,
                     });
-                Task completed = await Task.WhenAny(awaitTask, _destroyed.Task).ConfigureAwait(false);
-                if (completed == _destroyed.Task)
-                {
-                    throw new PlaywrightException(EvaluateSerialization.NavigationMessage);
-                }
-
-                return await awaitTask.ConfigureAwait(false);
+                return await RaceDestroyedAsync(awaitTask).ConfigureAwait(false);
             }
             finally
             {
@@ -988,6 +985,41 @@ namespace PlaywrightNative.WebKit
                 emulateUserGesture = true,
                 awaitPromise = true,
             });
+
+        /// <summary>
+        /// Races a WIP evaluate against context destruction so navigations fail
+        /// pending <c>awaitPromise</c> calls with the official navigation message.
+        /// </summary>
+        /// <typeparam name="T">The protocol response type.</typeparam>
+        /// <param name="task">The in-flight protocol call.</param>
+        /// <returns>The protocol response when the context survives.</returns>
+        private async Task<T> RaceDestroyedAsync<T>(Task<T> task)
+        {
+            if (_destroyed.Task.IsCompleted)
+            {
+                throw new PlaywrightException(EvaluateSerialization.NavigationMessage);
+            }
+
+            Task completed = await Task.WhenAny(task, _destroyed.Task).ConfigureAwait(false);
+            if (completed == _destroyed.Task)
+            {
+                throw new PlaywrightException(EvaluateSerialization.NavigationMessage);
+            }
+
+            try
+            {
+                return await task.ConfigureAwait(false);
+            }
+            catch (PlaywrightException ex) when (
+                ex.Message != null
+                && (ex.Message.Contains("Cannot find context with specified id", StringComparison.Ordinal)
+                    || ex.Message.Contains("Cannot find object with given id", StringComparison.Ordinal)
+                    || ex.Message.Contains("Execution context was destroyed", StringComparison.Ordinal)
+                    || ex.Message.Contains("Inspected target navigated or closed", StringComparison.Ordinal)))
+            {
+                throw new PlaywrightException(EvaluateSerialization.NavigationMessage);
+            }
+        }
 
         private bool HasForeignElementArgument(object[] args)
         {

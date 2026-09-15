@@ -18,6 +18,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
@@ -259,21 +260,28 @@ namespace PlaywrightNative.WebKit
                     proxy,
                     out Proxy browserProxy);
 
-                // Attach only when locale or context-level extra headers need WS
-                // handshake rewriting (Accept-Language / extra headers on upgrades).
-                // Forcing the proxy on every non-HAR context puts all traffic behind
-                // an HTTP proxy: MiniBrowser skips HTTP/2 (HAR hangs), and on macOS
-                // the local.playwright WS shim rewrites MessageEvent.origin and
-                // unclean client closes (route-web-socket parity).
-                // Do not bypass loopback when attached: WebKit Network interception
-                // does not rewrite WS upgrades, and tests use ws://localhost.
-                bool forceHandshake = extraHTTPHeaders != null
-                    && extraHTTPHeaders.Any(h => !string.IsNullOrEmpty(h.Key));
+                // Darwin CFNetwork excludes loopback from SOCKS5, so macOS WebKit
+                // needs the HTTP CONNECT face of the MITM listener. Linux libsoup
+                // will SOCKS-proxy 127.0.0.1; forcing HTTP CONNECT there disables
+                // HTTP/2 ALPN ("No supported application protocol" on h2-only
+                // client-certificate fixtures). Chromium always keeps socks5.
+                if (certsProxy != null && RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+                {
+                    browserProxy = certsProxy.HttpBrowserProxy;
+                }
+
+                // WebKit ignores Network.setExtraHTTPHeaders on WebSocket upgrades
+                // (stock 2276), and Network interception does not rewrite them either.
+                // Always attach LocaleHandshakeProxy so context *and* later page
+                // SetExtraHTTPHeaders stamp WS handshakes. Skip when a client-
+                // certificate MITM already owns the browser proxy.
+                // Do not bypass loopback: tests use ws://localhost.
+                // HAR/macOS WS-close tradeoffs are handled inside the proxy/shim.
                 LocaleHandshakeProxy handshake = certsProxy == null
                     ? LocaleHandshakeProxy.TryStart(
                         locale,
                         browserProxy,
-                        force: forceHandshake,
+                        force: true,
                         bypassLoopback: false,
                         out browserProxy)
                     : null;

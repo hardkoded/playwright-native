@@ -66,15 +66,32 @@ namespace PlaywrightNative.Helpers
             _acceptLoop = AcceptLoopAsync();
         }
 
+        private enum BrowserProxyKind
+        {
+            Socks,
+            HttpsConnect,
+            HttpForward,
+        }
+
         /// <summary>
         /// Listening port on 127.0.0.1.
         /// </summary>
         internal int Port { get; }
 
         /// <summary>
-        /// Official <c>proxyOverride</c> passed to the browser.
+        /// Official <c>proxyOverride</c> passed to the browser (SOCKS5).
         /// </summary>
         internal Proxy BrowserProxy { get; }
+
+        /// <summary>
+        /// HTTP CONNECT view of the same listener. Darwin CFNetwork excludes
+        /// loopback from SOCKS5; macOS WebKit uses this instead of
+        /// <see cref="BrowserProxy"/>. Linux keeps SOCKS so HTTP/2 ALPN works.
+        /// </summary>
+        internal Proxy HttpBrowserProxy => new Proxy
+        {
+            Server = "http://127.0.0.1:" + Port.ToString(CultureInfo.InvariantCulture),
+        };
 
         /// <inheritdoc/>
         public void Dispose()
@@ -327,6 +344,184 @@ namespace PlaywrightNative.Helpers
                 .Replace("'", "&#39;", StringComparison.Ordinal)
                 .Replace("\n", " ", StringComparison.Ordinal)
                 .Replace("\r", " ", StringComparison.Ordinal);
+        }
+
+        private static async Task<BrowserProxyRequest?> NegotiateBrowserProxyAsync(
+            NetworkStream browser,
+            CancellationToken token)
+        {
+            byte[] peek = new byte[1];
+            int n = await browser.ReadAsync(peek.AsMemory(0, 1), token).ConfigureAwait(false);
+            if (n <= 0)
+            {
+                return null;
+            }
+
+            // SOCKS5 version byte vs HTTP method ASCII.
+            if (peek[0] == 0x05)
+            {
+                if (!await SocksHandshakeAfterVersionAsync(browser, peek[0], token).ConfigureAwait(false))
+                {
+                    return null;
+                }
+
+                (string Host, int Port)? socks = await TryReadSocksConnectAsync(browser, token)
+                    .ConfigureAwait(false);
+                return socks == null
+                    ? null
+                    : new BrowserProxyRequest(socks.Value.Host, socks.Value.Port, BrowserProxyKind.Socks, null);
+            }
+
+            return await TryReadHttpProxyRequestAsync(browser, peek[0], token).ConfigureAwait(false);
+        }
+
+        private static async Task<BrowserProxyRequest?> TryReadHttpProxyRequestAsync(
+            Stream stream,
+            byte firstByte,
+            CancellationToken token)
+        {
+            using MemoryStream headerBuffer = new();
+            headerBuffer.WriteByte(firstByte);
+            byte[] chunk = new byte[1024];
+            while (true)
+            {
+                byte[] soFar = headerBuffer.ToArray();
+                string text = Encoding.ASCII.GetString(soFar);
+                if (text.Contains("\r\n\r\n", StringComparison.Ordinal))
+                {
+                    break;
+                }
+
+                if (soFar.Length > 64 * 1024)
+                {
+                    return null;
+                }
+
+                int n = await stream.ReadAsync(chunk.AsMemory(0, chunk.Length), token).ConfigureAwait(false);
+                if (n <= 0)
+                {
+                    return null;
+                }
+
+                await headerBuffer.WriteAsync(chunk.AsMemory(0, n), token).ConfigureAwait(false);
+            }
+
+            byte[] raw = headerBuffer.ToArray();
+            string headerText = Encoding.ASCII.GetString(raw);
+            int headerEnd = headerText.IndexOf("\r\n\r\n", StringComparison.Ordinal);
+            if (headerEnd < 0)
+            {
+                return null;
+            }
+
+            int lineEnd = headerText.IndexOf("\r\n", StringComparison.Ordinal);
+            if (lineEnd <= 0)
+            {
+                return null;
+            }
+
+            string requestLine = headerText.Substring(0, lineEnd);
+            string[] parts = requestLine.Split(' ');
+            if (parts.Length < 2)
+            {
+                return null;
+            }
+
+            string method = parts[0];
+            string target = parts[1];
+            if (string.Equals(method, "CONNECT", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!TryParseHostPort(target, defaultPort: 443, out string host, out int port))
+                {
+                    return null;
+                }
+
+                byte[] ok = Encoding.ASCII.GetBytes("HTTP/1.1 200 Connection Established\r\n\r\n");
+                await stream.WriteAsync(ok, token).ConfigureAwait(false);
+                return new BrowserProxyRequest(host, port, BrowserProxyKind.HttpsConnect, null);
+            }
+
+            // Cleartext absolute-form request: GET http://host/path HTTP/1.1
+            if (!Uri.TryCreate(target, UriKind.Absolute, out Uri absolute)
+                || (absolute.Scheme != Uri.UriSchemeHttp && absolute.Scheme != Uri.UriSchemeHttps))
+            {
+                return null;
+            }
+
+            string pathAndQuery = string.IsNullOrEmpty(absolute.PathAndQuery) ? "/" : absolute.PathAndQuery;
+            string version = parts.Length >= 3 ? parts[2] : "HTTP/1.1";
+            string originLine = method + " " + pathAndQuery + " " + version;
+            byte[] originRequest = Encoding.ASCII.GetBytes(string.Concat(originLine, headerText.AsSpan(lineEnd)));
+            return new BrowserProxyRequest(
+                absolute.IdnHost,
+                absolute.IsDefaultPort ? (absolute.Scheme == Uri.UriSchemeHttps ? 443 : 80) : absolute.Port,
+                BrowserProxyKind.HttpForward,
+                originRequest);
+        }
+
+        private static bool TryParseHostPort(string target, int defaultPort, out string host, out int port)
+        {
+            host = null;
+            port = defaultPort;
+            if (string.IsNullOrEmpty(target))
+            {
+                return false;
+            }
+
+            if (target.StartsWith('['))
+            {
+                int close = target.IndexOf(']');
+                if (close <= 1)
+                {
+                    return false;
+                }
+
+                host = target.Substring(1, close - 1);
+                if (close + 1 < target.Length && target[close + 1] == ':')
+                {
+                    return int.TryParse(target.AsSpan(close + 2), NumberStyles.Integer, CultureInfo.InvariantCulture, out port);
+                }
+
+                return true;
+            }
+
+            int colon = target.LastIndexOf(':');
+            if (colon <= 0)
+            {
+                host = target;
+                return true;
+            }
+
+            host = target.Substring(0, colon);
+            return int.TryParse(target.AsSpan(colon + 1), NumberStyles.Integer, CultureInfo.InvariantCulture, out port);
+        }
+
+        private static async Task<bool> SocksHandshakeAfterVersionAsync(
+            Stream stream,
+            byte version,
+            CancellationToken token)
+        {
+            if (version != 0x05)
+            {
+                return false;
+            }
+
+            int nmethods = await ReadByteAsync(stream, token).ConfigureAwait(false);
+            if (nmethods < 0)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < nmethods; i++)
+            {
+                if (await ReadByteAsync(stream, token).ConfigureAwait(false) < 0)
+                {
+                    return false;
+                }
+            }
+
+            await stream.WriteAsync(new byte[] { 0x05, 0x00 }, token).ConfigureAwait(false);
+            return true;
         }
 
         private static async Task<bool> SocksHandshakeAsync(Stream stream, CancellationToken token)
@@ -771,20 +966,14 @@ namespace PlaywrightNative.Helpers
 
         private static List<SslApplicationProtocol> ErrorPageAlpn(IReadOnlyList<string> offered)
         {
-            List<SslApplicationProtocol> list = new();
-            if (offered != null)
-            {
-                foreach (string protocol in offered)
-                {
-                    if (string.Equals(protocol, "h2", StringComparison.Ordinal))
-                    {
-                        list.Add(SslApplicationProtocol.Http2);
-                    }
-                }
-            }
-
-            list.Add(SslApplicationProtocol.Http11);
-            return list;
+            // Upstream socksClientCertificatesInterceptor error path passes
+            // `serverDecrypted.alpnProtocol` into the MITM upgrade; on handshake
+            // failure that value is undefined, so the browser MITM offers only
+            // ["http/1.1"]. Re-offering "h2" here makes WebKit negotiate HTTP/2
+            // for the error page, and our lightweight HTTP/2 error writer then
+            // trips "Broken pipe" / hangs instead of rendering the HTML.
+            _ = offered;
+            return new List<SslApplicationProtocol> { SslApplicationProtocol.Http11 };
         }
 
         private async Task AcceptLoopAsync()
@@ -822,32 +1011,42 @@ namespace PlaywrightNative.Helpers
                 using (client)
                 using (NetworkStream browser = client.GetStream())
                 {
-                    if (!await SocksHandshakeAsync(browser, _cts.Token).ConfigureAwait(false))
-                    {
-                        return;
-                    }
-
-                    (string Host, int Port)? dest = await TryReadSocksConnectAsync(browser, _cts.Token)
-                        .ConfigureAwait(false);
+                    BrowserProxyRequest? dest =
+                        await NegotiateBrowserProxyAsync(browser, _cts.Token).ConfigureAwait(false);
                     if (dest == null)
                     {
                         return;
                     }
 
-                    string host = dest.Value.Host;
-                    int port = dest.Value.Port;
+                    BrowserProxyRequest request = dest.Value;
                     try
                     {
-                        server = await ConnectOutboundAsync(host, port, _cts.Token).ConfigureAwait(false);
+                        server = await ConnectOutboundAsync(request.Host, request.Port, _cts.Token)
+                            .ConfigureAwait(false);
                     }
                     catch (Exception)
                     {
-                        await WriteSocksFailureAsync(browser, _cts.Token).ConfigureAwait(false);
+                        if (request.Kind == BrowserProxyKind.Socks)
+                        {
+                            await WriteSocksFailureAsync(browser, _cts.Token).ConfigureAwait(false);
+                        }
+
                         return;
                     }
 
-                    await WriteSocksSuccessAsync(browser, _cts.Token).ConfigureAwait(false);
+                    if (request.Kind == BrowserProxyKind.Socks)
+                    {
+                        await WriteSocksSuccessAsync(browser, _cts.Token).ConfigureAwait(false);
+                    }
+
                     using NetworkStream origin = server.GetStream();
+                    if (request.Kind == BrowserProxyKind.HttpForward)
+                    {
+                        await origin.WriteAsync(request.ForwardRequest, _cts.Token).ConfigureAwait(false);
+                        await PipeAsync(browser, origin, _cts.Token).ConfigureAwait(false);
+                        return;
+                    }
+
                     byte[] first = new byte[16 * 1024];
                     int n = await browser.ReadAsync(first.AsMemory(0, first.Length), _cts.Token)
                         .ConfigureAwait(false);
@@ -859,10 +1058,11 @@ namespace PlaywrightNative.Helpers
                     byte[] hello = new byte[n];
                     Buffer.BlockCopy(first, 0, hello, 0, n);
                     string originKey = ClientCertificateHelper.NormalizeOrigin(
-                        "https://" + host + ":" + port.ToString(CultureInfo.InvariantCulture));
+                        "https://" + request.Host + ":" + request.Port.ToString(CultureInfo.InvariantCulture));
                     if (hello[0] == 0x16 && _certs.TryGetValue(originKey, out X509Certificate2 clientCert))
                     {
-                        await EstablishTlsTunnelAsync(browser, origin, hello, host, port, clientCert)
+                        await EstablishTlsTunnelAsync(
+                            browser, origin, hello, request.Host, request.Port, clientCert)
                             .ConfigureAwait(false);
                     }
                     else
@@ -1015,7 +1215,15 @@ namespace PlaywrightNative.Helpers
 
                 try
                 {
-                    await serverTls.AuthenticateAsClientAsync(clientOptions, _cts.Token).ConfigureAwait(false);
+                    // Bound the origin handshake: WebKit can sit forever when the
+                    // server resets mid-TLS (SNI reject / TLS1.2 fixtures) or when
+                    // certificate validation stalls. Upstream surfaces an error page
+                    // instead of hanging page.goto.
+                    using CancellationTokenSource handshakeCts =
+                        CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
+                    handshakeCts.CancelAfter(TimeSpan.FromSeconds(5));
+                    await serverTls.AuthenticateAsClientAsync(clientOptions, handshakeCts.Token)
+                        .ConfigureAwait(false);
                 }
                 catch (Exception ex)
                 {
@@ -1024,17 +1232,22 @@ namespace PlaywrightNative.Helpers
                     return;
                 }
 
-                SslApplicationProtocol negotiated = serverTls.NegotiatedApplicationProtocol;
+                // Match upstream socksClientCertificatesInterceptor: MITM offers
+                // only the origin-negotiated ALPN to the browser.
                 browserTls = new SslStream(browserPrefixed, leaveInnerStreamOpen: false);
+                SslApplicationProtocol negotiated = serverTls.NegotiatedApplicationProtocol;
+                List<SslApplicationProtocol> browserAlpn = new()
+                {
+                    negotiated.Protocol.Length > 0 ? negotiated : SslApplicationProtocol.Http11,
+                };
+
                 SslServerAuthenticationOptions serverOptions = new()
                 {
                     ServerCertificate = _dummyCert,
                     ClientCertificateRequired = false,
                     CertificateRevocationCheckMode = X509RevocationMode.NoCheck,
                     EnabledSslProtocols = SslProtocols.None,
-                    ApplicationProtocols = negotiated.Protocol.Length > 0
-                        ? new List<SslApplicationProtocol> { negotiated }
-                        : new List<SslApplicationProtocol> { SslApplicationProtocol.Http11 },
+                    ApplicationProtocols = browserAlpn,
                 };
 #pragma warning disable CA5359
                 serverOptions.RemoteCertificateValidationCallback = (_, _, _, _) => true;
@@ -1100,10 +1313,32 @@ namespace PlaywrightNative.Helpers
             catch (AuthenticationException)
             {
             }
+            catch (OperationCanceledException)
+            {
+            }
             finally
             {
                 await tls.DisposeAsync().ConfigureAwait(false);
             }
+        }
+
+        private readonly struct BrowserProxyRequest
+        {
+            internal BrowserProxyRequest(string host, int port, BrowserProxyKind kind, byte[] forwardRequest)
+            {
+                Host = host;
+                Port = port;
+                Kind = kind;
+                ForwardRequest = forwardRequest;
+            }
+
+            internal string Host { get; }
+
+            internal int Port { get; }
+
+            internal BrowserProxyKind Kind { get; }
+
+            internal byte[] ForwardRequest { get; }
         }
 
         private sealed class PrependStream : Stream

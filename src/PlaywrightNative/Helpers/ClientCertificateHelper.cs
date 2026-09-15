@@ -199,6 +199,14 @@ namespace PlaywrightNative.Helpers
                 return TlsDisconnectedMessage;
             }
 
+            // Handshake CancelAfter / linked CTS — treat as a clean disconnect so
+            // page.goto still paints the Playwright client-certificate error page
+            // instead of hanging (WebKit TLS1.2 SNI-reject fixtures).
+            if (ex is OperationCanceledException || ex is TimeoutException)
+            {
+                return TlsDisconnectedMessage;
+            }
+
             string message = FlattenMessage(ex);
             if (IsMacVerifyFailure(message))
             {
