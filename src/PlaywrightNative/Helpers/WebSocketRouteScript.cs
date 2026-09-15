@@ -120,6 +120,7 @@ namespace PlaywrightNative.Helpers
             "        if (routed) {" +
             "          if (result && result.ops) pwWebSocketApplyRaw(result.ops);" +
             "          pwWebSocketPull();" +
+
             // Official mock stays CONNECTING until connect / ensureOpened from the
             // route handler. Do not auto-open here: a timer races Task.Run handlers
             // and can send page frames before OnMessage is registered.
