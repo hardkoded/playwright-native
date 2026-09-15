@@ -51,7 +51,8 @@ namespace PlaywrightNative.Tests
 
         internal static async Task<OfficialClientCertificateServer> StartAsync(
             bool http2 = false,
-            bool enableHttp1Fallback = false)
+            bool enableHttp1Fallback = false,
+            bool useFakeLocalhost = false)
         {
             X509Certificate2 cert = LoadPem(
                 Asset("client-certificates/server/server_cert.pem"),
@@ -131,10 +132,15 @@ namespace PlaywrightNative.Tests
             port = host.ServerFeatures.Get<Microsoft.AspNetCore.Hosting.Server.Features.IServerAddressesFeature>()
                 .Addresses
                 .SelectAddressPort();
+
+            // Official startCCServer({ useFakeLocalhost }): WebKit on macOS does
+            // not send localhost / 127.0.0.1 through the client-certificate SOCKS
+            // MITM, so tests use local.playwright (rewritten to localhost outbound).
+            string hostName = useFakeLocalhost ? "local.playwright" : "127.0.0.1";
             return new OfficialClientCertificateServer(
                 host,
                 port,
-                "https://127.0.0.1:" + port.ToString(CultureInfo.InvariantCulture) + "/");
+                "https://" + hostName + ":" + port.ToString(CultureInfo.InvariantCulture) + "/");
         }
 
         public async ValueTask DisposeAsync()

@@ -5,7 +5,9 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.WebSockets;
+using System.Security.Authentication;
 using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -13,6 +15,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Features;
+using Microsoft.AspNetCore.Server.Kestrel.Https;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Primitives;
@@ -266,7 +269,19 @@ namespace PlaywrightNative.TestServer
                             if (!string.IsNullOrEmpty(certificatePath))
                             {
                                 string certificatePassword = Environment.GetEnvironmentVariable("PLAYWRIGHT_TEST_CERT_PASSWORD");
-                                listenOptions.UseHttps(Path.GetFullPath(certificatePath), certificatePassword);
+                                string fullPath = Path.GetFullPath(certificatePath);
+                                X509Certificate2 certificate = string.IsNullOrEmpty(certificatePassword)
+                                    ? X509CertificateLoader.LoadPkcs12FromFile(fullPath, null, X509KeyStorageFlags.Exportable)
+                                    : X509CertificateLoader.LoadPkcs12FromFile(fullPath, certificatePassword, X509KeyStorageFlags.Exportable);
+
+                                // Official Node https negotiates TLS 1.3 with
+                                // WebKit/mac for playwright-test. Kestrel's
+                                // platform default can otherwise settle on 1.2.
+                                listenOptions.UseHttps(new HttpsConnectionAdapterOptions
+                                {
+                                    ServerCertificate = certificate,
+                                    SslProtocols = SslProtocols.Tls13,
+                                });
                             }
                             else
                             {
