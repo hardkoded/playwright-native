@@ -43,7 +43,6 @@ namespace PlaywrightNative.WebKit
         private readonly ConcurrentDictionary<string, WKRequest> _requestsById = new();
         private readonly ConcurrentDictionary<string, WKWebSocket> _webSockets = new();
         private readonly List<WKRouteEntry> _routes = new();
-        private readonly ConcurrentDictionary<string, JsonElement> _pendingIntercepts = new();
         private readonly ConcurrentDictionary<string, JsonElement> _requestIdToRequestWillBeSent = new();
         private readonly ConcurrentDictionary<string, byte> _handledIntercepts = new();
         private bool _interceptingEnabled;
@@ -729,7 +728,38 @@ namespace PlaywrightNative.WebKit
                 return null;
             }
 
-            if (_requestsById.TryGetValue(requestId, out WKRequest existing))
+            // Handle redirect: WebKit reuses requestId and includes redirectResponse.
+            WKRequest redirectedFrom = null;
+            if (p.TryGetProperty("redirectResponse", out JsonElement redirectResponse)
+                && redirectResponse.ValueKind == JsonValueKind.Object)
+            {
+                if (_requestsById.TryRemove(requestId, out WKRequest existingRequest))
+                {
+                    _handledIntercepts.TryRemove(requestId, out _);
+                    string redirectUrl = GetString(redirectResponse, "url");
+                    int redirectStatus = GetInt(redirectResponse, "status");
+                    string redirectStatusText = GetString(redirectResponse, "statusText");
+                    IDictionary<string, string> redirectHeaders = ParseHeaders(redirectResponse, caseInsensitive: true);
+
+                    WKResponse redirectResponseObj = new(
+                        _session,
+                        existingRequest,
+                        redirectUrl,
+                        redirectStatus,
+                        redirectStatusText,
+                        redirectHeaders,
+                        ResponseNetworkInfo.ParseServerAddr(redirectResponse),
+                        ResponseNetworkInfo.ParseSecurityDetails(redirectResponse),
+                        ResponseNetworkInfo.ParseFromServiceWorker(redirectResponse),
+                        ResponseNetworkInfo.ParseHttpVersion(redirectResponse));
+
+                    RaiseResponseReceived(redirectResponseObj);
+                    RaiseRequestFinished(existingRequest);
+
+                    redirectedFrom = existingRequest;
+                }
+            }
+            else if (_requestsById.TryGetValue(requestId, out WKRequest existing))
             {
                 return existing;
             }
@@ -749,8 +779,7 @@ namespace PlaywrightNative.WebKit
             bool isNavigationRequest = NetworkRequestEvents.IsDocumentNavigation(type);
             string frameId = GetString(p, "frameId");
             IFrame frame = _page.GetOrCreateFrameById(frameId);
-            WKRequest redirectedFrom = null;
-            if (isNavigationRequest)
+            if (redirectedFrom == null && isNavigationRequest)
             {
                 redirectedFrom = _page.ConsumeRedirectSource(url);
             }
@@ -799,110 +828,31 @@ namespace PlaywrightNative.WebKit
                 return;
             }
 
+            // Upstream wkPage.ts skips data: / about: network events.
+            if (p.TryGetProperty("request", out JsonElement previewRequest))
+            {
+                string previewUrl = GetString(previewRequest, "url");
+                if (!string.IsNullOrEmpty(previewUrl)
+                    && (previewUrl.StartsWith("data:", StringComparison.OrdinalIgnoreCase)
+                        || previewUrl.StartsWith("about:", StringComparison.OrdinalIgnoreCase)))
+                {
+                    return;
+                }
+            }
+
             // Upstream wkPage.ts: when interception is on and this is not a redirect,
-            // buffer willBeSent until requestIntercepted (route) or responseReceived
-            // (service-worker / non-intercepted completion). Creating the request early
-            // leaves the network paused with no continue for SW-handled fetches.
+            // buffer willBeSent until requestIntercepted (route), responseReceived, or
+            // loadingFailed (service-worker / non-intercepted completion). Creating the
+            // request early leaves the network paused with no continue for SW fetches.
             bool isRedirect = p.TryGetProperty("redirectResponse", out JsonElement redirectResponsePreview)
                 && redirectResponsePreview.ValueKind == JsonValueKind.Object;
             if (_interceptingEnabled && !isRedirect)
             {
-                _requestIdToRequestWillBeSent[requestId] = p;
-                if (_pendingIntercepts.TryRemove(requestId, out _))
-                {
-                    WKRequest created = CreateRequestFromWillBeSent(p, allowRoute: true);
-                    if (created != null)
-                    {
-                        OnInterceptedRequest(requestId, created);
-                    }
-                }
-
+                _requestIdToRequestWillBeSent[requestId] = p.Clone();
                 return;
             }
 
-            // Handle redirect: if redirectResponse is present, the existing request was
-            // redirected. WebKit reports the redirect chain by reusing the requestId.
-            WKRequest redirectedFrom = null;
-            if (p.TryGetProperty("redirectResponse", out JsonElement redirectResponse)
-                && redirectResponse.ValueKind == JsonValueKind.Object)
-            {
-                if (_requestsById.TryRemove(requestId, out WKRequest existingRequest))
-                {
-                    _handledIntercepts.TryRemove(requestId, out _);
-                    string redirectUrl = GetString(redirectResponse, "url");
-                    int redirectStatus = GetInt(redirectResponse, "status");
-                    string redirectStatusText = GetString(redirectResponse, "statusText");
-                    IDictionary<string, string> redirectHeaders = ParseHeaders(redirectResponse, caseInsensitive: true);
-
-                    WKResponse redirectResponseObj = new(
-                        _session,
-                        existingRequest,
-                        redirectUrl,
-                        redirectStatus,
-                        redirectStatusText,
-                        redirectHeaders,
-                        ResponseNetworkInfo.ParseServerAddr(redirectResponse),
-                        ResponseNetworkInfo.ParseSecurityDetails(redirectResponse),
-                        ResponseNetworkInfo.ParseFromServiceWorker(redirectResponse),
-                        ResponseNetworkInfo.ParseHttpVersion(redirectResponse));
-
-                    RaiseResponseReceived(redirectResponseObj);
-                    RaiseRequestFinished(existingRequest);
-
-                    redirectedFrom = existingRequest;
-                }
-            }
-
-            // Parse the request payload (nested under "request" in the WebKit event).
-            if (!p.TryGetProperty("request", out JsonElement requestPayload))
-            {
-                return;
-            }
-
-            string url = GetString(requestPayload, "url");
-            string method = GetString(requestPayload, "method");
-            byte[] postDataBuffer = RequestPostData.FromWebKitBase64(GetString(requestPayload, "postData"));
-            string postData = RequestPostData.ToUtf8String(postDataBuffer);
-            IDictionary<string, string> headers = ParseHeaders(requestPayload, caseInsensitive: false);
-
-            string type = GetString(p, "type");
-            bool isNavigationRequest = NetworkRequestEvents.IsDocumentNavigation(type);
-            string frameId = GetString(p, "frameId");
-            IFrame frame = _page.GetOrCreateFrameById(frameId);
-            if (redirectedFrom == null && isNavigationRequest)
-            {
-                redirectedFrom = _page.ConsumeRedirectSource(url);
-            }
-
-            WKRequest request = new(
-                requestId,
-                url,
-                method,
-                headers,
-                postData,
-                type ?? string.Empty,
-                isNavigationRequest,
-                redirectedFrom,
-                frame,
-                postDataBuffer);
-
-            request.DocumentUrl = isNavigationRequest ? url : frame?.Url;
-            request.TimestampSeconds = ResourceTimingParser.ReadDouble(p, "timestamp");
-            double wallTime = ResourceTimingParser.ReadDouble(p, "wallTime");
-            if (wallTime <= 0)
-            {
-                wallTime = request.TimestampSeconds;
-            }
-
-            ResourceTimingParser.ApplyWallTime(request.Timing, wallTime);
-
-            _requestsById[requestId] = request;
-            RaiseRequestCreated(request);
-
-            if (_pendingIntercepts.TryRemove(requestId, out _))
-            {
-                OnInterceptedRequest(requestId, request);
-            }
+            CreateRequestFromWillBeSent(p, allowRoute: false);
         }
 
         private void OnResponseReceived(JsonElement? parameters)
@@ -1124,6 +1074,15 @@ namespace PlaywrightNative.WebKit
                 return;
             }
 
+            // Upstream wkPage.ts: loadingFailed without requestIntercepted (e.g. service
+            // worker / cancelled fetches) — materialize the buffered willBeSent without
+            // a route so Page.Request / RequestFailed still fire under interception.
+            if (!_requestsById.ContainsKey(requestId)
+                && _requestIdToRequestWillBeSent.TryRemove(requestId, out JsonElement bufferedWillBeSent))
+            {
+                CreateRequestFromWillBeSent(bufferedWillBeSent, allowRoute: false);
+            }
+
             WKRequest request = null;
             if (_requestsById.TryRemove(requestId, out WKRequest removed))
             {
@@ -1192,15 +1151,22 @@ namespace PlaywrightNative.WebKit
                 return;
             }
 
-            if (_requestsById.TryGetValue(requestId, out WKRequest request))
-            {
-                OnInterceptedRequest(requestId, request);
-                return;
-            }
+            // Upstream wkPage.ts: intercepted without a buffered willBeSent (already
+            // released via responseReceived/loadingFailed, or willBeSent not yet seen).
+            // Continue without attaching a page route — do not leave the network paused.
+            _ = ContinueOrphanInterceptAsync(requestId);
+        }
 
-            // Wait for requestWillBeSent so the handler runs once. Handling
-            // intercept-first (or continuing it) issues a second network request.
-            _pendingIntercepts[requestId] = p;
+        private async Task ContinueOrphanInterceptAsync(string requestId)
+        {
+            try
+            {
+                await _session.SendAsync("Network.interceptWithRequest", new { requestId }).ConfigureAwait(false);
+            }
+            catch (PlaywrightException)
+            {
+                // Request may already have completed (SW) or been cancelled.
+            }
         }
 
         private void OnInterceptedRequest(string requestId, WKRequest request)
