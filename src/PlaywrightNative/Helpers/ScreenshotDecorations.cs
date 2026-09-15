@@ -36,7 +36,10 @@ namespace PlaywrightNative.Helpers
         // A bare `*` loses that specificity battle and leaves the caret visible.
         // Inject via evaluate (not AddStyleTag) so a navigation race becomes a
         // swallowed evaluate error instead of a raw CDP context-id failure.
-        internal const string HideCaretJs = @"(function() {
+        // Blur the focused field (caret cannot paint without focus) and force
+        // caret-color transparent. Resolve after two animation frames so WebKit's
+        // snapshot sees the post-blur frame.
+        internal const string HideCaretJs = @"() => {
   const collectRoots = (root, roots) => {
     roots.push(root);
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
@@ -83,11 +86,14 @@ namespace PlaywrightNative.Helpers
     for (const item of restore)
       item.element.style.setProperty('caret-color', item.value, item.priority);
     if (refocus && typeof refocus.focus === 'function') {
-      try { refocus.focus(); } catch (e) {}
+      try { refocus.focus({ preventScroll: true }); } catch (e) {}
     }
     delete window.__pwRestoreCaret;
   };
-})()";
+  return new Promise(resolve => {
+    requestAnimationFrame(() => requestAnimationFrame(resolve));
+  });
+}";
 
         internal const string RestoreCaretJs = "window.__pwRestoreCaret && window.__pwRestoreCaret()";
 
@@ -188,29 +194,30 @@ namespace PlaywrightNative.Helpers
 
         /// <summary>
         /// Builds the stylesheet injected for the given screenshot options.
-        /// Caret hiding is applied via <see cref="HideCaretJs"/> (matching upstream
-        /// <c>inPagePrepareForScreenshots</c>), not this sheet: a global
-        /// <c>* { caret-color }</c> loses to page rules like
-        /// <c>div { caret-color: #000 !important }</c>, and <c>AddStyleTag</c>
-        /// during a redirect loop surfaces raw CDP context-id errors.
+        /// Caret hiding uses type/attribute selectors (not <c>*</c>) so page
+        /// rules like <c>input { caret-color: red !important }</c> lose to an
+        /// equally specific later sheet; <see cref="HideCaretJs"/> still
+        /// applies inline styles + blur as a backstop.
         /// Animations are frozen via <see cref="FinishAnimationsJs"/> (matching
         /// upstream), not CSS: forcing <c>animation-duration: 0s</c> here snaps
         /// a running CSS animation to completion and drops it from
         /// <c>getAnimations()</c> before that script can cancel/finish it,
         /// which suppresses the finish/cancel events official tests assert on.
         /// </summary>
-        /// <param name="caret">The screenshot caret option (unused; kept for call-site compatibility).</param>
+        /// <param name="caret">The screenshot caret option.</param>
         /// <param name="style">Optional caller stylesheet.</param>
         /// <returns>The combined CSS, or an empty string.</returns>
         internal static string BuildCss(string caret, string style)
         {
-            _ = caret;
+            string caretCss = IsHideCaret(caret)
+                ? "input, textarea, [contenteditable] { caret-color: transparent !important; }"
+                : string.Empty;
             if (string.IsNullOrEmpty(style))
             {
-                return string.Empty;
+                return caretCss;
             }
 
-            return style;
+            return string.IsNullOrEmpty(caretCss) ? style : caretCss + style;
         }
 
         /// <summary>

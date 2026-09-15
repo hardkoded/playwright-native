@@ -35,6 +35,8 @@ namespace PlaywrightNative.Helpers
     /// </summary>
     internal sealed class WebKitMacProxyBypassShim : IDisposable
     {
+        private static readonly string[] HeaderLineSeparators = { "\r\n" };
+
         private static readonly Encoding Latin1 = Encoding.Latin1;
 
         private readonly TcpListener _listener;
@@ -239,11 +241,70 @@ namespace PlaywrightNative.Helpers
             int versionIdx = text.LastIndexOf(' ', lineEnd - 1);
             string version = versionIdx > 0 ? text.Substring(versionIdx + 1, lineEnd - versionIdx - 1) : "HTTP/1.1";
             string rewritten = method + " " + originForm + " " + version + rest;
-            return Latin1.GetBytes(rewritten);
+            return ForceConnectionClose(Latin1.GetBytes(rewritten));
+        }
+
+        /// <summary>
+        /// Forces <c>Connection: close</c> so the shim handles one HTTP exchange
+        /// per TCP connection. Blind bidirectional piping with keep-alive would
+        /// forward a later request (e.g. a bypassed host) to the upstream proxy
+        /// without re-running <see cref="ProxySettings.ShouldBypass"/>.
+        /// </summary>
+        /// <param name="headerBytes">Absolute-form or origin-form request headers.</param>
+        /// <returns>Headers with a single Connection: close directive.</returns>
+        private static byte[] ForceConnectionClose(byte[] headerBytes)
+        {
+            string text = Latin1.GetString(headerBytes);
+            int headerEnd = text.IndexOf("\r\n\r\n", StringComparison.Ordinal);
+            if (headerEnd < 0)
+            {
+                return headerBytes;
+            }
+
+            string head = text.Substring(0, headerEnd);
+            string[] lines = head.Split(HeaderLineSeparators, StringSplitOptions.None);
+            if (lines.Length == 0)
+            {
+                return headerBytes;
+            }
+
+            StringBuilder rebuilt = new();
+            rebuilt.Append(lines[0]).Append("\r\n");
+            for (int i = 1; i < lines.Length; i++)
+            {
+                if (lines[i].StartsWith("Connection:", StringComparison.OrdinalIgnoreCase)
+                    || lines[i].StartsWith("Proxy-Connection:", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                rebuilt.Append(lines[i]).Append("\r\n");
+            }
+
+            rebuilt.Append("Connection: close\r\n\r\n");
+            return Latin1.GetBytes(rebuilt.ToString());
         }
 
         private static Task WriteAsciiAsync(NetworkStream stream, string text)
             => stream.WriteAsync(Latin1.GetBytes(text)).AsTask();
+
+        /// <summary>
+        /// Copies one HTTP response (upstream → client). Unlike a full duplex
+        /// pipe, this completes when the upstream closes after
+        /// <see cref="ForceConnectionClose"/>.
+        /// </summary>
+        private static async Task CopyResponseAsync(NetworkStream upstream, NetworkStream client)
+        {
+            try
+            {
+                await upstream.CopyToAsync(client).ConfigureAwait(false);
+            }
+#pragma warning disable RCS1075
+            catch (Exception)
+#pragma warning restore RCS1075
+            {
+            }
+        }
 
         private async Task AcceptLoopAsync()
         {
@@ -392,11 +453,15 @@ namespace PlaywrightNative.Helpers
                 {
                     await ConnectWithTimeoutAsync(upstream, _upstreamHost, _upstreamPort).ConfigureAwait(false);
                     upStream = upstream.GetStream();
-                    outbound = headerBytes;
+                    outbound = ForceConnectionClose(headerBytes);
                 }
 
                 await upStream.WriteAsync(outbound).ConfigureAwait(false);
-                await PipeBidirectionalAsync(clientStream, upStream).ConfigureAwait(false);
+
+                // One request / one response — do not keep-alive pipe, or a
+                // subsequent absolute-form request on this socket would skip
+                // ShouldBypass and hang in upstream DNS for excluded hosts.
+                await CopyResponseAsync(upStream, clientStream).ConfigureAwait(false);
             }
 #pragma warning disable RCS1075
             catch (Exception)

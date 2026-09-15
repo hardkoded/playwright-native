@@ -7801,13 +7801,19 @@ namespace PlaywrightNative.WebKit
                 }
 
                 // Page.overrideUserAgent is bound to the previous target; re-apply
-                // the context UA after a cross-process commit.
-                string userAgent = (_context ?? OwnerContext as WKBrowserContext) is WKBrowserContext ctx
-                    ? ((IHasUserAgent)ctx).UserAgent
-                    : null;
-                if (!string.IsNullOrEmpty(userAgent))
+                // an explicit context UA, or re-run the macOS Safari-token default.
+                WKBrowserContext ctx = _context ?? OwnerContext as WKBrowserContext;
+                if (ctx != null)
                 {
-                    await SetUserAgentAsync(userAgent).ConfigureAwait(false);
+                    string userAgent = ((IHasUserAgent)ctx).UserAgent;
+                    if (!string.IsNullOrEmpty(userAgent))
+                    {
+                        await SetUserAgentAsync(userAgent).ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        await ctx.ReapplyDefaultSafariUserAgentAsync(this).ConfigureAwait(false);
+                    }
                 }
             }
 #pragma warning disable RCS1075

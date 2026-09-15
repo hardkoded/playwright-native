@@ -2429,6 +2429,15 @@ namespace PlaywrightNative.WebKit
         }
 
         /// <summary>
+        /// Re-applies the macOS Safari-token default on <paramref name="page"/>
+        /// after a cross-process navigation drops the per-target override.
+        /// </summary>
+        /// <param name="page">The page whose target just committed.</param>
+        /// <returns>A task that completes when the override is applied or skipped.</returns>
+        internal Task ReapplyDefaultSafariUserAgentAsync(WKPage page)
+            => EnsureDefaultUserAgentHasSafariTokenAsync(page);
+
+        /// <summary>
         /// macOS WebKit's default <c>navigator.userAgent</c> often omits the
         /// trailing <c>Safari/…</c> token that upstream Playwright and the
         /// page-basic sanity check expect. Append one derived from AppleWebKit
@@ -2445,7 +2454,7 @@ namespace PlaywrightNative.WebKit
                 return;
             }
 
-            string ua = null;
+            string ua;
             try
             {
                 ua = await page.EvaluateAsync<string>("() => navigator.userAgent").ConfigureAwait(false);
@@ -2454,31 +2463,24 @@ namespace PlaywrightNative.WebKit
             catch (Exception)
 #pragma warning restore RCS1075
             {
-                // Fall through and install a Safari-shaped default UA.
+                // Page is not evaluable yet (or mid-swap); skip rather than
+                // persisting a synthetic context UA that would diverge from
+                // navigator.userAgent for APIRequest / default-header checks.
+                return;
             }
 
-            if (!string.IsNullOrEmpty(ua) && ua.Contains("Safari/", StringComparison.Ordinal))
+            if (string.IsNullOrEmpty(ua) || ua.Contains("Safari/", StringComparison.Ordinal))
             {
                 return;
             }
 
-            // Persist as the context default so later pages and cross-process
-            // swaps re-apply the same override (Page.overrideUserAgent is
-            // per-target and is lost when the provisional commits).
-            if (string.IsNullOrEmpty(ua))
-            {
-                ua = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                    + "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15";
-            }
-            else
-            {
-                Match match = Regex.Match(ua, @"AppleWebKit/([\d.]+)");
-                string version = match.Success ? match.Groups[1].Value : "605.1.15";
-                ua = ua.TrimEnd() + " Safari/" + version;
-            }
+            Match match = Regex.Match(ua, @"AppleWebKit/([\d.]+)");
+            string version = match.Success ? match.Groups[1].Value : "605.1.15";
 
-            _userAgent = ua;
-            await page.SetUserAgentAsync(ua).ConfigureAwait(false);
+            // Page-level override only. Do not assign <see cref="_userAgent"/>:
+            // context.request / default headers must keep matching the engine's
+            // reported navigator.userAgent unless the caller set userAgent.
+            await page.SetUserAgentAsync(ua.TrimEnd() + " Safari/" + version).ConfigureAwait(false);
         }
 
         private sealed class NoopContextDisposable : IAsyncDisposable
