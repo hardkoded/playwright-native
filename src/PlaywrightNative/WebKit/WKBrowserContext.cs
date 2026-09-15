@@ -2454,19 +2454,25 @@ namespace PlaywrightNative.WebKit
                 return;
             }
 
-            string ua;
-            try
+            string ua = null;
+            for (int attempt = 0; attempt < 3; attempt++)
             {
-                ua = await page.EvaluateAsync<string>("() => navigator.userAgent").ConfigureAwait(false);
-            }
+                try
+                {
+                    ua = await page.EvaluateAsync<string>("() => navigator.userAgent").ConfigureAwait(false);
+                    if (!string.IsNullOrEmpty(ua))
+                    {
+                        break;
+                    }
+                }
 #pragma warning disable RCS1075
-            catch (Exception)
+                catch (Exception)
 #pragma warning restore RCS1075
-            {
-                // Page is not evaluable yet (or mid-swap); skip rather than
-                // persisting a synthetic context UA that would diverge from
-                // navigator.userAgent for APIRequest / default-header checks.
-                return;
+                {
+                    // Page may not be evaluable yet (or mid-swap); retry briefly.
+                }
+
+                await Task.Delay(25).ConfigureAwait(false);
             }
 
             if (string.IsNullOrEmpty(ua) || ua.Contains("Safari/", StringComparison.Ordinal))
@@ -2481,6 +2487,22 @@ namespace PlaywrightNative.WebKit
             // context.request / default headers must keep matching the engine's
             // reported navigator.userAgent unless the caller set userAgent.
             await page.SetUserAgentAsync(ua.TrimEnd() + " Safari/" + version).ConfigureAwait(false);
+
+            // Verify the override stuck; MiniBrowser occasionally ignores the
+            // first Page.overrideUserAgent before the document is live.
+            try
+            {
+                string after = await page.EvaluateAsync<string>("() => navigator.userAgent").ConfigureAwait(false);
+                if (!string.IsNullOrEmpty(after) && !after.Contains("Safari/", StringComparison.Ordinal))
+                {
+                    await page.SetUserAgentAsync(after.TrimEnd() + " Safari/" + version).ConfigureAwait(false);
+                }
+            }
+#pragma warning disable RCS1075
+            catch (Exception)
+#pragma warning restore RCS1075
+            {
+            }
         }
 
         private sealed class NoopContextDisposable : IAsyncDisposable

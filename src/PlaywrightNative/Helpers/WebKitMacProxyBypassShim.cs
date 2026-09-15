@@ -44,13 +44,15 @@ namespace PlaywrightNative.Helpers
         private readonly string _upstreamHost;
         private readonly int _upstreamPort;
         private readonly string _bypass;
+        private readonly string _proxyAuthorization;
         private int _disposed;
 
-        private WebKitMacProxyBypassShim(string upstreamHost, int upstreamPort, string bypass)
+        private WebKitMacProxyBypassShim(string upstreamHost, int upstreamPort, string bypass, string proxyAuthorization)
         {
             _upstreamHost = upstreamHost;
             _upstreamPort = upstreamPort;
             _bypass = bypass;
+            _proxyAuthorization = proxyAuthorization;
             _listener = new TcpListener(IPAddress.Loopback, 0);
             _listener.Start();
             Port = ((IPEndPoint)_listener.LocalEndpoint).Port;
@@ -101,9 +103,12 @@ namespace PlaywrightNative.Helpers
         }
 
         /// <summary>
-        /// Starts a Darwin bypass shim when <paramref name="userProxy"/> has a
-        /// non-empty bypass list. Otherwise returns <see langword="null"/> and
-        /// leaves <paramref name="browserProxy"/> unchanged.
+        /// Starts a WebKit HTTP(S) proxy shim on Darwin/Linux when needed.
+        /// CFNetwork refuses to proxy <c>localhost</c> even with an empty
+        /// bypass list (<c>kCFErrorHTTPProxyConnectionFailure</c> / 306), so
+        /// Darwin always wraps HTTP(S) proxies. Linux only wraps when a bypass
+        /// list is present (libsoup then drops localhost / link-local). SOCKS
+        /// is not framed here. Windows uses curl's noproxy and skips this.
         /// </summary>
         /// <param name="userProxy">Caller proxy, or <see langword="null"/>.</param>
         /// <param name="browserProxy">Proxy to pass to WebKit.</param>
@@ -112,17 +117,20 @@ namespace PlaywrightNative.Helpers
         {
             browserProxy = userProxy;
             if (userProxy == null
-                || string.IsNullOrEmpty(userProxy.Server)
-                || string.IsNullOrEmpty(ProxySettings.NormalizeBypass(userProxy.Bypass)))
+                || string.IsNullOrEmpty(userProxy.Server))
             {
                 return null;
             }
 
-            // WebKit on Darwin (CFNetwork) and Linux (libsoup) both stop
-            // proxying localhost / link-local once any bypass host is set.
-            // Windows uses curl's noproxy and does not need this shim.
             if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
                 && Environment.GetEnvironmentVariable("PW_FORCE_MAC_PROXY_BYPASS_SHIM") != "1")
+            {
+                return null;
+            }
+
+            string bypass = ProxySettings.NormalizeBypass(userProxy.Bypass);
+            bool isDarwin = RuntimeInformation.IsOSPlatform(OSPlatform.OSX);
+            if (string.IsNullOrEmpty(bypass) && !isDarwin)
             {
                 return null;
             }
@@ -134,10 +142,23 @@ namespace PlaywrightNative.Helpers
                 return null;
             }
 
+            // This shim speaks HTTP absolute-form / CONNECT only.
+            if (upstream.Scheme.StartsWith("socks", StringComparison.OrdinalIgnoreCase))
+            {
+                return null;
+            }
+
             int port = upstream.IsDefaultPort
                 ? (string.Equals(upstream.Scheme, "https", StringComparison.OrdinalIgnoreCase) ? 443 : 80)
                 : upstream.Port;
-            WebKitMacProxyBypassShim shim = new(upstream.Host, port, ProxySettings.NormalizeBypass(userProxy.Bypass));
+            string proxyAuthorization = null;
+            if (!string.IsNullOrEmpty(upstream.UserInfo))
+            {
+                string decoded = Uri.UnescapeDataString(upstream.UserInfo);
+                proxyAuthorization = "Basic " + Convert.ToBase64String(Encoding.ASCII.GetBytes(decoded));
+            }
+
+            WebKitMacProxyBypassShim shim = new(upstream.Host, port, bypass, proxyAuthorization);
             browserProxy = shim.BrowserProxy;
             return shim;
         }
@@ -531,7 +552,13 @@ namespace PlaywrightNative.Helpers
                 NetworkStream upStream = upstream.GetStream();
                 string connectRequest = "CONNECT " + host + ":" + port.ToString(CultureInfo.InvariantCulture)
                     + " HTTP/1.1\r\nHost: " + host + ":" + port.ToString(CultureInfo.InvariantCulture)
-                    + "\r\n\r\n";
+                    + "\r\n";
+                if (!string.IsNullOrEmpty(_proxyAuthorization))
+                {
+                    connectRequest += "Proxy-Authorization: " + _proxyAuthorization + "\r\n";
+                }
+
+                connectRequest += "\r\n";
                 await WriteAsciiAsync(upStream, connectRequest).ConfigureAwait(false);
                 (byte[] responseHeaders, byte[] leftover) = await ReadHeadersAsync(upStream, _cts.Token)
                     .ConfigureAwait(false);
@@ -598,7 +625,7 @@ namespace PlaywrightNative.Helpers
                 {
                     await ConnectWithTimeoutAsync(upstream, _upstreamHost, _upstreamPort).ConfigureAwait(false);
                     upStream = upstream.GetStream();
-                    outbound = ForceConnectionClose(headerBytes);
+                    outbound = ForceConnectionClose(InjectProxyAuthorization(headerBytes));
                 }
 
                 await upStream.WriteAsync(outbound).ConfigureAwait(false);
@@ -637,6 +664,40 @@ namespace PlaywrightNative.Helpers
             {
                 upstream.Dispose();
             }
+        }
+
+        /// <summary>
+        /// Injects upstream <c>Proxy-Authorization</c> when the shim wraps a
+        /// credentialed proxy. WebKit authenticates to the shim (no credentials);
+        /// the shim must attach credentials on the hop to the real proxy.
+        /// </summary>
+        /// <param name="headerBytes">Request headers from WebKit.</param>
+        /// <returns>Headers including Proxy-Authorization when configured.</returns>
+        private byte[] InjectProxyAuthorization(byte[] headerBytes)
+        {
+            if (string.IsNullOrEmpty(_proxyAuthorization) || headerBytes == null || headerBytes.Length == 0)
+            {
+                return headerBytes;
+            }
+
+            string text = Latin1.GetString(headerBytes);
+            if (text.Contains("Proxy-Authorization:", StringComparison.OrdinalIgnoreCase))
+            {
+                return headerBytes;
+            }
+
+            int headerEnd = text.IndexOf("\r\n\r\n", StringComparison.Ordinal);
+            if (headerEnd < 0)
+            {
+                return headerBytes;
+            }
+
+            string injected = string.Concat(
+                text.AsSpan(0, headerEnd),
+                "\r\nProxy-Authorization: ",
+                _proxyAuthorization,
+                "\r\n\r\n");
+            return Latin1.GetBytes(injected);
         }
 
         /// <summary>
