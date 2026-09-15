@@ -5102,9 +5102,14 @@ namespace PlaywrightNative.WebKit
                         reason = "page.goto: Navigation to \"" + pendingUrl +
                             "\" is interrupted by another navigation to \"" + competing + "\"";
                     }
-
-                    // Otherwise this is a real failure (e.g. cross-process abort
-                    // before commit) — fall through and fail the pending goto.
+                    else
+                    {
+                        // Superseded without a recorded Location / competitor yet:
+                        // cross-process reload redirects often report "Frame load
+                        // interrupted" on empty.html before OnResponseReceived sets
+                        // _pendingRedirectTarget. Keep Reload/GoTo waiters armed.
+                        return;
+                    }
                 }
 
                 NavigationException exception = new(reason, errorUrl);
