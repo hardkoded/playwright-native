@@ -5258,6 +5258,14 @@ namespace PlaywrightNative.WebKit
                 return false;
             }
 
+            // Pending main-frame goto markers must not suppress iframe navigations
+            // to the same URL (page-network-request "subframe navigation request").
+            if (request.Frame != null
+                && request.Frame.ParentFrame != null)
+            {
+                return false;
+            }
+
             if (request.WKRedirectedFrom != null)
             {
                 string redirectedUrl = NavigationTimeout.WithoutHash(request.Url);
@@ -8198,6 +8206,21 @@ namespace PlaywrightNative.WebKit
             // the transport thread — racing the assertion.
             Load?.Invoke(this, this);
             RecordLifecycle("load");
+
+            // Drop stale pending-navigation markers once the main frame has loaded so
+            // later same-URL navigations (reload, iframe) are not treated as duplicates
+            // of the completed goto.
+            lock (_navigationLock)
+            {
+                _pendingNavigationUrl = null;
+                _emittedPendingNavigationRequest = false;
+                _emittedPendingNavigationFinished = false;
+                _firstPendingNavigationRequest = null;
+                _pendingNavigationCommitted = false;
+                _pendingRedirectTarget = null;
+                _pendingRedirectSource = null;
+            }
+
             tcs?.TrySetResult(true);
         }
 
