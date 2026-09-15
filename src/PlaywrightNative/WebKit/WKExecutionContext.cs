@@ -139,12 +139,23 @@ namespace PlaywrightNative.WebKit
                 // awaitPromise must stay true: macOS WebKit checks transient
                 // activation across the requestStorageAccess microtask chain.
                 // Upstream evaluateWithArguments uses the same pair of flags.
+                // Refresh transient activation in-page (focus + click) so
+                // requestStorageAccess is not rejected after OOPIF load.
                 JsonElement? response = await _session.SendAsync(
                     "Runtime.callFunctionOn",
                     new
                     {
                         objectId = anchorId,
-                        functionDeclaration = "function() { return (" + expression + "); }",
+                        functionDeclaration =
+                            "function() {" +
+                            "try { window.focus && window.focus(); } catch (e) {}" +
+                            "try { const el = document.documentElement || document.body;" +
+                            "if (el) { el.focus && el.focus();" +
+                            "el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window })); }" +
+                            "} catch (e) {}" +
+                            "const __pw_v = (" + expression + ");" +
+                            "return typeof __pw_v === 'function' ? __pw_v() : __pw_v;" +
+                            "}",
                         returnByValue = false,
                         emulateUserGesture = true,
                         awaitPromise = true,

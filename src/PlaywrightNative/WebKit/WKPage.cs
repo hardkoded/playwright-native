@@ -4061,6 +4061,10 @@ namespace PlaywrightNative.WebKit
             // scripts (context-menu suppress). Re-run user init scripts so right-
             // click tests still get console events after SetContent.
             await ReplayUserInitScriptsAsync().ConfigureAwait(false);
+            if (_context != null)
+            {
+                await _context.ReplayInitScriptsOnCurrentDocumentAsync(this).ConfigureAwait(false);
+            }
 
             if (waitUntil == WaitUntilState.Commit)
             {

@@ -77,6 +77,7 @@ namespace PlaywrightNative.Helpers
             int timeoutMs = TimeoutSettings.TimeoutMs(timeout);
             Stopwatch sw = Stopwatch.StartNew();
             List<string> logs = new List<string>();
+            string lastPreview = null;
 
             while (true)
             {
@@ -123,6 +124,7 @@ namespace PlaywrightNative.Helpers
                             if (!string.IsNullOrEmpty(previewValue))
                             {
                                 eagerPreview = previewValue;
+                                lastPreview = previewValue;
                             }
                         }
                         catch (PlaywrightException)
@@ -203,6 +205,11 @@ namespace PlaywrightNative.Helpers
 
                 if (timeoutMs != Timeout.Infinite && sw.ElapsedMilliseconds >= timeoutMs)
                 {
+                    if (logs.Count == 0 && !string.IsNullOrEmpty(lastPreview))
+                    {
+                        AppendResolvedLog(logs, visible: false, lastPreview);
+                    }
+
                     string message = apiName +
                         ": Timeout " +
                         timeoutMs.ToString(CultureInfo.InvariantCulture) +

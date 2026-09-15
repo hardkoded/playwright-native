@@ -272,26 +272,37 @@ namespace PlaywrightNative.WebKit
 
                 // WebKit ignores Network.setExtraHTTPHeaders on WebSocket upgrades
                 // (stock 2276), and Network interception does not rewrite them either.
-                // Always attach LocaleHandshakeProxy so context *and* later page
-                // SetExtraHTTPHeaders stamp WS handshakes. Skip when a client-
-                // certificate MITM already owns the browser proxy.
+                // Linux keeps LocaleHandshakeProxy on every context so later
+                // page.SetExtraHTTPHeaders still stamps WS. On Darwin, forcing
+                // an HTTP proxy on every context breaks CFNetwork (multipart /
+                // HAR / WS close / local.playwright). Attach there only when
+                // locale or context-level extra headers need rewriting.
+                // Skip when a client-certificate MITM already owns the proxy.
                 // Do not bypass loopback: tests use ws://localhost.
-                // HAR/macOS WS-close tradeoffs are handled inside the proxy/shim.
+                bool forceHandshake = extraHTTPHeaders != null
+                    && extraHTTPHeaders.Any(h => !string.IsNullOrEmpty(h.Key));
+                if (!RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+                {
+                    forceHandshake = true;
+                }
+
                 LocaleHandshakeProxy handshake = certsProxy == null
                     ? LocaleHandshakeProxy.TryStart(
                         locale,
                         browserProxy,
-                        force: true,
+                        force: forceHandshake,
                         bypassLoopback: false,
                         out browserProxy)
                     : null;
 
                 // macOS CFNetwork excludes localhost/link-local whenever any
-                // bypass list is set. Keep bypass semantics in a local shim and
-                // pass WebKit an empty bypass list so those hosts stay proxied.
-                WebKitMacProxyBypassShim bypassShim = certsProxy == null
-                    ? WebKitMacProxyBypassShim.TryStart(browserProxy, out browserProxy)
-                    : null;
+                // bypass list is set, and also fails localhost through a raw
+                // HTTP MITM (client certs / handshake). Always wrap HTTP(S)
+                // proxies — including Darwin client-certificate HttpBrowserProxy —
+                // so loopback-mapped hosts (local.playwright → 127.0.0.1) stay
+                // proxied. SOCKS (Linux certs) is not wrapped.
+                WebKitMacProxyBypassShim bypassShim =
+                    WebKitMacProxyBypassShim.TryStart(browserProxy, out browserProxy);
                 WKBrowserContext context;
                 try
                 {

@@ -32,19 +32,26 @@ namespace PlaywrightNative.Helpers
         /// </summary>
         internal const string Source =
             @"(() => {
-  if (globalThis.__pw_suppress_native_context_menu__) return;
-  globalThis.__pw_suppress_native_context_menu__ = true;
   const suppress = (event) => {
     try { event.preventDefault(); } catch (e) {}
   };
+  const docs = globalThis.__pw_suppress_native_context_menu_docs
+    || (globalThis.__pw_suppress_native_context_menu_docs = new WeakSet());
   const install = (target) => {
     if (!target || typeof target.addEventListener !== 'function') return;
     try {
       target.addEventListener('contextmenu', suppress, true);
     } catch (e) {}
   };
-  install(globalThis);
-  install(globalThis.document);
+  if (!globalThis.__pw_suppress_native_context_menu__) {
+    globalThis.__pw_suppress_native_context_menu__ = true;
+    install(globalThis);
+  }
+  // document.open/write/close creates a new Document; re-bind on that node.
+  if (globalThis.document && !docs.has(globalThis.document)) {
+    docs.add(globalThis.document);
+    install(globalThis.document);
+  }
 })()";
     }
 }

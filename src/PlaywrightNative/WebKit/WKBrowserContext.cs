@@ -59,6 +59,8 @@ namespace PlaywrightNative.WebKit
         private Dictionary<string, string> _extraHttpHeaders;
         private ViewportSize _viewport;
         private string _userAgent;
+        private string _defaultSafariUserAgent;
+        private bool _defaultSafariUaInitInstalled;
         private string _locale;
         private string _timezoneId;
         private bool _offline;
@@ -287,9 +289,10 @@ namespace PlaywrightNative.WebKit
         /// <c>metrics.remoteAddress</c> for proxied destinations.
         /// </summary>
         internal int? InternalProxyPort
-            => _localeHandshake != null
-                ? _localeHandshake.Port
-                : _clientCertificatesProxy?.Port;
+            => _macProxyBypassShim?.Port
+                ?? (_localeHandshake != null
+                    ? _localeHandshake.Port
+                    : _clientCertificatesProxy?.Port);
 
         /// <summary>
         /// Gets the owning WebKit browser instance.
@@ -1121,6 +1124,16 @@ namespace PlaywrightNative.WebKit
         /// <param name="shim">Shim started for this context, or <see langword="null"/>.</param>
         internal void AttachMacProxyBypassShim(WebKitMacProxyBypassShim shim)
             => _macProxyBypassShim = shim;
+
+        /// <summary>
+        /// Re-runs context init scripts on the current document after
+        /// <c>document.open</c>/<c>write</c>/<c>close</c> wipes listeners
+        /// (native context-menu suppress, locale WS shim).
+        /// </summary>
+        /// <param name="page">The page whose current document should be patched.</param>
+        /// <returns>A task that completes when evaluation has been attempted.</returns>
+        internal Task ReplayInitScriptsOnCurrentDocumentAsync(IPage page)
+            => _initScripts.EvaluateOnCurrentAsync(page);
 
         /// <summary>
         /// On macOS WebKit, loopback WebSockets bypass HTTP proxies. When a
@@ -2454,79 +2467,106 @@ namespace PlaywrightNative.WebKit
                 return;
             }
 
-            string ua = null;
-            for (int attempt = 0; attempt < 5; attempt++)
+            string ua = _defaultSafariUserAgent;
+            if (string.IsNullOrEmpty(ua))
             {
-                try
+                for (int attempt = 0; attempt < 5; attempt++)
                 {
-                    ua = await page.EvaluateAsync<string>("() => navigator.userAgent").ConfigureAwait(false);
-                    if (!string.IsNullOrEmpty(ua))
+                    try
                     {
-                        break;
+                        ua = await page.EvaluateAsync<string>("() => navigator.userAgent").ConfigureAwait(false);
+                        if (!string.IsNullOrEmpty(ua))
+                        {
+                            break;
+                        }
                     }
-                }
 #pragma warning disable RCS1075
-                catch (Exception)
+                    catch (Exception)
 #pragma warning restore RCS1075
-                {
-                    // Page may not be evaluable yet (or mid-swap); retry briefly.
-                }
+                    {
+                        // Page may not be evaluable yet (or mid-swap); retry briefly.
+                    }
 
-                await Task.Delay(50).ConfigureAwait(false);
+                    await Task.Delay(50).ConfigureAwait(false);
+                }
             }
 
-            if (!string.IsNullOrEmpty(ua) && ua.Contains("Safari/", StringComparison.Ordinal))
+            if (!string.IsNullOrEmpty(ua)
+                && ua.Contains("Safari/", StringComparison.Ordinal)
+                && ua.Contains("Version/", StringComparison.Ordinal))
+            {
+                await StampNavigatorUserAgentAsync(page, ua).ConfigureAwait(false);
+                return;
+            }
+
+            // MiniBrowser's default navigator.userAgent often omits Version/ and
+            // Safari/. Page.overrideUserAgent also fails to stick before the
+            // first document is live, so stamp both the protocol override and a
+            // navigator getter (init script) without assigning _userAgent.
+            string baseUa = string.IsNullOrEmpty(ua)
+                ? "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)"
+                : ua;
+            string withSafari = WithSafariTokens(baseUa);
+            _defaultSafariUserAgent = withSafari;
+            await page.SetUserAgentAsync(withSafari).ConfigureAwait(false);
+            await StampNavigatorUserAgentAsync(page, withSafari).ConfigureAwait(false);
+
+            static string WithSafariTokens(string userAgent)
+            {
+                string result = string.IsNullOrEmpty(userAgent)
+                    ? "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)"
+                    : userAgent.TrimEnd();
+                Match webkit = Regex.Match(result, @"AppleWebKit/([\d.]+)");
+                string version = webkit.Success ? webkit.Groups[1].Value : "605.1.15";
+                if (!result.Contains("Version/", StringComparison.Ordinal))
+                {
+                    result += " Version/" + version;
+                }
+
+                if (!result.Contains("Safari/", StringComparison.Ordinal))
+                {
+                    result += " Safari/" + version;
+                }
+
+                return result;
+            }
+        }
+
+        private async Task StampNavigatorUserAgentAsync(WKPage page, string userAgent)
+        {
+            if (page == null || string.IsNullOrEmpty(userAgent))
             {
                 return;
             }
 
-            // MiniBrowser sometimes returns empty UA before the document is live.
-            // Still stamp a Safari token so page-basic sanity checks pass.
-            string baseUa = string.IsNullOrEmpty(ua)
-                ? "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)"
-                : ua;
-            Match match = Regex.Match(baseUa, @"AppleWebKit/([\d.]+)");
-            string version = match.Success ? match.Groups[1].Value : "605.1.15";
-            string withSafari = baseUa.TrimEnd() + " Safari/" + version;
-
-            // Page-level override only. Do not assign <see cref="_userAgent"/>:
-            // context.request / default headers must keep matching the engine's
-            // reported navigator.userAgent unless the caller set userAgent.
-            await page.SetUserAgentAsync(withSafari).ConfigureAwait(false);
-
-            // Verify the override stuck; MiniBrowser occasionally ignores the
-            // first Page.overrideUserAgent before the document is live.
-            for (int verify = 0; verify < 4; verify++)
+            string literal = JsonSerializer.Serialize(userAgent);
+            string script =
+                "(() => { const ua = " + literal + @";
+  try {
+    Object.defineProperty(navigator, 'userAgent', {
+      configurable: true,
+      enumerable: true,
+      get() { return ua; }
+    });
+  } catch (e) {}
+})()";
+            try
             {
-                try
-                {
-                    string after = await page.EvaluateAsync<string>("() => navigator.userAgent")
-                        .ConfigureAwait(false);
-                    if (!string.IsNullOrEmpty(after) && after.Contains("Safari/", StringComparison.Ordinal))
-                    {
-                        return;
-                    }
-
-                    if (!string.IsNullOrEmpty(after))
-                    {
-                        Match afterMatch = Regex.Match(after, @"AppleWebKit/([\d.]+)");
-                        string afterVersion = afterMatch.Success ? afterMatch.Groups[1].Value : version;
-                        await page.SetUserAgentAsync(after.TrimEnd() + " Safari/" + afterVersion)
-                            .ConfigureAwait(false);
-                    }
-                    else
-                    {
-                        await page.SetUserAgentAsync(withSafari).ConfigureAwait(false);
-                    }
-                }
-#pragma warning disable RCS1075
-                catch (Exception)
-#pragma warning restore RCS1075
-                {
-                }
-
-                await Task.Delay(50).ConfigureAwait(false);
+                await page.EvaluateAsync(script).ConfigureAwait(false);
             }
+#pragma warning disable RCS1075
+            catch (Exception)
+#pragma warning restore RCS1075
+            {
+            }
+
+            if (_defaultSafariUaInitInstalled)
+            {
+                return;
+            }
+
+            _defaultSafariUaInitInstalled = true;
+            await AddInitScriptAsync(script, scriptPath: null).ConfigureAwait(false);
         }
 
         private sealed class NoopContextDisposable : IAsyncDisposable
