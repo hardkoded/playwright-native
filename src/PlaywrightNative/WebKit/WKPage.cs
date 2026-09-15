@@ -68,6 +68,7 @@ namespace PlaywrightNative.WebKit
         private readonly List<string> _initScripts = new() { WebKitFormDataScript.Source };
         private readonly ConcurrentDictionary<string, Func<JsonElement[], Task<object>>> _exposedFunctions = new(StringComparer.Ordinal);
         private readonly ConcurrentDictionary<string, (long Ticks, Task<object> Task)> _recentBindingInvocations = new(StringComparer.Ordinal);
+        private readonly object _bindingCoalesceLock = new();
         private readonly ConcurrentDictionary<string, byte> _evaluateCallbackNames = new(StringComparer.Ordinal);
         private readonly ConcurrentDictionary<string, Func<IJSHandle, Task<object>>> _handleBindings = new(StringComparer.Ordinal);
         private readonly Queue<string[]> _windowOpenFeatures = new();
@@ -8562,26 +8563,29 @@ namespace PlaywrightNative.WebKit
             _ = contextId;
             string key = argument ?? string.Empty;
             long now = DateTime.UtcNow.Ticks;
-            if (_recentBindingInvocations.TryGetValue(key, out (long Ticks, Task<object> Task) recent)
-                && now - recent.Ticks < TimeSpan.FromMilliseconds(100).Ticks)
+            lock (_bindingCoalesceLock)
             {
-                return recent.Task;
-            }
-
-            Task<object> invoked = handler(args);
-            _recentBindingInvocations[key] = (now, invoked);
-            if (_recentBindingInvocations.Count > 64)
-            {
-                foreach (KeyValuePair<string, (long Ticks, Task<object> Task)> entry in _recentBindingInvocations)
+                if (_recentBindingInvocations.TryGetValue(key, out (long Ticks, Task<object> Task) recent)
+                    && now - recent.Ticks < TimeSpan.FromMilliseconds(100).Ticks)
                 {
-                    if (now - entry.Value.Ticks >= TimeSpan.FromMilliseconds(100).Ticks)
+                    return recent.Task;
+                }
+
+                Task<object> invoked = handler(args);
+                _recentBindingInvocations[key] = (now, invoked);
+                if (_recentBindingInvocations.Count > 64)
+                {
+                    foreach (KeyValuePair<string, (long Ticks, Task<object> Task)> entry in _recentBindingInvocations)
                     {
-                        _recentBindingInvocations.TryRemove(entry.Key, out _);
+                        if (now - entry.Value.Ticks >= TimeSpan.FromMilliseconds(100).Ticks)
+                        {
+                            _recentBindingInvocations.TryRemove(entry.Key, out _);
+                        }
                     }
                 }
-            }
 
-            return invoked;
+                return invoked;
+            }
         }
 
         private async Task DeliverInvokedBindingAsync(Task<object> invoked, int contextId, long seq)

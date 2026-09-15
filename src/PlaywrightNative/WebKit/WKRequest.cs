@@ -83,7 +83,8 @@ namespace PlaywrightNative.WebKit
             RequestId = requestId;
             Url = NavigationTimeout.WithoutHash(url);
             Method = method;
-            Headers = new Dictionary<string, string>(headers, StringComparer.OrdinalIgnoreCase);
+            IDictionary<string, string> applicationHeaders = HeaderMap.WithoutProxyHop(headers);
+            Headers = new Dictionary<string, string>(applicationHeaders, StringComparer.OrdinalIgnoreCase);
             _postDataBuffer = postDataBuffer ?? RequestPostData.FromWebKitBase64(postData);
             PostData = RequestPostData.ToUtf8String(_postDataBuffer) ?? postData;
             _resourceType = resourceType;
@@ -461,7 +462,7 @@ namespace PlaywrightNative.WebKit
                 RawHeadersAreFinal = true;
             }
 
-            _rawHeaders.TrySetResult(headers ?? HeaderMap.Array(Headers));
+            _rawHeaders.TrySetResult(HeaderMap.WithoutProxyHop(headers ?? HeaderMap.Array(Headers)));
         }
 
         /// <summary>
