@@ -2154,16 +2154,36 @@ namespace PlaywrightNative
 
                 if (timeoutMs != Timeout.Infinite && sw.ElapsedMilliseconds >= timeoutMs)
                 {
+                    // Last-chance read so failure messages still include Received
+                    // when the final poll timed out empty (ShouldSupportFailure).
+                    if (last == null)
+                    {
+                        try
+                        {
+                            IReadOnlyList<IElementHandle> final =
+                                await ElementHandlesOrEmptyAsync(250).ConfigureAwait(false);
+                            if (final.Count == 1)
+                            {
+                                last = await final[0]
+                                    .EvaluateAsync<string>(ElementStateScript.InputValueFunction)
+                                    .ConfigureAwait(false) ?? string.Empty;
+                            }
+                        }
+                        catch (TimeoutException)
+                        {
+                        }
+                        catch (PlaywrightException)
+                        {
+                        }
+                    }
+
                     StringBuilder log = new StringBuilder();
                     log.Append(header);
                     log.Append("\nExpected: ");
                     log.Append(ExpectTextMatch.FormatNeedle(needle, _negate));
-                    if (last != null)
-                    {
-                        log.Append("\nReceived: \"");
-                        log.Append(last);
-                        log.Append('"');
-                    }
+                    log.Append("\nReceived: \"");
+                    log.Append(last ?? string.Empty);
+                    log.Append('"');
 
                     throw CreateExpectException(
                         log.ToString(),

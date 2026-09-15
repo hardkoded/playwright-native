@@ -3099,6 +3099,30 @@ namespace PlaywrightNative.WebKit
 
                     if (waitTcs.Task.IsFaulted || waitTcs.Task.IsCanceled)
                     {
+                        if (IsHarRedirectPending()
+                            && IsWaitFaultSupersededCancel(waitTcs.Task))
+                        {
+                            // HAR redirect cancelled the prior document waiter —
+                            // re-arm lifecycle waiters for the redirect target.
+                            lock (_navigationLock)
+                            {
+                                loadTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                                domTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                                commitTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                                _pendingLoadTcs = loadTcs;
+                                _pendingDomContentTcs = domTcs;
+                                _pendingCommitTcs = commitTcs;
+                                _pendingNavigationCommitted = false;
+                            }
+
+                            waitTcs = waitUntil == WaitUntilState.Commit
+                                ? commitTcs
+                                : waitUntil == WaitUntilState.DOMContentLoaded
+                                    ? domTcs
+                                    : loadTcs;
+                            continue;
+                        }
+
                         await ThrowIfCancelledByRendererAsync(waitTcs.Task, url).ConfigureAwait(false);
                         await RethrowNavigationWaitAsync(waitTcs.Task, url).ConfigureAwait(false);
                     }
@@ -3149,6 +3173,28 @@ namespace PlaywrightNative.WebKit
 
                             if (waitTcs.Task.IsFaulted || waitTcs.Task.IsCanceled)
                             {
+                                if (IsHarRedirectPending()
+                                    && IsWaitFaultSupersededCancel(waitTcs.Task))
+                                {
+                                    lock (_navigationLock)
+                                    {
+                                        loadTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                                        domTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                                        commitTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                                        _pendingLoadTcs = loadTcs;
+                                        _pendingDomContentTcs = domTcs;
+                                        _pendingCommitTcs = commitTcs;
+                                        _pendingNavigationCommitted = false;
+                                    }
+
+                                    waitTcs = waitUntil == WaitUntilState.Commit
+                                        ? commitTcs
+                                        : waitUntil == WaitUntilState.DOMContentLoaded
+                                            ? domTcs
+                                            : loadTcs;
+                                    continue;
+                                }
+
                                 await ThrowIfCancelledByRendererAsync(waitTcs.Task, url).ConfigureAwait(false);
                                 await RethrowNavigationWaitAsync(waitTcs.Task, url).ConfigureAwait(false);
                             }
@@ -3182,8 +3228,34 @@ namespace PlaywrightNative.WebKit
                             timeoutMs);
                     }
 
-                    await ThrowIfCancelledByRendererAsync(waitTcs.Task, url).ConfigureAwait(false);
-                    await RethrowNavigationWaitAsync(waitTcs.Task, url).ConfigureAwait(false);
+                    if (waitTcs.Task.IsFaulted || waitTcs.Task.IsCanceled)
+                    {
+                        if (IsHarRedirectPending()
+                            && IsWaitFaultSupersededCancel(waitTcs.Task))
+                        {
+                            lock (_navigationLock)
+                            {
+                                loadTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                                domTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                                commitTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                                _pendingLoadTcs = loadTcs;
+                                _pendingDomContentTcs = domTcs;
+                                _pendingCommitTcs = commitTcs;
+                                _pendingNavigationCommitted = false;
+                            }
+
+                            waitTcs = waitUntil == WaitUntilState.Commit
+                                ? commitTcs
+                                : waitUntil == WaitUntilState.DOMContentLoaded
+                                    ? domTcs
+                                    : loadTcs;
+                            continue;
+                        }
+
+                        await ThrowIfCancelledByRendererAsync(waitTcs.Task, url).ConfigureAwait(false);
+                        await RethrowNavigationWaitAsync(waitTcs.Task, url).ConfigureAwait(false);
+                    }
+
                     break;
                 }
             }
@@ -3984,6 +4056,12 @@ namespace PlaywrightNative.WebKit
             string htmlJsLiteral = JsonSerializer.Serialize(html);
             string expression = $"(() => {{ document.open(); document.write({htmlJsLiteral}); document.close(); }})()";
             await EvaluateInFrameAsync<object>(frame, expression).ConfigureAwait(false);
+
+            // document.open/write/close wipes document-level listeners from init
+            // scripts (context-menu suppress). Re-run user init scripts so right-
+            // click tests still get console events after SetContent.
+            await ReplayUserInitScriptsAsync().ConfigureAwait(false);
+
             if (waitUntil == WaitUntilState.Commit)
             {
                 return;
@@ -4994,6 +5072,20 @@ namespace PlaywrightNative.WebKit
 
                 if (IsSupersededNavigationFailure(reason))
                 {
+                    // Redirect / HAR redirectNavigation cancelled this document while
+                    // a replacement navigation is expected — keep waiters armed.
+                    // Check this before competing-URL rewriting: FindCompeting may
+                    // still see the pre-redirect URL (theverge.com) and would
+                    // otherwise fall through and fail the goto that should wait
+                    // for www.theverge.com (ShouldGoForwardToRedirectedNavigation).
+                    if (redirectInFlight
+                        || _harRedirectInProgress
+                        || !string.IsNullOrEmpty(redirectUrl)
+                        || !string.IsNullOrEmpty(_pendingRedirectTarget))
+                    {
+                        return;
+                    }
+
                     string startUrl = NavigationTimeout.WithoutHash(_navigationStartUrl);
                     string competing = _lastCompetingNavigationUrl;
                     if (string.IsNullOrEmpty(competing)
@@ -5009,21 +5101,6 @@ namespace PlaywrightNative.WebKit
                     {
                         reason = "page.goto: Navigation to \"" + pendingUrl +
                             "\" is interrupted by another navigation to \"" + competing + "\"";
-                    }
-                    else if (redirectInFlight
-                        || _harRedirectInProgress
-                        || !string.IsNullOrEmpty(redirectUrl)
-                        || !string.IsNullOrEmpty(_pendingRedirectTarget))
-                    {
-                        // Redirect cancelled this document while a replacement
-                        // navigation is expected — keep waiters armed.
-                        // Do not keep them armed for _awaitingReplacementTarget
-                        // alone: this method only runs when the failing request
-                        // already matches the pending URL, so a cancelled /
-                        // interrupted provisional load is the navigation itself
-                        // failing (e.g. proxy bypass connection drop after a
-                        // cross-process swap). Keeping waiters armed hangs goto.
-                        return;
                     }
 
                     // Otherwise this is a real failure (e.g. cross-process abort
@@ -5119,6 +5196,12 @@ namespace PlaywrightNative.WebKit
                 && (reason.Contains("interrupted", StringComparison.OrdinalIgnoreCase)
                     || reason.Contains("cancelled", StringComparison.OrdinalIgnoreCase)
                     || reason.Contains("canceled", StringComparison.OrdinalIgnoreCase));
+
+        private static bool IsWaitFaultSupersededCancel(Task waitTask)
+        {
+            Exception inner = waitTask?.Exception?.GetBaseException() ?? waitTask?.Exception?.InnerException;
+            return IsSupersededNavigationFailure(inner?.Message);
+        }
 
         private static bool IsCompetingUrl(string requestUrl, string pendingUrl, string startUrl)
         {
@@ -5292,6 +5375,21 @@ namespace PlaywrightNative.WebKit
             }
 
             if (string.IsNullOrEmpty(competing) || string.Equals(competing, pendingUrl, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            // HAR redirectNavigation / server redirects supersede the original URL
+            // with the Location target. That is expected continuation, not a
+            // competing navigation (ShouldGoForwardToRedirectedNavigation).
+            string redirectTarget;
+            lock (_navigationLock)
+            {
+                redirectTarget = NavigationTimeout.WithoutHash(_pendingRedirectTarget);
+            }
+
+            if (!string.IsNullOrEmpty(redirectTarget)
+                && string.Equals(competing, redirectTarget, StringComparison.Ordinal))
             {
                 return;
             }

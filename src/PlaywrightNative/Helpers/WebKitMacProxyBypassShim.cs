@@ -171,16 +171,69 @@ namespace PlaywrightNative.Helpers
 
         private static async Task PipeBidirectionalAsync(NetworkStream a, NetworkStream b)
         {
-            Task aToB = a.CopyToAsync(b);
-            Task bToA = b.CopyToAsync(a);
+            // Half-close aware tunnel (same pattern as LocaleHandshakeProxy): when
+            // one side EOFs after a client WebSocket close frame, shut down only
+            // that write direction and keep copying the opposite way so the close
+            // echo reaches the browser. Task.WhenAny + dispose aborted application
+            // close codes as 1006 (ShouldWorkWithClientSideClose).
+            using CancellationTokenSource tunnelCts = new();
+            Task aToB = CopyAndShutdownAsync(a, b, tunnelCts.Token);
+            Task bToA = CopyAndShutdownAsync(b, a, tunnelCts.Token);
             try
             {
-                await Task.WhenAny(aToB, bToA).ConfigureAwait(false);
+                await Task.WhenAll(aToB, bToA).ConfigureAwait(false);
             }
-#pragma warning disable RCS1075
-            catch (Exception)
-#pragma warning restore RCS1075
+            catch (IOException)
             {
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            finally
+            {
+                try
+                {
+                    await tunnelCts.CancelAsync().ConfigureAwait(false);
+                }
+                catch (ObjectDisposedException)
+                {
+                }
+            }
+        }
+
+        private static async Task CopyAndShutdownAsync(
+            NetworkStream source,
+            NetworkStream destination,
+            CancellationToken token)
+        {
+            try
+            {
+                await source.CopyToAsync(destination, token).ConfigureAwait(false);
+            }
+            catch (IOException)
+            {
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            finally
+            {
+                try
+                {
+                    destination.Socket?.Shutdown(SocketShutdown.Send);
+                }
+                catch (SocketException)
+                {
+                }
+                catch (ObjectDisposedException)
+                {
+                }
             }
         }
 

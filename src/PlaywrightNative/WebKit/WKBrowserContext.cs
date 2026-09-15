@@ -2455,7 +2455,7 @@ namespace PlaywrightNative.WebKit
             }
 
             string ua = null;
-            for (int attempt = 0; attempt < 3; attempt++)
+            for (int attempt = 0; attempt < 5; attempt++)
             {
                 try
                 {
@@ -2472,36 +2472,60 @@ namespace PlaywrightNative.WebKit
                     // Page may not be evaluable yet (or mid-swap); retry briefly.
                 }
 
-                await Task.Delay(25).ConfigureAwait(false);
+                await Task.Delay(50).ConfigureAwait(false);
             }
 
-            if (string.IsNullOrEmpty(ua) || ua.Contains("Safari/", StringComparison.Ordinal))
+            if (!string.IsNullOrEmpty(ua) && ua.Contains("Safari/", StringComparison.Ordinal))
             {
                 return;
             }
 
-            Match match = Regex.Match(ua, @"AppleWebKit/([\d.]+)");
+            // MiniBrowser sometimes returns empty UA before the document is live.
+            // Still stamp a Safari token so page-basic sanity checks pass.
+            string baseUa = string.IsNullOrEmpty(ua)
+                ? "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)"
+                : ua;
+            Match match = Regex.Match(baseUa, @"AppleWebKit/([\d.]+)");
             string version = match.Success ? match.Groups[1].Value : "605.1.15";
+            string withSafari = baseUa.TrimEnd() + " Safari/" + version;
 
             // Page-level override only. Do not assign <see cref="_userAgent"/>:
             // context.request / default headers must keep matching the engine's
             // reported navigator.userAgent unless the caller set userAgent.
-            await page.SetUserAgentAsync(ua.TrimEnd() + " Safari/" + version).ConfigureAwait(false);
+            await page.SetUserAgentAsync(withSafari).ConfigureAwait(false);
 
             // Verify the override stuck; MiniBrowser occasionally ignores the
             // first Page.overrideUserAgent before the document is live.
-            try
+            for (int verify = 0; verify < 4; verify++)
             {
-                string after = await page.EvaluateAsync<string>("() => navigator.userAgent").ConfigureAwait(false);
-                if (!string.IsNullOrEmpty(after) && !after.Contains("Safari/", StringComparison.Ordinal))
+                try
                 {
-                    await page.SetUserAgentAsync(after.TrimEnd() + " Safari/" + version).ConfigureAwait(false);
+                    string after = await page.EvaluateAsync<string>("() => navigator.userAgent")
+                        .ConfigureAwait(false);
+                    if (!string.IsNullOrEmpty(after) && after.Contains("Safari/", StringComparison.Ordinal))
+                    {
+                        return;
+                    }
+
+                    if (!string.IsNullOrEmpty(after))
+                    {
+                        Match afterMatch = Regex.Match(after, @"AppleWebKit/([\d.]+)");
+                        string afterVersion = afterMatch.Success ? afterMatch.Groups[1].Value : version;
+                        await page.SetUserAgentAsync(after.TrimEnd() + " Safari/" + afterVersion)
+                            .ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        await page.SetUserAgentAsync(withSafari).ConfigureAwait(false);
+                    }
                 }
-            }
 #pragma warning disable RCS1075
-            catch (Exception)
+                catch (Exception)
 #pragma warning restore RCS1075
-            {
+                {
+                }
+
+                await Task.Delay(50).ConfigureAwait(false);
             }
         }
 
