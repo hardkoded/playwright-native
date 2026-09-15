@@ -5227,9 +5227,35 @@ namespace PlaywrightNative.WebKit
         private static bool IsCompetingUrl(string requestUrl, string pendingUrl, string startUrl)
         {
             return !string.IsNullOrEmpty(requestUrl)
-                && !string.Equals(requestUrl, pendingUrl, StringComparison.Ordinal)
-                && !string.Equals(requestUrl, startUrl, StringComparison.Ordinal)
+                && !IsSameNavigationDestination(requestUrl, pendingUrl)
+                && !IsSameNavigationDestination(requestUrl, startUrl)
                 && !requestUrl.Equals("about:blank", StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
+        /// True when <paramref name="a"/> and <paramref name="b"/> are the same
+        /// navigation destination, including WebKit's trailing-slash canonicalization
+        /// (<c>http://host</c> vs <c>http://host/</c>).
+        /// </summary>
+        private static bool IsSameNavigationDestination(string a, string b)
+        {
+            if (string.IsNullOrEmpty(a) || string.IsNullOrEmpty(b))
+            {
+                return false;
+            }
+
+            if (string.Equals(a, b, StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            // WebKit often commits with a trailing slash after the requested URL.
+            // That is the same navigation, not a competing document (SOCKS proxy /
+            // TLS renegotiation fixtures were false-interrupted as "/path" → "/path/").
+            string aTrim = a.TrimEnd('/');
+            string bTrim = b.TrimEnd('/');
+            return !string.IsNullOrEmpty(aTrim)
+                && string.Equals(aTrim, bTrim, StringComparison.Ordinal);
         }
 
         private static bool IsSameDocumentHashNavigation(string currentUrl, string nextUrl)
@@ -5470,9 +5496,17 @@ namespace PlaywrightNative.WebKit
                 }
 
                 string pendingUrl = NavigationTimeout.WithoutHash(_pendingNavigationUrl);
-                if (string.Equals(requestUrl, pendingUrl, StringComparison.Ordinal)
-                    || string.Equals(requestUrl, NavigationTimeout.WithoutHash(_navigationStartUrl), StringComparison.Ordinal))
+                if (IsSameNavigationDestination(requestUrl, pendingUrl)
+                    || IsSameNavigationDestination(requestUrl, NavigationTimeout.WithoutHash(_navigationStartUrl)))
                 {
+                    // Adopt the canonicalized URL (e.g. trailing slash) so later
+                    // commit/load matching sees the same destination.
+                    if (!string.Equals(requestUrl, pendingUrl, StringComparison.Ordinal)
+                        && IsSameNavigationDestination(requestUrl, pendingUrl))
+                    {
+                        _pendingNavigationUrl = requestUrl;
+                    }
+
                     return;
                 }
 
@@ -8628,13 +8662,19 @@ namespace PlaywrightNative.WebKit
 
                     string pendingUrl = NavigationTimeout.WithoutHash(_pendingNavigationUrl);
                     if (string.IsNullOrEmpty(pendingUrl)
-                        || string.Equals(committedUrl, pendingUrl, StringComparison.Ordinal))
+                        || IsSameNavigationDestination(committedUrl, pendingUrl))
                     {
+                        if (!string.IsNullOrEmpty(committedUrl)
+                            && !string.Equals(committedUrl, pendingUrl, StringComparison.Ordinal))
+                        {
+                            _pendingNavigationUrl = committedUrl;
+                        }
+
                         _pendingNavigationCommitted = true;
                         commitTcs = _pendingCommitTcs;
                         _pendingCommitTcs = null;
                     }
-                    else if (!string.Equals(committedUrl, NavigationTimeout.WithoutHash(_navigationStartUrl), StringComparison.Ordinal))
+                    else if (!IsSameNavigationDestination(committedUrl, NavigationTimeout.WithoutHash(_navigationStartUrl)))
                     {
                         _lastCompetingNavigationUrl = committedUrl;
 
@@ -8813,8 +8853,8 @@ namespace PlaywrightNative.WebKit
                     && !_pendingNavigationCommitted
                     && !_harRedirectInProgress
                     && !string.IsNullOrEmpty(currentUrl)
-                    && !string.Equals(currentUrl, pendingUrl, StringComparison.Ordinal)
-                    && !string.Equals(currentUrl, redirectUrl, StringComparison.Ordinal)
+                    && !IsSameNavigationDestination(currentUrl, pendingUrl)
+                    && !IsSameNavigationDestination(currentUrl, redirectUrl)
                     && !currentUrl.Equals("about:blank", StringComparison.OrdinalIgnoreCase))
                 {
                     string competing = !string.IsNullOrEmpty(_lastCompetingNavigationUrl)
