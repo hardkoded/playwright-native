@@ -90,7 +90,7 @@ namespace PlaywrightNative.WebKit
                 return;
             }
 
-            await SetCheckedAsync(true, position, scroll, force).ConfigureAwait(false);
+            await SetCheckedAsync(true, position, scroll, force, timeout).ConfigureAwait(false);
         }
 
         /// <inheritdoc/>
@@ -532,7 +532,7 @@ namespace PlaywrightNative.WebKit
                 return;
             }
 
-            await SetCheckedAsync(false, position, scroll, force).ConfigureAwait(false);
+            await SetCheckedAsync(false, position, scroll, force, timeout).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -610,7 +610,7 @@ namespace PlaywrightNative.WebKit
             return point;
         }
 
-        private async Task SetCheckedAsync(bool check, Position position = null, ActionScroll scroll = default, bool? force = default)
+        private async Task SetCheckedAsync(bool check, Position position = null, ActionScroll scroll = default, bool? force = default, float? timeout = default)
         {
             if (await IsCheckedAsync().ConfigureAwait(false) == check)
             {
@@ -622,11 +622,24 @@ namespace PlaywrightNative.WebKit
                 throw new PlaywrightException("Cannot uncheck radio button");
             }
 
-            // Prefer the full click pipeline (scroll, hit-test, modifiers). WebKit's
-            // pointer path still misses some checkbox/label hit targets on CI, so fall
-            // back to the injected DOM click used by ElementStateScript.CheckFunction.
-            // Pass force through so force:true skips hit-testing on hidden inputs.
-            await ClickAsync(position: position, force: force, scroll: scroll).ConfigureAwait(false);
+            // WebKit pointer hit-testing can hang on LABEL→control and some checkbox
+            // targets (elementsFromPoint never agrees), so ClickAsync never returns and
+            // the CheckFunction fallback never runs. Prefer retarget+DOM click first when
+            // force/position are not required (CheckFunction already follows LABEL.control).
+            if (force != true && position == null)
+            {
+                await EvaluateFunctionAsync<bool>(
+                    check ? ElementStateScript.CheckFunction : ElementStateScript.UncheckFunction)
+                    .ConfigureAwait(false);
+                if (await IsCheckedAsync().ConfigureAwait(false) == check)
+                {
+                    return;
+                }
+            }
+
+            // Prefer the full click pipeline for force/position (scroll, hit-test,
+            // modifiers). Pass force through so force:true skips hit-testing on hidden inputs.
+            await ClickAsync(position: position, force: force, scroll: scroll, timeout: timeout).ConfigureAwait(false);
 
             if (await IsCheckedAsync().ConfigureAwait(false) == check)
             {

@@ -3594,14 +3594,16 @@ namespace PlaywrightNative.WebKit
         {
             try
             {
-                // Child-frame evaluates (e.g. requestStorageAccess) need the page
-                // active/focused on macOS after iframe navigations.
+                WKExecutionContext context = await WaitForFrameContextAsync(frame).ConfigureAwait(false);
+
+                // Re-assert after the frame context is ready so cross-process iframe
+                // navigations that steal focus between SetContent and evaluate do not
+                // leave requestStorageAccess without an active/focused page (macOS).
                 if (frame?.ParentFrame != null)
                 {
                     await EnsureActiveAndFocusedAsync().ConfigureAwait(false);
                 }
 
-                WKExecutionContext context = await WaitForFrameContextAsync(frame).ConfigureAwait(false);
                 if (EvaluateSerialization.CanWrapExpression(expression))
                 {
                     JsonElement? wrapped = await context
@@ -3610,7 +3612,12 @@ namespace PlaywrightNative.WebKit
                     return EvaluateSerialization.ParseRemote<T>(wrapped);
                 }
 
-                JsonElement? remote = await context.EvaluateHandleAsync(expression).ConfigureAwait(false);
+                // Child-frame thenables (requestStorageAccess) must run under
+                // callFunctionOn+emulateUserGesture — Runtime.evaluate's gesture flag
+                // is not enough after OOPIF load on macOS (upstream uses callFunctionOn).
+                JsonElement? remote = frame?.ParentFrame != null
+                    ? await context.EvaluateHandleWithUserGestureAsync(expression).ConfigureAwait(false)
+                    : await context.EvaluateHandleAsync(expression).ConfigureAwait(false);
                 return await EvaluateSerialization.MaterializeAsync<T>(
                     remote,
                     id => context.EvaluateFunctionOnHandleAsync<JsonElement>(id, EvaluateSerialization.SerializeAwaitedJs),
@@ -8100,6 +8107,13 @@ namespace PlaywrightNative.WebKit
                 : (payload.TryGetProperty("parentFrameId", out JsonElement pfEl) ? pfEl.GetString() : null);
 
             _frameManager.FrameCommittedNavigation(id, url, name, parentId);
+            if (!string.IsNullOrEmpty(parentId))
+            {
+                // Cross-process iframe navigations clear page activity on macOS WebKit;
+                // re-assert so a following requestStorageAccess evaluate sees focus.
+                _ = EnsureActiveAndFocusedAsync();
+            }
+
             if (string.IsNullOrEmpty(parentId)
                 || string.Equals(id, _mainFrameId, StringComparison.Ordinal))
             {
