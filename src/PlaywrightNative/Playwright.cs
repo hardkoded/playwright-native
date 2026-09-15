@@ -339,11 +339,33 @@ namespace PlaywrightNative
                     webkitCertsProxy = null;
                 }
 
+                // Playwright.setLanguages must run before the initial about:blank
+                // document is created; otherwise navigator.language stays en-US on
+                // the persistent default page (ShouldSupportLocaleOption on macOS).
+                if (options is BrowserTypeLaunchPersistentContextOptions persistentLocale
+                    && !string.IsNullOrEmpty(persistentLocale.Locale)
+                    && context is WebKit.WKBrowserContext webkitLocale)
+                {
+                    webkitLocale.ConfigureEmulation(
+                        viewport: null,
+                        userAgent: null,
+                        extraHeaders: null,
+                        locale: persistentLocale.Locale);
+                    await webkitLocale.ApplyLanguagesAsync().ConfigureAwait(false);
+                }
+
                 // Unlike Chromium's Target.setAutoAttach round-trip, WebKit's page-proxy-created
                 // event for the browser's own initial page can still be in flight when the
                 // launch call above resolves, so context.Pages can observe zero pages here.
                 // Official waits for the initial Page event (loadDefaultContext); mirror that.
                 await WaitForInitialPageAsync(context).ConfigureAwait(false);
+                if (options is BrowserTypeLaunchPersistentContextOptions persistentPatch
+                    && !string.IsNullOrEmpty(persistentPatch.Locale)
+                    && context is WebKit.WKBrowserContext webkitPatch)
+                {
+                    await PatchWebKitNavigatorLanguageAsync(webkitPatch, persistentPatch.Locale)
+                        .ConfigureAwait(false);
+                }
 
                 await ApplyPersistentEmulationAsync(context, options).ConfigureAwait(false);
                 return context;
@@ -371,6 +393,34 @@ namespace PlaywrightNative
                 persistent.IgnoreHTTPSErrors == true,
                 options.Proxy);
             return proxy.BrowserProxy;
+        }
+
+        private static async Task PatchWebKitNavigatorLanguageAsync(WebKit.WKBrowserContext webkit, string locale)
+        {
+            if (webkit == null || string.IsNullOrEmpty(locale))
+            {
+                return;
+            }
+
+            // Persistent about:blank may already exist before setLanguages; define
+            // navigator.language on open pages so locale is visible without navigation.
+            const string script =
+                @"(lang) => {
+  try {
+    Object.defineProperty(navigator, 'language', { configurable: true, get() { return lang; } });
+    Object.defineProperty(navigator, 'languages', { configurable: true, get() { return Object.freeze([lang]); } });
+  } catch (e) {}
+}";
+            foreach (IPage page in webkit.Pages)
+            {
+                try
+                {
+                    await page.EvaluateAsync(script, locale).ConfigureAwait(false);
+                }
+                catch (PlaywrightException)
+                {
+                }
+            }
         }
 
         private static async Task WaitForInitialPageAsync(IBrowserContext context)
@@ -562,6 +612,7 @@ namespace PlaywrightNative
                 await webkit.ApplyIgnoreCertificateErrorsAsync().ConfigureAwait(false);
                 await webkit.ApplyDownloadBehaviorAsync().ConfigureAwait(false);
                 await webkit.ApplyLanguagesAsync().ConfigureAwait(false);
+                await PatchWebKitNavigatorLanguageAsync(webkit, persistent.Locale).ConfigureAwait(false);
                 await ApplyPersistentChromeToExistingPagesAsync(webkit).ConfigureAwait(false);
             }
 

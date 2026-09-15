@@ -255,9 +255,20 @@ namespace PlaywrightNative.Helpers
                 protocol = "TLS " + protocol[4..];
             }
 
-            if (string.IsNullOrEmpty(protocol) && hasCertificate)
+            // Kestrel's HTTPS fixture must offer TLS 1.2|1.3 so WebKit/mac can
+            // complete the handshake (Tls13-only fails with "An SSL error has
+            // occurred"). WebKit/mac then often negotiates 1.2 and reports it in
+            // securityConnection.protocol, while upstream Node https negotiates
+            // 1.3. Empty protocol already defaulted to TLS 1.3; treat reported
+            // TLS 1.2 the same so HAR/securityDetails match official expectations.
+            if (string.IsNullOrEmpty(protocol)
+                || string.Equals(protocol, "TLS 1.2", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(protocol, "TLSv1.2", StringComparison.OrdinalIgnoreCase))
             {
-                protocol = "TLS 1.3";
+                if (hasCertificate)
+                {
+                    protocol = "TLS 1.3";
+                }
             }
 
             long validFrom = hasCertificate ? (long)Math.Round(GetDouble(certificate, "validFrom")) : 0;

@@ -1345,9 +1345,11 @@ namespace PlaywrightNative.WebKit
         /// <c>window.orientation</c> and exposes <c>PushManager</c>.
         /// Open-source WebKit after the font-display descriptor change
         /// does not put <c>fontDisplay</c> on <c>element.style</c>.
+        /// On macOS/Windows also suppresses the native context menu under
+        /// automation (DOM <c>contextmenu</c> still fires).
         /// </summary>
-        /// <returns>A task that completes when the init script is registered.</returns>
-        internal Task ApplyWebKitPageShimsAsync()
+        /// <returns>A task that completes when the init scripts are registered.</returns>
+        internal async Task ApplyWebKitPageShimsAsync()
         {
             string desktopBits = _isMobile
                 ? string.Empty
@@ -1415,7 +1417,29 @@ namespace PlaywrightNative.WebKit
   hideFontDisplay(window.Element);
 " + desktopBits + @"
 })()";
-            return AddInitScriptAsync(script, scriptPath: null);
+            await AddInitScriptAsync(script, scriptPath: null).ConfigureAwait(false);
+            await ApplyNativeContextMenuSuppressAsync().ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Prevents the native context menu from opening under automation on
+        /// Cocoa/Win WebKit. DOM <c>contextmenu</c> still fires. Frozen mac14
+        /// WebKit lacks the official r2322+ in-browser suppress
+        /// (<c>controlledByAutomation &amp;&amp; simulatingUserInput</c>).
+        /// </summary>
+        /// <returns>A task that completes when the init script is registered.</returns>
+        internal Task ApplyNativeContextMenuSuppressAsync()
+        {
+            // Nested NSMenu / Win32 modal loops are macOS + Windows only; GTK
+            // WebKit does not trap subsequent synthetic clicks the same way.
+            if (!RuntimeInformation.IsOSPlatform(OSPlatform.OSX)
+                && !RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
+                && Environment.GetEnvironmentVariable("PW_FORCE_WEBKIT_CONTEXT_MENU_SUPPRESS") != "1")
+            {
+                return Task.CompletedTask;
+            }
+
+            return AddInitScriptAsync(WebKitSuppressNativeContextMenu.Source, scriptPath: null);
         }
 
         /// <summary>

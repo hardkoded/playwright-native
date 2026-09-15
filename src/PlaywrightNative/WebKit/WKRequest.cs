@@ -85,6 +85,10 @@ namespace PlaywrightNative.WebKit
             Method = method;
             IDictionary<string, string> applicationHeaders = HeaderMap.WithoutProxyHop(headers);
             Headers = new Dictionary<string, string>(applicationHeaders, StringComparer.OrdinalIgnoreCase);
+
+            // Snapshot at interception so route.fallback → continue can tell a
+            // real header override from restating Headers after ApplyContinueOverrides.
+            InterceptedHeaders = new Dictionary<string, string>(Headers, StringComparer.OrdinalIgnoreCase);
             _postDataBuffer = postDataBuffer ?? RequestPostData.FromWebKitBase64(postData);
             PostData = RequestPostData.ToUtf8String(_postDataBuffer) ?? postData;
             _resourceType = resourceType;
@@ -160,6 +164,12 @@ namespace PlaywrightNative.WebKit
 
         /// <inheritdoc/>
         public IResponse ExistingResponse => Response;
+
+        /// <summary>
+        /// Headers captured when the request was first intercepted, before any
+        /// <c>route.continue</c> / <c>route.fallback</c> mutations.
+        /// </summary>
+        internal IDictionary<string, string> InterceptedHeaders { get; }
 
         /// <summary>
         /// Cookie-stripped headers last passed to <c>route.continue</c>, replayed

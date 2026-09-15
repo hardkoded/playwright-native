@@ -43,6 +43,30 @@ namespace PlaywrightNative.WebKit
     /// </remarks>
     internal static class WebkitBrowserType
     {
+        // Playwright WebKit embedder switches (macOS AppDelegate / Win Common.cpp /
+        // Linux MiniBrowser GOption patches). Linux MiniBrowser rejects anything
+        // else with "Unknown option"; macOS Playwright.app and the Windows
+        // embedder silently ignore unknown flags, so we mirror MiniBrowser here.
+        private static readonly string[] KnownExactWebKitArgs =
+        {
+            "--inspector-pipe",
+            "--headless",
+            "--no-startup-window",
+            "--disable-accelerated-compositing",
+            "--desktop",
+        };
+
+        private static readonly string[] KnownPrefixWebKitArgs =
+        {
+            "--user-data-dir=",
+            "--proxy=",
+            "--proxy-bypass-list=",
+            "--curl-proxy=",
+            "--curl-noproxy=",
+            "--ignore-host=",
+            "--remote-debugging-port=",
+        };
+
         /// <summary>
         /// Builds the command-line arguments for launching WebKit. Mirrors upstream
         /// <c>webkit.ts</c>: <c>--inspector-pipe</c>, headless mode flag, and a Win32-only
@@ -54,6 +78,8 @@ namespace PlaywrightNative.WebKit
         /// <returns>The argument list.</returns>
         internal static List<string> GetDefaultArgs(bool headless = true, string[] additionalArgs = null, string userDataDir = null)
         {
+            ThrowIfUnknownUserArgs(additionalArgs);
+
             List<string> args = new()
             {
                 "--inspector-pipe",
@@ -311,6 +337,56 @@ namespace PlaywrightNative.WebKit
                     }
                 }
             }
+        }
+
+        /// <summary>
+        /// Rejects user <c>Args</c> that Playwright's WebKit builds do not recognize,
+        /// matching Linux MiniBrowser's <c>Cannot parse arguments: Unknown option …</c>
+        /// so macOS / Windows launches fail the same way.
+        /// </summary>
+        /// <param name="additionalArgs">User-supplied launch arguments, or <see langword="null"/>.</param>
+        private static void ThrowIfUnknownUserArgs(IEnumerable<string> additionalArgs)
+        {
+            if (additionalArgs == null)
+            {
+                return;
+            }
+
+            foreach (string arg in additionalArgs)
+            {
+                if (string.IsNullOrEmpty(arg) || !arg.StartsWith('-'))
+                {
+                    continue;
+                }
+
+                if (IsKnownWebKitArg(arg))
+                {
+                    continue;
+                }
+
+                throw new PlaywrightException("Cannot parse arguments: Unknown option " + arg);
+            }
+        }
+
+        private static bool IsKnownWebKitArg(string arg)
+        {
+            foreach (string exact in KnownExactWebKitArgs)
+            {
+                if (string.Equals(arg, exact, StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+
+            foreach (string prefix in KnownPrefixWebKitArgs)
+            {
+                if (arg.StartsWith(prefix, StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
     }
 }

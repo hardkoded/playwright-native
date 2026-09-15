@@ -756,6 +756,24 @@ namespace PlaywrightNative.Helpers
             return list;
         }
 
+        private static List<SslApplicationProtocol> ErrorPageAlpn(IReadOnlyList<string> offered)
+        {
+            List<SslApplicationProtocol> list = new();
+            if (offered != null)
+            {
+                foreach (string protocol in offered)
+                {
+                    if (string.Equals(protocol, "h2", StringComparison.Ordinal))
+                    {
+                        list.Add(SslApplicationProtocol.Http2);
+                    }
+                }
+            }
+
+            list.Add(SslApplicationProtocol.Http11);
+            return list;
+        }
+
         private async Task AcceptLoopAsync()
         {
             while (!_cts.IsCancellationRequested)
@@ -1034,9 +1052,10 @@ namespace PlaywrightNative.Helpers
             SslStream tls = new(browser, leaveInnerStreamOpen: false);
             try
             {
-                // Origin handshake already failed — mirror upstream's error path
-                // (ALPN http/1.1 only). Pin TLS 1.2|1.3 so AuthenticateAsServer
-                // accepts a TLS 1.2-only ClientHello from WebKit on macOS
+                // Origin handshake already failed — mirror upstream's error path.
+                // Always include http/1.1 and keep any h2 the browser offered so
+                // AuthenticateAsServer can negotiate. Pin TLS 1.2|1.3 for TLS
+                // 1.2-only ClientHellos from WebKit on macOS
                 // (BrowserShouldNotHangOnTlsErrorsDuringTls12Handshake).
 #pragma warning disable CA5398
                 SslServerAuthenticationOptions options = new()
@@ -1045,13 +1064,14 @@ namespace PlaywrightNative.Helpers
                     ClientCertificateRequired = false,
                     CertificateRevocationCheckMode = X509RevocationMode.NoCheck,
                     EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13,
-                    ApplicationProtocols = new List<SslApplicationProtocol> { SslApplicationProtocol.Http11 },
+                    ApplicationProtocols = ErrorPageAlpn(offered),
                 };
 #pragma warning restore CA5398
 #pragma warning disable CA5359
                 options.RemoteCertificateValidationCallback = (_, _, _, _) => true;
 #pragma warning restore CA5359
                 await tls.AuthenticateAsServerAsync(options, _cts.Token).ConfigureAwait(false);
+
                 if (tls.NegotiatedApplicationProtocol.Equals(SslApplicationProtocol.Http2))
                 {
                     await WriteHttp2ErrorAsync(tls, body, _cts.Token).ConfigureAwait(false);

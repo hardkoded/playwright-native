@@ -129,13 +129,18 @@ namespace PlaywrightNative.WebKit
             // interceptWithRequest with a full header object makes macOS WebKit
             // invent an extra wire header (commonly Content-Length: 0 on GET)
             // that a natural continue never sends.
+            // Compare against InterceptedHeaders — FallbackAsync applies overrides
+            // to Request.Headers before ContinueAsync, so comparing to Headers
+            // would treat a real custom header as a no-op and drop it on the wire
+            // (RedirectedRequestsShouldReportOverriddenHeaders).
             bool headersAreNoOp = false;
             if (headers != null && url == null && method == null && body == null)
             {
-                Dictionary<string, string> merged = RouteContinue.ApplyHeadersOverrides(Request.Headers, headers);
+                IDictionary<string, string> baseline = Request.InterceptedHeaders ?? Request.Headers;
+                Dictionary<string, string> merged = RouteContinue.ApplyHeadersOverrides(baseline, headers);
                 headersAreNoOp = RouteContinue.HeaderMapsEqual(
                     WithoutTransferSizing(RouteContinue.RemoveCookie(merged)),
-                    WithoutTransferSizing(RouteContinue.RemoveCookie(Request.Headers)));
+                    WithoutTransferSizing(RouteContinue.RemoveCookie(baseline)));
             }
 
             Request.ApplyContinueOverrides(url, method, headers, body);
