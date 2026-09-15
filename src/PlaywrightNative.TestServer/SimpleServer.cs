@@ -392,6 +392,7 @@ namespace PlaywrightNative.TestServer
             await _webSocketAcceptGate.WaitAsync().ConfigureAwait(false);
             WebSocket webSocket;
             Stream raw;
+            OfficialServerWebSocket official;
             Action<WebSocket> once;
             Func<WebSocket, Task> onceAsync;
             bool waiting;
@@ -401,12 +402,36 @@ namespace PlaywrightNative.TestServer
                 _webSocketRequestWait = null;
                 requestWaiter?.TrySetResult(context.Request);
                 waiting = _webSocketWait != null;
-                (webSocket, raw) = await UpgradeToWebSocketAsync(context).ConfigureAwait(false);
-                NotifyWebSocket(new OfficialServerWebSocket(webSocket, raw));
                 once = _onceWebSocket;
                 onceAsync = _onceWebSocketAsync;
                 _onceWebSocket = null;
                 _onceWebSocketAsync = null;
+                (webSocket, raw) = await UpgradeToWebSocketAsync(context).ConfigureAwait(false);
+
+                // Legacy OnceWebSocketConnection handlers need System.Net.WebSockets.WebSocket.
+                // Give them ManagedWebSocket exclusively — do not also run raw-frame receive
+                // on the same stream.
+                bool legacyHandler = once != null || onceAsync != null;
+                if (legacyHandler && webSocket == null && raw != null)
+                {
+                    string subProtocol = FirstRequestedProtocol(context);
+                    webSocket = WebSocket.CreateFromStream(
+                        raw,
+                        isServer: true,
+                        string.IsNullOrEmpty(subProtocol) ? null : subProtocol,
+                        Timeout.InfiniteTimeSpan);
+                    official = new OfficialServerWebSocket(webSocket);
+                }
+                else if (raw != null)
+                {
+                    official = new OfficialServerWebSocket(raw);
+                }
+                else
+                {
+                    official = new OfficialServerWebSocket(webSocket);
+                }
+
+                NotifyWebSocket(official);
                 if (once != null)
                 {
                     once(webSocket);
@@ -420,7 +445,7 @@ namespace PlaywrightNative.TestServer
             if (onceAsync != null)
             {
                 await onceAsync(webSocket).ConfigureAwait(false);
-                if (webSocket.State == WebSocketState.Open)
+                if (webSocket != null && webSocket.State == WebSocketState.Open)
                 {
                     await ReceiveLoopAsync(webSocket, sendCloseMessage: false, CancellationToken.None).ConfigureAwait(false);
                 }
@@ -430,29 +455,31 @@ namespace PlaywrightNative.TestServer
 
             if (once != null)
             {
-                await WaitUntilDisconnectedAsync(webSocket).ConfigureAwait(false);
+                if (webSocket != null)
+                {
+                    await WaitUntilDisconnectedAsync(webSocket).ConfigureAwait(false);
+                }
+                else
+                {
+                    await official.WaitUntilClosedAsync().ConfigureAwait(false);
+                }
+
                 return;
             }
 
             if (waiting)
             {
-                await WaitUntilDisconnectedAsync(webSocket).ConfigureAwait(false);
+                // OfficialServerWebSocket owns the connection via raw frames / listeners.
+                await official.WaitUntilClosedAsync().ConfigureAwait(false);
                 return;
             }
 
             if (!string.IsNullOrEmpty(_sendOnWebSocketConnection))
             {
-                await webSocket.SendAsync(
-                    new ArraySegment<byte>(Encoding.UTF8.GetBytes(_sendOnWebSocketConnection)),
-                    WebSocketMessageType.Text,
-                    true,
-                    CancellationToken.None).ConfigureAwait(false);
+                official.Send(_sendOnWebSocketConnection);
             }
 
-            await ReceiveLoopAsync(
-                webSocket,
-                context.Request.Headers["User-Agent"].ToString().Contains("Firefox"),
-                CancellationToken.None).ConfigureAwait(false);
+            await official.WaitUntilClosedAsync().ConfigureAwait(false);
         }
 
         internal async Task<(WebSocket Socket, Stream Stream)> UpgradeToWebSocketAsync(HttpContext context)
@@ -471,12 +498,13 @@ namespace PlaywrightNative.TestServer
                 }
 
                 Stream stream = await upgrade.UpgradeAsync().ConfigureAwait(false);
-                WebSocket socket = WebSocket.CreateFromStream(
-                    stream,
-                    isServer: true,
-                    string.IsNullOrEmpty(subProtocol) ? null : subProtocol,
-                    TimeSpan.FromSeconds(30));
-                return (socket, stream);
+
+                // Return the raw upgraded stream without wrapping ManagedWebSocket.
+                // Sharing the stream with CreateFromStream lets ManagedWebSocket abort
+                // the connection during client-initiated application close codes
+                // (macOS WebKit then reports error + close 1006 instead of a clean
+                // echo). OfficialServerWebSocket owns the raw frames instead.
+                return (null, stream);
             }
 
             WebSocket accepted = string.IsNullOrEmpty(subProtocol)
@@ -708,7 +736,12 @@ namespace PlaywrightNative.TestServer
                 {
                     (WebSocket webSocket, Stream stream) = await _server.UpgradeToWebSocketAsync(_context)
                         .ConfigureAwait(false);
-                    _socket = new OfficialServerWebSocket(webSocket, stream);
+
+                    // Prefer raw-stream ownership so client close codes (e.g. 3002) are
+                    // echoed without ManagedWebSocket aborting the handshake on macOS WebKit.
+                    _socket = stream != null
+                        ? new OfficialServerWebSocket(stream)
+                        : new OfficialServerWebSocket(webSocket);
                     _server.NotifyWebSocket(_socket);
                     return;
                 }
