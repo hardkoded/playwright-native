@@ -251,35 +251,75 @@ namespace PlaywrightNative.Helpers
 
         private async Task WriteWhiteVideoAsync()
         {
-            ProcessStartInfo startInfo = new()
+            // Playwright's bundled screencast ffmpeg is built with most demuxers
+            // disabled (no lavfi color source). Prefer a full system ffmpeg —
+            // the same one ResolveForWebp selects on CI (brew/apt/choco) — so
+            // empty-video still produces a white 1s WebM.
+            string[] candidates =
             {
-                FileName = FfmpegLocator.Resolve(),
-                Arguments = string.Format(
-                    CultureInfo.InvariantCulture,
-                    "-y -f lavfi -i color=c=white:s={0}x{1}:d=1 -an -r 25 -c:v libvpx -b:v 1M -pix_fmt yuv420p \"{2}\"",
-                    _width,
-                    _height,
-                    _path),
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
+                FfmpegLocator.ResolveForWebp(),
+                FfmpegLocator.Resolve(),
             };
 
-            using Process process = new() { StartInfo = startInfo };
-            if (!process.Start())
+            foreach (string ffmpeg in candidates)
             {
-                return;
-            }
+                if (string.IsNullOrEmpty(ffmpeg))
+                {
+                    continue;
+                }
 
-            await process.StandardError.ReadToEndAsync().ConfigureAwait(false);
-            if (!await Task.Run(() => process.WaitForExit(15_000)).ConfigureAwait(false))
-            {
+                ProcessStartInfo startInfo = new()
+                {
+                    FileName = ffmpeg,
+                    Arguments = string.Format(
+                        CultureInfo.InvariantCulture,
+                        "-y -f lavfi -i color=c=white:s={0}x{1}:d=1 -an -r 25 -c:v libvpx -b:v 1M -pix_fmt yuv420p \"{2}\"",
+                        _width,
+                        _height,
+                        _path),
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                };
+
                 try
                 {
-                    process.Kill();
+                    using Process process = new() { StartInfo = startInfo };
+                    if (!process.Start())
+                    {
+                        continue;
+                    }
+
+                    await process.StandardError.ReadToEndAsync().ConfigureAwait(false);
+                    if (!await Task.Run(() => process.WaitForExit(15_000)).ConfigureAwait(false))
+                    {
+                        try
+                        {
+                            process.Kill();
+                        }
+                        catch (InvalidOperationException)
+                        {
+                        }
+
+                        continue;
+                    }
+
+                    if (process.ExitCode == 0 && File.Exists(_path) && new FileInfo(_path).Length > 0)
+                    {
+                        return;
+                    }
                 }
                 catch (InvalidOperationException)
                 {
+                    // Try the next ffmpeg candidate.
+                }
+                catch (System.ComponentModel.Win32Exception)
+                {
+                    // ffmpeg missing or not executable on this candidate.
+                }
+                catch (IOException)
+                {
+                    // Try the next ffmpeg candidate.
                 }
             }
         }

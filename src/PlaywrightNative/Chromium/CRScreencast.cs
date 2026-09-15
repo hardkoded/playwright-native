@@ -30,6 +30,7 @@ namespace PlaywrightNative.Chromium
     {
         private readonly Page _page;
         private readonly object _gate = new();
+        private Task _deliverChain = Task.CompletedTask;
         private Func<ScreencastFrame, Task> _onFrame;
         private ScreencastVideoWriter _video;
         private ScreencastVideoWriter _artifactsVideo;
@@ -325,35 +326,65 @@ namespace PlaywrightNative.Chromium
             _ = DeliverFrameAsync(frame, jpeg, sessionId);
         }
 
-        private async Task DeliverFrameAsync(ScreencastFrame frame, byte[] jpeg, int sessionId)
+        private Task DeliverFrameAsync(ScreencastFrame frame, byte[] jpeg, int sessionId)
         {
-            Func<ScreencastFrame, Task> onFrame;
-            ScreencastVideoWriter video;
-            ScreencastVideoWriter artifacts;
+            // Serialize delivery + ack so an async OnFrame callback applies
+            // backpressure (Chrome waits for screencastFrameAck). Fire-and-forget
+            // CDP handlers must not overlap.
+            Task previous;
+            TaskCompletionSource<bool> done = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
             lock (_gate)
             {
-                if (!_started)
-                {
-                    return;
-                }
-
-                onFrame = _onFrame;
-                video = _video;
-                artifacts = _artifactsVideo;
+                previous = _deliverChain;
+                _deliverChain = done.Task;
             }
 
-            video?.Write(jpeg);
-            artifacts?.Write(jpeg);
+            return DeliverFrameCoreAsync(previous, done, frame, jpeg, sessionId);
+        }
+
+        private async Task DeliverFrameCoreAsync(
+            Task previous,
+            TaskCompletionSource<bool> done,
+            ScreencastFrame frame,
+            byte[] jpeg,
+            int sessionId)
+        {
             try
             {
-                if (onFrame != null)
+                await previous.ConfigureAwait(false);
+
+                Func<ScreencastFrame, Task> onFrame;
+                ScreencastVideoWriter video;
+                ScreencastVideoWriter artifacts;
+                lock (_gate)
                 {
-                    await onFrame(frame).ConfigureAwait(false);
+                    if (!_started)
+                    {
+                        return;
+                    }
+
+                    onFrame = _onFrame;
+                    video = _video;
+                    artifacts = _artifactsVideo;
+                }
+
+                video?.Write(jpeg);
+                artifacts?.Write(jpeg);
+                try
+                {
+                    if (onFrame != null)
+                    {
+                        await onFrame(frame).ConfigureAwait(false);
+                    }
+                }
+                finally
+                {
+                    await AckAsync(sessionId).ConfigureAwait(false);
                 }
             }
             finally
             {
-                await AckAsync(sessionId).ConfigureAwait(false);
+                done.TrySetResult(true);
             }
         }
 

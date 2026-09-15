@@ -31,6 +31,7 @@ namespace PlaywrightNative.WebKit
     {
         private readonly WKPage _page;
         private readonly object _gate = new();
+        private Task _deliverChain = Task.CompletedTask;
         private Func<ScreencastFrame, Task> _onFrame;
         private ScreencastVideoWriter _video;
         private ScreencastVideoWriter _artifactsVideo;
@@ -289,49 +290,80 @@ namespace PlaywrightNative.WebKit
             _ = DeliverFrameAsync(frame, jpeg);
         }
 
-        private async Task DeliverFrameAsync(ScreencastFrame frame, byte[] jpeg)
+        private Task DeliverFrameAsync(ScreencastFrame frame, byte[] jpeg)
         {
-            Func<ScreencastFrame, Task> onFrame;
-            ScreencastVideoWriter video;
-            ScreencastVideoWriter artifacts;
-            int generation;
+            // Serialize delivery + ack so an async OnFrame callback applies
+            // backpressure (upstream awaits the listener before acking). Fire-
+            // and-forget OnMessage handlers must not overlap.
+            Task previous;
+            TaskCompletionSource<bool> done = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
             lock (_gate)
             {
-                if (!_started)
-                {
-                    return;
-                }
-
-                onFrame = _onFrame;
-                video = _video;
-                artifacts = _artifactsVideo;
-                generation = _generation;
+                previous = _deliverChain;
+                _deliverChain = done.Task;
             }
 
-            video?.Write(jpeg);
-            artifacts?.Write(jpeg);
+            return DeliverFrameCoreAsync(previous, done, frame, jpeg);
+        }
+
+        private async Task DeliverFrameCoreAsync(
+            Task previous,
+            TaskCompletionSource<bool> done,
+            ScreencastFrame frame,
+            byte[] jpeg)
+        {
             try
             {
-                if (onFrame != null)
+                await previous.ConfigureAwait(false);
+
+                Func<ScreencastFrame, Task> onFrame;
+                ScreencastVideoWriter video;
+                ScreencastVideoWriter artifacts;
+                int generation;
+                bool ownsProtocol;
+                lock (_gate)
                 {
-                    await onFrame(frame).ConfigureAwait(false);
+                    if (!_started)
+                    {
+                        return;
+                    }
+
+                    onFrame = _onFrame;
+                    video = _video;
+                    artifacts = _artifactsVideo;
+                    generation = _generation;
+                    ownsProtocol = _ownsProtocol;
+                }
+
+                video?.Write(jpeg);
+                artifacts?.Write(jpeg);
+                try
+                {
+                    if (onFrame != null)
+                    {
+                        await onFrame(frame).ConfigureAwait(false);
+                    }
+                }
+                finally
+                {
+                    if (ownsProtocol)
+                    {
+                        try
+                        {
+                            await _page.Session.SendAsync("Screencast.screencastFrameAck", new { generation }).ConfigureAwait(false);
+                        }
+                        catch (TargetClosedException)
+                        {
+                        }
+                        catch (PlaywrightException)
+                        {
+                        }
+                    }
                 }
             }
             finally
             {
-                if (_ownsProtocol)
-                {
-                    try
-                    {
-                        await _page.Session.SendAsync("Screencast.screencastFrameAck", new { generation }).ConfigureAwait(false);
-                    }
-                    catch (TargetClosedException)
-                    {
-                    }
-                    catch (PlaywrightException)
-                    {
-                    }
-                }
+                done.TrySetResult(true);
             }
         }
 

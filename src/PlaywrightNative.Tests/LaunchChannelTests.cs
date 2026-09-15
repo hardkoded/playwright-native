@@ -55,7 +55,12 @@ namespace PlaywrightNative.Tests
             if (installed)
             {
                 string path = BrowserChannelResolver.Resolve(BrowserChannel.Msedge);
-                Assert.That(path, Does.Contain("msedge").IgnoreCase);
+                // Linux/Windows install layouts use "msedge" in the path; macOS
+                // ships the official app as "Microsoft Edge.app/.../Microsoft Edge".
+                Assert.That(
+                    path,
+                    Does.Contain("msedge").IgnoreCase
+                        .Or.Contain("Microsoft Edge").IgnoreCase);
                 return;
             }
 
