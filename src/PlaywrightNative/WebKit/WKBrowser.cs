@@ -52,6 +52,7 @@ namespace PlaywrightNative.WebKit
         private readonly ConcurrentDictionary<string, WKPage> _pages = new();
         private readonly ConcurrentDictionary<string, WKPage> _downloads = new(StringComparer.Ordinal);
         private WKBrowserContext _defaultContext;
+        private WebKitMacProxyBypassShim _macProxyBypassShim;
         private bool _closed;
 
         private WKBrowser(
@@ -276,6 +277,13 @@ namespace PlaywrightNative.WebKit
                         bypassLoopback: false,
                         out browserProxy)
                     : null;
+
+                // macOS CFNetwork excludes localhost/link-local whenever any
+                // bypass list is set. Keep bypass semantics in a local shim and
+                // pass WebKit an empty bypass list so those hosts stay proxied.
+                WebKitMacProxyBypassShim bypassShim = certsProxy == null
+                    ? WebKitMacProxyBypassShim.TryStart(browserProxy, out browserProxy)
+                    : null;
                 WKBrowserContext context;
                 try
                 {
@@ -283,12 +291,14 @@ namespace PlaywrightNative.WebKit
                 }
                 catch
                 {
+                    bypassShim?.Dispose();
                     handshake?.Dispose();
                     certsProxy?.Dispose();
                     throw;
                 }
 
                 context.AttachLocaleHandshake(handshake);
+                context.AttachMacProxyBypassShim(bypassShim);
                 context.AttachClientCertificatesProxy(certsProxy, proxy);
                 context.AttachClientCertificates(clientCertificates);
                 context.BaseURL = baseURL;
@@ -525,6 +535,9 @@ namespace PlaywrightNative.WebKit
 #pragma warning restore RCS1075
             }
 
+            _macProxyBypassShim?.Dispose();
+            _macProxyBypassShim = null;
+
             RaiseDisconnected();
         }
 
@@ -567,6 +580,13 @@ namespace PlaywrightNative.WebKit
 
             return browser;
         }
+
+        /// <summary>
+        /// Owns the launch-level macOS WebKit proxy-bypass shim.
+        /// </summary>
+        /// <param name="shim">Shim started for this browser, or <see langword="null"/>.</param>
+        internal void AttachMacProxyBypassShim(WebKitMacProxyBypassShim shim)
+            => _macProxyBypassShim = shim;
 
         /// <summary>
         /// Persistent context created by <c>LaunchPersistentContextAsync</c>.

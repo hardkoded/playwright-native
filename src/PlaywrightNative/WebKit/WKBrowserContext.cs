@@ -84,6 +84,7 @@ namespace PlaywrightNative.WebKit
         private bool _creatingStorageStatePage;
         private string _closeReason;
         private LocaleHandshakeProxy _localeHandshake;
+        private WebKitMacProxyBypassShim _macProxyBypassShim;
         private ClientCertificatesProxy _clientCertificatesProxy;
         private IReadOnlyList<ClientCertificate> _clientCertificates;
         private Proxy _proxy;
@@ -792,6 +793,8 @@ namespace PlaywrightNative.WebKit
             await VideoRecorder.FlushAsync(this).ConfigureAwait(false);
             _localeHandshake?.Dispose();
             _localeHandshake = null;
+            _macProxyBypassShim?.Dispose();
+            _macProxyBypassShim = null;
             _clientCertificatesProxy?.Dispose();
             _clientCertificatesProxy = null;
             _closed = true;
@@ -1111,6 +1114,13 @@ namespace PlaywrightNative.WebKit
         /// <param name="handshake">Proxy started for this context, or <see langword="null"/>.</param>
         internal void AttachLocaleHandshake(LocaleHandshakeProxy handshake)
             => _localeHandshake = handshake;
+
+        /// <summary>
+        /// Owns the macOS WebKit proxy-bypass shim for this context.
+        /// </summary>
+        /// <param name="shim">Shim started for this context, or <see langword="null"/>.</param>
+        internal void AttachMacProxyBypassShim(WebKitMacProxyBypassShim shim)
+            => _macProxyBypassShim = shim;
 
         /// <summary>
         /// On macOS WebKit, loopback WebSockets bypass HTTP proxies. When a

@@ -41,10 +41,15 @@ namespace PlaywrightNative.Helpers
                 return reason;
             }
 
+            // Do not match bare "NSURLError" — that token also appears in TLS /
+            // certificate failures that must surface as page content (client
+            // certificate fixtures) rather than a connection exception.
             if (reason.Contains("network connection was lost", StringComparison.OrdinalIgnoreCase)
                 || reason.Contains("Could not connect to the server", StringComparison.OrdinalIgnoreCase)
                 || reason.Contains("Connection refused", StringComparison.OrdinalIgnoreCase)
-                || reason.Contains("NSURLError", StringComparison.OrdinalIgnoreCase))
+                || reason.Contains("NSURLErrorCannotConnectToHost", StringComparison.OrdinalIgnoreCase)
+                || reason.Contains("NSURLErrorNetworkConnectionLost", StringComparison.OrdinalIgnoreCase)
+                || reason.Contains("NSURLErrorTimedOut", StringComparison.OrdinalIgnoreCase))
             {
                 return "Could not connect to the server";
             }

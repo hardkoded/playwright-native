@@ -156,17 +156,21 @@ namespace PlaywrightNative.WebKit
             }
 
             List<string> launchArgs = GetDefaultArgs(headless, args, userDataDir);
-            string proxyServer = ProxySettings.FormatServer(proxy, includeCredentials: true);
+            WebKitMacProxyBypassShim macBypassShim = WebKitMacProxyBypassShim.TryStart(proxy, out Proxy effectiveProxy);
+            string proxyServer = ProxySettings.FormatServer(effectiveProxy, includeCredentials: true);
             if (!string.IsNullOrEmpty(proxyServer))
             {
                 // Official webkit.ts launch args: macOS --proxy-bypass-list,
                 // Linux one --ignore-host per token, Windows --curl-noproxy.
+                // On macOS, when a bypass list is present TryStart wraps the
+                // upstream proxy so CFNetwork does not also exclude localhost /
+                // link-local; effectiveProxy then has an empty bypass list.
                 if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
                 {
                     launchArgs.Add("--proxy=" + proxyServer);
-                    if (!string.IsNullOrEmpty(proxy.Bypass))
+                    if (!string.IsNullOrEmpty(effectiveProxy.Bypass))
                     {
-                        launchArgs.Add("--proxy-bypass-list=" + proxy.Bypass);
+                        launchArgs.Add("--proxy-bypass-list=" + effectiveProxy.Bypass);
                     }
                 }
                 else if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
@@ -175,17 +179,17 @@ namespace PlaywrightNative.WebKit
                         ? string.Concat("socks5h://", proxyServer.AsSpan("socks5://".Length))
                         : proxyServer;
                     launchArgs.Add("--curl-proxy=" + curlProxy);
-                    if (!string.IsNullOrEmpty(proxy.Bypass))
+                    if (!string.IsNullOrEmpty(effectiveProxy.Bypass))
                     {
-                        launchArgs.Add("--curl-noproxy=" + proxy.Bypass);
+                        launchArgs.Add("--curl-noproxy=" + effectiveProxy.Bypass);
                     }
                 }
                 else
                 {
                     launchArgs.Add("--proxy=" + proxyServer);
-                    if (!string.IsNullOrEmpty(proxy.Bypass))
+                    if (!string.IsNullOrEmpty(effectiveProxy.Bypass))
                     {
-                        foreach (string token in proxy.Bypass.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                        foreach (string token in effectiveProxy.Bypass.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
                         {
                             launchArgs.Add("--ignore-host=" + token);
                         }
@@ -303,10 +307,13 @@ namespace PlaywrightNative.WebKit
                 childReads = null;
                 childWrites = null;
 
+                browser.AttachMacProxyBypassShim(macBypassShim);
+                macBypassShim = null;
                 return browser;
             }
             finally
             {
+                macBypassShim?.Dispose();
                 connection?.Dispose();
 
                 if (transport != null)

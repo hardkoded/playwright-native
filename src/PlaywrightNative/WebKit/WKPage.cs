@@ -4993,13 +4993,20 @@ namespace PlaywrightNative.WebKit
                         reason = "page.goto: Navigation to \"" + pendingUrl +
                             "\" is interrupted by another navigation to \"" + competing + "\"";
                     }
-                    else
+                    else if (redirectInFlight
+                        || _harRedirectInProgress
+                        || !string.IsNullOrEmpty(redirectUrl)
+                        || !string.IsNullOrEmpty(_pendingRedirectTarget)
+                        || _awaitingReplacementTarget
+                        || _provisionalSession != null)
                     {
-                        // Superseded without a true competitor means redirect /
-                        // cross-process swap cancelled this document. Keep the
-                        // history/goto waiter armed for the replacement load.
+                        // Redirect / cross-process swap cancelled this document
+                        // while a replacement is expected — keep waiters armed.
                         return;
                     }
+
+                    // Otherwise this is a real failure (e.g. cross-process abort
+                    // before commit) — fall through and fail the pending goto.
                 }
 
                 NavigationException exception = new(reason, errorUrl);
@@ -7840,10 +7847,13 @@ namespace PlaywrightNative.WebKit
                 // WebKit also drops the first cross-process provisional during a
                 // normal HTTP redirect (reload/goto). That is not a failed
                 // navigation — wait for the replacement target instead.
-                if (!IsHarRedirectPending()
-                    && _pendingLoadTcs == null
-                    && _pendingDomContentTcs == null
-                    && _pendingCommitTcs == null)
+                // When no replacement is expected (cross-process abort before
+                // commit), fail pending waiters so goto does not hang.
+                bool expectReplacement = IsHarRedirectPending()
+                    || _awaitingReplacementTarget
+                    || _harRedirectInProgress
+                    || !string.IsNullOrEmpty(_pendingRedirectTarget);
+                if (!expectReplacement)
                 {
                     FailPendingWithReason("Navigation failed", _pendingNavigationUrl);
                 }

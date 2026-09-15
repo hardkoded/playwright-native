@@ -339,19 +339,24 @@ namespace PlaywrightNative
                     webkitCertsProxy = null;
                 }
 
-                // Playwright.setLanguages must run before the initial about:blank
-                // document is created; otherwise navigator.language stays en-US on
-                // the persistent default page (ShouldSupportLocaleOption on macOS).
-                if (options is BrowserTypeLaunchPersistentContextOptions persistentLocale
-                    && !string.IsNullOrEmpty(persistentLocale.Locale)
-                    && context is WebKit.WKBrowserContext webkitLocale)
+                // Apply locale / userAgent before the initial about:blank finishes
+                // init. setLanguages must precede document creation (locale stays
+                // en-US otherwise), and userAgent must be known before
+                // EnsureDefaultUserAgentHasSafariTokenAsync runs on macOS.
+                if (options is BrowserTypeLaunchPersistentContextOptions persistentEarly
+                    && context is WebKit.WKBrowserContext webkitEarly
+                    && (!string.IsNullOrEmpty(persistentEarly.Locale)
+                        || !string.IsNullOrEmpty(persistentEarly.UserAgent)))
                 {
-                    webkitLocale.ConfigureEmulation(
+                    webkitEarly.ConfigureEmulation(
                         viewport: null,
-                        userAgent: null,
+                        userAgent: persistentEarly.UserAgent,
                         extraHeaders: null,
-                        locale: persistentLocale.Locale);
-                    await webkitLocale.ApplyLanguagesAsync().ConfigureAwait(false);
+                        locale: persistentEarly.Locale);
+                    if (!string.IsNullOrEmpty(persistentEarly.Locale))
+                    {
+                        await webkitEarly.ApplyLanguagesAsync().ConfigureAwait(false);
+                    }
                 }
 
                 // Unlike Chromium's Target.setAutoAttach round-trip, WebKit's page-proxy-created
