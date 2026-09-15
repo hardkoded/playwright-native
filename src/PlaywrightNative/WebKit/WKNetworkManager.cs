@@ -44,6 +44,7 @@ namespace PlaywrightNative.WebKit
         private readonly ConcurrentDictionary<string, WKWebSocket> _webSockets = new();
         private readonly List<WKRouteEntry> _routes = new();
         private readonly ConcurrentDictionary<string, JsonElement> _pendingIntercepts = new();
+        private readonly ConcurrentDictionary<string, JsonElement> _requestIdToRequestWillBeSent = new();
         private readonly ConcurrentDictionary<string, byte> _handledIntercepts = new();
         private bool _interceptingEnabled;
         private bool _interceptionPatternInstalled;
@@ -306,7 +307,6 @@ namespace PlaywrightNative.WebKit
             bool needIntercept = routeCount > 0
                 || _page.WKContext?.HasContextRoutes == true
                 || HttpBasicAuth.HasCredentials(_httpCredentials)
-                || !string.IsNullOrEmpty(_locale)
                 || _inFlightRouteHandlers > 0;
             if (needIntercept && !_interceptingEnabled)
             {
@@ -706,6 +706,70 @@ namespace PlaywrightNative.WebKit
             socket.NotifyError(WebSocketProtocol.FormatSocketError(message, socket.Har.Status));
         }
 
+        private WKRequest CreateRequestFromWillBeSent(JsonElement p, bool allowRoute)
+        {
+            string requestId = GetString(p, "requestId");
+            if (string.IsNullOrEmpty(requestId))
+            {
+                return null;
+            }
+
+            if (_requestsById.TryGetValue(requestId, out WKRequest existing))
+            {
+                return existing;
+            }
+
+            if (!p.TryGetProperty("request", out JsonElement requestPayload))
+            {
+                return null;
+            }
+
+            string url = GetString(requestPayload, "url");
+            string method = GetString(requestPayload, "method");
+            byte[] postDataBuffer = RequestPostData.FromWebKitBase64(GetString(requestPayload, "postData"));
+            string postData = RequestPostData.ToUtf8String(postDataBuffer);
+            IDictionary<string, string> headers = ParseHeaders(requestPayload, caseInsensitive: false);
+
+            string type = GetString(p, "type");
+            bool isNavigationRequest = NetworkRequestEvents.IsDocumentNavigation(type);
+            string frameId = GetString(p, "frameId");
+            IFrame frame = _page.GetOrCreateFrameById(frameId);
+            WKRequest redirectedFrom = null;
+            if (isNavigationRequest)
+            {
+                redirectedFrom = _page.ConsumeRedirectSource(url);
+            }
+
+            WKRequest request = new(
+                requestId,
+                url,
+                method,
+                headers,
+                postData,
+                type ?? string.Empty,
+                isNavigationRequest,
+                redirectedFrom,
+                frame,
+                postDataBuffer);
+
+            request.DocumentUrl = isNavigationRequest ? url : frame?.Url;
+            request.TimestampSeconds = ResourceTimingParser.ReadDouble(p, "timestamp");
+            double wallTime = ResourceTimingParser.ReadDouble(p, "wallTime");
+            if (wallTime <= 0)
+            {
+                wallTime = request.TimestampSeconds;
+            }
+
+            ResourceTimingParser.ApplyWallTime(request.Timing, wallTime);
+
+            // allowRoute is informational for callers; request creation itself does not
+            // attach a route. Routes are attached only from OnInterceptedRequest.
+            _ = allowRoute;
+            _requestsById[requestId] = request;
+            RaiseRequestCreated(request);
+            return request;
+        }
+
         private void OnRequestWillBeSent(JsonElement? parameters)
         {
             if (!parameters.HasValue)
@@ -717,6 +781,27 @@ namespace PlaywrightNative.WebKit
             string requestId = GetString(p, "requestId");
             if (string.IsNullOrEmpty(requestId))
             {
+                return;
+            }
+
+            // Upstream wkPage.ts: when interception is on and this is not a redirect,
+            // buffer willBeSent until requestIntercepted (route) or responseReceived
+            // (service-worker / non-intercepted completion). Creating the request early
+            // leaves the network paused with no continue for SW-handled fetches.
+            bool isRedirect = p.TryGetProperty("redirectResponse", out JsonElement redirectResponsePreview)
+                && redirectResponsePreview.ValueKind == JsonValueKind.Object;
+            if (_interceptingEnabled && !isRedirect)
+            {
+                _requestIdToRequestWillBeSent[requestId] = p;
+                if (_pendingIntercepts.TryRemove(requestId, out _))
+                {
+                    WKRequest created = CreateRequestFromWillBeSent(p, allowRoute: true);
+                    if (created != null)
+                    {
+                        OnInterceptedRequest(requestId, created);
+                    }
+                }
+
                 return;
             }
 
@@ -818,6 +903,15 @@ namespace PlaywrightNative.WebKit
             if (string.IsNullOrEmpty(requestId))
             {
                 return;
+            }
+
+            // Service-worker (and other non-intercepted) responses: willBeSent was
+            // buffered while interception was enabled, but requestIntercepted never
+            // arrives. Materialize the request without a route, matching wkPage.ts.
+            if (!_requestsById.ContainsKey(requestId)
+                && _requestIdToRequestWillBeSent.TryRemove(requestId, out JsonElement bufferedWillBeSent))
+            {
+                CreateRequestFromWillBeSent(bufferedWillBeSent, allowRoute: false);
             }
 
             if (!_requestsById.TryGetValue(requestId, out WKRequest request))
@@ -1052,6 +1146,17 @@ namespace PlaywrightNative.WebKit
             string requestId = GetString(p, "requestId");
             if (string.IsNullOrEmpty(requestId))
             {
+                return;
+            }
+
+            if (_requestIdToRequestWillBeSent.TryRemove(requestId, out JsonElement willBeSent))
+            {
+                WKRequest created = CreateRequestFromWillBeSent(willBeSent, allowRoute: true);
+                if (created != null)
+                {
+                    OnInterceptedRequest(requestId, created);
+                }
+
                 return;
             }
 

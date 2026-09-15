@@ -433,25 +433,25 @@ namespace PlaywrightNative.WebKit
         }
 
         /// <summary>
-        /// Evaluates a structured-clone wrapped expression. Uses
-        /// <c>returnByValue: true</c> so synchronous results (including after a
-        /// same-turn navigation) are returned without a second protocol call.
-        /// Only Promise results are awaited via <c>Runtime.callFunctionOn</c>.
-        /// Abort when this context is destroyed.
+        /// Evaluates a structured-clone wrapped expression. Prefers
+        /// <c>returnByValue: true</c> so synchronous tagged results (including after a
+        /// same-turn navigation) avoid a second protocol call. Thenables that lose their
+        /// Promise shape under by-value are re-fetched as handles and awaited via
+        /// <c>Runtime.callFunctionOn</c>. Abort when this context is destroyed.
         /// </summary>
         /// <remarks>
-        /// Do not re-evaluate the same expression when awaiting a Promise —
-        /// that re-runs page side effects (exposeFunction bindings, fetch, etc.).
+        /// WebKit has no <c>awaitPromise</c> on <c>Runtime.evaluate</c>. Returning an
+        /// untagged empty by-value object for a Promise (common with exposeFunction)
+        /// must not be treated as success — that deserializes as <c>default(T)</c> (0).
+        /// Only re-evaluate when by-value dropped the Promise <c>objectId</c>.
         /// </remarks>
         /// <param name="expression">An expression that returns a tagged payload or a promise of one.</param>
         /// <returns>The remote object (<c>result</c>) for <see cref="EvaluateSerialization.ParseRemote{T}"/>.</returns>
         internal async Task<JsonElement?> EvaluateSerializedRemoteAsync(string expression)
         {
-            // Prefer returnByValue:true so synchronous completion values (including
-            // after location.reload()) arrive in one round-trip. WebKit has no
-            // awaitPromise on Runtime.evaluate; only Promise results need a second
-            // callFunctionOn. Awaiting non-promises races navigation and throws
-            // "Execution context was destroyed".
+            // Prefer returnByValue:true so synchronous tagged completion values (including
+            // after location.reload()) arrive in one round-trip without racing context
+            // destruction on callFunctionOn.
             JsonElement? byValueResponse = await _session.SendAsync(
                 "Runtime.evaluate",
                 BuildEvaluateParams(expression, returnByValue: true)).ConfigureAwait(false);
@@ -467,7 +467,10 @@ namespace PlaywrightNative.WebKit
                 return null;
             }
 
-            if (!IsPromiseRemote(result))
+            // Finished structured-clone payloads (and undefined) — including sync
+            // navigation returns. Do not treat empty/untagged objects as done: those
+            // are how WebKit often serializes Promises under returnByValue:true.
+            if (IsTaggedRemote(result))
             {
                 return result;
             }
@@ -475,11 +478,9 @@ namespace PlaywrightNative.WebKit
             string objectId = RemoteObject.GetObjectId(result);
             if (string.IsNullOrEmpty(objectId))
             {
-                // returnByValue dropped the Promise id. Fetch a handle without
-                // re-running the user expression: evaluate a program that returns
-                // the already-settled completion is impossible, so take one handle
-                // evaluate of the same expression (Promise constructors are
-                // typically pure). Prefer preserving objectId on the first call.
+                // By-value dropped the Promise id (or never marked subtype=promise).
+                // One handle evaluate preserves objectId so we can await; avoid treating
+                // the empty by-value blob as the answer.
                 JsonElement? asHandle = await _session.SendAsync(
                     "Runtime.evaluate",
                     BuildEvaluateParams(expression, returnByValue: false)).ConfigureAwait(false);
@@ -494,7 +495,7 @@ namespace PlaywrightNative.WebKit
                     return null;
                 }
 
-                if (!IsPromiseRemote(handleResult))
+                if (IsTaggedRemote(handleResult))
                 {
                     return handleResult;
                 }
@@ -615,6 +616,43 @@ namespace PlaywrightNative.WebKit
                 && string.Equals(subtype.GetString(), "promise", StringComparison.Ordinal);
         }
 
+        /// <summary>
+        /// Returns whether a by-value remote object is a finished
+        /// <see cref="EvaluateSerialization"/> payload (or <c>undefined</c>),
+        /// as opposed to an empty object shell left when WebKit serializes a Promise.
+        /// </summary>
+        /// <param name="result">A <c>Runtime.RemoteObject</c>.</param>
+        /// <returns><see langword="true"/> when the value is a usable tagged payload.</returns>
+        private static bool IsTaggedRemote(JsonElement result)
+        {
+            if (result.TryGetProperty("type", out JsonElement type)
+                && type.ValueKind == JsonValueKind.String
+                && string.Equals(type.GetString(), "undefined", StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            if (!result.TryGetProperty("value", out JsonElement value)
+                || value.ValueKind != JsonValueKind.Object)
+            {
+                return false;
+            }
+
+            return value.TryGetProperty("v", out _)
+                || value.TryGetProperty("b", out _)
+                || value.TryGetProperty("n", out _)
+                || value.TryGetProperty("s", out _)
+                || value.TryGetProperty("bi", out _)
+                || value.TryGetProperty("d", out _)
+                || value.TryGetProperty("u", out _)
+                || value.TryGetProperty("r", out _)
+                || value.TryGetProperty("e", out _)
+                || value.TryGetProperty("ta", out _)
+                || value.TryGetProperty("a", out _)
+                || value.TryGetProperty("o", out _)
+                || value.TryGetProperty("ref", out _);
+        }
+
         private static T DeserializeValue<T>(JsonElement remoteObject)
         {
             if (remoteObject.ValueKind == JsonValueKind.Null ||
@@ -729,10 +767,9 @@ namespace PlaywrightNative.WebKit
 
         private async Task<JsonElement?> SendEvaluateAsync(string expression)
         {
-            // WebKit's Runtime.evaluate has no awaitPromise. Use returnByValue:true so
-            // sync values (including after synchronous navigation) are returned without a
-            // second round-trip. Only Promise results need callFunctionOn + awaitPromise;
-            // awaiting non-promises races context destruction on navigation.
+            // WebKit Runtime.evaluate has no awaitPromise. Prefer returnByValue:true for
+            // sync values (including after sync navigation). Untagged empty objects from
+            // Promise by-value serialization must still be awaited via a handle.
             JsonElement? evalResponse = await _session.SendAsync(
                 "Runtime.evaluate",
                 BuildEvaluateParams(expression, returnByValue: true)).ConfigureAwait(false);
@@ -746,11 +783,30 @@ namespace PlaywrightNative.WebKit
 
             bool threw = evalElement.TryGetProperty("wasThrown", out JsonElement wasThrown)
                 && wasThrown.ValueKind == JsonValueKind.True;
-            if (threw
-                || !evalElement.TryGetProperty("result", out JsonElement result)
-                || !IsPromiseRemote(result))
+            if (threw || !evalElement.TryGetProperty("result", out JsonElement result))
             {
                 return evalResponse;
+            }
+
+            if (IsTaggedRemote(result))
+            {
+                return evalResponse;
+            }
+
+            // Non-object primitives are final even when untagged.
+            if (result.TryGetProperty("type", out JsonElement typeEl)
+                && typeEl.ValueKind == JsonValueKind.String)
+            {
+                string typeName = typeEl.GetString();
+                if (string.Equals(typeName, "number", StringComparison.Ordinal)
+                    || string.Equals(typeName, "string", StringComparison.Ordinal)
+                    || string.Equals(typeName, "boolean", StringComparison.Ordinal)
+                    || string.Equals(typeName, "bigint", StringComparison.Ordinal)
+                    || string.Equals(typeName, "undefined", StringComparison.Ordinal)
+                    || string.Equals(typeName, "symbol", StringComparison.Ordinal))
+                {
+                    return evalResponse;
+                }
             }
 
             string objectId = RemoteObject.GetObjectId(result);
@@ -772,6 +828,11 @@ namespace PlaywrightNative.WebKit
                 }
 
                 if (!handleElement.TryGetProperty("result", out JsonElement handleResult))
+                {
+                    return asHandle;
+                }
+
+                if (IsTaggedRemote(handleResult))
                 {
                     return asHandle;
                 }
