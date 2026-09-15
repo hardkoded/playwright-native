@@ -304,10 +304,17 @@ namespace PlaywrightNative.WebKit
                 routeCount = _routes.Count;
             }
 
+            // Locale (and context extra headers via LocaleAndAuthHeaders) must
+            // intercept WebSocket handshakes: LocaleHandshakeProxy bypasses
+            // loopback to avoid truncating chunked localhost HTTP, so WS to the
+            // test server never hits the proxy. Network interception is the
+            // only path that rewrites Accept-Language / ExtraHTTPHeaders there.
             bool needIntercept = routeCount > 0
                 || _page.WKContext?.HasContextRoutes == true
                 || HttpBasicAuth.HasCredentials(_httpCredentials)
-                || _inFlightRouteHandlers > 0;
+                || _inFlightRouteHandlers > 0
+                || !string.IsNullOrEmpty(_locale)
+                || HasExtraHttpHeadersForInterception();
             if (needIntercept && !_interceptingEnabled)
             {
                 _interceptingEnabled = true;
@@ -1303,6 +1310,12 @@ namespace PlaywrightNative.WebKit
             }
 
             return merged;
+        }
+
+        private bool HasExtraHttpHeadersForInterception()
+        {
+            Dictionary<string, string> extra = ExtraHttpHeaders.Merged(_page.Context, _page.PageExtraHttpHeaders);
+            return extra != null && extra.Count > 0;
         }
 
         private IDictionary<string, string> MergeExtraHttpHeaders(IEnumerable<KeyValuePair<string, string>> headers)

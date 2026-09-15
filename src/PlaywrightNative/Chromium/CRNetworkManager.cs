@@ -1321,6 +1321,13 @@ namespace PlaywrightNative.Chromium
 
             string requestId = RequestKey(session, rawId);
 
+            // Official: release buffered requestWillBeSent when the request fails
+            // before Fetch.requestPaused (common for SW-handled / cancelled fetches).
+            if (!_requestsById.ContainsKey(requestId) && !_requestsByRawId.ContainsKey(rawId))
+            {
+                TryReleaseHeldFetch(rawId, url: null);
+            }
+
             if (TryTakeRequest(session, rawId, out CRRequest request))
             {
                 MaybeUpdateRequestSession(session, request);
