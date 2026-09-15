@@ -36,6 +36,13 @@ namespace PlaywrightNative.Helpers
     {
         private static readonly string[] HeaderSeparators = ["\r\n"];
 
+        /// <summary>
+        /// Byte-preserving 0–255 mapping. <see cref="Encoding.ASCII"/> replaces
+        /// bytes ≥ 128 with <c>?</c> (63), which corrupts binary/UTF-8 bodies on
+        /// loopback HTTP when WebKit traffic is forced through this proxy.
+        /// </summary>
+        private static readonly Encoding Latin1 = Encoding.Latin1;
+
         private readonly string _locale;
         private readonly TcpListener _listener;
         private readonly CancellationTokenSource _cts = new();
@@ -154,7 +161,29 @@ namespace PlaywrightNative.Helpers
         /// </summary>
         /// <param name="headers">Merged extra headers, or <see langword="null"/>.</param>
         internal void SetExtraHeaders(IReadOnlyDictionary<string, string> headers)
-            => _extraHeaders = headers;
+        {
+            if (headers == null || headers.Count == 0)
+            {
+                _extraHeaders = null;
+                return;
+            }
+
+            // Snapshot so later page/context map replacement cannot clear the
+            // proxy mid-handshake (macOS WebKit ignores Network.setExtraHTTPHeaders
+            // on upgrades and relies solely on this stamp).
+            Dictionary<string, string> copy = new(StringComparer.OrdinalIgnoreCase);
+            foreach (KeyValuePair<string, string> header in headers)
+            {
+                if (string.IsNullOrEmpty(header.Key))
+                {
+                    continue;
+                }
+
+                copy[header.Key] = header.Value ?? string.Empty;
+            }
+
+            _extraHeaders = copy.Count == 0 ? null : copy;
+        }
 
         private static async Task<byte[]> ReadHttpMessageAsync(HttpIO io, CancellationToken token)
         {
@@ -223,7 +252,7 @@ namespace PlaywrightNative.Helpers
 
         private static int ParseContentLength(byte[] data, int headerEnd)
         {
-            string headers = Encoding.ASCII.GetString(data, 0, headerEnd);
+            string headers = Latin1.GetString(data, 0, headerEnd);
             foreach (string line in headers.Split(HeaderSeparators, StringSplitOptions.None))
             {
                 if (line.StartsWith("Content-Length:", StringComparison.OrdinalIgnoreCase)
@@ -275,7 +304,7 @@ namespace PlaywrightNative.Helpers
                 return false;
             }
 
-            string text = Encoding.ASCII.GetString(message);
+            string text = Latin1.GetString(message);
             return text.Contains("Upgrade: websocket", StringComparison.OrdinalIgnoreCase)
                 || text.Contains("Sec-WebSocket-Key:", StringComparison.OrdinalIgnoreCase);
         }
@@ -336,7 +365,7 @@ namespace PlaywrightNative.Helpers
                 return false;
             }
 
-            string text = Encoding.ASCII.GetString(message);
+            string text = Latin1.GetString(message);
             int lineEnd = text.IndexOf("\r\n", StringComparison.Ordinal);
             string requestLine = lineEnd < 0 ? text : text.Substring(0, lineEnd);
             string[] parts = requestLine.Split(' ');
@@ -369,7 +398,7 @@ namespace PlaywrightNative.Helpers
 
         private static byte[] ToOriginForm(byte[] message)
         {
-            string text = Encoding.ASCII.GetString(message);
+            string text = Latin1.GetString(message);
             int lineEnd = text.IndexOf("\r\n", StringComparison.Ordinal);
             if (lineEnd < 0)
             {
@@ -404,12 +433,12 @@ namespace PlaywrightNative.Helpers
                 rewritten += " " + string.Join(" ", parts, 2, parts.Length - 2);
             }
 
-            return StripProxyHeaders(Encoding.ASCII.GetBytes(string.Concat(rewritten, text.AsSpan(lineEnd))));
+            return StripProxyHeaders(Latin1.GetBytes(string.Concat(rewritten, text.AsSpan(lineEnd))));
         }
 
         private static byte[] StripProxyHeaders(byte[] message)
         {
-            string text = Encoding.ASCII.GetString(message);
+            string text = Latin1.GetString(message);
             int headerEnd = text.IndexOf("\r\n\r\n", StringComparison.Ordinal);
             if (headerEnd < 0)
             {
@@ -434,12 +463,12 @@ namespace PlaywrightNative.Helpers
             }
 
             builder.Append(text.AsSpan(headerEnd));
-            return Encoding.ASCII.GetBytes(builder.ToString());
+            return Latin1.GetBytes(builder.ToString());
         }
 
         private static byte[] RewriteAcceptLanguage(byte[] message, string locale)
         {
-            string text = Encoding.ASCII.GetString(message);
+            string text = Latin1.GetString(message);
             int headerEnd = text.IndexOf("\r\n\r\n", StringComparison.Ordinal);
             if (headerEnd < 0)
             {
@@ -489,7 +518,7 @@ namespace PlaywrightNative.Helpers
             }
 
             builder.Append(text.AsSpan(headerEnd));
-            return Encoding.ASCII.GetBytes(builder.ToString());
+            return Latin1.GetBytes(builder.ToString());
         }
 
         private static byte[] RewriteExtraHeaders(byte[] message, IReadOnlyDictionary<string, string> extra)
@@ -499,7 +528,7 @@ namespace PlaywrightNative.Helpers
                 return message;
             }
 
-            string text = Encoding.ASCII.GetString(message);
+            string text = Latin1.GetString(message);
             int headerEnd = text.IndexOf("\r\n\r\n", StringComparison.Ordinal);
             if (headerEnd < 0)
             {
@@ -556,7 +585,7 @@ namespace PlaywrightNative.Helpers
             }
 
             builder.Append(text.AsSpan(headerEnd));
-            return Encoding.ASCII.GetBytes(builder.ToString());
+            return Latin1.GetBytes(builder.ToString());
         }
 
         private static async Task TunnelAsync(HttpIO client, HttpIO server, CancellationToken token)
@@ -681,7 +710,7 @@ namespace PlaywrightNative.Helpers
                         server?.Dispose();
                         server = await ConnectAsync(host, port, token).ConfigureAwait(false);
                         serverIo = new HttpIO(server.GetStream());
-                        byte[] established = Encoding.ASCII.GetBytes("HTTP/1.1 200 Connection Established\r\n\r\n");
+                        byte[] established = Latin1.GetBytes("HTTP/1.1 200 Connection Established\r\n\r\n");
                         await client.Stream.WriteAsync(established, token).ConfigureAwait(false);
 
                         // CONNECT is always an opaque tunnel (https/wss), including
@@ -743,7 +772,7 @@ namespace PlaywrightNative.Helpers
                     }
 
                     await client.Stream.WriteAsync(response, token).ConfigureAwait(false);
-                    string responseText = Encoding.ASCII.GetString(response);
+                    string responseText = Latin1.GetString(response);
 
                     // ReadHttpMessageAsync only honors Content-Length. Chunked (or
                     // otherwise unsized) bodies remain on the socket — tunnel them

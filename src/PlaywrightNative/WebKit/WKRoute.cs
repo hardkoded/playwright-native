@@ -134,8 +134,24 @@ namespace PlaywrightNative.WebKit
             IDictionary<string, string> protocolHeaders = Request.ContinuedHeaders;
             if (sendBody != null)
             {
+                // WebKit's Network.interceptWithRequest replaces the full header
+                // set when |headers| is present. If only postData was overridden,
+                // ContinuedHeaders is null — start from the original request so
+                // Content-Type and friends survive, then set Content-Length to the
+                // new body size (base64 postData is already byte-accurate).
+                if (protocolHeaders == null)
+                {
+                    protocolHeaders = RouteContinue.RemoveCookie(Request.Headers);
+                }
+
                 protocolHeaders = WithContentLength(protocolHeaders, sendBody.Length);
             }
+
+            // RouteContinue strips proxy-* as forbidden, but WebKit proxy auth is
+            // carried as Proxy-Authorization in context ExtraHTTPHeaders. Reinject
+            // it onto the protocol continue payload so auto-continue (locale /
+            // extras interception) does not drop credentials.
+            protocolHeaders = WithProxyAuthorization(protocolHeaders);
 
             if (sendUrl == null && sendMethod == null && protocolHeaders == null && sendBody == null)
             {
@@ -235,8 +251,11 @@ namespace PlaywrightNative.WebKit
             byte[] rawBody = bodyBytes ?? (body == null ? Array.Empty<byte>() : Encoding.UTF8.GetBytes(body));
             responseHeaders.Remove("content-encoding");
             responseHeaders.Remove("transfer-encoding");
-            responseHeaders["content-length"] = rawBody.Length.ToString(CultureInfo.InvariantCulture);
 
+            // Upstream wkInterceptableRequest.fulfill does not invent Content-Length.
+            // WebKit already receives the body via |content|; auto-adding
+            // content-length: 0 makes default fulfills expose two headers while
+            // page-request-intercept expects only content-type: text/plain.
             string mimeType = MimeTypeFor(contentType, responseHeaders);
             string statusText = HttpStatusText.For(statusCode);
             Request.ApplyFulfill(rawBody);
@@ -352,11 +371,7 @@ namespace PlaywrightNative.WebKit
             Dictionary<string, string> result = headers == null
                 ? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
                 : new Dictionary<string, string>(headers, StringComparer.OrdinalIgnoreCase);
-            if (!result.ContainsKey("content-length"))
-            {
-                result["content-length"] = length.ToString(CultureInfo.InvariantCulture);
-            }
-
+            result["content-length"] = length.ToString(CultureInfo.InvariantCulture);
             return result;
         }
 
@@ -403,6 +418,36 @@ namespace PlaywrightNative.WebKit
             }
 
             return "General";
+        }
+
+        private IDictionary<string, string> WithProxyAuthorization(IDictionary<string, string> headers)
+        {
+            Dictionary<string, string> extra = ExtraHttpHeaders.Merged(_page.Context, _page.PageExtraHttpHeaders);
+            if (extra == null || extra.Count == 0)
+            {
+                return headers;
+            }
+
+            string proxyAuthorization = null;
+            foreach (KeyValuePair<string, string> pair in extra)
+            {
+                if (string.Equals(pair.Key, "Proxy-Authorization", StringComparison.OrdinalIgnoreCase))
+                {
+                    proxyAuthorization = pair.Value;
+                    break;
+                }
+            }
+
+            if (proxyAuthorization == null)
+            {
+                return headers;
+            }
+
+            Dictionary<string, string> result = headers == null
+                ? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                : new Dictionary<string, string>(headers, StringComparer.OrdinalIgnoreCase);
+            result["Proxy-Authorization"] = proxyAuthorization;
+            return result;
         }
 
         private void EnsureNotHandled()

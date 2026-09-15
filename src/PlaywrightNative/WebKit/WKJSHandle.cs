@@ -81,15 +81,22 @@ namespace PlaywrightNative.WebKit
         protected WKExecutionContext Context => _context;
 
         /// <inheritdoc/>
-        public async ValueTask DisposeAsync()
+        /// <remarks>
+        /// Upstream <c>JSHandle.dispose</c> fire-and-forgets <c>Runtime.releaseObject</c>.
+        /// Awaiting it hangs while a JavaScript dialog is open (the page is paused),
+        /// which blocked click timeouts from surfacing in
+        /// <c>should not hang for clicks that open dialogs</c>.
+        /// </remarks>
+        public ValueTask DisposeAsync()
         {
             if (_disposed)
             {
-                return;
+                return default;
             }
 
             _disposed = true;
-            await _context.ReleaseHandleAsync(_objectId).ConfigureAwait(false);
+            _ = _context.ReleaseHandleAsync(_objectId);
+            return default;
         }
 
         /// <inheritdoc/>

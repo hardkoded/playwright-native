@@ -60,18 +60,24 @@ namespace PlaywrightNative.Firefox
         protected FFExecutionContext Context => _context;
 
         /// <inheritdoc/>
-        public async ValueTask DisposeAsync()
+        /// <remarks>
+        /// Upstream <c>JSHandle.dispose</c> fire-and-forgets release so dispose
+        /// does not hang while a JavaScript dialog holds the page.
+        /// </remarks>
+        public ValueTask DisposeAsync()
         {
             if (_disposed)
             {
-                return;
+                return default;
             }
 
             _disposed = true;
             if (_context != null && !string.IsNullOrEmpty(_objectId))
             {
-                await _context.ReleaseHandleAsync(_objectId).ConfigureAwait(false);
+                _ = _context.ReleaseHandleAsync(_objectId);
             }
+
+            return default;
         }
 
         /// <inheritdoc/>

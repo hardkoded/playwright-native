@@ -1340,7 +1340,23 @@ namespace PlaywrightNative.WebKit
         private bool HasExtraHttpHeadersForInterception()
         {
             Dictionary<string, string> extra = ExtraHttpHeaders.Merged(_page.Context, _page.PageExtraHttpHeaders);
-            return extra != null && extra.Count > 0;
+            if (extra == null || extra.Count == 0)
+            {
+                return false;
+            }
+
+            // Proxy-Authorization is injected for WebKit proxy auth and is also
+            // applied via Network.setExtraHTTPHeaders. Intercepting solely for it
+            // forces auto-continue that would otherwise strip the header.
+            foreach (KeyValuePair<string, string> pair in extra)
+            {
+                if (!string.Equals(pair.Key, "Proxy-Authorization", StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private IDictionary<string, string> MergeExtraHttpHeaders(IEnumerable<KeyValuePair<string, string>> headers)

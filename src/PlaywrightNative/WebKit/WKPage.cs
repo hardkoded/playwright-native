@@ -1691,6 +1691,11 @@ namespace PlaywrightNative.WebKit
         /// <inheritdoc/>
         public async Task ApplyMergedExtraHttpHeadersAsync()
         {
+            // Stamp the handshake proxy before protocol apply so WebSocket upgrades
+            // (which ignore Network.setExtraHTTPHeaders on WebKit 2276 / macOS) still
+            // pick up page/context ExtraHTTPHeaders even if the session command fails.
+            _context?.UpdateHandshakeExtraHeaders(_extraHttpHeaders);
+
             WKTargetSession target = _targetSession
                 ?? throw new PlaywrightException("Cannot set extra HTTP headers: the page has no active target session.");
             await ApplyExtraHttpHeadersOnAsync(target).ConfigureAwait(false);
@@ -1700,7 +1705,6 @@ namespace PlaywrightNative.WebKit
             }
 
             await ApplyWorkerExtraHeadersAsync().ConfigureAwait(false);
-            _context?.UpdateHandshakeExtraHeaders(_extraHttpHeaders);
             if (_networkManager != null)
             {
                 await _networkManager.UpdateInterceptionAsync().ConfigureAwait(false);
@@ -7149,6 +7153,11 @@ namespace PlaywrightNative.WebKit
                 // colorScheme, and forcedColors (page-emulate-media after "reload").
                 AdoptContextMedia();
                 await ApplyEmulatedMediaToSessionAsync(target).ConfigureAwait(false);
+
+                // Orientation lives on the page-proxy session; process-swap navigations
+                // recreate the target without re-running page-proxy init, so re-assert
+                // Emulation.setOrientationOverride (screen.orientation after cross-process).
+                await ApplyEmulatedViewportFromContextAsync().ConfigureAwait(false);
             }
 #pragma warning disable RCS1075
             catch (Exception)

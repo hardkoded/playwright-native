@@ -443,7 +443,9 @@ namespace PlaywrightNative.WebKit
         /// WebKit has no <c>awaitPromise</c> on <c>Runtime.evaluate</c>. Returning an
         /// untagged empty by-value object for a Promise (common with exposeFunction)
         /// must not be treated as success — that deserializes as <c>default(T)</c> (0).
-        /// Only re-evaluate when by-value dropped the Promise <c>objectId</c>.
+        /// A handle re-evaluate may re-run page side effects; <c>WKPage</c> coalesces
+        /// binding invocations by frame+name+args (ignoring seq) so host callbacks
+        /// still fire once.
         /// </remarks>
         /// <param name="expression">An expression that returns a tagged payload or a promise of one.</param>
         /// <returns>The remote object (<c>result</c>) for <see cref="EvaluateSerialization.ParseRemote{T}"/>.</returns>
@@ -451,10 +453,20 @@ namespace PlaywrightNative.WebKit
         {
             // Prefer returnByValue:true so synchronous tagged completion values (including
             // after location.reload()) arrive in one round-trip without racing context
-            // destruction on callFunctionOn.
+            // destruction on callFunctionOn. Stash the first-run value so a Promise handle
+            // recover does not re-execute page side effects.
+            string stashKey = "__pw_eval_" + Guid.NewGuid().ToString("N");
+            string stashedExpression =
+                "(() => { const __pw_r = (" + expression + "); globalThis[" +
+                JsonSerializer.Serialize(stashKey) +
+                "] = __pw_r; return __pw_r; })()";
+            string recoverExpression =
+                "(() => { const __pw_k = " + JsonSerializer.Serialize(stashKey) +
+                "; const __pw_v = globalThis[__pw_k]; try { delete globalThis[__pw_k]; } catch (e) {} return __pw_v; })()";
+
             JsonElement? byValueResponse = await _session.SendAsync(
                 "Runtime.evaluate",
-                BuildEvaluateParams(expression, returnByValue: true)).ConfigureAwait(false);
+                BuildEvaluateParams(stashedExpression, returnByValue: true)).ConfigureAwait(false);
             if (byValueResponse == null)
             {
                 return null;
@@ -478,12 +490,9 @@ namespace PlaywrightNative.WebKit
             string objectId = RemoteObject.GetObjectId(result);
             if (string.IsNullOrEmpty(objectId))
             {
-                // By-value dropped the Promise id (or never marked subtype=promise).
-                // One handle evaluate preserves objectId so we can await; avoid treating
-                // the empty by-value blob as the answer.
                 JsonElement? asHandle = await _session.SendAsync(
                     "Runtime.evaluate",
-                    BuildEvaluateParams(expression, returnByValue: false)).ConfigureAwait(false);
+                    BuildEvaluateParams(recoverExpression, returnByValue: false)).ConfigureAwait(false);
                 if (asHandle == null)
                 {
                     return null;
@@ -770,9 +779,20 @@ namespace PlaywrightNative.WebKit
             // WebKit Runtime.evaluate has no awaitPromise. Prefer returnByValue:true for
             // sync values (including after sync navigation). Untagged empty objects from
             // Promise by-value serialization must still be awaited via a handle.
+            // Stash the first-run result so the handle recover does not re-execute page
+            // side effects (exposeFunction / evaluate callbacks).
+            string stashKey = "__pw_eval_" + Guid.NewGuid().ToString("N");
+            string stashedExpression =
+                "(() => { const __pw_r = (" + expression + "); globalThis[" +
+                JsonSerializer.Serialize(stashKey) +
+                "] = __pw_r; return __pw_r; })()";
+            string recoverExpression =
+                "(() => { const __pw_k = " + JsonSerializer.Serialize(stashKey) +
+                "; const __pw_v = globalThis[__pw_k]; try { delete globalThis[__pw_k]; } catch (e) {} return __pw_v; })()";
+
             JsonElement? evalResponse = await _session.SendAsync(
                 "Runtime.evaluate",
-                BuildEvaluateParams(expression, returnByValue: true)).ConfigureAwait(false);
+                BuildEvaluateParams(stashedExpression, returnByValue: true)).ConfigureAwait(false);
 
             if (evalResponse == null)
             {
@@ -814,7 +834,7 @@ namespace PlaywrightNative.WebKit
             {
                 JsonElement? asHandle = await _session.SendAsync(
                     "Runtime.evaluate",
-                    BuildEvaluateParams(expression, returnByValue: false)).ConfigureAwait(false);
+                    BuildEvaluateParams(recoverExpression, returnByValue: false)).ConfigureAwait(false);
                 if (asHandle == null)
                 {
                     return null;

@@ -103,6 +103,17 @@ namespace PlaywrightNative.Helpers
                 throw new ArgumentException("URL must be absolute.", nameof(url));
             }
 
+            // macOS client-certificate fixtures advertise https://local.playwright while
+            // binding on localhost; browser SOCKS MITM rewrites the host, but APIRequest
+            // uses HttpClient and must do the same DNS-safe rewrite.
+            string rewrittenHost = ClientCertificatesProxy.RewriteToLocalhostIfNeeded(uri.Host);
+            if (!string.Equals(rewrittenHost, uri.Host, StringComparison.OrdinalIgnoreCase))
+            {
+                UriBuilder builder = new UriBuilder(uri) { Host = rewrittenHost };
+                uri = builder.Uri;
+                url = uri.ToString();
+            }
+
             if (!string.Equals(uri.Scheme, "http", StringComparison.OrdinalIgnoreCase)
                 && !string.Equals(uri.Scheme, "https", StringComparison.OrdinalIgnoreCase))
             {

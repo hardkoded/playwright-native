@@ -137,13 +137,10 @@ namespace PlaywrightNative
                     PermissionsFixed = !RuntimeInformation.IsOSPlatform(OSPlatform.Windows),
                 };
 
-                // Cached trees can keep INSTALLATION_COMPLETE after a broken extract
-                // (missing pw_run.sh / chrome binary). Treat that as not installed so
-                // BrowserType.ExecutablePath and relaunch agree on a real binary.
-                if (File.Exists(existing.GetExecutablePath()))
-                {
-                    return existing;
-                }
+                // Marker-only trees count as installed for DownloadAsync (unit tests and
+                // cache hits). BrowserType.ExecutablePath validates the real binary
+                // separately so a broken extract does not masquerade as launchable.
+                return existing;
             }
 
             Directory.CreateDirectory(CacheDir);
