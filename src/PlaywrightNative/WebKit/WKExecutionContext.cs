@@ -104,6 +104,68 @@ namespace PlaywrightNative.WebKit
         }
 
         /// <summary>
+        /// Evaluates <paramref name="expression"/> via <c>Runtime.callFunctionOn</c> with
+        /// <c>emulateUserGesture: true</c>, returning a handle (<c>returnByValue: false</c>).
+        /// Upstream <c>page.evaluate</c> applies user gestures through callFunctionOn (utility
+        /// script); <c>Runtime.evaluate</c>'s gesture flag is not enough for APIs such as
+        /// <c>document.requestStorageAccess()</c> in cross-process iframes on macOS.
+        /// </summary>
+        /// <param name="expression">The JavaScript expression to evaluate.</param>
+        /// <returns>The raw <c>result</c> remote object, or <see langword="null"/>.</returns>
+        internal async Task<JsonElement?> EvaluateHandleWithUserGestureAsync(string expression)
+        {
+            JsonElement? anchorResponse = await _session.SendAsync(
+                "Runtime.evaluate",
+                BuildEvaluateParams("({})", returnByValue: false)).ConfigureAwait(false);
+            if (anchorResponse == null)
+            {
+                return null;
+            }
+
+            ThrowIfThrown(anchorResponse.Value);
+            if (!anchorResponse.Value.TryGetProperty("result", out JsonElement anchorResult))
+            {
+                return null;
+            }
+
+            string anchorId = RemoteObject.GetObjectId(anchorResult);
+            if (string.IsNullOrEmpty(anchorId))
+            {
+                return null;
+            }
+
+            try
+            {
+                JsonElement? response = await _session.SendAsync(
+                    "Runtime.callFunctionOn",
+                    new
+                    {
+                        objectId = anchorId,
+                        functionDeclaration = "function() { return (" + expression + "); }",
+                        returnByValue = false,
+                        emulateUserGesture = true,
+                        awaitPromise = false,
+                    }).ConfigureAwait(false);
+                if (response == null)
+                {
+                    return null;
+                }
+
+                ThrowIfThrown(response.Value);
+                if (!response.Value.TryGetProperty("result", out JsonElement result))
+                {
+                    return null;
+                }
+
+                return result;
+            }
+            finally
+            {
+                await ReleaseHandleAsync(anchorId).ConfigureAwait(false);
+            }
+        }
+
+        /// <summary>
         /// Evaluates a JavaScript function in this execution context with the given arguments
         /// via <c>Runtime.callFunctionOn</c>. JS handles from another world are rejected or
         /// adopted when they are DOM nodes.
