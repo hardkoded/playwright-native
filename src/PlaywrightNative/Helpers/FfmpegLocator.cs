@@ -14,8 +14,10 @@
  * limitations under the License.
  */
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Text;
 
 namespace PlaywrightNative.Helpers
 {
@@ -84,7 +86,10 @@ namespace PlaywrightNative.Helpers
         /// Returns an ffmpeg that can encode WebP via <c>libwebp</c>.
         /// Playwright's bundled build is screencast-only (<c>--disable-everything</c>,
         /// no libwebp) and rejects <c>-lossless</c>; prefer a system ffmpeg on PATH
-        /// (CI installs one via apt/brew/choco).
+        /// (CI installs one via apt/brew/choco). Candidates are probed for an actual
+        /// <c>libwebp</c> encoder — Homebrew sometimes leaves an older bottle ahead of
+        /// the freshly installed one, and PATH can contain a wrapper that still
+        /// resolves to the screencast build.
         /// </summary>
         /// <returns>An ffmpeg path, or <c>ffmpeg</c> / <c>ffmpeg.exe</c> for PATH lookup.</returns>
         internal static string ResolveForWebp()
@@ -96,20 +101,17 @@ namespace PlaywrightNative.Helpers
                     return _resolvedWebp;
                 }
 
-                string onPath = FindOnPath(BareCommandName());
-                if (onPath != null)
+                foreach (string candidate in WebpCandidates())
                 {
-                    _resolvedWebp = onPath;
-                    return _resolvedWebp;
+                    if (SupportsLibWebp(candidate))
+                    {
+                        _resolvedWebp = candidate;
+                        return _resolvedWebp;
+                    }
                 }
 
-                string fromEnv = Environment.GetEnvironmentVariable("PLAYWRIGHT_FFMPEG_PATH");
-                if (!string.IsNullOrEmpty(fromEnv) && File.Exists(fromEnv) && !IsBundledName(fromEnv))
-                {
-                    _resolvedWebp = fromEnv;
-                    return _resolvedWebp;
-                }
-
+                // Last resort: bare command name (Process PATH lookup). Callers will
+                // surface a clear encode error if this also lacks libwebp.
                 _resolvedWebp = BareCommandName();
                 return _resolvedWebp;
             }
@@ -124,6 +126,145 @@ namespace PlaywrightNative.Helpers
             return string.Equals(name, "ffmpeg-linux", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(name, "ffmpeg-mac", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(name, "ffmpeg-win64.exe", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static System.Collections.Generic.IEnumerable<string> WebpCandidates()
+        {
+            // Prefer well-known package-manager locations before a PATH walk so a
+            // stale/bundled `ffmpeg` earlier on PATH cannot win.
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+            {
+                yield return "/opt/homebrew/bin/ffmpeg";
+                yield return "/usr/local/bin/ffmpeg";
+            }
+            else if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+            {
+                yield return "/usr/bin/ffmpeg";
+                yield return "/usr/local/bin/ffmpeg";
+            }
+
+            string onPath = FindOnPath(BareCommandName());
+            if (onPath != null)
+            {
+                yield return onPath;
+            }
+
+            // Every PATH hit, in order — FindOnPath only returns the first.
+            string pathEnv = Environment.GetEnvironmentVariable("PATH");
+            if (!string.IsNullOrEmpty(pathEnv))
+            {
+                string fileName = BareCommandName();
+                foreach (string directory in pathEnv.Split(Path.PathSeparator))
+                {
+                    if (string.IsNullOrWhiteSpace(directory))
+                    {
+                        continue;
+                    }
+
+                    string candidate;
+                    try
+                    {
+                        candidate = Path.Combine(directory.Trim(), fileName);
+                    }
+                    catch (ArgumentException)
+                    {
+                        continue;
+                    }
+
+                    if (File.Exists(candidate))
+                    {
+                        yield return candidate;
+                    }
+                }
+            }
+
+            string fromEnv = Environment.GetEnvironmentVariable("PLAYWRIGHT_FFMPEG_PATH");
+            if (!string.IsNullOrEmpty(fromEnv) && File.Exists(fromEnv) && !IsBundledName(fromEnv))
+            {
+                yield return fromEnv;
+            }
+        }
+
+        private static bool SupportsLibWebp(string ffmpegPath)
+        {
+            if (string.IsNullOrEmpty(ffmpegPath))
+            {
+                return false;
+            }
+
+            // Bare command names are always worth trying; absolute paths must exist.
+            if (ffmpegPath.Contains(Path.DirectorySeparatorChar)
+                || (Path.AltDirectorySeparatorChar != Path.DirectorySeparatorChar
+                    && ffmpegPath.Contains(Path.AltDirectorySeparatorChar)))
+            {
+                if (!File.Exists(ffmpegPath))
+                {
+                    return false;
+                }
+
+                if (IsBundledName(ffmpegPath))
+                {
+                    return false;
+                }
+            }
+
+            try
+            {
+                ProcessStartInfo startInfo = new ProcessStartInfo
+                {
+                    FileName = ffmpegPath,
+                    Arguments = "-hide_banner -encoders",
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                };
+                using Process process = Process.Start(startInfo);
+                if (process == null)
+                {
+                    return false;
+                }
+
+                StringBuilder output = new StringBuilder();
+                process.OutputDataReceived += (_, e) =>
+                {
+                    if (e.Data != null)
+                    {
+                        output.AppendLine(e.Data);
+                    }
+                };
+                process.ErrorDataReceived += (_, e) =>
+                {
+                    if (e.Data != null)
+                    {
+                        output.AppendLine(e.Data);
+                    }
+                };
+                process.BeginOutputReadLine();
+                process.BeginErrorReadLine();
+                if (!process.WaitForExit(5_000))
+                {
+                    try
+                    {
+                        process.Kill();
+                    }
+                    catch (InvalidOperationException)
+                    {
+                    }
+
+                    return false;
+                }
+
+                process.WaitForExit();
+                string text = output.ToString();
+
+                // Encoder listing lines look like: " V....D libwebp  libwebp WebP image"
+                return text.Contains("libwebp", StringComparison.Ordinal);
+            }
+            catch (Exception)
+            {
+                return false;
+            }
         }
 
         private static string FindOnPath(string fileName)
