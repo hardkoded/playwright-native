@@ -1817,7 +1817,10 @@ namespace PlaywrightNative.WebKit
             // about:blank newPage can finish load before Page.loadEventFired is
             // subscribed. Seed from document.readyState so waitForLoadState
             // resolves immediately when the document is already complete.
-            await LoadStateSeed.TryFromDocumentAsync(this, RecordLifecycle).ConfigureAwait(false);
+            // Raise public Load/DOMContentLoaded before recording so waitForEvent
+            // observers are queued ahead of waitForLoadState (same order as
+            // OnLoadEventFired / OnDomContentEventFired).
+            await LoadStateSeed.TryFromDocumentAsync(this, RecordLifecycleFromDocumentSeed).ConfigureAwait(false);
             await LifecycleWaiter.WaitAsync(
                 SnapshotLifecycle,
                 handler => LifecycleChanged += handler,
@@ -6199,6 +6202,43 @@ namespace PlaywrightNative.WebKit
             LifecycleChanged?.Invoke(name);
         }
 
+        /// <summary>
+        /// Seeds lifecycle from <c>document.readyState</c> while preserving the
+        /// public event-before-waiter ordering used by protocol load handlers.
+        /// </summary>
+        /// <param name="name">Lifecycle event name.</param>
+        private void RecordLifecycleFromDocumentSeed(string name)
+        {
+            if (name == "load")
+            {
+                bool already;
+                lock (_lifecycleEvents)
+                {
+                    already = _lifecycleEvents.Contains("load");
+                }
+
+                if (!already)
+                {
+                    Load?.Invoke(this, this);
+                }
+            }
+            else if (name == "DOMContentLoaded")
+            {
+                bool already;
+                lock (_lifecycleEvents)
+                {
+                    already = _lifecycleEvents.Contains("DOMContentLoaded");
+                }
+
+                if (!already)
+                {
+                    DOMContentLoaded?.Invoke(this, this);
+                }
+            }
+
+            RecordLifecycle(name);
+        }
+
         private void OnMainFrameLifecycle(string name)
         {
             if (name == "networkidle")
@@ -8106,6 +8146,19 @@ namespace PlaywrightNative.WebKit
                 ? parentEl.GetString()
                 : (payload.TryGetProperty("parentFrameId", out JsonElement pfEl) ? pfEl.GetString() : null);
 
+            // Clear page-level lifecycle before FrameCommittedNavigation releases
+            // click SignalBarrier. Otherwise waitForLoadState can observe the
+            // previous document's "load" and resolve as clickload before Page.Load.
+            if (string.IsNullOrEmpty(parentId)
+                || string.Equals(id, _mainFrameId, StringComparison.Ordinal)
+                || string.Equals(id, _frameManager.MainFrame.FrameId, StringComparison.Ordinal))
+            {
+                lock (_navigationLock)
+                {
+                    _lifecycleEvents.Clear();
+                }
+            }
+
             _frameManager.FrameCommittedNavigation(id, url, name, parentId);
             if (!string.IsNullOrEmpty(parentId))
             {
@@ -8304,8 +8357,19 @@ namespace PlaywrightNative.WebKit
             // Fire the public event first so user handlers run before the awaiter
             // resuming on TrySetResult sees the task complete. Otherwise, the threadpool
             // continuation can resume the test's await before Load.Invoke finishes on
-            // the transport thread — racing the assertion.
-            Load?.Invoke(this, this);
+            // the transport thread — racing the assertion. Skip when readyState seed
+            // already raised Load for this document.
+            bool alreadyRecorded;
+            lock (_lifecycleEvents)
+            {
+                alreadyRecorded = _lifecycleEvents.Contains("load");
+            }
+
+            if (!alreadyRecorded)
+            {
+                Load?.Invoke(this, this);
+            }
+
             RecordLifecycle("load");
 
             // Drop stale pending-navigation markers once the main frame has loaded so
@@ -8334,7 +8398,17 @@ namespace PlaywrightNative.WebKit
                 _pendingDomContentTcs = null;
             }
 
-            DOMContentLoaded?.Invoke(this, this);
+            bool alreadyRecorded;
+            lock (_lifecycleEvents)
+            {
+                alreadyRecorded = _lifecycleEvents.Contains("DOMContentLoaded");
+            }
+
+            if (!alreadyRecorded)
+            {
+                DOMContentLoaded?.Invoke(this, this);
+            }
+
             RecordLifecycle("DOMContentLoaded");
             tcs?.TrySetResult(true);
         }

@@ -151,6 +151,46 @@ namespace PlaywrightNative.Helpers
         }
 
         /// <summary>
+        /// True when two header maps have the same names and values
+        /// (case-insensitive names).
+        /// </summary>
+        /// <param name="left">First map.</param>
+        /// <param name="right">Second map.</param>
+        /// <returns><see langword="true"/> when the maps match.</returns>
+        internal static bool HeaderMapsEqual(
+            IDictionary<string, string> left,
+            IDictionary<string, string> right)
+        {
+            if (ReferenceEquals(left, right))
+            {
+                return true;
+            }
+
+            int leftCount = left?.Count ?? 0;
+            int rightCount = right?.Count ?? 0;
+            if (leftCount != rightCount)
+            {
+                return false;
+            }
+
+            if (leftCount == 0)
+            {
+                return true;
+            }
+
+            foreach (KeyValuePair<string, string> pair in left)
+            {
+                if (!right.TryGetValue(pair.Key, out string value)
+                    || !string.Equals(pair.Value ?? string.Empty, value ?? string.Empty, StringComparison.Ordinal))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        /// <summary>
         /// Official forbidden-request-header check (MDN + <c>proxy-</c> /
         /// <c>sec-</c> prefixes).
         /// </summary>

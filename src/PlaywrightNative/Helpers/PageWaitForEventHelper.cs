@@ -224,14 +224,16 @@ namespace PlaywrightNative.Helpers
                         h => page.Load += h,
                         h => page.Load -= h,
                         matches,
-                        timeout);
+                        timeout,
+                        deferPredicateEvaluation: false);
                 case "DOMContentLoaded":
                     return WaitTypedAsync<T, IPage>(
                         page,
                         h => page.DOMContentLoaded += h,
                         h => page.DOMContentLoaded -= h,
                         matches,
-                        timeout);
+                        timeout,
+                        deferPredicateEvaluation: false);
                 case "Worker":
                     return WaitTypedAsync<T, IWorker>(
                         page,
@@ -289,7 +291,8 @@ namespace PlaywrightNative.Helpers
             string waitForEventName = null,
             bool abortOnClose = true,
             bool abortOnPageCrash = true,
-            Func<Task<IReadOnlyList<T>>> existingAfterSubscribe = null)
+            Func<Task<IReadOnlyList<T>>> existingAfterSubscribe = null,
+            bool deferPredicateEvaluation = true)
         {
             if (typeof(T) != typeof(TEvent))
             {
@@ -315,7 +318,8 @@ namespace PlaywrightNative.Helpers
                 waitForEventName: waitForEventName,
                 abortOnPageClose: abortOnClose ? page : null,
                 abortOnPageCrash: abortOnPageCrash,
-                existingAfterSubscribe: existing).ConfigureAwait(false);
+                existingAfterSubscribe: existing,
+                deferPredicateEvaluation: deferPredicateEvaluation).ConfigureAwait(false);
             return (T)(object)result;
         }
 

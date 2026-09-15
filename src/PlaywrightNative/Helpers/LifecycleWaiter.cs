@@ -81,6 +81,11 @@ namespace PlaywrightNative.Helpers
             string name = ToEventName(state);
             if (Contains(snapshot(), name))
             {
+                // Page.Load / DOMContentLoaded waiters use RunContinuationsAsynchronously.
+                // If the lifecycle was recorded on this turn (or just before click returned),
+                // yield so waitForEvent continuations run before waitForLoadState returns
+                // (page-autowaiting-basic expects route|load|clickload).
+                await Task.Delay(1).ConfigureAwait(false);
                 return;
             }
 
@@ -99,6 +104,7 @@ namespace PlaywrightNative.Helpers
             {
                 if (Contains(snapshot(), name))
                 {
+                    await Task.Delay(1).ConfigureAwait(false);
                     return;
                 }
 
