@@ -272,22 +272,23 @@ namespace PlaywrightNative.WebKit
 
                 // WebKit ignores Network.setExtraHTTPHeaders on WebSocket upgrades
                 // (stock 2276), and Network interception does not rewrite them either.
-                // Always attach LocaleHandshakeProxy so context *and* later page
-                // SetExtraHTTPHeaders stamp WS handshakes. Skip when a client-
-                // certificate MITM already owns the browser proxy.
-                //
-                // Darwin: HTTP CONNECT + loopback bypass (CFNetwork truncates
-                // multipart/HAR through the MITM). WebKitMacLocaleWebSocketShim
-                // rewrites ws://localhost to local.playwright so upgrades still
-                // reach the proxy. Linux: SOCKS5 without bypass - HTTP CONNECT
-                // proxies disable WebKit HTTP/2 ALPN on h2-only origins, while
-                // SOCKS keeps ALPN and still sees cleartext WS upgrades.
+                // Linux keeps LocaleHandshakeProxy on every context so later
+                // page.SetExtraHTTPHeaders still stamps WS (SOCKS; no CFNetwork cost).
+                // Darwin: forcing an HTTP MITM on every context breaks localhost WS /
+                // HAR / Fallback amend postData (CFNetwork + MacProxyBypassShim).
+                // Attach there only when locale or context ExtraHTTPHeaders need
+                // rewriting; WebKitMacLocaleWebSocketShim then rewrites loopback WS
+                // to local.playwright* so upgrades still reach the proxy.
+                // Skip when a client-certificate MITM already owns the browser proxy.
                 bool isDarwin = RuntimeInformation.IsOSPlatform(OSPlatform.OSX);
+                bool forceHandshake = !isDarwin
+                    || (extraHTTPHeaders != null
+                        && extraHTTPHeaders.Any(h => !string.IsNullOrEmpty(h.Key)));
                 LocaleHandshakeProxy handshake = certsProxy == null
                     ? LocaleHandshakeProxy.TryStart(
                         locale,
                         browserProxy,
-                        force: true,
+                        force: forceHandshake,
                         bypassLoopback: isDarwin,
                         useSocks: !isDarwin,
                         out browserProxy)
