@@ -384,34 +384,13 @@ namespace PlaywrightNative.TestServer
                     {
                     }
 
-                    // Drain until the peer EOFs (client finished the close
-                    // handshake) BEFORE NotifyClose. WaitUntilClosedAsync lets
-                    // Kestrel dispose the upgraded stream — notifying too early
-                    // RSTs the dual-hop tunnel and WebKit reports error+1006
-                    // instead of clean application close 3002.
-                    try
-                    {
-                        byte[] sink = new byte[256];
-                        using CancellationTokenSource drainCts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
-                        while (true)
-                        {
-                            int n = await _stream.ReadAsync(sink.AsMemory(0, sink.Length), drainCts.Token)
-                                .ConfigureAwait(false);
-                            if (n == 0)
-                            {
-                                break;
-                            }
-                        }
-                    }
-                    catch (IOException)
-                    {
-                    }
-                    catch (ObjectDisposedException)
-                    {
-                    }
-                    catch (OperationCanceledException)
-                    {
-                    }
+                    // Brief settle so dual-hop Darwin proxies (Mac bypass shim →
+                    // LocaleHandshakeProxy) finish copying the close echo to
+                    // CFNetwork. Do NOT drain until peer EOF: under MITM the
+                    // client often waits for a clean close first, so a 2s
+                    // drain times out, Kestrel disposes, and WebKit reports
+                    // error+1006 instead of application close 3002.
+                    await Task.Delay(100).ConfigureAwait(false);
 
                     NotifyClose(code, reason);
                     return;

@@ -291,7 +291,20 @@ namespace PlaywrightNative.TestServer
                             }
                             else
                             {
-                                listenOptions.UseHttps("testCert.cer");
+                                // Prefer the tracked PEM fixtures / sibling PFX over
+                                // Kestrel's UseHttps("testCert.cer"), which breaks on
+                                // CI when only a public DER from `dotnet dev-certs`
+                                // is present (no private key → TLS EOF).
+                                string defaultCer = Path.Combine(contentRoot, "testCert.cer");
+                                X509Certificate2 fallback = LoadHttpsCertificate(
+                                    File.Exists(defaultCer) ? defaultCer : contentRoot,
+                                    certificatePassword: "playwright");
+                                listenOptions.Protocols = HttpProtocols.Http1;
+                                listenOptions.UseHttps(new HttpsConnectionAdapterOptions
+                                {
+                                    ServerCertificate = fallback,
+                                    SslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13,
+                                });
                             }
                         });
                     }
@@ -322,7 +335,12 @@ namespace PlaywrightNative.TestServer
         {
             string fullPath = Path.GetFullPath(certificatePath);
             string extension = Path.GetExtension(fullPath);
-            X509KeyStorageFlags flags = X509KeyStorageFlags.Exportable;
+
+            // EphemeralKeySet is required on Windows so PEM-imported keys are
+            // usable by Kestrel/SslStream. Without it the handshake aborts with
+            // "unexpected EOF or 0 bytes from the transport stream".
+            X509KeyStorageFlags flags =
+                X509KeyStorageFlags.Exportable | X509KeyStorageFlags.EphemeralKeySet;
             if (extension.Equals(".pfx", StringComparison.OrdinalIgnoreCase)
                 || extension.Equals(".p12", StringComparison.OrdinalIgnoreCase))
             {
@@ -332,7 +350,9 @@ namespace PlaywrightNative.TestServer
                     flags);
             }
 
-            string directory = Path.GetDirectoryName(fullPath) ?? ".";
+            string directory = Directory.Exists(fullPath)
+                ? fullPath
+                : (Path.GetDirectoryName(fullPath) ?? ".");
             string siblingPfx = Path.Combine(directory, "key.pfx");
             if (File.Exists(siblingPfx))
             {
@@ -346,10 +366,20 @@ namespace PlaywrightNative.TestServer
             string pemKey = Path.Combine(directory, "playwright-test-key.pem");
             if (File.Exists(pemCert) && File.Exists(pemKey))
             {
-                return X509Certificate2.CreateFromPemFile(pemCert, pemKey);
+                X509Certificate2 pem = X509Certificate2.CreateFromPemFile(pemCert, pemKey);
+                byte[] pfxBytes = pem.Export(X509ContentType.Pkcs12);
+                return X509CertificateLoader.LoadPkcs12(pfxBytes, string.Empty, flags);
             }
 
-            return X509CertificateLoader.LoadCertificateFromFile(fullPath);
+            X509Certificate2 publicOnly = X509CertificateLoader.LoadCertificateFromFile(fullPath);
+            if (!publicOnly.HasPrivateKey)
+            {
+                throw new InvalidOperationException(
+                    "HTTPS certificate at '" + fullPath + "' has no private key. " +
+                    "Provide key.pfx or playwright-test.pem + playwright-test-key.pem.");
+            }
+
+            return publicOnly;
         }
 
         public Task StartAsync() => _webHost.StartAsync();

@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 using System;
+using System.IO;
 using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
@@ -208,6 +209,52 @@ namespace PlaywrightNative.Helpers
             return marker + " " + ProfileInUseMessage;
         }
 
+        /// <summary>
+        /// When Chromium exits without stderr markers, annotate the failure with
+        /// a profile-lock hint if <paramref name="userDataDir"/> holds a lock.
+        /// </summary>
+        /// <param name="message">Launch failure message.</param>
+        /// <param name="userDataDir">Persistent profile directory, or null.</param>
+        /// <returns>Possibly annotated message.</returns>
+        internal static string AppendProfileLockHint(string message, string userDataDir)
+        {
+            if (string.IsNullOrEmpty(userDataDir) || string.IsNullOrEmpty(message))
+            {
+                return message;
+            }
+
+            if (message.Contains(ProfileInUseMessage, StringComparison.Ordinal))
+            {
+                return message;
+            }
+
+            if (FindProfileInUseMarker(message) != null)
+            {
+                return RewriteProfileInUse(message);
+            }
+
+            try
+            {
+                string lockPath = Path.Combine(userDataDir, "SingletonLock");
+                string cookiePath = Path.Combine(userDataDir, "SingletonCookie");
+                if (File.Exists(lockPath)
+                    || Directory.Exists(lockPath)
+                    || File.Exists(cookiePath)
+                    || Directory.Exists(cookiePath))
+                {
+                    return RewriteProfileInUse(message + "\n[profile-lock] SingletonLock");
+                }
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+
+            return message;
+        }
+
         private static string RewriteProfileInUse(string logs)
         {
             if (logs.Contains(ProfileInUseMessage, StringComparison.Ordinal))
@@ -252,6 +299,16 @@ namespace PlaywrightNative.Helpers
             if (logs.Contains("ProcessSingleton", StringComparison.Ordinal)
                 && (logs.Contains("profile directory", StringComparison.OrdinalIgnoreCase)
                     || logs.Contains("profile is already in use", StringComparison.OrdinalIgnoreCase)))
+            {
+                return "Failed to create a ProcessSingleton for your profile directory.";
+            }
+
+            // Windows Chromium often exits on a locked profile without printing
+            // ProcessSingleton to stderr (logging goes to the user-data debug
+            // file). AppendProfileLockHint injects [profile-lock] when the
+            // profile directory still holds SingletonLock / SingletonCookie.
+            if (logs.Contains("Failed to launch browser!", StringComparison.Ordinal)
+                && logs.Contains("[profile-lock]", StringComparison.Ordinal))
             {
                 return "Failed to create a ProcessSingleton for your profile directory.";
             }

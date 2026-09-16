@@ -532,7 +532,8 @@ namespace PlaywrightNative.WebKit
         /// <inheritdoc/>
         public Task AddCookiesAsync(IEnumerable<Cookie> cookies)
         {
-            IEnumerable<Cookie> cookiesForProtocol = FilterCookiesForWebKitHost(cookies);
+            IEnumerable<Cookie> cookiesForProtocol = ExpandLoopbackCookiesForMacWsShim(
+                FilterCookiesForWebKitHost(cookies));
             return string.IsNullOrEmpty(_browserContextId)
                 ? _browser.Session.SendAsync("Playwright.setCookies", new
                 {
@@ -1603,6 +1604,76 @@ namespace PlaywrightNative.WebKit
             }
 
             return filtered;
+        }
+
+        /// <summary>
+        /// Darwin WebKitMacLocaleWebSocketShim rewrites <c>wss://localhost</c> to
+        /// <c>wss://local.playwright</c>. CFNetwork looks up cookies for the wire
+        /// host, so mirror loopback cookies onto the fake hosts.
+        /// </summary>
+        private static IEnumerable<Cookie> ExpandLoopbackCookiesForMacWsShim(IEnumerable<Cookie> cookies)
+        {
+            if (cookies == null)
+            {
+                return Array.Empty<Cookie>();
+            }
+
+            bool macShim =
+                RuntimeInformation.IsOSPlatform(OSPlatform.OSX)
+                || Environment.GetEnvironmentVariable("PW_FORCE_MAC_WS_SHIM") == "1";
+            if (!macShim)
+            {
+                return cookies;
+            }
+
+            List<Cookie> expanded = new List<Cookie>();
+            foreach (Cookie cookie in cookies)
+            {
+                if (cookie == null)
+                {
+                    continue;
+                }
+
+                Cookie rewritten = ContextCookies.Rewrite(cookie);
+                expanded.Add(rewritten);
+
+                string domain = rewritten.Domain ?? string.Empty;
+                string fakeHost = null;
+                if (string.Equals(domain, "localhost", StringComparison.OrdinalIgnoreCase)
+                    || domain.EndsWith(".localhost", StringComparison.OrdinalIgnoreCase))
+                {
+                    fakeHost = WebKitMacLocaleWebSocketShim.FakeLoopbackHost;
+                }
+                else if (string.Equals(domain, "127.0.0.1", StringComparison.Ordinal))
+                {
+                    fakeHost = WebKitMacLocaleWebSocketShim.FakeIpv4LoopbackHost;
+                }
+                else if (string.Equals(domain, "::1", StringComparison.Ordinal)
+                    || string.Equals(domain, "[::1]", StringComparison.OrdinalIgnoreCase))
+                {
+                    fakeHost = WebKitMacLocaleWebSocketShim.FakeIpv6LoopbackHost;
+                }
+
+                if (fakeHost == null)
+                {
+                    continue;
+                }
+
+                expanded.Add(new Cookie
+                {
+                    Name = rewritten.Name,
+                    Value = rewritten.Value,
+                    Domain = fakeHost,
+                    Path = string.IsNullOrEmpty(rewritten.Path) ? "/" : rewritten.Path,
+                    Expires = rewritten.Expires,
+                    HttpOnly = rewritten.HttpOnly,
+                    Secure = rewritten.Secure,
+                    SameSite = rewritten.SameSite,
+                    PartitionKey = rewritten.PartitionKey,
+                });
+            }
+
+            return expanded;
         }
 
         private static bool DropsUnsupportedPartitionedCookies()

@@ -34,6 +34,8 @@ namespace PlaywrightNative.Helpers
     /// </summary>
     internal sealed class LocaleHandshakeProxy : IDisposable
     {
+        private const int MaxBufferedBodyBytes = 1024 * 1024;
+
         private static readonly string[] HeaderSeparators = ["\r\n"];
 
         /// <summary>
@@ -219,6 +221,34 @@ namespace PlaywrightNative.Helpers
 
         private static async Task<byte[]> ReadHttpMessageAsync(HttpIO io, CancellationToken token)
         {
+            (byte[] message, int remainingBody) = await ReadHttpMessageCoreAsync(io, bufferBody: true, token)
+                .ConfigureAwait(false);
+            if (remainingBody > 0 && message != null)
+            {
+                // bufferBody:true still streams oversized bodies via the core
+                // helper — append by reading remainingBody into a combined buffer
+                // only when small; oversized returns headers-only + remaining.
+                MemoryStream combined = new();
+                combined.Write(message);
+                await CopyExactAsync(io, combined, remainingBody, token).ConfigureAwait(false);
+                return combined.ToArray();
+            }
+
+            return message;
+        }
+
+        /// <summary>
+        /// Reads one HTTP message. When <paramref name="bufferBody"/> is false or
+        /// Content-Length exceeds <see cref="MaxBufferedBodyBytes"/>, returns
+        /// headers only and leaves remaining body bytes on
+        /// <paramref name="io"/> for the caller to stream (avoids buffering
+        /// 200MB multipart uploads through the Linux WebKit SOCKS MITM).
+        /// </summary>
+        private static async Task<(byte[] Message, int RemainingBody)> ReadHttpMessageCoreAsync(
+            HttpIO io,
+            bool bufferBody,
+            CancellationToken token)
+        {
             MemoryStream buffer = new();
             while (true)
             {
@@ -234,14 +264,29 @@ namespace PlaywrightNative.Helpers
                     int n = await io.ReadAsync(buffer, token).ConfigureAwait(false);
                     if (n == 0)
                     {
-                        return data.Length == 0 ? null : data;
+                        return data.Length == 0 ? (null, 0) : (data, 0);
                     }
 
                     continue;
                 }
 
                 int contentLength = ParseContentLength(data, headerEnd);
-                int total = headerEnd + 4 + Math.Max(contentLength, 0);
+                int headersLength = headerEnd + 4;
+                bool streamBody = !bufferBody || contentLength > MaxBufferedBodyBytes;
+                if (streamBody && contentLength > 0)
+                {
+                    data = buffer.ToArray();
+                    if (data.Length > headersLength)
+                    {
+                        io.Unread(data, headersLength, data.Length - headersLength);
+                    }
+
+                    byte[] headersOnly = new byte[headersLength];
+                    Buffer.BlockCopy(data, 0, headersOnly, 0, headersLength);
+                    return (headersOnly, contentLength);
+                }
+
+                int total = headersLength + Math.Max(contentLength, 0);
                 while (data.Length < total)
                 {
                     int n = await io.ReadAsync(buffer, token).ConfigureAwait(false);
@@ -259,10 +304,28 @@ namespace PlaywrightNative.Helpers
                     io.Unread(data, total, data.Length - total);
                     byte[] exact = new byte[total];
                     Buffer.BlockCopy(data, 0, exact, 0, total);
-                    return exact;
+                    return (exact, 0);
                 }
 
-                return data;
+                return (data, 0);
+            }
+        }
+
+        private static async Task CopyExactAsync(HttpIO from, Stream to, int count, CancellationToken token)
+        {
+            int remaining = count;
+            byte[] chunk = new byte[Math.Min(64 * 1024, Math.Max(count, 1))];
+            while (remaining > 0)
+            {
+                int toRead = Math.Min(chunk.Length, remaining);
+                int n = await from.ReadBytesAsync(chunk.AsMemory(0, toRead), token).ConfigureAwait(false);
+                if (n == 0)
+                {
+                    break;
+                }
+
+                await to.WriteAsync(chunk.AsMemory(0, n), token).ConfigureAwait(false);
+                remaining -= n;
             }
         }
 
@@ -1144,7 +1207,11 @@ namespace PlaywrightNative.Helpers
             {
                 while (!token.IsCancellationRequested)
                 {
-                    byte[] request = await ReadHttpMessageAsync(client, token).ConfigureAwait(false);
+                    (byte[] request, int remainingBody) = await ReadHttpMessageCoreAsync(
+                            client,
+                            bufferBody: true,
+                            token)
+                        .ConfigureAwait(false);
                     if (request == null || request.Length == 0)
                     {
                         return;
@@ -1242,6 +1309,12 @@ namespace PlaywrightNative.Helpers
                         {
                             byte[] remote = ToOriginForm(request);
                             await serverIo.Stream.WriteAsync(remote, token).ConfigureAwait(false);
+                            if (remainingBody > 0)
+                            {
+                                await CopyExactAsync(client, serverIo.Stream, remainingBody, token)
+                                    .ConfigureAwait(false);
+                            }
+
                             await TunnelAsync(client, serverIo, token).ConfigureAwait(false);
                             return;
                         }
@@ -1259,6 +1332,12 @@ namespace PlaywrightNative.Helpers
                     forwarded = RewriteFakeLoopbackHostHeader(forwarded);
 
                     await serverIo.Stream.WriteAsync(forwarded, token).ConfigureAwait(false);
+                    if (remainingBody > 0)
+                    {
+                        await CopyExactAsync(client, serverIo.Stream, remainingBody, token)
+                            .ConfigureAwait(false);
+                    }
+
                     if (IsWebSocketUpgrade(request))
                     {
                         await TunnelAsync(client, serverIo, token).ConfigureAwait(false);
@@ -1349,6 +1428,26 @@ namespace PlaywrightNative.Helpers
                 _unread = null;
                 _unreadOffset = 0;
                 _unreadCount = 0;
+            }
+
+            internal async Task<int> ReadBytesAsync(Memory<byte> destination, CancellationToken token)
+            {
+                if (_unreadCount > 0)
+                {
+                    int take = Math.Min(_unreadCount, destination.Length);
+                    _unread.AsSpan(_unreadOffset, take).CopyTo(destination.Span);
+                    _unreadOffset += take;
+                    _unreadCount -= take;
+                    if (_unreadCount == 0)
+                    {
+                        _unread = null;
+                        _unreadOffset = 0;
+                    }
+
+                    return take;
+                }
+
+                return await Stream.ReadAsync(destination, token).ConfigureAwait(false);
             }
         }
     }

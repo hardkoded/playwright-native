@@ -203,11 +203,12 @@ namespace PlaywrightNative
             BrowserTypeLaunchGuard.ThrowIfPersistentForbidden(options);
             ThrowIfPageArgument(options.Args);
             ClientCertificatesProxy certsProxy = null;
+            string resolvedDir = null;
             try
             {
                 string executablePath = await ResolveExecutablePathAsync(SupportedBrowser.Chromium, options).ConfigureAwait(false);
                 bool ownsUserDataDir = string.IsNullOrEmpty(userDataDir);
-                string resolvedDir = ResolveUserDataDir(userDataDir);
+                resolvedDir = ResolveUserDataDir(userDataDir);
                 Proxy launchProxy = StartPersistentClientCertificates(options, out certsProxy);
 
                 PlaywrightNative.Chromium.CRBrowser crBrowser = await PlaywrightNative.Chromium.ChromiumBrowserType
@@ -250,6 +251,16 @@ namespace PlaywrightNative
             catch (Exception ex)
             {
                 certsProxy?.Dispose();
+                string annotated = BrowserTypeLaunchGuard.AppendProfileLockHint(
+                    ex.Message ?? string.Empty,
+                    resolvedDir);
+                if (!string.Equals(annotated, ex.Message, StringComparison.Ordinal))
+                {
+                    throw BrowserTypeLaunchGuard.WrapLaunch(
+                        "browserType.launchPersistentContext",
+                        new PlaywrightException(annotated, ex));
+                }
+
                 throw BrowserTypeLaunchGuard.WrapLaunch("browserType.launchPersistentContext", ex);
             }
         }

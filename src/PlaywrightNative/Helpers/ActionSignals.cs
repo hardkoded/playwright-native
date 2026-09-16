@@ -218,8 +218,18 @@ namespace PlaywrightNative.Helpers
             }
 
             // WebKit form navigations often request after the input command
-            // returns. Hold the constructor retain until that signal lands.
-            await Task.Delay(16).ConfigureAwait(false);
+            // returns. Hold the constructor retain until that signal lands —
+            // Ubuntu WebKit form GETs routinely need >16ms after click.
+            for (int i = 0; i < 16; i++)
+            {
+                if (sawDocumentRequest != null && sawDocumentRequest())
+                {
+                    break;
+                }
+
+                await Task.Delay(16).ConfigureAwait(false);
+            }
+
             await TryCommitMissedSameDocumentAsync(
                 page,
                 commitSameDocumentUrl,

@@ -668,6 +668,16 @@ namespace PlaywrightNative.Helpers
 
             try
             {
+                // Never call DOM.describeNode for loading=lazy iframes. Darwin
+                // WebKit often never replies for unloaded lazy frames, and a
+                // stuck describeNode blocks the target session until NUnit's
+                // 30s timeout (poisoning the next PageTest setup).
+                string loading = await iframeEl.GetAttributeAsync("loading").ConfigureAwait(false);
+                if (string.Equals(loading, "lazy", StringComparison.OrdinalIgnoreCase))
+                {
+                    return null;
+                }
+
                 // Avoid DOM.describeNode on unloaded / still-loading iframes:
                 // Darwin WebKit target sessions never reply, and a stuck
                 // describeNode blocks CaptureYaml evaluates behind it.
