@@ -111,6 +111,7 @@ namespace PlaywrightNative.WebKit
         private WKNetworkManager _provisionalNetworkManager;
         private string _mainFrameId;
         private string _mainFrameUrl = "about:blank";
+        private int _lifecycleSeedGeneration;
         private TaskCompletionSource<bool> _pendingLoadTcs;
         private TaskCompletionSource<bool> _pendingDomContentTcs;
         private TaskCompletionSource<bool> _pendingCommitTcs;
@@ -8754,14 +8755,21 @@ namespace PlaywrightNative.WebKit
 
                 MarkReportAsNewNavigation(_mainFrameUrl);
 
-                // data:/about: navigations skip Network.* events. On some Darwin
-                // WebKit builds Page.loadEventFired can also race past our waiter
-                // arming; seed load/DOMContentLoaded from readyState after commit.
+                // data: navigations skip Network.* events. On some Darwin WebKit
+                // builds Page.loadEventFired can also race past waiter arming; seed
+                // load/DOMContentLoaded from readyState after commit. Do not seed
+                // about:blank — SetContent / blank→blank reuse that URL and a stale
+                // poll would resolve pending load waiters (or fire Load) too early
+                // relative to parallel waitForEvent / autowait ordering.
                 if (!string.IsNullOrEmpty(_mainFrameUrl)
-                    && (_mainFrameUrl.StartsWith("data:", StringComparison.OrdinalIgnoreCase)
-                        || _mainFrameUrl.StartsWith("about:", StringComparison.OrdinalIgnoreCase)))
+                    && _mainFrameUrl.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
                 {
-                    _ = SeedLifecycleFromReadyStateAfterDataNavigationAsync();
+                    int seedGeneration = Interlocked.Increment(ref _lifecycleSeedGeneration);
+                    _ = SeedLifecycleFromReadyStateAfterDataNavigationAsync(seedGeneration);
+                }
+                else
+                {
+                    Interlocked.Increment(ref _lifecycleSeedGeneration);
                 }
 
                 // Match Chromium Page: re-assert file-chooser interception on each new
@@ -8790,14 +8798,34 @@ namespace PlaywrightNative.WebKit
             }
         }
 
-        private async Task SeedLifecycleFromReadyStateAfterDataNavigationAsync()
+        private async Task SeedLifecycleFromReadyStateAfterDataNavigationAsync(int seedGeneration)
         {
             try
             {
                 for (int attempt = 0; attempt < 40; attempt++)
                 {
+                    if (Volatile.Read(ref _lifecycleSeedGeneration) != seedGeneration)
+                    {
+                        return;
+                    }
+
                     string readyState = await EvaluateExpressionAsync<string>("document.readyState")
                         .ConfigureAwait(false);
+                    if (Volatile.Read(ref _lifecycleSeedGeneration) != seedGeneration)
+                    {
+                        return;
+                    }
+
+                    // Only seed the document that started this poll — later HTTP
+                    // navigations clear lifecycle and must not be completed by a
+                    // leftover about:/data: seed task.
+                    string url = _mainFrameUrl;
+                    if (string.IsNullOrEmpty(url)
+                        || !url.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+                    {
+                        return;
+                    }
+
                     if (string.Equals(readyState, "interactive", StringComparison.Ordinal)
                         || string.Equals(readyState, "complete", StringComparison.Ordinal))
                     {
@@ -8805,6 +8833,11 @@ namespace PlaywrightNative.WebKit
                         TaskCompletionSource<bool> domTcs;
                         lock (_navigationLock)
                         {
+                            if (Volatile.Read(ref _lifecycleSeedGeneration) != seedGeneration)
+                            {
+                                return;
+                            }
+
                             domTcs = _pendingDomContentTcs;
                             _pendingDomContentTcs = null;
                         }
@@ -8818,6 +8851,11 @@ namespace PlaywrightNative.WebKit
                         TaskCompletionSource<bool> loadTcs;
                         lock (_navigationLock)
                         {
+                            if (Volatile.Read(ref _lifecycleSeedGeneration) != seedGeneration)
+                            {
+                                return;
+                            }
+
                             loadTcs = _pendingLoadTcs;
                             _pendingLoadTcs = null;
                         }

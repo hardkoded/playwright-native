@@ -85,7 +85,7 @@ namespace PlaywrightNative.Helpers
                 // If the lifecycle was recorded on this turn (or just before click returned),
                 // yield so waitForEvent continuations run before waitForLoadState returns
                 // (page-autowaiting-basic expects route|load|clickload).
-                await Task.Delay(1).ConfigureAwait(false);
+                await DrainPublicLifecycleContinuationsAsync().ConfigureAwait(false);
                 return;
             }
 
@@ -104,7 +104,7 @@ namespace PlaywrightNative.Helpers
             {
                 if (Contains(snapshot(), name))
                 {
-                    await Task.Delay(1).ConfigureAwait(false);
+                    await DrainPublicLifecycleContinuationsAsync().ConfigureAwait(false);
                     return;
                 }
 
@@ -112,6 +112,7 @@ namespace PlaywrightNative.Helpers
                 if (timeoutMs == Timeout.Infinite)
                 {
                     await tcs.Task.ConfigureAwait(false);
+                    await DrainPublicLifecycleContinuationsAsync().ConfigureAwait(false);
                     return;
                 }
 
@@ -121,12 +122,25 @@ namespace PlaywrightNative.Helpers
                         new TimeoutException($"{apiName}: Timeout {timeoutMs}ms exceeded.")));
 
                 await tcs.Task.ConfigureAwait(false);
+
+                // Same drain as the already-recorded path: protocol handlers raise
+                // public Load before RecordLifecycle, but both TCS continuations are
+                // RCA — without a yield, clickload can append before load.
+                await DrainPublicLifecycleContinuationsAsync().ConfigureAwait(false);
             }
             finally
             {
                 unsubscribe(OnChanged);
             }
         }
+
+        /// <summary>
+        /// Lets <c>Page.Load</c> / <c>DOMContentLoaded</c> RCA continuations run
+        /// before <c>waitForLoadState</c> returns.
+        /// </summary>
+        /// <returns>A task that completes after a short scheduler drain.</returns>
+        private static Task DrainPublicLifecycleContinuationsAsync()
+            => Task.Delay(1);
 
         private static bool Contains(IReadOnlyCollection<string> events, string name)
         {

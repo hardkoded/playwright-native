@@ -372,7 +372,9 @@ namespace PlaywrightNative.Tests
             await WithPageAsync(async page =>
             {
                 await page.GoToAsync(Prefix + "/input/fileupload.html").ConfigureAwait(false);
-                string outputDir = Path.Combine(Path.GetTempPath(), "pw-set-input-" + Guid.NewGuid().ToString("N"));
+                // Keep the large file under the process cwd so Path.GetRelativePath
+                // stays relative on Windows CI (temp is often on another drive).
+                string outputDir = Path.Combine(Directory.GetCurrentDirectory(), "pw-set-input-" + Guid.NewGuid().ToString("N"));
                 Directory.CreateDirectory(outputDir);
                 string uploadFile = Path.Combine(outputDir, "200MB.zip");
                 CreateLargeFile(uploadFile);

@@ -1253,7 +1253,6 @@ namespace PlaywrightNative.Chromium
                 // Official Playwright writes from the utility world so parser-inserted
                 // scripts (including exposeFunction calls) do not nest inside this evaluate.
                 CRSession frameSession = SessionForFrame(frame);
-                CRExecutionContext writeContext = null;
                 JsonElement? isolated = null;
                 try
                 {
@@ -1275,7 +1274,7 @@ namespace PlaywrightNative.Chromium
                     && isolated.Value.TryGetProperty("executionContextId", out JsonElement isolatedId)
                     && isolatedId.TryGetInt32(out int isolatedContextId))
                 {
-                    writeContext = new CRExecutionContext(frameSession, isolatedContextId);
+                    CRExecutionContext writeContext = new CRExecutionContext(frameSession, isolatedContextId);
                     await writeContext.EvaluateFunctionAsync<bool>(writeHtml, html).WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
                 }
                 else
@@ -1283,148 +1282,53 @@ namespace PlaywrightNative.Chromium
                     await EvaluateFunctionInFrameAsync<bool>(frame, writeHtml, html).WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
                 }
 
-                // document.open() destroys the utility world used for the write.
-                writeContext = null;
-                try
-                {
-                    JsonElement? after = await frameSession.SendAsync("Page.createIsolatedWorld", new
-                    {
-                        frameId = frame.FrameId,
-                        worldName = _utilityWorldName + ":setContent",
-                        grantUniveralAccess = true,
-                    }).WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
-                    if (after.HasValue
-                        && after.Value.TryGetProperty("executionContextId", out JsonElement afterId)
-                        && afterId.TryGetInt32(out int afterContextId))
-                    {
-                        writeContext = new CRExecutionContext(frameSession, afterContextId);
-                    }
-                }
-                catch (TimeoutException)
-                {
-                }
-                catch (PlaywrightException)
-                {
-                }
-
                 if (frame.LifecycleEvents.Contains(targetLifecycleEvent))
                 {
                     return;
                 }
 
-                // Prefer the utility world used for document.write — the main-world
-                // context is often destroyed mid-parse, which previously caused
-                // SetContent to wait the full timeout for a load event.
-                for (int attempt = 0; attempt < 20; attempt++)
+                // Wait for real CDP lifecycle (upstream frames.ts setContent). Do not
+                // synthesize load from document.readyState — Chromium reports
+                // readyState=complete while hanging subresources (img) are still
+                // outstanding, which broke page-set-content timeout / await-resources.
+                int remainingMs = timeout == System.Threading.Timeout.Infinite
+                    ? System.Threading.Timeout.Infinite
+                    : Math.Max(0, timeout - (int)(Environment.TickCount64 - startTicks));
+                if (remainingMs == 0)
                 {
-                    if (frame.LifecycleEvents.Contains(targetLifecycleEvent))
-                    {
-                        return;
-                    }
-
-                    if (timeout != System.Threading.Timeout.Infinite
-                        && Environment.TickCount64 - startTicks >= timeout)
-                    {
-                        break;
-                    }
-
-                    try
-                    {
-                        string ready;
-                        if (writeContext != null)
-                        {
-                            ready = await writeContext.EvaluateFunctionAsync<string>("() => document.readyState")
-                                .WaitAsync(TimeSpan.FromMilliseconds(250)).ConfigureAwait(false);
-                        }
-                        else
-                        {
-                            ready = await EvaluateFunctionInFrameAsync<string>(frame, "() => document.readyState")
-                                .WaitAsync(TimeSpan.FromMilliseconds(250)).ConfigureAwait(false);
-                        }
-
-                        if (string.Equals(ready, "interactive", StringComparison.Ordinal)
-                            || string.Equals(ready, "complete", StringComparison.Ordinal))
-                        {
-                            frame.OnLifecycleEvent("DOMContentLoaded");
-                        }
-
-                        if (string.Equals(ready, "complete", StringComparison.Ordinal))
-                        {
-                            frame.OnLifecycleEvent("load");
-                        }
-
-                        if (frame.LifecycleEvents.Contains(targetLifecycleEvent))
-                        {
-                            return;
-                        }
-                    }
-                    catch (TimeoutException)
-                    {
-                    }
-                    catch (PlaywrightException)
-                    {
-                    }
-
-                    await Task.Delay(25).ConfigureAwait(false);
+                    throw new TimeoutException(
+                        $"SetContentAsync timed out waiting for '{targetLifecycleEvent}' after {timeout}ms");
                 }
 
-                if (frame.LifecycleEvents.Contains(targetLifecycleEvent))
-                {
-                    return;
-                }
-
-                // Static document.write HTML is complete once the write evaluate
-                // returns. Prefer synthesizing the common lifecycle targets over
-                // hanging until the navigation timeout when CDP load events are
-                // lost after the utility-world context swap. But a caller who asked
-                // for a short timeout to detect a genuinely stuck load (e.g. a
-                // pending subresource) must still see it: only synthesize while the
-                // requested deadline has not already passed.
-                if (timeout != System.Threading.Timeout.Infinite
-                    && Environment.TickCount64 - startTicks >= timeout)
-                {
-                    throw new TimeoutException($"SetContentAsync timed out waiting for '{targetLifecycleEvent}' after {timeout}ms");
-                }
-
-                if (!string.Equals(targetLifecycleEvent, "networkidle", StringComparison.Ordinal))
-                {
-                    frame.OnLifecycleEvent("DOMContentLoaded");
-                    frame.OnLifecycleEvent("load");
-                }
-
-                // document.open destroys the main-world context. Wait until a new
-                // one exists so callers do not hang on the first post-SetContent
-                // evaluate / query. CDP may also raise OnNavigated during this
-                // window and ClearLifecycleEvents, wiping the synthetic load.
+                // document.open destroys the main-world context. Wait briefly for a
+                // replacement so callers do not hang on the first post-SetContent
+                // evaluate, but do not treat context recovery as lifecycle success.
                 try
                 {
-                    await WaitForFrameExecutionContextAsync(frame, timeout: 5_000).ConfigureAwait(false);
+                    int contextWaitMs = remainingMs == System.Threading.Timeout.Infinite
+                        ? 5_000
+                        : Math.Min(5_000, remainingMs);
+                    await WaitForFrameExecutionContextAsync(frame, timeout: contextWaitMs).ConfigureAwait(false);
                 }
                 catch (TimeoutException)
                 {
                 }
 
-                if (!string.Equals(targetLifecycleEvent, "networkidle", StringComparison.Ordinal))
-                {
-                    if (!frame.LifecycleEvents.Contains("DOMContentLoaded"))
-                    {
-                        frame.OnLifecycleEvent("DOMContentLoaded");
-                    }
-
-                    if (!frame.LifecycleEvents.Contains("load"))
-                    {
-                        frame.OnLifecycleEvent("load");
-                    }
-
-                    return;
-                }
-
                 if (frame.LifecycleEvents.Contains(targetLifecycleEvent))
                 {
                     return;
                 }
 
-                using var cts = new System.Threading.CancellationTokenSource(timeout);
+                remainingMs = timeout == System.Threading.Timeout.Infinite
+                    ? System.Threading.Timeout.Infinite
+                    : Math.Max(0, timeout - (int)(Environment.TickCount64 - startTicks));
+                if (remainingMs == 0)
+                {
+                    throw new TimeoutException(
+                        $"SetContentAsync timed out waiting for '{targetLifecycleEvent}' after {timeout}ms");
+                }
+
+                using var cts = new System.Threading.CancellationTokenSource(remainingMs);
                 cts.Token.Register(() => lifecycleTcs.TrySetException(
                     new TimeoutException($"SetContentAsync timed out waiting for '{targetLifecycleEvent}' after {timeout}ms")));
 
@@ -2429,34 +2333,11 @@ namespace PlaywrightNative.Chromium
             string apiName = frame.ParentFrame == null ? "page.goto" : "frame.goto";
             int waitMs = timeout <= 0 ? System.Threading.Timeout.Infinite : timeout;
 
-            // Already on about:blank (including empty Frame.Url) navigating to about:blank:
-            // Chromium may not emit a new load. Resolve without another navigate race.
-            // Page.addScriptToEvaluateOnNewDocument also does not re-run, so replay
-            // registered page init scripts onto the current document.
-            if (IsBlankNavigationUrl(url)
-                && IsBlankNavigationUrl(frame.Url)
-                && frame.LifecycleEvents.Contains(targetLifecycleEvent))
-            {
-                await ReplayPageInitScriptsAsync().ConfigureAwait(false);
-                frame.Url = NavigationTimeout.PreserveUserInfo(url, frame.Url);
-
-                // Upstream really navigates here, so the page still observes the
-                // document lifecycle. Replay the events we skipped, or callers
-                // waiting on load / domcontentloaded never hear anything. A real
-                // navigation costs a round trip, so hand control back to the
-                // caller first — it subscribes right after calling goto.
-                await Task.Yield();
-                foreach (string replayed in new[] { "DOMContentLoaded", "load" })
-                {
-                    if (frame.LifecycleEvents.Contains(replayed))
-                    {
-                        frame.OnLifecycleEvent(replayed);
-                    }
-                }
-
-                return;
-            }
-
+            // Already on about:blank navigating to about:blank: do not short-circuit
+            // before NavigateFrameAsync. A Task.Yield replay raced ActionTrace's own
+            // yield and fired Page.Load before parallel WaitForLoadAsync subscribed
+            // (page-basic should fire load / domcontentloaded). Always navigate, then
+            // replay lifecycle after Page.navigate returns when Chromium omits events.
             TaskCompletionSource<bool> lifecycleTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
             string expectedDocumentId = null;
             bool navigationSettled = false;
@@ -2597,9 +2478,14 @@ namespace PlaywrightNative.Chromium
                 // Chromium often omits a second load when navigating about:blank to
                 // about:blank even though Page.navigate returns a new loaderId.
                 // Frame.Url may still be "" while the public page URL is about:blank.
+                // Replay lifecycle so WaitForLoad / WaitForDOMContentLoaded hear it
+                // (subscriptions from WhenAll are already armed after the navigate hop).
                 if (IsBlankNavigationUrl(url) && IsBlankNavigationUrl(frame.Url))
                 {
                     frame.Url = NavigationTimeout.PreserveUserInfo(url, frame.Url);
+                    await ReplayPageInitScriptsAsync().ConfigureAwait(false);
+                    frame.OnLifecycleEvent("DOMContentLoaded");
+                    frame.OnLifecycleEvent("load");
                     return;
                 }
 

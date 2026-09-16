@@ -270,10 +270,7 @@ namespace PlaywrightNative.TestServer
                             if (!string.IsNullOrEmpty(certificatePath))
                             {
                                 string certificatePassword = Environment.GetEnvironmentVariable("PLAYWRIGHT_TEST_CERT_PASSWORD");
-                                string fullPath = Path.GetFullPath(certificatePath);
-                                X509Certificate2 certificate = string.IsNullOrEmpty(certificatePassword)
-                                    ? X509CertificateLoader.LoadPkcs12FromFile(fullPath, null, X509KeyStorageFlags.Exportable)
-                                    : X509CertificateLoader.LoadPkcs12FromFile(fullPath, certificatePassword, X509KeyStorageFlags.Exportable);
+                                X509Certificate2 certificate = LoadHttpsCertificate(certificatePath, certificatePassword);
 
                                 // Prefer TLS 1.3 (HAR/securityDetails assert it) but
                                 // also offer 1.2. Kestrel SslProtocols.Tls13 alone
@@ -310,6 +307,50 @@ namespace PlaywrightNative.TestServer
         public void SetAuth(string path, string username, string password) => _auths.Add(path, (username, password));
 
         public void SetCSP(string path, string csp) => _csp.Add(path, csp);
+
+        /// <summary>
+        /// Loads a TLS server certificate. CI sets <c>PLAYWRIGHT_TEST_CERT_PATH</c> to
+        /// a DER/PEM <c>testCert.cer</c> from <c>dotnet dev-certs https -ep</c>, which
+        /// has no private key and is not PKCS12 — <c>LoadPkcs12FromFile</c> throws
+        /// ASN1 corrupted data. Prefer PKCS12 paths as-is; for public certs use the
+        /// sibling <c>key.pfx</c> / PEM fixtures that include a private key.
+        /// </summary>
+        /// <param name="certificatePath">Path from <c>PLAYWRIGHT_TEST_CERT_PATH</c>.</param>
+        /// <param name="certificatePassword">Optional PKCS12 password.</param>
+        /// <returns>A certificate with a private key suitable for Kestrel HTTPS.</returns>
+        private static X509Certificate2 LoadHttpsCertificate(string certificatePath, string certificatePassword)
+        {
+            string fullPath = Path.GetFullPath(certificatePath);
+            string extension = Path.GetExtension(fullPath);
+            X509KeyStorageFlags flags = X509KeyStorageFlags.Exportable;
+            if (extension.Equals(".pfx", StringComparison.OrdinalIgnoreCase)
+                || extension.Equals(".p12", StringComparison.OrdinalIgnoreCase))
+            {
+                return X509CertificateLoader.LoadPkcs12FromFile(
+                    fullPath,
+                    certificatePassword ?? string.Empty,
+                    flags);
+            }
+
+            string directory = Path.GetDirectoryName(fullPath) ?? ".";
+            string siblingPfx = Path.Combine(directory, "key.pfx");
+            if (File.Exists(siblingPfx))
+            {
+                string pfxPassword = string.IsNullOrEmpty(certificatePassword)
+                    ? "playwright"
+                    : certificatePassword;
+                return X509CertificateLoader.LoadPkcs12FromFile(siblingPfx, pfxPassword, flags);
+            }
+
+            string pemCert = Path.Combine(directory, "playwright-test.pem");
+            string pemKey = Path.Combine(directory, "playwright-test-key.pem");
+            if (File.Exists(pemCert) && File.Exists(pemKey))
+            {
+                return X509Certificate2.CreateFromPemFile(pemCert, pemKey);
+            }
+
+            return X509CertificateLoader.LoadCertificateFromFile(fullPath);
+        }
 
         public Task StartAsync() => _webHost.StartAsync();
 

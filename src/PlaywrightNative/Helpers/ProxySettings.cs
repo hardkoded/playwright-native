@@ -55,6 +55,11 @@ namespace PlaywrightNative.Helpers
                 server = "http://" + server;
             }
 
+            // Chromium context proxies do not get launch --host-resolver-rules.
+            // On Windows, socks5://localhost resolves to ::1 while MockSocksProxy
+            // listens on IPv4 Loopback only → ERR_CONNECTION_RESET. Prefer 127.0.0.1.
+            server = RewriteLocalhostToIpv4Loopback(server);
+
             if (!includeCredentials || !HasCredentials(proxy))
             {
                 return server;
@@ -265,6 +270,35 @@ namespace PlaywrightNative.Helpers
 
             merged.Add(new KeyValuePair<string, string>("Proxy-Authorization", "Basic " + token));
             return merged;
+        }
+
+        /// <summary>
+        /// Rewrites <c>localhost</c> / <c>[::1]</c> hosts in a proxy URL to
+        /// <c>127.0.0.1</c> so IPv4-only test proxies accept the connection.
+        /// </summary>
+        /// <param name="server">Formatted proxy server URL.</param>
+        /// <returns>The rewritten URL, or the original when the host is not loopback-by-name.</returns>
+        private static string RewriteLocalhostToIpv4Loopback(string server)
+        {
+            if (string.IsNullOrEmpty(server)
+                || !Uri.TryCreate(server, UriKind.Absolute, out Uri uri))
+            {
+                return server;
+            }
+
+            string host = uri.Host;
+            if (!string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(host, "::1", StringComparison.Ordinal)
+                && !string.Equals(host, "[::1]", StringComparison.OrdinalIgnoreCase))
+            {
+                return server;
+            }
+
+            UriBuilder builder = new UriBuilder(uri)
+            {
+                Host = "127.0.0.1",
+            };
+            return builder.Uri.AbsoluteUri.TrimEnd('/');
         }
 
         /// <summary>

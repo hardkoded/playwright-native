@@ -67,7 +67,7 @@ namespace PlaywrightNative.Chromium
 
         /// <inheritdoc/>
         public Task<byte[]> BodyAsync()
-            => _crResponse.GetBodyBytesAsync();
+            => _crResponse.GetBodyBytesForCallerAsync();
 
         /// <inheritdoc/>
         public Task<string> FinishedAsync()
@@ -75,11 +75,11 @@ namespace PlaywrightNative.Chromium
 
         /// <inheritdoc/>
         public Task<T> JsonAsync<T>()
-            => ResponseContent.ReadJsonAsync<T>(_crResponse.GetBodyBytesAsync);
+            => ResponseContent.ReadJsonAsync<T>(_crResponse.GetBodyBytesForCallerAsync);
 
         /// <inheritdoc/>
         public Task<string> TextAsync()
-            => ResponseContent.ReadTextAsync(_crResponse.GetBodyBytesAsync);
+            => ResponseContent.ReadTextAsync(_crResponse.GetBodyBytesForCallerAsync);
 
         /// <inheritdoc/>
         public async Task<Dictionary<string, string>> AllHeadersAsync()
