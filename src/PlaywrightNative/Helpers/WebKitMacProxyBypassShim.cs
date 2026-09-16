@@ -233,7 +233,7 @@ namespace PlaywrightNative.Helpers
                 // before TcpClient.Dispose RSTs the browser-facing socket.
                 try
                 {
-                    await Task.Delay(25).ConfigureAwait(false);
+                    await Task.Delay(100).ConfigureAwait(false);
                 }
                 catch (ObjectDisposedException)
                 {
@@ -688,6 +688,17 @@ namespace PlaywrightNative.Helpers
                 try
                 {
                     client.NoDelay = true;
+                    try
+                    {
+                        client.Client.LingerState = new LingerOption(true, 5);
+                    }
+                    catch (SocketException)
+                    {
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                    }
+
                     NetworkStream clientStream = client.GetStream();
                     (byte[] headerBytes, byte[] requestLeftover) = await ReadHeadersAsync(clientStream, _cts.Token)
                         .ConfigureAwait(false);

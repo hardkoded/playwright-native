@@ -669,9 +669,11 @@ namespace PlaywrightNative.Helpers
                 {
                 }
 
+                // Extra settle so the Mac bypass-shim hop can push the close
+                // echo to CFNetwork before TcpClient.Dispose.
                 try
                 {
-                    await Task.Delay(25, CancellationToken.None).ConfigureAwait(false);
+                    await Task.Delay(100, CancellationToken.None).ConfigureAwait(false);
                 }
                 catch (ObjectDisposedException)
                 {
@@ -1023,8 +1025,22 @@ namespace PlaywrightNative.Helpers
             try
             {
                 using (client)
-                using (NetworkStream clientStream = client.GetStream())
                 {
+                    // Do not dispose NetworkStream separately — that can RST the
+                    // browser-facing socket before dual-hop peers finish reading a
+                    // WebSocket close echo (ShouldWorkWithClientSideClose → 1006).
+                    try
+                    {
+                        client.Client.LingerState = new LingerOption(true, 5);
+                    }
+                    catch (SocketException)
+                    {
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                    }
+
+                    NetworkStream clientStream = client.GetStream();
                     if (_useSocks)
                     {
                         await HandleSocksClientAsync(clientStream).ConfigureAwait(false);

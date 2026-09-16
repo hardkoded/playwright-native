@@ -155,9 +155,10 @@ namespace PlaywrightNative.WebKit
             // Bound the wait: a stuck inner command (lost response or browser hang)
             // faults with a labelled timeout rather than blocking the target forever.
             // DOM.describeNode on unloaded lazy iframes never replies on Darwin —
-            // keep that path short so AI aria stitch can skip empty iframes.
+            // keep that path very short so AI aria stitch abandons before CaptureYaml
+            // evaluates pile up behind the hung command (NUnit 30s kill).
             int timeoutMs = string.Equals(method, "DOM.describeNode", StringComparison.Ordinal)
-                ? 2_000
+                ? 500
                 : CommandTimeoutMs;
             CancellationTokenSource timeoutCts = new(timeoutMs);
             timeoutCts.Token.Register(() =>

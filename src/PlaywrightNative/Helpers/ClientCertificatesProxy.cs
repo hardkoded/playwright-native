@@ -744,15 +744,23 @@ namespace PlaywrightNative.Helpers
 
         private static async Task PipeAsync(Stream a, Stream b, CancellationToken token)
         {
-            // Half-close aware: WhenAny + dispose aborted TLS close_notify and
-            // made Darwin CFNetwork report "Could not connect" for MITM error
-            // pages (BrowserShouldHaveIgnoreHttpsErrorsFalseByDefault).
+            // Half-close aware: wait for the first direction to EOF, then give the
+            // reverse side a grace window to deliver TLS close_notify / HTTP body
+            // before cancelling. Immediate WhenAny+cancel aborted Darwin MITM
+            // pages; pure WhenAll hung keep-alive HttpForward and starved later
+            // navigations (KeepSupportingHttp TargetClosedException pollution).
             using CancellationTokenSource tunnelCts = CancellationTokenSource.CreateLinkedTokenSource(token);
             Task copyA = CopyAndShutdownAsync(a, b, tunnelCts.Token);
             Task copyB = CopyAndShutdownAsync(b, a, tunnelCts.Token);
             try
             {
-                await Task.WhenAll(copyA, copyB).ConfigureAwait(false);
+                await Task.WhenAny(copyA, copyB).ConfigureAwait(false);
+                Task both = Task.WhenAll(copyA, copyB);
+                Task finished = await Task.WhenAny(both, Task.Delay(500, token)).ConfigureAwait(false);
+                if (finished == both)
+                {
+                    await both.ConfigureAwait(false);
+                }
             }
             catch (IOException)
             {
@@ -806,10 +814,17 @@ namespace PlaywrightNative.Helpers
             {
                 try
                 {
-                    if (destination is NetworkStream network)
+                    if (destination is SslStream ssl)
+                    {
+                        await ssl.ShutdownAsync().ConfigureAwait(false);
+                    }
+                    else if (destination is NetworkStream network)
                     {
                         network.Socket?.Shutdown(SocketShutdown.Send);
                     }
+                }
+                catch (IOException)
+                {
                 }
                 catch (SocketException)
                 {
@@ -1149,8 +1164,22 @@ namespace PlaywrightNative.Helpers
             try
             {
                 using (client)
-                using (NetworkStream browser = client.GetStream())
                 {
+                    // Avoid disposing NetworkStream separately — that RSTs the
+                    // Darwin bypass-shim hop before CFNetwork finishes reading the
+                    // MITM TLS error HTML ("Could not connect to the server").
+                    try
+                    {
+                        client.Client.LingerState = new LingerOption(true, 5);
+                    }
+                    catch (SocketException)
+                    {
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                    }
+
+                    NetworkStream browser = client.GetStream();
                     BrowserProxyRequest? dest =
                         await NegotiateBrowserProxyAsync(browser, _cts.Token).ConfigureAwait(false);
                     if (dest == null)
@@ -1627,7 +1656,7 @@ namespace PlaywrightNative.Helpers
             // instead of RSTing — CFNetwork otherwise reports "Could not connect".
             try
             {
-                client.Client.LingerState = new LingerOption(true, 1);
+                client.Client.LingerState = new LingerOption(true, 5);
             }
             catch (SocketException)
             {
@@ -1678,7 +1707,7 @@ namespace PlaywrightNative.Helpers
             // before TcpClient.Dispose RSTs the browser-facing socket.
             try
             {
-                await Task.Delay(50).ConfigureAwait(false);
+                await Task.Delay(200).ConfigureAwait(false);
             }
             catch (ObjectDisposedException)
             {

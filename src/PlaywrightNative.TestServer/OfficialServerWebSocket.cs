@@ -368,7 +368,7 @@ namespace PlaywrightNative.TestServer
                         {
                             try
                             {
-                                network.Socket.LingerState = new LingerOption(true, 2);
+                                network.Socket.LingerState = new LingerOption(true, 5);
                             }
                             catch (SocketException)
                             {
@@ -384,13 +384,32 @@ namespace PlaywrightNative.TestServer
                     {
                     }
 
-                    // Let dual-hop proxies drain the close echo before any
-                    // later Destroy/dispose RSTs the connection (1006).
+                    // Drain until the peer EOFs (client finished the close
+                    // handshake) BEFORE NotifyClose. WaitUntilClosedAsync lets
+                    // Kestrel dispose the upgraded stream — notifying too early
+                    // RSTs the dual-hop tunnel and WebKit reports error+1006
+                    // instead of clean application close 3002.
                     try
                     {
-                        await Task.Delay(50).ConfigureAwait(false);
+                        byte[] sink = new byte[256];
+                        using CancellationTokenSource drainCts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+                        while (true)
+                        {
+                            int n = await _stream.ReadAsync(sink.AsMemory(0, sink.Length), drainCts.Token)
+                                .ConfigureAwait(false);
+                            if (n == 0)
+                            {
+                                break;
+                            }
+                        }
+                    }
+                    catch (IOException)
+                    {
                     }
                     catch (ObjectDisposedException)
+                    {
+                    }
+                    catch (OperationCanceledException)
                     {
                     }
 

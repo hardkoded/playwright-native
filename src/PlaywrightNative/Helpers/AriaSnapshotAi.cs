@@ -67,21 +67,29 @@ namespace PlaywrightNative.Helpers
   try {
     const loading = (el.getAttribute('loading') || '').toLowerCase();
     const src = el.getAttribute('src') || '';
+    // Unloaded lazy iframes: never ask DOM.describeNode — Darwin WebKit
+    // never replies, and a stuck command blocks later CaptureYaml evaluates
+    // on the same target until the session command timeout (NUnit 30s).
+    if (loading === 'lazy') {
+      const doc = el.contentDocument;
+      if (!doc || !doc.documentElement) {
+        return false;
+      }
+      const url = doc.URL || '';
+      if (!src || src === 'about:blank' || !url || url === 'about:blank') {
+        return false;
+      }
+      if (doc.readyState === 'loading') {
+        return false;
+      }
+      return true;
+    }
     const doc = el.contentDocument;
     if (doc) {
       if (!doc.documentElement) {
         return false;
       }
-      // Lazy iframes with a real src often sit on about:blank with
-      // readyState complete before navigation starts — treating them as
-      // ready made Darwin describeNode hang (ReturnEmptySnapshotWhenIframeIsNotLoaded).
       const url = doc.URL || '';
-      if (loading === 'lazy') {
-        // Still on the initial blank document, or never assigned a window.
-        if (!src || src === 'about:blank' || !url || url === 'about:blank') {
-          return false;
-        }
-      }
       if (src && src !== 'about:blank' && (!url || url === 'about:blank')) {
         return false;
       }
@@ -90,16 +98,15 @@ namespace PlaywrightNative.Helpers
       }
       return true;
     }
-    // Unloaded lazy iframes may expose contentWindow without a document —
-    // never ask describeNode for those (Darwin hangs without a command timeout).
-    if (loading === 'lazy') {
-      return false;
-    }
     // Opaque / cross-origin frames (e.g. data:) expose contentWindow but
     // null contentDocument without throwing. Still ask the protocol for the
     // content frame so AI stitch can capture them.
     return !!el.contentWindow;
   } catch (e) {
+    // Lazy frames that throw on contentDocument access are still unsafe.
+    if ((el.getAttribute('loading') || '').toLowerCase() === 'lazy') {
+      return false;
+    }
     return true;
   }
 }";
@@ -139,8 +146,21 @@ namespace PlaywrightNative.Helpers
             int budgetMs = TimeoutSettings.TimeoutMs(timeout);
             await EnsurePrefixesAsync(page, deadlineClock, budgetMs).ConfigureAwait(false);
             IFrame frame = page.MainFrame;
-            string prefix = await PrefixForAsync(page, frame).ConfigureAwait(false);
-            string yaml = await AriaSnapshotOfficialAi.CaptureYamlAsync(root, depth, boxes, prefix).ConfigureAwait(false);
+            string prefix = await RaceOrDefaultAsync(
+                () => PrefixForAsync(page, frame),
+                deadlineClock,
+                budgetMs,
+                fallback: string.Empty).ConfigureAwait(false);
+            string yaml = await RaceOrDefaultAsync(
+                () => AriaSnapshotOfficialAi.CaptureYamlAsync(root, depth, boxes, prefix),
+                deadlineClock,
+                budgetMs,
+                fallback: string.Empty).ConfigureAwait(false);
+            if (string.IsNullOrEmpty(yaml))
+            {
+                return string.Empty;
+            }
+
             return await StitchAsync(page, frame, yaml, depth, boxes, deadlineClock, budgetMs).ConfigureAwait(false);
         }
 
@@ -177,8 +197,16 @@ namespace PlaywrightNative.Helpers
             int budgetMs = TimeoutSettings.TimeoutMs(timeout);
             await EnsurePrefixesAsync(page, deadlineClock, budgetMs).ConfigureAwait(false);
             IFrame frame = page.MainFrame;
-            string prefix = await PrefixForAsync(page, frame).ConfigureAwait(false);
-            string json = await AriaSnapshotOfficialAi.CaptureJsonAsync(root, depth, boxes, prefix).ConfigureAwait(false);
+            string prefix = await RaceOrDefaultAsync(
+                () => PrefixForAsync(page, frame),
+                deadlineClock,
+                budgetMs,
+                fallback: string.Empty).ConfigureAwait(false);
+            string json = await RaceOrDefaultAsync(
+                () => AriaSnapshotOfficialAi.CaptureJsonAsync(root, depth, boxes, prefix),
+                deadlineClock,
+                budgetMs,
+                fallback: "[]").ConfigureAwait(false);
             return await StitchJsonAsync(page, frame, json, depth, boxes, deadlineClock, budgetMs).ConfigureAwait(false);
         }
 
@@ -641,8 +669,8 @@ namespace PlaywrightNative.Helpers
             try
             {
                 // Avoid DOM.describeNode on unloaded / still-loading iframes:
-                // Darwin WebKit target sessions have no command timeout, so a
-                // stuck describeNode blocks CaptureYaml evaluates behind it.
+                // Darwin WebKit target sessions never reply, and a stuck
+                // describeNode blocks CaptureYaml evaluates behind it.
                 bool ready = await iframeEl.EvaluateAsync<bool>(IframeCaptureReadyFunction)
                     .ConfigureAwait(false);
                 if (!ready)
