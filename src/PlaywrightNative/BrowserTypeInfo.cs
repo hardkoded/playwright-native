@@ -96,6 +96,15 @@ namespace PlaywrightNative
                     return computed;
                 }
 
+                // Install dir present (partial extract / marker race): still expose the
+                // rooted path so launched browsers report a non-empty ExecutablePath
+                // containing the browser name (webkit / chromium / firefox).
+                string installDir = Path.GetDirectoryName(computed);
+                if (!string.IsNullOrEmpty(installDir) && Directory.Exists(installDir))
+                {
+                    return computed;
+                }
+
                 if (browser == SupportedBrowser.Chromium)
                 {
                     foreach (string candidate in BrowserChannelResolver.CandidatePaths(BrowserChannel.Chrome))

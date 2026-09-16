@@ -111,8 +111,14 @@ namespace PlaywrightNative.WebKit
         /// <c>document.requestStorageAccess()</c> in cross-process iframes on macOS.
         /// </summary>
         /// <param name="expression">The JavaScript expression to evaluate.</param>
+        /// <param name="pulseTrustedGestureAsync">
+        /// Optional callback invoked immediately before <c>callFunctionOn</c> so macOS
+        /// WebKit still has transient activation after the objectId anchor evaluate.
+        /// </param>
         /// <returns>The raw <c>result</c> remote object, or <see langword="null"/>.</returns>
-        internal async Task<JsonElement?> EvaluateHandleWithUserGestureAsync(string expression)
+        internal async Task<JsonElement?> EvaluateHandleWithUserGestureAsync(
+            string expression,
+            Func<Task> pulseTrustedGestureAsync = null)
         {
             // WebKit WIP only accepts objectId-bound Runtime.callFunctionOn (not
             // executionContextId) — same as upstream wkExecutionContext. Match
@@ -152,6 +158,13 @@ namespace PlaywrightNative.WebKit
 
             try
             {
+                // Pulse after the anchor evaluate — that round-trip otherwise
+                // clears Darwin transient activation from an earlier iframe click.
+                if (pulseTrustedGestureAsync != null)
+                {
+                    await pulseTrustedGestureAsync().ConfigureAwait(false);
+                }
+
                 JsonElement? response = await _session.SendAsync(
                     "Runtime.callFunctionOn",
                     new

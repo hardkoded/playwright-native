@@ -122,7 +122,15 @@ var ClockController = class {
     this._replayLogOnce();
     await this._innerPause();
     const toConsume = time - this._now.time;
-    await this._innerFastForwardTo(shiftTicks(this._now.ticks, toConsume));
+    // install() leaves real-time running (inject calls resume). By the time
+    // pauseAt(sameTime) runs, wall clock may have advanced past `time` so
+    // toConsume is negative — match _replayLogOnce's pauseAt path and snap
+    // the wall time instead of throwing "Cannot fast-forward to the past".
+    if (toConsume > 0) {
+      await this._innerFastForwardTo(shiftTicks(this._now.ticks, toConsume));
+    } else {
+      this._innerSetTime(asWallTime(time));
+    }
     return toConsume;
   }
   async _innerPause() {

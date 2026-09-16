@@ -154,13 +154,18 @@ namespace PlaywrightNative.WebKit
 
             // Bound the wait: a stuck inner command (lost response or browser hang)
             // faults with a labelled timeout rather than blocking the target forever.
-            CancellationTokenSource timeoutCts = new(CommandTimeoutMs);
+            // DOM.describeNode on unloaded lazy iframes never replies on Darwin —
+            // keep that path short so AI aria stitch can skip empty iframes.
+            int timeoutMs = string.Equals(method, "DOM.describeNode", StringComparison.Ordinal)
+                ? 2_000
+                : CommandTimeoutMs;
+            CancellationTokenSource timeoutCts = new(timeoutMs);
             timeoutCts.Token.Register(() =>
             {
                 if (_callbacks.TryRemove(id, out TaskCompletionSource<JsonElement?> timedOut))
                 {
                     timedOut.TrySetException(new TimeoutException(
-                        $"WebKit command '{method}' (id {id}) on target '{_targetId}' did not respond within {CommandTimeoutMs}ms."));
+                        $"WebKit command '{method}' (id {id}) on target '{_targetId}' did not respond within {timeoutMs}ms."));
                 }
             });
             _ = tcs.Task.ContinueWith(_ => timeoutCts.Dispose(), TaskScheduler.Default);

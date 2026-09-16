@@ -744,11 +744,15 @@ namespace PlaywrightNative.Helpers
 
         private static async Task PipeAsync(Stream a, Stream b, CancellationToken token)
         {
-            Task copyA = a.CopyToAsync(b, token);
-            Task copyB = b.CopyToAsync(a, token);
+            // Half-close aware: WhenAny + dispose aborted TLS close_notify and
+            // made Darwin CFNetwork report "Could not connect" for MITM error
+            // pages (BrowserShouldHaveIgnoreHttpsErrorsFalseByDefault).
+            using CancellationTokenSource tunnelCts = CancellationTokenSource.CreateLinkedTokenSource(token);
+            Task copyA = CopyAndShutdownAsync(a, b, tunnelCts.Token);
+            Task copyB = CopyAndShutdownAsync(b, a, tunnelCts.Token);
             try
             {
-                await Task.WhenAny(copyA, copyB).ConfigureAwait(false);
+                await Task.WhenAll(copyA, copyB).ConfigureAwait(false);
             }
             catch (IOException)
             {
@@ -758,6 +762,61 @@ namespace PlaywrightNative.Helpers
             }
             catch (OperationCanceledException)
             {
+            }
+            finally
+            {
+                try
+                {
+                    await tunnelCts.CancelAsync().ConfigureAwait(false);
+                }
+                catch (ObjectDisposedException)
+                {
+                }
+            }
+        }
+
+        private static async Task CopyAndShutdownAsync(Stream source, Stream destination, CancellationToken token)
+        {
+            byte[] buffer = new byte[81920];
+            try
+            {
+                while (true)
+                {
+                    int read = await source.ReadAsync(buffer.AsMemory(0, buffer.Length), token)
+                        .ConfigureAwait(false);
+                    if (read == 0)
+                    {
+                        break;
+                    }
+
+                    await destination.WriteAsync(buffer.AsMemory(0, read), token).ConfigureAwait(false);
+                    await destination.FlushAsync(token).ConfigureAwait(false);
+                }
+            }
+            catch (IOException)
+            {
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            finally
+            {
+                try
+                {
+                    if (destination is NetworkStream network)
+                    {
+                        network.Socket?.Shutdown(SocketShutdown.Send);
+                    }
+                }
+                catch (SocketException)
+                {
+                }
+                catch (ObjectDisposedException)
+                {
+                }
             }
         }
 
@@ -1612,6 +1671,16 @@ namespace PlaywrightNative.Helpers
             {
             }
             catch (OperationCanceledException)
+            {
+            }
+
+            // Brief settle so the Darwin bypass-shim hop can flush TLS records
+            // before TcpClient.Dispose RSTs the browser-facing socket.
+            try
+            {
+                await Task.Delay(50).ConfigureAwait(false);
+            }
+            catch (ObjectDisposedException)
             {
             }
         }

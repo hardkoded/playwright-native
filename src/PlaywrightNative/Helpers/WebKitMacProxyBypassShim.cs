@@ -189,6 +189,20 @@ namespace PlaywrightNative.Helpers
             // that write direction and keep copying the opposite way so the close
             // echo reaches the browser. Task.WhenAny + dispose aborted application
             // close codes as 1006 (ShouldWorkWithClientSideClose).
+            try
+            {
+                a.Socket.NoDelay = true;
+                b.Socket.NoDelay = true;
+                a.Socket.LingerState = new LingerOption(true, 2);
+                b.Socket.LingerState = new LingerOption(true, 2);
+            }
+            catch (SocketException)
+            {
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+
             using CancellationTokenSource tunnelCts = new();
             Task aToB = CopyAndShutdownAsync(a, b, tunnelCts.Token);
             Task bToA = CopyAndShutdownAsync(b, a, tunnelCts.Token);
@@ -210,6 +224,16 @@ namespace PlaywrightNative.Helpers
                 try
                 {
                     await tunnelCts.CancelAsync().ConfigureAwait(false);
+                }
+                catch (ObjectDisposedException)
+                {
+                }
+
+                // Give dual-hop Darwin proxies a beat to flush the close echo
+                // before TcpClient.Dispose RSTs the browser-facing socket.
+                try
+                {
+                    await Task.Delay(25).ConfigureAwait(false);
                 }
                 catch (ObjectDisposedException)
                 {

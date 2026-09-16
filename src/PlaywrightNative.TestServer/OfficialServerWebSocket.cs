@@ -366,11 +366,29 @@ namespace PlaywrightNative.TestServer
                     {
                         if (_stream is NetworkStream network)
                         {
+                            try
+                            {
+                                network.Socket.LingerState = new LingerOption(true, 2);
+                            }
+                            catch (SocketException)
+                            {
+                            }
+
                             network.Socket?.Shutdown(SocketShutdown.Send);
                         }
                     }
                     catch (SocketException)
                     {
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                    }
+
+                    // Let dual-hop proxies drain the close echo before any
+                    // later Destroy/dispose RSTs the connection (1006).
+                    try
+                    {
+                        await Task.Delay(50).ConfigureAwait(false);
                     }
                     catch (ObjectDisposedException)
                     {

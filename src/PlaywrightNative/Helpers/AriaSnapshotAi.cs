@@ -76,8 +76,11 @@ namespace PlaywrightNative.Helpers
       // readyState complete before navigation starts — treating them as
       // ready made Darwin describeNode hang (ReturnEmptySnapshotWhenIframeIsNotLoaded).
       const url = doc.URL || '';
-      if (loading === 'lazy' && src && src !== 'about:blank' && (!url || url === 'about:blank')) {
-        return false;
+      if (loading === 'lazy') {
+        // Still on the initial blank document, or never assigned a window.
+        if (!src || src === 'about:blank' || !url || url === 'about:blank') {
+          return false;
+        }
       }
       if (src && src !== 'about:blank' && (!url || url === 'about:blank')) {
         return false;

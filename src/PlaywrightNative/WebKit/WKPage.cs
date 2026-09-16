@@ -3702,16 +3702,6 @@ namespace PlaywrightNative.WebKit
                     catch (PlaywrightException)
                     {
                     }
-
-                    if (expression != null
-                        && expression.Contains("requestStorageAccess", StringComparison.Ordinal))
-                    {
-                        // macOS WebKit also needs a trusted input gesture on the
-                        // iframe; emulateUserGesture alone is not enough after OOPIF
-                        // load. Pulse via the page mouse stack — not window.focus /
-                        // ClickAsync("iframe") (those clear activation or steal focus).
-                        await PulseTrustedGestureOnFrameAsync(frame).ConfigureAwait(false);
-                    }
                 }
 
                 if (EvaluateSerialization.CanWrapExpression(expression))
@@ -3731,7 +3721,9 @@ namespace PlaywrightNative.WebKit
                     && expression != null
                     && expression.Contains("requestStorageAccess", StringComparison.Ordinal);
                 JsonElement? remote = needsUserGesture
-                    ? await context.EvaluateHandleWithUserGestureAsync(expression).ConfigureAwait(false)
+                    ? await context.EvaluateHandleWithUserGestureAsync(
+                        expression,
+                        () => PulseTrustedGestureOnFrameAsync(frame)).ConfigureAwait(false)
                     : await context.EvaluateHandleAsync(expression).ConfigureAwait(false);
                 return await EvaluateSerialization.MaterializeAsync<T>(
                     remote,

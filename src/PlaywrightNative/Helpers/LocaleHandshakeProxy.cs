@@ -629,6 +629,20 @@ namespace PlaywrightNative.Helpers
             // client WebSocket close frame), shut down only that write direction and keep
             // copying the opposite way so the close echo can still reach the browser.
             // Task.WhenAny + dispose aborted application close codes as 1006.
+            try
+            {
+                client.Stream.Socket.NoDelay = true;
+                server.Stream.Socket.NoDelay = true;
+                client.Stream.Socket.LingerState = new LingerOption(true, 2);
+                server.Stream.Socket.LingerState = new LingerOption(true, 2);
+            }
+            catch (SocketException)
+            {
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+
             using CancellationTokenSource tunnelCts = CancellationTokenSource.CreateLinkedTokenSource(token);
             Task copyA = CopyAndShutdownAsync(client.Stream, server.Stream, tunnelCts.Token);
             Task copyB = CopyAndShutdownAsync(server.Stream, client.Stream, tunnelCts.Token);
@@ -650,6 +664,14 @@ namespace PlaywrightNative.Helpers
                 try
                 {
                     await tunnelCts.CancelAsync().ConfigureAwait(false);
+                }
+                catch (ObjectDisposedException)
+                {
+                }
+
+                try
+                {
+                    await Task.Delay(25, CancellationToken.None).ConfigureAwait(false);
                 }
                 catch (ObjectDisposedException)
                 {

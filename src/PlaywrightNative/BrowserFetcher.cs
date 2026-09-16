@@ -137,10 +137,27 @@ namespace PlaywrightNative
                     PermissionsFixed = !RuntimeInformation.IsOSPlatform(OSPlatform.Windows),
                 };
 
-                // Marker-only trees count as installed for DownloadAsync (unit tests and
-                // cache hits). BrowserType.ExecutablePath validates the real binary
-                // separately so a broken extract does not masquerade as launchable.
-                return existing;
+                // Cached trees can keep INSTALLATION_COMPLETE after a broken extract
+                // (missing pw_run.sh / chrome binary). Treat that as not installed so
+                // DownloadAsync re-extracts and BrowserType.ExecutablePath sees a real
+                // binary. Marker-only fixtures used by unit tests omit the executable
+                // on purpose — those paths never call DownloadAsync expecting a launch.
+                if (File.Exists(existing.GetExecutablePath()))
+                {
+                    return existing;
+                }
+
+                try
+                {
+                    Directory.Delete(installDir, recursive: true);
+                }
+                catch (IOException)
+                {
+                    // Fall through and attempt a fresh download/extract.
+                }
+                catch (UnauthorizedAccessException)
+                {
+                }
             }
 
             Directory.CreateDirectory(CacheDir);
