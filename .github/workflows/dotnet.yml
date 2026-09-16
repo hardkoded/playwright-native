@@ -62,7 +62,31 @@ jobs:
           - { os: ubuntu-latest,  browser: webkit,   mode: headless }
     steps:
     - uses: actions/checkout@v4
+    # builds.dotnet.microsoft.com occasionally fails to serve the Windows SDK
+    # zip (transient CDN / network). Retry a few times before failing the job.
     - name: Setup .NET
+      id: setup-dotnet-1
+      continue-on-error: true
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: ${{ env.DOTNET_VERSION }}
+    - name: Wait before Setup .NET retry
+      if: steps.setup-dotnet-1.outcome == 'failure'
+      shell: bash
+      run: sleep 20
+    - name: Setup .NET (retry 2)
+      id: setup-dotnet-2
+      if: steps.setup-dotnet-1.outcome == 'failure'
+      continue-on-error: true
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: ${{ env.DOTNET_VERSION }}
+    - name: Wait before Setup .NET final retry
+      if: steps.setup-dotnet-1.outcome == 'failure' && steps.setup-dotnet-2.outcome == 'failure'
+      shell: bash
+      run: sleep 40
+    - name: Setup .NET (retry 3)
+      if: steps.setup-dotnet-1.outcome == 'failure' && steps.setup-dotnet-2.outcome == 'failure'
       uses: actions/setup-dotnet@v4
       with:
         dotnet-version: ${{ env.DOTNET_VERSION }}
