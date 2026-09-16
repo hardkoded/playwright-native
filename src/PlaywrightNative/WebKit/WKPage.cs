@@ -3698,21 +3698,12 @@ namespace PlaywrightNative.WebKit
                     {
                         // macOS WebKit also requires a trusted input gesture on the
                         // iframe (emulateUserGesture alone is not enough after OOPIF
-                        // load). Pulse via Input.dispatchMouseEvent — not window.focus
+                        // load). Pulse via the page mouse stack — not window.focus
                         // / synthetic click inside callFunctionOn (those break
                         // document.hasFocus() for unrelated child-frame evaluates).
+                        // Do not follow with ClickAsync("iframe"): actionability
+                        // waits clear transient activation before RSA runs.
                         await PulseTrustedGestureOnFrameAsync(frame).ConfigureAwait(false);
-
-                        // Prefer a real element click through the page mouse stack when
-                        // the iframe is addressable — Darwin CFNetwork+proxy setups
-                        // sometimes drop the raw Input.dispatchMouseEvent activation.
-                        try
-                        {
-                            await ClickAsync("iframe", timeout: 1000).ConfigureAwait(false);
-                        }
-                        catch (PlaywrightException)
-                        {
-                        }
                     }
                 }
 
@@ -7466,35 +7457,11 @@ namespace PlaywrightNative.WebKit
 
                 double x = point[0];
                 double y = point[1];
-                await _session.SendAsync("Input.dispatchMouseEvent", new
-                {
-                    type = "move",
-                    button = 0,
-                    buttons = 0,
-                    x,
-                    y,
-                    modifiers = 0,
-                }).ConfigureAwait(false);
-                await _session.SendAsync("Input.dispatchMouseEvent", new
-                {
-                    type = "down",
-                    button = 0,
-                    buttons = 1,
-                    x,
-                    y,
-                    modifiers = 0,
-                    clickCount = 1,
-                }).ConfigureAwait(false);
-                await _session.SendAsync("Input.dispatchMouseEvent", new
-                {
-                    type = "up",
-                    button = 0,
-                    buttons = 0,
-                    x,
-                    y,
-                    modifiers = 0,
-                    clickCount = 1,
-                }).ConfigureAwait(false);
+
+                // Use the full mouse stack (WKRawMouse) so Darwin CFNetwork+proxy
+                // setups that drop bare Input.dispatchMouseEvent still get a
+                // trusted click on the iframe's content.
+                await _mouse.ClickAsync(x, y).ConfigureAwait(false);
 
                 // Do not call EnsureActiveAndFocusedAsync here — re-activating the
                 // page proxy after the iframe click clears transient user activation

@@ -187,14 +187,12 @@ namespace PlaywrightNative.Helpers
 
             // Mac WS shim uses distinct fake hosts so HAR / IWebSocket.Url can
             // restore localhost vs 127.0.0.1 vs ::1 after the proxy hop.
-            // Map local.playwright → 127.0.0.1 (not "localhost"): test HTTPS
-            // fixtures bind IPAddress.Loopback (IPv4 only), and Darwin
-            // localhost often prefers ::1 first → connect fails → CFNetwork
-            // reports "Could not connect" instead of the MITM error page
-            // (BrowserShouldHaveIgnoreHttpsErrorsFalseByDefault).
+            // Keep "localhost" as the proxy CONNECT target (Darwin client-cert
+            // fixtures assert ProxiedConnectHost == localhost). Direct TCP
+            // below maps localhost → 127.0.0.1 so Loopback-only listeners work.
             if (string.Equals(host, WebKitMacLocaleWebSocketShim.FakeLoopbackHost, StringComparison.OrdinalIgnoreCase))
             {
-                return "127.0.0.1";
+                return "localhost";
             }
 
             if (string.Equals(host, WebKitMacLocaleWebSocketShim.FakeIpv4LoopbackHost, StringComparison.OrdinalIgnoreCase))
@@ -1227,10 +1225,16 @@ namespace PlaywrightNative.Helpers
             Proxy outbound = ResolveOutboundProxy(connectHost, port);
             if (outbound == null || string.IsNullOrEmpty(outbound.Server))
             {
+                // Test HTTPS fixtures bind IPAddress.Loopback (IPv4 only). Darwin
+                // "localhost" often resolves ::1 first → connect fails → CFNetwork
+                // surfaces "Could not connect" instead of the MITM error page.
+                string tcpHost = string.Equals(connectHost, "localhost", StringComparison.OrdinalIgnoreCase)
+                    ? "127.0.0.1"
+                    : connectHost;
                 TcpClient direct = new() { NoDelay = true };
                 try
                 {
-                    await direct.ConnectAsync(connectHost, port, token).ConfigureAwait(false);
+                    await direct.ConnectAsync(tcpHost, port, token).ConfigureAwait(false);
                     return direct;
                 }
                 catch
