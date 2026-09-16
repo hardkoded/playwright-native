@@ -222,9 +222,21 @@ namespace PlaywrightNative.Helpers
             NetworkStream destination,
             CancellationToken token)
         {
+            byte[] buffer = new byte[81920];
             try
             {
-                await source.CopyToAsync(destination, token).ConfigureAwait(false);
+                while (true)
+                {
+                    int read = await source.ReadAsync(buffer.AsMemory(0, buffer.Length), token)
+                        .ConfigureAwait(false);
+                    if (read == 0)
+                    {
+                        break;
+                    }
+
+                    await destination.WriteAsync(buffer.AsMemory(0, read), token).ConfigureAwait(false);
+                    await destination.FlushAsync(token).ConfigureAwait(false);
+                }
             }
             catch (IOException)
             {

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Net.Sockets;
 using System.Net.WebSockets;
 using System.Text;
 using System.Threading;
@@ -355,6 +356,24 @@ namespace PlaywrightNative.TestServer
                     {
                         _closeSent = true;
                         WriteFrame(opcode: 8, payload);
+                    }
+
+                    // Half-close after the echo so dual Darwin proxies
+                    // (Mac bypass shim → LocaleHandshakeProxy) observe EOF on
+                    // the reverse copy and finish delivering the close frame
+                    // before the origin socket is disposed.
+                    try
+                    {
+                        if (_stream is NetworkStream network)
+                        {
+                            network.Socket?.Shutdown(SocketShutdown.Send);
+                        }
+                    }
+                    catch (SocketException)
+                    {
+                    }
+                    catch (ObjectDisposedException)
+                    {
                     }
 
                     NotifyClose(code, reason);

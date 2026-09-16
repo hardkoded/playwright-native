@@ -254,51 +254,71 @@ namespace PlaywrightNative.Helpers
 
             SemaphoreSlim gate = ScreenshotGates.GetOrAdd(page.GetHashCode(), _ => new SemaphoreSlim(1, 1));
             await gate.WaitAsync().ConfigureAwait(false);
-            string css = BuildCss(caret, style);
-            List<IElementHandle> tags = new List<IElementHandle>();
-            bool hideCaret = IsHideCaret(caret);
-            bool disableAnimations = IsDisabled(animations);
             try
             {
-                try
+                // Upstream safeNonStallingEvaluate retries through navigations.
+                // Full-page shots during Reload (page-screenshot.spec) must not
+                // surface a one-shot "navigating" failure from style injection.
+                const int maxAttempts = 25;
+                for (int attempt = 0; ; attempt++)
                 {
-                    // WebKit: empty stylesheet toggle forces layout so CSS
-                    // animations are synchronized before capture (upstream).
-                    if (page is WKPage)
+                    List<IElementHandle> tags = new List<IElementHandle>();
+                    bool hideCaret = IsHideCaret(caret);
+                    bool disableAnimations = IsDisabled(animations);
+                    string css = BuildCss(caret, style);
+                    try
                     {
-                        await EvaluateInFramesAsync(page, SyncAnimationsJs).ConfigureAwait(false);
-                    }
+                        try
+                        {
+                            // WebKit: empty stylesheet toggle forces layout so CSS
+                            // animations are synchronized before capture (upstream).
+                            if (page is WKPage)
+                            {
+                                await EvaluateInFramesAsync(page, SyncAnimationsJs).ConfigureAwait(false);
+                            }
 
-                    if (css.Length > 0)
+                            if (css.Length > 0)
+                            {
+                                await InjectStyleAsync(page, css, tags).ConfigureAwait(false);
+                            }
+
+                            if (hideCaret)
+                            {
+                                await EvaluateInFramesAsync(page, HideCaretJs).ConfigureAwait(false);
+                            }
+
+                            if (disableAnimations)
+                            {
+                                await FinishAnimationsAsync(page).ConfigureAwait(false);
+                            }
+
+                            await ScreenshotMask.ApplyAsync(page, mask, maskColor, tags).ConfigureAwait(false);
+                            await WaitForFontsAsync(page).ConfigureAwait(false);
+
+                            return await capture().ConfigureAwait(false);
+                        }
+                        catch (Exception ex) when (DestroyedContext.IsDestroyedContext(ex)
+                            || (ex is PlaywrightException pe
+                                && pe.Message.Contains(NavigatingMessage, StringComparison.Ordinal)))
+                        {
+                            if (attempt >= maxAttempts - 1)
+                            {
+                                throw new PlaywrightException(NavigatingMessage);
+                            }
+
+                            await Task.Delay(50).ConfigureAwait(false);
+                        }
+                    }
+                    finally
                     {
-                        await InjectStyleAsync(page, css, tags).ConfigureAwait(false);
+                        await CleanupDecorationsAsync(page, tags, hideCaret, disableAnimations).ConfigureAwait(false);
                     }
-
-                    if (hideCaret)
-                    {
-                        await EvaluateInFramesAsync(page, HideCaretJs).ConfigureAwait(false);
-                    }
-
-                    if (disableAnimations)
-                    {
-                        await FinishAnimationsAsync(page).ConfigureAwait(false);
-                    }
-
-                    await ScreenshotMask.ApplyAsync(page, mask, maskColor, tags).ConfigureAwait(false);
-                    await WaitForFontsAsync(page).ConfigureAwait(false);
-
-                    return await capture().ConfigureAwait(false);
                 }
-                catch (Exception ex) when (DestroyedContext.IsDestroyedContext(ex))
-                {
-                    // Official screenshotter surfaces navigation races as this message
-                    // rather than raw CDP "Cannot find context with specified id".
-                    throw new PlaywrightException(NavigatingMessage);
-                }
+
+                throw new PlaywrightException(NavigatingMessage);
             }
             finally
             {
-                await CleanupDecorationsAsync(page, tags, hideCaret, disableAnimations).ConfigureAwait(false);
                 gate.Release();
             }
         }
