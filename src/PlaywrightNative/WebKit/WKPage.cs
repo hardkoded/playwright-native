@@ -2964,6 +2964,52 @@ namespace PlaywrightNative.WebKit
                 throw PageClosedException();
             }
 
+            int timeoutMs = (int)(timeout ?? _defaultNavigationTimeout);
+            if (timeoutMs <= 0)
+            {
+                timeoutMs = Timeout.Infinite;
+            }
+
+            // Official reportAsNew waits until a popup's first real URL has committed.
+            // Navigating a noopener popup away from an in-flight document load (e.g.
+            // /one-style.html → cross-process) kills MiniBrowser; wait for that load
+            // BEFORE arming goto waiters so the popup's first commit cannot look like
+            // a competing navigation for the not-yet-sent empty.html goto.
+            if (_opener != null)
+            {
+                if (PopupOpenedHelper.IsBlankUrl(_mainFrameUrl))
+                {
+                    await Task.WhenAny(
+                            _firstNonInitialNavigationTcs.Task,
+                            _closedTcs.Task,
+                            Task.Delay(5_000))
+                        .ConfigureAwait(false);
+                }
+
+                try
+                {
+                    float settleMs = timeoutMs == Timeout.Infinite ? 5_000f : Math.Min(timeoutMs, 5_000f);
+                    await WaitForLoadStateAsync(LoadState.Load, settleMs).ConfigureAwait(false);
+                }
+#pragma warning disable RCS1075
+                catch (Exception)
+#pragma warning restore RCS1075
+                {
+                }
+
+                if (_targetSession != null)
+                {
+                    try
+                    {
+                        await _session.SendAsync("Target.activate", new { targetId = _targetSession.TargetId })
+                            .ConfigureAwait(false);
+                    }
+                    catch (PlaywrightException)
+                    {
+                    }
+                }
+            }
+
             TaskCompletionSource<bool> loadTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
             TaskCompletionSource<bool> domTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
             TaskCompletionSource<bool> commitTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -3026,55 +3072,11 @@ namespace PlaywrightNative.WebKit
                 ? (object)new { url, pageProxyId = _pageProxyId, frameId }
                 : new { url, pageProxyId = _pageProxyId, frameId, referrer = referer };
 
-            int timeoutMs = (int)(timeout ?? _defaultNavigationTimeout);
-            if (timeoutMs <= 0)
-            {
-                timeoutMs = Timeout.Infinite;
-            }
-
             TaskCompletionSource<bool> waitTcs = waitUntil == WaitUntilState.Commit
                 ? commitTcs
                 : waitUntil == WaitUntilState.DOMContentLoaded
                     ? domTcs
                     : loadTcs;
-
-            // Official reportAsNew waits until a popup's first real URL has committed.
-            // Navigating a noopener popup away from an in-flight document load (e.g.
-            // /one-style.html → cross-process) kills MiniBrowser; wait for that load.
-            if (_opener != null)
-            {
-                if (PopupOpenedHelper.IsBlankUrl(_mainFrameUrl))
-                {
-                    await Task.WhenAny(
-                            _firstNonInitialNavigationTcs.Task,
-                            _closedTcs.Task,
-                            Task.Delay(5_000))
-                        .ConfigureAwait(false);
-                }
-
-                try
-                {
-                    float settleMs = timeoutMs == Timeout.Infinite ? 5_000f : Math.Min(timeoutMs, 5_000f);
-                    await WaitForLoadStateAsync(LoadState.Load, settleMs).ConfigureAwait(false);
-                }
-#pragma warning disable RCS1075
-                catch (Exception)
-#pragma warning restore RCS1075
-                {
-                }
-
-                if (_targetSession != null)
-                {
-                    try
-                    {
-                        await _session.SendAsync("Target.activate", new { targetId = _targetSession.TargetId })
-                            .ConfigureAwait(false);
-                    }
-                    catch (PlaywrightException)
-                    {
-                    }
-                }
-            }
 
             Task<JsonElement?> sendTask = _browser.Session.SendAsync("Playwright.navigate", parameters);
 
@@ -5539,6 +5541,16 @@ namespace PlaywrightNative.WebKit
                 return;
             }
 
+            // Only document navigations can interrupt a goto. Subresources
+            // (Stylesheet/Script/…) from the previous page must not become
+            // _lastCompetingNavigationUrl (ShouldNotTreatNavigationsAsNewPopups:
+            // popup goto empty.html was interrupted by one-style.css).
+            if (!request.IsNavigationRequest
+                && !NetworkRequestEvents.IsDocumentNavigation(request.ResourceType))
+            {
+                return;
+            }
+
             IFrame frame = request.InternalFrame;
             IFrame main = MainFrame;
             if (frame != null && main != null && !ReferenceEquals(frame, main) && frame != main)
@@ -5652,10 +5664,9 @@ namespace PlaywrightNative.WebKit
                 return _lastCompetingNavigationUrl;
             }
 
-            string fallback = null;
             foreach (IRequest request in _requests.Snapshot())
             {
-                if (request == null)
+                if (request == null || !request.IsNavigationRequest)
                 {
                     continue;
                 }
@@ -5666,15 +5677,10 @@ namespace PlaywrightNative.WebKit
                     continue;
                 }
 
-                if (request.IsNavigationRequest)
-                {
-                    return requestUrl;
-                }
-
-                fallback ??= requestUrl;
+                return requestUrl;
             }
 
-            return fallback;
+            return null;
         }
 
         private void ApplyRequestedNavigationUrl(string url)
