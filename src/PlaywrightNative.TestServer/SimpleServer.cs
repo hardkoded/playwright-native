@@ -338,9 +338,13 @@ namespace PlaywrightNative.TestServer
 
             // EphemeralKeySet is required on Windows so PEM-imported keys are
             // usable by Kestrel/SslStream. Without it the handshake aborts with
-            // "unexpected EOF or 0 bytes from the transport stream".
-            X509KeyStorageFlags flags =
-                X509KeyStorageFlags.Exportable | X509KeyStorageFlags.EphemeralKeySet;
+            // "unexpected EOF or 0 bytes from the transport stream". macOS/Linux
+            // reject the flag (PlatformNotSupportedException).
+            X509KeyStorageFlags flags = X509KeyStorageFlags.Exportable;
+            if (OperatingSystem.IsWindows())
+            {
+                flags |= X509KeyStorageFlags.EphemeralKeySet;
+            }
             if (extension.Equals(".pfx", StringComparison.OrdinalIgnoreCase)
                 || extension.Equals(".p12", StringComparison.OrdinalIgnoreCase))
             {

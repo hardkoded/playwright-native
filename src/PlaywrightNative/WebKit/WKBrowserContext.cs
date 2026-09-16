@@ -572,7 +572,10 @@ namespace PlaywrightNative.WebKit
                     browserContextId = _browserContextId,
                 }).ConfigureAwait(false);
 
-            return ContextCookies.FilterByUrls(ContextCookies.FromProtocol(result, webKit: true), urls);
+            IReadOnlyList<BrowserContextCookiesResult> cookies =
+                ContextCookies.FromProtocol(result, webKit: true);
+            cookies = HideMacWsShimCookies(cookies);
+            return ContextCookies.FilterByUrls(cookies, urls);
         }
 
         /// <inheritdoc/>
@@ -1609,7 +1612,10 @@ namespace PlaywrightNative.WebKit
         /// <summary>
         /// Darwin WebKitMacLocaleWebSocketShim rewrites <c>wss://localhost</c> to
         /// <c>wss://local.playwright</c>. CFNetwork looks up cookies for the wire
-        /// host, so mirror loopback cookies onto the fake hosts.
+        /// host, so mirror loopback cookies onto the fake hosts. Keep the caller's
+        /// cookie objects unchanged (do not <see cref="ContextCookies.Rewrite"/> —
+        /// that would stamp Domain onto Url cookies and make a later ToProtocol
+        /// Rewrite throw "either url or domain").
         /// </summary>
         private static IEnumerable<Cookie> ExpandLoopbackCookiesForMacWsShim(IEnumerable<Cookie> cookies)
         {
@@ -1634,10 +1640,13 @@ namespace PlaywrightNative.WebKit
                     continue;
                 }
 
-                Cookie rewritten = ContextCookies.Rewrite(cookie);
-                expanded.Add(rewritten);
+                expanded.Add(cookie);
 
-                string domain = rewritten.Domain ?? string.Empty;
+                if (!TryGetLoopbackCookieHost(cookie, out string domain, out string path, out bool? secure))
+                {
+                    continue;
+                }
+
                 string fakeHost = null;
                 if (string.Equals(domain, "localhost", StringComparison.OrdinalIgnoreCase)
                     || domain.EndsWith(".localhost", StringComparison.OrdinalIgnoreCase))
@@ -1659,21 +1668,93 @@ namespace PlaywrightNative.WebKit
                     continue;
                 }
 
+                // Prefer Url over Domain so ToProtocol Rewrite stays valid, and
+                // WebKit stores a host cookie for the shim name (Domain-only
+                // local.playwright rows were not sent on wss upgrades).
+                bool useHttps = secure == true;
                 expanded.Add(new Cookie
                 {
-                    Name = rewritten.Name,
-                    Value = rewritten.Value,
-                    Domain = fakeHost,
-                    Path = string.IsNullOrEmpty(rewritten.Path) ? "/" : rewritten.Path,
-                    Expires = rewritten.Expires,
-                    HttpOnly = rewritten.HttpOnly,
-                    Secure = rewritten.Secure,
-                    SameSite = rewritten.SameSite,
-                    PartitionKey = rewritten.PartitionKey,
+                    Name = cookie.Name,
+                    Value = cookie.Value,
+                    Url = (useHttps ? "https://" : "http://") + fakeHost +
+                        (string.IsNullOrEmpty(path) || path == "/" ? "/" : path),
+                    Expires = cookie.Expires,
+                    HttpOnly = cookie.HttpOnly,
+                    Secure = secure ?? cookie.Secure,
+                    SameSite = cookie.SameSite,
+                    PartitionKey = cookie.PartitionKey,
                 });
             }
 
             return expanded;
+        }
+
+        /// <summary>
+        /// Hides Mac WS shim fake-host cookies from the public cookies API so
+        /// mirrored <c>local.playwright*</c> rows do not inflate counts.
+        /// </summary>
+        private static IReadOnlyList<BrowserContextCookiesResult> HideMacWsShimCookies(
+            IReadOnlyList<BrowserContextCookiesResult> cookies)
+        {
+            bool macShim =
+                RuntimeInformation.IsOSPlatform(OSPlatform.OSX)
+                || Environment.GetEnvironmentVariable("PW_FORCE_MAC_WS_SHIM") == "1";
+            if (!macShim || cookies == null || cookies.Count == 0)
+            {
+                return cookies;
+            }
+
+            List<BrowserContextCookiesResult> filtered = new List<BrowserContextCookiesResult>();
+            foreach (BrowserContextCookiesResult cookie in cookies)
+            {
+                if (cookie != null
+                    && WebKitMacLocaleWebSocketShim.IsFakeLoopbackHost(cookie.Domain ?? string.Empty))
+                {
+                    continue;
+                }
+
+                filtered.Add(cookie);
+            }
+
+            return filtered;
+        }
+
+        private static bool TryGetLoopbackCookieHost(
+            Cookie cookie,
+            out string domain,
+            out string path,
+            out bool? secure)
+        {
+            domain = cookie.Domain ?? string.Empty;
+            path = cookie.Path ?? string.Empty;
+            secure = cookie.Secure;
+            if (!string.IsNullOrEmpty(domain))
+            {
+                if (string.IsNullOrEmpty(path))
+                {
+                    path = "/";
+                }
+
+                return true;
+            }
+
+            if (string.IsNullOrEmpty(cookie.Url)
+                || !Uri.TryCreate(cookie.Url, UriKind.Absolute, out Uri uri))
+            {
+                return false;
+            }
+
+            domain = uri.Host;
+            string pathname = uri.AbsolutePath;
+            int slash = pathname.LastIndexOf('/');
+            path = slash >= 0 ? pathname.Substring(0, slash + 1) : "/";
+            if (!secure.HasValue
+                && string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+            {
+                secure = true;
+            }
+
+            return !string.IsNullOrEmpty(domain);
         }
 
         private static bool DropsUnsupportedPartitionedCookies()

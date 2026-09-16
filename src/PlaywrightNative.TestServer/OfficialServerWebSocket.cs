@@ -387,10 +387,36 @@ namespace PlaywrightNative.TestServer
                     // Brief settle so dual-hop Darwin proxies (Mac bypass shim →
                     // LocaleHandshakeProxy) finish copying the close echo to
                     // CFNetwork. Do NOT drain until peer EOF: under MITM the
-                    // client often waits for a clean close first, so a 2s
+                    // client often waits for a clean close first, so a long
                     // drain times out, Kestrel disposes, and WebKit reports
-                    // error+1006 instead of application close 3002.
-                    await Task.Delay(100).ConfigureAwait(false);
+                    // error+1006 instead of application close 3002. A short
+                    // optional drain plus settle covers the common case.
+                    try
+                    {
+                        byte[] sink = new byte[256];
+                        using CancellationTokenSource drainCts =
+                            new CancellationTokenSource(TimeSpan.FromMilliseconds(150));
+                        while (true)
+                        {
+                            int n = await _stream.ReadAsync(sink.AsMemory(0, sink.Length), drainCts.Token)
+                                .ConfigureAwait(false);
+                            if (n == 0)
+                            {
+                                break;
+                            }
+                        }
+                    }
+                    catch (IOException)
+                    {
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                    }
+                    catch (OperationCanceledException)
+                    {
+                    }
+
+                    await Task.Delay(50).ConfigureAwait(false);
 
                     NotifyClose(code, reason);
                     return;
