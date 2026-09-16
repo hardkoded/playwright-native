@@ -114,6 +114,20 @@ namespace PlaywrightNative.WebKit
         /// <returns>The raw <c>result</c> remote object, or <see langword="null"/>.</returns>
         internal async Task<JsonElement?> EvaluateHandleWithUserGestureAsync(string expression)
         {
+            // WebKit WIP only accepts objectId-bound Runtime.callFunctionOn (not
+            // executionContextId) — same as upstream wkExecutionContext. Match
+            // utilityScript evaluate: enter an async function under
+            // emulateUserGesture, then await inside so Darwin keeps transient
+            // activation across requestStorageAccess microtasks. A sync
+            // callFunctionOn that merely returns a Promise ends the gesture
+            // scope before RSA settles (returns false on macOS).
+            string functionDeclaration =
+                "async function () {" +
+                "  let result = (" + expression + ");" +
+                "  if (typeof result === 'function') result = result();" +
+                "  return await result;" +
+                "}";
+
             JsonElement? anchorResponse = await _session.SendAsync(
                 "Runtime.evaluate",
                 BuildEvaluateParams("({})", returnByValue: false)).ConfigureAwait(false);
@@ -136,23 +150,12 @@ namespace PlaywrightNative.WebKit
 
             try
             {
-                // awaitPromise must stay true: macOS WebKit checks transient
-                // activation across the requestStorageAccess microtask chain.
-                // Upstream evaluateWithArguments uses the same pair of flags —
-                // emulateUserGesture only. Do not window.focus()/click here:
-                // that steals iframe document focus and breaks
-                // document.hasFocus() checks (emulation-focus.spec.ts).
-                //
-                // AsFunction (not "return (expression)") so () => promise
-                // expressions are *invoked* by callFunctionOn. Returning the
-                // arrow without calling it made requestStorageAccess resolve
-                // to a function handle and materialize as false on Darwin.
                 JsonElement? response = await _session.SendAsync(
                     "Runtime.callFunctionOn",
                     new
                     {
                         objectId = anchorId,
-                        functionDeclaration = EvaluateWithArg.AsFunction(expression),
+                        functionDeclaration,
                         returnByValue = false,
                         emulateUserGesture = true,
                         awaitPromise = true,
@@ -163,12 +166,9 @@ namespace PlaywrightNative.WebKit
                 }
 
                 ThrowIfThrown(response.Value);
-                if (!response.Value.TryGetProperty("result", out JsonElement result))
-                {
-                    return null;
-                }
-
-                return result;
+                return response.Value.TryGetProperty("result", out JsonElement result)
+                    ? result
+                    : null;
             }
             finally
             {

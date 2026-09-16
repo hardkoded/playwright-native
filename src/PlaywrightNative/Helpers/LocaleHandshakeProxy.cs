@@ -835,6 +835,22 @@ namespace PlaywrightNative.Helpers
             // WebKitMacLocaleWebSocketShim); map back to localhost for the
             // real test-server socket, matching ClientCertificatesProxy.
             string connectHost = ClientCertificatesProxy.RewriteToLocalhostIfNeeded(host);
+            if (string.Equals(connectHost, "localhost", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(connectHost, "127.0.0.1", StringComparison.Ordinal))
+            {
+                TcpClient ipv4 = new(AddressFamily.InterNetwork) { NoDelay = true };
+                try
+                {
+                    await ipv4.ConnectAsync(IPAddress.Loopback, port, token).ConfigureAwait(false);
+                    return ipv4;
+                }
+                catch
+                {
+                    ipv4.Dispose();
+                    throw;
+                }
+            }
+
             TcpClient server = new() { NoDelay = true };
             try
             {

@@ -65,6 +65,8 @@ namespace PlaywrightNative.Helpers
         /// </summary>
         private const string IframeCaptureReadyFunction = @"(el) => {
   try {
+    const loading = (el.getAttribute('loading') || '').toLowerCase();
+    const src = el.getAttribute('src') || '';
     const doc = el.contentDocument;
     if (doc) {
       if (!doc.documentElement) {
@@ -73,8 +75,11 @@ namespace PlaywrightNative.Helpers
       // Lazy iframes with a real src often sit on about:blank with
       // readyState complete before navigation starts — treating them as
       // ready made Darwin describeNode hang (ReturnEmptySnapshotWhenIframeIsNotLoaded).
-      const src = el.getAttribute('src') || '';
-      if (src && src !== 'about:blank' && (!doc.URL || doc.URL === 'about:blank')) {
+      const url = doc.URL || '';
+      if (loading === 'lazy' && src && src !== 'about:blank' && (!url || url === 'about:blank')) {
+        return false;
+      }
+      if (src && src !== 'about:blank' && (!url || url === 'about:blank')) {
         return false;
       }
       if (doc.readyState === 'loading') {
@@ -82,10 +87,14 @@ namespace PlaywrightNative.Helpers
       }
       return true;
     }
+    // Unloaded lazy iframes may expose contentWindow without a document —
+    // never ask describeNode for those (Darwin hangs without a command timeout).
+    if (loading === 'lazy') {
+      return false;
+    }
     // Opaque / cross-origin frames (e.g. data:) expose contentWindow but
     // null contentDocument without throwing. Still ask the protocol for the
-    // content frame so AI stitch can capture them. Unloaded lazy iframes
-    // typically have neither a usable document nor a contentWindow yet.
+    // content frame so AI stitch can capture them.
     return !!el.contentWindow;
   } catch (e) {
     return true;

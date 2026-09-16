@@ -188,8 +188,9 @@ namespace PlaywrightNative.Helpers
             // Mac WS shim uses distinct fake hosts so HAR / IWebSocket.Url can
             // restore localhost vs 127.0.0.1 vs ::1 after the proxy hop.
             // Keep "localhost" as the proxy CONNECT target (Darwin client-cert
-            // fixtures assert ProxiedConnectHost == localhost). Direct TCP
-            // below maps localhost → 127.0.0.1 so Loopback-only listeners work.
+            // fixtures assert ProxiedConnectHost == localhost). Direct TCP in
+            // ConnectOutboundAsync forces AddressFamily.InterNetwork +
+            // IPAddress.Loopback so IPv4-only test listeners still work.
             if (string.Equals(host, WebKitMacLocaleWebSocketShim.FakeLoopbackHost, StringComparison.OrdinalIgnoreCase))
             {
                 return "localhost";
@@ -357,6 +358,10 @@ namespace PlaywrightNative.Helpers
 
         private static bool IsIpAddress(string host)
             => IPAddress.TryParse(host, out _);
+
+        private static bool IsIpv4LoopbackConnectHost(string connectHost)
+            => string.Equals(connectHost, "localhost", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(connectHost, "127.0.0.1", StringComparison.Ordinal);
 
         private static string EscapeHtml(string text)
         {
@@ -1221,20 +1226,39 @@ namespace PlaywrightNative.Helpers
 
         private async Task<TcpClient> ConnectOutboundAsync(string host, int port, CancellationToken token)
         {
+            // Upstream resolves the env/user proxy against the CONNECT host
+            // (local.playwright) before rewriting; keep that order so NO_PROXY
+            // localhost entries do not accidentally bypass when the wire host is
+            // the fake Darwin loopback name.
+            Proxy outbound = ResolveOutboundProxy(host, port);
             string connectHost = RewriteToLocalhostIfNeeded(host);
-            Proxy outbound = ResolveOutboundProxy(connectHost, port);
             if (outbound == null || string.IsNullOrEmpty(outbound.Server))
             {
                 // Test HTTPS fixtures bind IPAddress.Loopback (IPv4 only). Darwin
-                // "localhost" often resolves ::1 first → connect fails → CFNetwork
-                // surfaces "Could not connect" instead of the MITM error page.
-                string tcpHost = string.Equals(connectHost, "localhost", StringComparison.OrdinalIgnoreCase)
-                    ? "127.0.0.1"
-                    : connectHost;
+                // "localhost" often resolves ::1 first; a default dual-mode
+                // TcpClient + ConnectAsync("127.0.0.1") is also unreliable there.
+                // Force an IPv4 socket to Loopback so the MITM reaches the origin
+                // and can paint the TLS error page instead of CFNetwork's
+                // "Could not connect".
+                if (IsIpv4LoopbackConnectHost(connectHost))
+                {
+                    TcpClient ipv4 = new(AddressFamily.InterNetwork) { NoDelay = true };
+                    try
+                    {
+                        await ipv4.ConnectAsync(IPAddress.Loopback, port, token).ConfigureAwait(false);
+                        return ipv4;
+                    }
+                    catch
+                    {
+                        ipv4.Dispose();
+                        throw;
+                    }
+                }
+
                 TcpClient direct = new() { NoDelay = true };
                 try
                 {
-                    await direct.ConnectAsync(tcpHost, port, token).ConfigureAwait(false);
+                    await direct.ConnectAsync(connectHost, port, token).ConfigureAwait(false);
                     return direct;
                 }
                 catch
@@ -1539,6 +1563,20 @@ namespace PlaywrightNative.Helpers
                 return;
             }
 
+            // Linger so a later Dispose after the Darwin bypass-shim hop still
+            // pushes residual TLS records (SNI-reject / self-signed error pages)
+            // instead of RSTing — CFNetwork otherwise reports "Could not connect".
+            try
+            {
+                client.Client.LingerState = new LingerOption(true, 1);
+            }
+            catch (SocketException)
+            {
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+
             try
             {
                 client.Client.Shutdown(SocketShutdown.Send);
@@ -1556,7 +1594,7 @@ namespace PlaywrightNative.Helpers
             {
                 NetworkStream stream = client.GetStream();
                 byte[] sink = new byte[1024];
-                using CancellationTokenSource drainCts = new(TimeSpan.FromMilliseconds(250));
+                using CancellationTokenSource drainCts = new(TimeSpan.FromSeconds(2));
                 while (true)
                 {
                     int n = await stream.ReadAsync(sink.AsMemory(0, sink.Length), drainCts.Token)
