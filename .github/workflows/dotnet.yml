@@ -70,7 +70,21 @@ jobs:
       if: matrix.os == 'windows-latest'
       shell: pwsh
       run: |
-        choco install ffmpeg -y --no-progress
+        # community.chocolatey.org occasionally returns 504 while resolving
+        # ffmpeg; retry so Windows shards do not fail before tests start.
+        $ok = $false
+        for ($i = 1; $i -le 5; $i++) {
+          choco install ffmpeg -y --no-progress
+          if ($LASTEXITCODE -eq 0) {
+            $ok = $true
+            break
+          }
+          Write-Host "choco install ffmpeg failed (attempt $i); retrying in $($i * 15)s..."
+          Start-Sleep -Seconds ($i * 15)
+        }
+        if (-not $ok) {
+          throw "choco install ffmpeg failed after retries"
+        }
         ffmpeg -version
     - name: Install ffmpeg (macOS)
       if: startsWith(matrix.os, 'macos')
