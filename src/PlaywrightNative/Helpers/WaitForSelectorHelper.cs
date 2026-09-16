@@ -18,7 +18,6 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
-using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Playwright;
@@ -32,16 +31,6 @@ namespace PlaywrightNative.Helpers
     /// </summary>
     internal static class WaitForSelectorHelper
     {
-        /// <summary>
-        /// Combined preview + visibility probe (one evaluate round-trip).
-        /// </summary>
-        private const string ProbePreviewAndVisibilityFunction =
-            @"el => {
-  const preview = (" + RemoteObject.PreviewNodeFunction + @")(el);
-  const visible = (" + DomVisibility.IsVisibleFunction + @")(el);
-  return { preview, visible };
-}";
-
         /// <summary>
         /// Waits until <paramref name="selector"/> satisfies <paramref name="state"/>.
         /// </summary>
@@ -129,66 +118,29 @@ namespace PlaywrightNative.Helpers
                     attached = handle != null;
                     if (attached)
                     {
-                        // One round-trip for preview + visibility. Splitting those
-                        // across EvaluateAsync / IsVisibleAsync raced Darwin WebKit
-                        // removals (mydiv disappeared before either completed).
-                        bool probed = false;
+                        // Snapshot the preview before IsVisibleAsync. A concurrent
+                        // remove between those two round-trips used to swallow the
+                        // "locator resolved to …" line on Darwin WebKit (mydiv race
+                        // in should report logs while waiting for visible). Persist
+                        // immediately so a later DestroyedContext path cannot drop it.
+                        try
+                        {
+                            string previewValue = await handle.EvaluateAsync<string>(RemoteObject.PreviewNodeFunction)
+                                .ConfigureAwait(false);
+                            if (!string.IsNullOrEmpty(previewValue))
+                            {
+                                eagerPreview = previewValue;
+                                RememberResolvedSnapshot(
+                                    resolvedSnapshots,
+                                    visible: wanted == WaitForSelectorState.Hidden,
+                                    eagerPreview);
+                            }
+                        }
+                        catch (PlaywrightException)
+                        {
+                        }
+
                         if (wanted != WaitForSelectorState.Attached
-                            && wanted != WaitForSelectorState.Detached)
-                        {
-                            try
-                            {
-                                JsonElement probe = await handle.EvaluateAsync<JsonElement>(
-                                        ProbePreviewAndVisibilityFunction)
-                                    .ConfigureAwait(false);
-                                if (probe.ValueKind == JsonValueKind.Object)
-                                {
-                                    if (probe.TryGetProperty("preview", out JsonElement previewEl)
-                                        && previewEl.ValueKind == JsonValueKind.String)
-                                    {
-                                        eagerPreview = previewEl.GetString();
-                                    }
-
-                                    if (probe.TryGetProperty("visible", out JsonElement visibleEl)
-                                        && (visibleEl.ValueKind == JsonValueKind.True
-                                            || visibleEl.ValueKind == JsonValueKind.False))
-                                    {
-                                        visible = visibleEl.GetBoolean();
-                                        probed = true;
-                                    }
-                                }
-
-                                if (!string.IsNullOrEmpty(eagerPreview))
-                                {
-                                    // Persist before any later DestroyedContext path
-                                    // can clear attached/handle state.
-                                    RememberResolvedSnapshot(resolvedSnapshots, visible, eagerPreview);
-                                }
-                            }
-                            catch (PlaywrightException)
-                            {
-                            }
-                        }
-
-                        if (!probed && string.IsNullOrEmpty(eagerPreview))
-                        {
-                            try
-                            {
-                                string previewValue = await handle.EvaluateAsync<string>(RemoteObject.PreviewNodeFunction)
-                                    .ConfigureAwait(false);
-                                if (!string.IsNullOrEmpty(previewValue))
-                                {
-                                    eagerPreview = previewValue;
-                                    RememberResolvedSnapshot(resolvedSnapshots, visible: false, eagerPreview);
-                                }
-                            }
-                            catch (PlaywrightException)
-                            {
-                            }
-                        }
-
-                        if (!probed
-                            && wanted != WaitForSelectorState.Attached
                             && wanted != WaitForSelectorState.Detached)
                         {
                             visible = await handle.IsVisibleAsync().ConfigureAwait(false);

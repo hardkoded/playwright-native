@@ -3690,10 +3690,7 @@ namespace PlaywrightNative.WebKit
                 // Re-assert page activity after the frame context is ready so
                 // cross-process iframe navigations that steal focus between
                 // SetContent and evaluate do not leave requestStorageAccess
-                // without an active page (macOS). Upstream only uses
-                // Emulation.setActiveAndFocused — not Target.activate or an
-                // iframe mouse pulse (those fight OOPIF focus / do not keep
-                // transient activation across RSA's promise).
+                // without an active page (macOS).
                 if (frame?.ParentFrame != null)
                 {
                     try
@@ -3703,6 +3700,16 @@ namespace PlaywrightNative.WebKit
                     }
                     catch (PlaywrightException)
                     {
+                    }
+
+                    if (expression != null
+                        && expression.Contains("requestStorageAccess", StringComparison.Ordinal))
+                    {
+                        // macOS WebKit also needs a trusted input gesture on the
+                        // iframe; emulateUserGesture alone is not enough after OOPIF
+                        // load. Pulse via the page mouse stack — not window.focus /
+                        // ClickAsync("iframe") (those clear activation or steal focus).
+                        await PulseTrustedGestureOnFrameAsync(frame).ConfigureAwait(false);
                     }
                 }
 
@@ -3714,10 +3721,15 @@ namespace PlaywrightNative.WebKit
                     return EvaluateSerialization.ParseRemote<T>(wrapped);
                 }
 
-                // Child-frame thenables (requestStorageAccess) must run under
-                // callFunctionOn+emulateUserGesture — Runtime.evaluate's gesture flag
-                // is not enough after OOPIF load on macOS (upstream uses callFunctionOn).
-                JsonElement? remote = frame?.ParentFrame != null
+                // Child-frame requestStorageAccess must run under
+                // callFunctionOn+emulateUserGesture — Runtime.evaluate's gesture
+                // flag is not enough after OOPIF load on macOS. Do not wrap every
+                // child-frame evaluate: expressions like the page global `result`
+                // collide with a wrapper `let result` (TDZ / frameset click).
+                bool needsUserGesture = frame?.ParentFrame != null
+                    && expression != null
+                    && expression.Contains("requestStorageAccess", StringComparison.Ordinal);
+                JsonElement? remote = needsUserGesture
                     ? await context.EvaluateHandleWithUserGestureAsync(expression).ConfigureAwait(false)
                     : await context.EvaluateHandleAsync(expression).ConfigureAwait(false);
                 return await EvaluateSerialization.MaterializeAsync<T>(
@@ -7404,6 +7416,71 @@ namespace PlaywrightNative.WebKit
             {
                 // Older or exotic builds may lack the command; do not fail page init.
                 _logger?.LogDebug(ex, "Emulation.setActiveAndFocused failed for page proxy {PageProxyId}", _pageProxyId);
+            }
+        }
+
+        /// <summary>
+        /// Dispatches a trusted mouse click centered on the iframe element that hosts
+        /// <paramref name="frame"/> so macOS WebKit grants transient activation for
+        /// <c>document.requestStorageAccess()</c>. Does not run in-page
+        /// <c>window.focus()</c> (that breaks <c>document.hasFocus()</c> checks).
+        /// </summary>
+        /// <param name="frame">The child frame about to evaluate.</param>
+        /// <returns>A task that completes when the gesture has been sent or skipped.</returns>
+        private async Task PulseTrustedGestureOnFrameAsync(WKFrame frame)
+        {
+            WKFrame parent = frame?.ParentFrame;
+            if (parent == null)
+            {
+                return;
+            }
+
+            try
+            {
+                WKExecutionContext parentContext = await WaitForFrameContextAsync(parent).ConfigureAwait(false);
+                string frameNameJson = JsonSerializer.Serialize(frame.Name ?? string.Empty);
+                string frameUrlJson = JsonSerializer.Serialize(frame.Url ?? string.Empty);
+
+                // Prefer matching by name/src, then the first iframe.
+                double[] point = await parentContext.EvaluateAsync<double[]>(
+                    "(() => {" +
+                    "const frames = Array.from(document.querySelectorAll('iframe'));" +
+                    "let el = null;" +
+                    "const wantName = " + frameNameJson + ";" +
+                    "const wantUrl = " + frameUrlJson + ";" +
+                    "for (const f of frames) {" +
+                    "  try {" +
+                    "    if (wantName && f.name === wantName) { el = f; break; }" +
+                    "    if (wantUrl && (f.src === wantUrl || (f.contentWindow && f.contentWindow.location.href === wantUrl))) { el = f; break; }" +
+                    "  } catch (e) {}" +
+                    "}" +
+                    "if (!el && frames.length) el = frames[0];" +
+                    "if (!el) return null;" +
+                    "const r = el.getBoundingClientRect();" +
+                    "if (!r.width || !r.height) return null;" +
+                    "return [r.left + (r.width / 2), r.top + (r.height / 2)];" +
+                    "})()").ConfigureAwait(false);
+
+                if (point == null || point.Length < 2)
+                {
+                    return;
+                }
+
+                double x = point[0];
+                double y = point[1];
+
+                // Use the full mouse stack (WKRawMouse) so Darwin CFNetwork+proxy
+                // setups that drop bare Input.dispatchMouseEvent still get a
+                // trusted click on the iframe's content.
+                await _mouse.ClickAsync(x, y).ConfigureAwait(false);
+
+                // Do not call EnsureActiveAndFocusedAsync here — re-activating the
+                // page proxy after the iframe click clears transient user activation
+                // that requestStorageAccess needs on Darwin.
+            }
+            catch (PlaywrightException ex)
+            {
+                _logger?.LogDebug(ex, "Trusted gesture pulse failed for requestStorageAccess on {PageProxyId}", _pageProxyId);
             }
         }
 

@@ -121,11 +121,13 @@ namespace PlaywrightNative.WebKit
             // activation across requestStorageAccess microtasks. A sync
             // callFunctionOn that merely returns a Promise ends the gesture
             // scope before RSA settles (returns false on macOS).
+            // Use a private binding name — page scripts often expose a global
+            // `result` (page-click frameset), and `let result = (result)` is TDZ.
             string functionDeclaration =
                 "async function () {" +
-                "  let result = (" + expression + ");" +
-                "  if (typeof result === 'function') result = result();" +
-                "  return await result;" +
+                "  let __pwRet = (" + expression + ");" +
+                "  if (typeof __pwRet === 'function') __pwRet = __pwRet();" +
+                "  return await __pwRet;" +
                 "}";
 
             JsonElement? anchorResponse = await _session.SendAsync(
