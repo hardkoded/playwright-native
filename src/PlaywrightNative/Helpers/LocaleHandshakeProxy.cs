@@ -180,7 +180,10 @@ namespace PlaywrightNative.Helpers
             effectiveProxy = new Proxy
             {
                 Server = scheme + "127.0.0.1:" + handshake.Port.ToString(CultureInfo.InvariantCulture),
-                Bypass = bypassLoopback ? "<-loopback>" : null,
+
+                // <loopback> expands in ProxySettings.ShouldBypass (shim / MITM).
+                // Keep <-loopback> as a synonym there for older callers.
+                Bypass = bypassLoopback ? "<loopback>" : null,
             };
             return handshake;
         }

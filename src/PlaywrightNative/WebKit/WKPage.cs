@@ -5248,7 +5248,8 @@ namespace PlaywrightNative.WebKit
         /// <summary>
         /// True when <paramref name="a"/> and <paramref name="b"/> are the same
         /// navigation destination, including WebKit's trailing-slash canonicalization
-        /// (<c>http://host</c> vs <c>http://host/</c>).
+        /// (<c>http://host</c> vs <c>http://host/</c>) and whitespace-only
+        /// differences in <c>data:</c> URLs (MiniBrowser may re-serialize markup).
         /// </summary>
         private static bool IsSameNavigationDestination(string a, string b)
         {
@@ -5267,8 +5268,53 @@ namespace PlaywrightNative.WebKit
             // TLS renegotiation fixtures were false-interrupted as "/path" → "/path/").
             string aTrim = a.TrimEnd('/');
             string bTrim = b.TrimEnd('/');
-            return !string.IsNullOrEmpty(aTrim)
-                && string.Equals(aTrim, bTrim, StringComparison.Ordinal);
+            if (!string.IsNullOrEmpty(aTrim)
+                && string.Equals(aTrim, bTrim, StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            // data: navigations: WebKit may rewrite newlines to spaces in the
+            // committed URL. Treat whitespace-equivalent payloads as the same
+            // document (mouse/touch input tests use inline data: HTML).
+            if (a.StartsWith("data:", StringComparison.OrdinalIgnoreCase)
+                && b.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+            {
+                string aNorm = CollapseWhitespace(a);
+                string bNorm = CollapseWhitespace(b);
+                return string.Equals(aNorm, bNorm, StringComparison.Ordinal);
+            }
+
+            return false;
+        }
+
+        private static string CollapseWhitespace(string value)
+        {
+            if (string.IsNullOrEmpty(value))
+            {
+                return value;
+            }
+
+            System.Text.StringBuilder sb = new(value.Length);
+            bool pendingSpace = false;
+            foreach (char c in value)
+            {
+                if (char.IsWhiteSpace(c))
+                {
+                    pendingSpace = true;
+                    continue;
+                }
+
+                if (pendingSpace && sb.Length > 0)
+                {
+                    sb.Append(' ');
+                }
+
+                pendingSpace = false;
+                sb.Append(c);
+            }
+
+            return sb.ToString();
         }
 
         private static bool IsSameDocumentHashNavigation(string currentUrl, string nextUrl)
@@ -8670,6 +8716,13 @@ namespace PlaywrightNative.WebKit
                         _pendingNavigationCommitted = true;
                         commitTcs = _pendingCommitTcs;
                         _pendingCommitTcs = null;
+                    }
+                    else if (_pendingNavigationCommitted)
+                    {
+                        // Client / meta redirect after the goto target already
+                        // committed: keep Load/NetworkIdle waiters armed so
+                        // official timeout messaging wins (child-redirect.html).
+                        _pendingNavigationUrl = committedUrl;
                     }
                     else if (!IsSameNavigationDestination(committedUrl, NavigationTimeout.WithoutHash(_navigationStartUrl)))
                     {

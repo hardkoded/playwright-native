@@ -107,6 +107,12 @@ namespace PlaywrightNative.Helpers
         /// leading <c>*</c>, and a leading <c>.</c> matches a host suffix.
         /// Matches both <c>URL.host</c> (may include a non-default port) and
         /// <c>URL.hostname</c>, same as upstream Playwright.
+        /// Also expands <c>&lt;loopback&gt;</c> / <c>&lt;-loopback&gt;</c> to
+        /// localhost / link-local hosts for internal HTTP proxy shims
+        /// (<see cref="WebKitMacProxyBypassShim"/>, client-cert MITM). Chromium's
+        /// native <c>--proxy-bypass-list=&lt;-loopback&gt;</c> is passed to the
+        /// browser unchanged via <see cref="FormatBypassList"/> and is not
+        /// evaluated here.
         /// </summary>
         /// <param name="host">Official <c>URL.host</c> (port only when non-default).</param>
         /// <param name="bypass">Raw bypass list, or <see langword="null"/>.</param>
@@ -128,6 +134,20 @@ namespace PlaywrightNative.Helpers
                     continue;
                 }
 
+                // LocaleHandshakeProxy / Mac bypass shim: "localhost stays direct".
+                // Accept both SOCKS-style <loopback> and the Chromium-looking
+                // <-loopback> token historically written by bypassLoopback:true.
+                if (string.Equals(token, "<loopback>", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(token, "<-loopback>", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (IsLoopbackHostname(hostname))
+                    {
+                        return true;
+                    }
+
+                    continue;
+                }
+
                 if (token[0] == '.'
                     && (hostname.EndsWith(token, StringComparison.Ordinal)
                         || string.Equals(hostname, token.Substring(1), StringComparison.Ordinal)))
@@ -141,6 +161,39 @@ namespace PlaywrightNative.Helpers
                 {
                     return true;
                 }
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Whether <paramref name="hostname"/> is loopback / link-local in the
+        /// Chromium <c>&lt;loopback&gt;</c> sense (localhost, *.localhost,
+        /// 127.0.0.0/8, ::1).
+        /// </summary>
+        /// <param name="hostname">Host without port.</param>
+        /// <returns><see langword="true"/> for loopback hosts.</returns>
+        internal static bool IsLoopbackHostname(string hostname)
+        {
+            if (string.IsNullOrEmpty(hostname))
+            {
+                return false;
+            }
+
+            if (string.Equals(hostname, "localhost", StringComparison.OrdinalIgnoreCase)
+                || hostname.EndsWith(".localhost", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(hostname, "::1", StringComparison.Ordinal)
+                || string.Equals(hostname, "[::1]", StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            // 127.0.0.0/8
+            if (hostname.StartsWith("127.", StringComparison.Ordinal)
+                && System.Net.IPAddress.TryParse(hostname, out System.Net.IPAddress ip)
+                && System.Net.IPAddress.IsLoopback(ip))
+            {
+                return true;
             }
 
             return false;
