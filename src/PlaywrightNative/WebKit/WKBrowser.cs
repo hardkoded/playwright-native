@@ -555,6 +555,13 @@ namespace PlaywrightNative.WebKit
             _macProxyBypassShim?.Dispose();
             _macProxyBypassShim = null;
 
+            // CloseAsync unsubscribes Disconnected before disposing the connection,
+            // so OnDisconnected never runs on this path. Darwin often skips
+            // pageProxyDestroyed before process death — clear remaining pages so
+            // persistent-context Pages is empty after browser.CloseAsync
+            // (defaultbrowsercontext-2 ExposesBrowser).
+            CloseRemainingPages();
+
             RaiseDisconnected();
         }
 
@@ -969,7 +976,12 @@ namespace PlaywrightNative.WebKit
         private void OnDisconnected(object sender, EventArgs e)
         {
             _closed = true;
+            CloseRemainingPages();
+            RaiseDisconnected();
+        }
 
+        private void CloseRemainingPages()
+        {
             foreach (WKPage page in _pages.Values)
             {
                 page.WKContext?.RemovePage(page);
@@ -977,7 +989,6 @@ namespace PlaywrightNative.WebKit
             }
 
             _pages.Clear();
-            RaiseDisconnected();
         }
 
         private void RaiseDisconnected()

@@ -187,9 +187,14 @@ namespace PlaywrightNative.Helpers
 
             // Mac WS shim uses distinct fake hosts so HAR / IWebSocket.Url can
             // restore localhost vs 127.0.0.1 vs ::1 after the proxy hop.
+            // Map local.playwright → 127.0.0.1 (not "localhost"): test HTTPS
+            // fixtures bind IPAddress.Loopback (IPv4 only), and Darwin
+            // localhost often prefers ::1 first → connect fails → CFNetwork
+            // reports "Could not connect" instead of the MITM error page
+            // (BrowserShouldHaveIgnoreHttpsErrorsFalseByDefault).
             if (string.Equals(host, WebKitMacLocaleWebSocketShim.FakeLoopbackHost, StringComparison.OrdinalIgnoreCase))
             {
-                return "localhost";
+                return "127.0.0.1";
             }
 
             if (string.Equals(host, WebKitMacLocaleWebSocketShim.FakeIpv4LoopbackHost, StringComparison.OrdinalIgnoreCase))
@@ -1123,6 +1128,7 @@ namespace PlaywrightNative.Helpers
                                     string message = ClientCertificateHelper.RewriteTlsMessage(ex);
                                     await WriteTlsErrorPageAsync(prefixed, failedAlpn, message)
                                         .ConfigureAwait(false);
+                                    await HalfCloseAfterErrorPageAsync(client).ConfigureAwait(false);
                                 }
                             }
                             catch (IOException)
@@ -1184,7 +1190,7 @@ namespace PlaywrightNative.Helpers
                         && TryGetClientCert(request.Host, request.Port, out X509Certificate2 clientCert))
                     {
                         await EstablishTlsTunnelAsync(
-                            browser, origin, hello, request.Host, request.Port, clientCert)
+                            browser, origin, hello, request.Host, request.Port, clientCert, client)
                             .ConfigureAwait(false);
                     }
                     else
@@ -1308,7 +1314,8 @@ namespace PlaywrightNative.Helpers
             byte[] clientHello,
             string host,
             int port,
-            X509Certificate2 clientCert)
+            X509Certificate2 clientCert,
+            TcpClient browserClient = null)
         {
             IReadOnlyList<string> offered = ParseAlpnFromClientHello(clientHello)
                 ?? new[] { "http/1.1" };
@@ -1368,6 +1375,7 @@ namespace PlaywrightNative.Helpers
 
                     serverTls = null;
                     await WriteTlsErrorPageAsync(browserPrefixed, offered, message).ConfigureAwait(false);
+                    await HalfCloseAfterErrorPageAsync(browserClient).ConfigureAwait(false);
                     return;
                 }
 
@@ -1509,6 +1517,60 @@ namespace PlaywrightNative.Helpers
                 catch (ObjectDisposedException)
                 {
                 }
+            }
+        }
+
+        /// <summary>
+        /// After the MITM error HTML is written, half-close the accepted socket
+        /// and briefly drain so disposing <see cref="TcpClient"/> does not RST
+        /// unread data still in the Darwin bypass shim pipe (CFNetwork then
+        /// reports "Could not connect" instead of the error document).
+        /// </summary>
+        /// <param name="client">Accepted browser-side client, or null.</param>
+        /// <returns>A task that completes when the half-close attempt finishes.</returns>
+        private async Task HalfCloseAfterErrorPageAsync(TcpClient client)
+        {
+            if (client?.Client == null)
+            {
+                return;
+            }
+
+            try
+            {
+                client.Client.Shutdown(SocketShutdown.Send);
+            }
+            catch (SocketException)
+            {
+                return;
+            }
+            catch (ObjectDisposedException)
+            {
+                return;
+            }
+
+            try
+            {
+                NetworkStream stream = client.GetStream();
+                byte[] sink = new byte[1024];
+                using CancellationTokenSource drainCts = new(TimeSpan.FromMilliseconds(250));
+                while (true)
+                {
+                    int n = await stream.ReadAsync(sink.AsMemory(0, sink.Length), drainCts.Token)
+                        .ConfigureAwait(false);
+                    if (n <= 0)
+                    {
+                        break;
+                    }
+                }
+            }
+            catch (IOException)
+            {
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+            catch (OperationCanceledException)
+            {
             }
         }
 

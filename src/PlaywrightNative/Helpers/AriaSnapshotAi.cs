@@ -70,6 +70,13 @@ namespace PlaywrightNative.Helpers
       if (!doc.documentElement) {
         return false;
       }
+      // Lazy iframes with a real src often sit on about:blank with
+      // readyState complete before navigation starts — treating them as
+      // ready made Darwin describeNode hang (ReturnEmptySnapshotWhenIframeIsNotLoaded).
+      const src = el.getAttribute('src') || '';
+      if (src && src !== 'about:blank' && (!doc.URL || doc.URL === 'about:blank')) {
+        return false;
+      }
       if (doc.readyState === 'loading') {
         return false;
       }
