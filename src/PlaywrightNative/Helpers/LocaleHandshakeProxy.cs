@@ -1170,13 +1170,10 @@ namespace PlaywrightNative.Helpers
                     }
 
                     byte[] forwarded = predetermined == null ? ToOriginForm(request) : StripProxyHeaders(request);
-                    if (predetermined == null
-                        && TryParseRequestTarget(request, out string forwardTarget)
-                        && TryParseAuthority(forwardTarget, out string forwardHost, out _)
-                        && WebKitMacLocaleWebSocketShim.IsFakeLoopbackHost(forwardHost))
-                    {
-                        forwarded = RewriteFakeLoopbackHostHeader(forwarded);
-                    }
+
+                    // SOCKS predetermined targets keep the wire Host (local.playwright*).
+                    // Always rewrite to the public loopback host before the origin hop.
+                    forwarded = RewriteFakeLoopbackHostHeader(forwarded);
 
                     await serverIo.Stream.WriteAsync(forwarded, token).ConfigureAwait(false);
                     if (IsWebSocketUpgrade(request))

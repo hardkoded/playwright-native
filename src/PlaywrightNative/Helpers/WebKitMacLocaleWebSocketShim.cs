@@ -25,9 +25,10 @@ namespace PlaywrightNative.Helpers
     /// same reason. This init script rewrites loopback WebSocket URLs (and Blob
     /// worker sources that embed them) to distinct fake hosts so the
     /// handshake proxy sees the upgrade; the proxy maps that host back to
-    /// the original loopback when connecting. <c>WebSocket.url</c> and message
-    /// <c>origin</c> are restored to the caller-facing loopback URL so page
-    /// scripts still observe <c>ws://localhost</c> / <c>ws://127.0.0.1</c>.
+    /// the original loopback when connecting. <c>WebSocket.url</c> is restored
+    /// to the caller-facing loopback URL. Message <c>origin</c> is left as the
+    /// wire origin — wrapping message listeners with <c>Proxy</c> broke
+    /// await-in-evaluate Promise resolution for <c>message</c> events.
     /// Network/HAR events see the wire host; <see cref="ToPublicUrl"/> maps
     /// them back for the public API.
     /// </summary>
@@ -65,29 +66,19 @@ namespace PlaywrightNative.Helpers
     return null;
   };
   const parseWs = (url) => {
-    try {
-      return new URL(String(url), location.href);
-    } catch (e) {
-      return null;
-    }
+    try { return new URL(String(url), location.href); } catch (e) { return null; }
   };
   const rewriteUrl = (url) => {
     const original = parseWs(url);
     if (!original || (original.protocol !== 'ws:' && original.protocol !== 'wss:'))
-      return { wire: url, publicUrl: String(url), publicOrigin: null, fakeOrigin: null };
+      return { wire: url, publicUrl: String(url) };
     const fake = fakeFor(original.hostname);
     if (!fake)
-      return { wire: url, publicUrl: String(url), publicOrigin: null, fakeOrigin: null };
-    const publicOrigin = original.protocol + '//' + original.host;
+      return { wire: url, publicUrl: String(url) };
     const publicUrl = original.toString();
     const wireUrl = new URL(publicUrl);
     wireUrl.hostname = fake;
-    return {
-      wire: wireUrl.toString(),
-      publicUrl,
-      publicOrigin,
-      fakeOrigin: wireUrl.protocol + '//' + wireUrl.host,
-    };
+    return { wire: wireUrl.toString(), publicUrl };
   };
   const rewriteText = (text) => {
     if (typeof text !== 'string') return text;
@@ -99,73 +90,23 @@ namespace PlaywrightNative.Helpers
       .replace(/ws:\/\/(localhost|[a-z0-9-]+\.localhost)/gi, 'ws://local.playwright')
       .replace(/wss:\/\/(localhost|[a-z0-9-]+\.localhost)/gi, 'wss://local.playwright');
   };
-  const wrapMessageEvent = (event, publicOrigin, fakeOrigin) => {
-    if (!publicOrigin || !fakeOrigin || event.origin !== fakeOrigin)
-      return event;
-    try {
-      return new Proxy(event, {
-        get(target, prop, receiver) {
-          if (prop === 'origin') return publicOrigin;
-          const value = Reflect.get(target, prop, receiver);
-          return typeof value === 'function' ? value.bind(target) : value;
-        }
-      });
-    } catch (e) {
-      return event;
-    }
-  };
   const OrigWS = globalThis.WebSocket;
   if (typeof OrigWS === 'function') {
     const Wrapped = function(url, protocols) {
       const rewritten = rewriteUrl(url);
       const ws = protocols === undefined ? new OrigWS(rewritten.wire) : new OrigWS(rewritten.wire, protocols);
-      if (!rewritten.publicOrigin || rewritten.wire === rewritten.publicUrl)
-        return ws;
-      try {
-        Object.defineProperty(ws, 'url', {
-          configurable: true,
-          enumerable: true,
-          get: () => rewritten.publicUrl,
-        });
-      } catch (e) {}
-      const wrapListener = (listener) => {
-        if (typeof listener !== 'function') return listener;
-        const wrapped = function(event) {
-          return listener.call(this, wrapMessageEvent(event, rewritten.publicOrigin, rewritten.fakeOrigin));
-        };
-        wrapped.__pw_orig_listener = listener;
-        listener.__pw_wrapped_listener = wrapped;
-        return wrapped;
-      };
-      const origAdd = ws.addEventListener.bind(ws);
-      ws.addEventListener = function(type, listener, options) {
-        if (type === 'message')
-          return origAdd(type, wrapListener(listener), options);
-        return origAdd(type, listener, options);
-      };
-      const origRemove = ws.removeEventListener.bind(ws);
-      ws.removeEventListener = function(type, listener, options) {
-        if (type === 'message' && listener && listener.__pw_wrapped_listener)
-          return origRemove(type, listener.__pw_wrapped_listener, options);
-        return origRemove(type, listener, options);
-      };
-      let userOnMessage = null;
-      let wrappedOnMessage = null;
-      try {
-        Object.defineProperty(ws, 'onmessage', {
-          configurable: true,
-          enumerable: true,
-          get: () => userOnMessage,
-          set: (listener) => {
-            if (wrappedOnMessage)
-              origRemove('message', wrappedOnMessage);
-            userOnMessage = listener;
-            wrappedOnMessage = typeof listener === 'function' ? wrapListener(listener) : null;
-            if (wrappedOnMessage)
-              origAdd('message', wrappedOnMessage);
-          }
-        });
-      } catch (e) {}
+      // Restore caller-facing URL only. Do not wrap message listeners — Proxy /
+      // rebinding breaks await-in-evaluate Promise resolution for message events
+      // (capabilities WebSocketShouldWork / web-socket should work).
+      if (rewritten.wire !== rewritten.publicUrl) {
+        try {
+          Object.defineProperty(ws, 'url', {
+            configurable: true,
+            enumerable: true,
+            get: () => rewritten.publicUrl,
+          });
+        } catch (e) {}
+      }
       return ws;
     };
     Wrapped.prototype = OrigWS.prototype;
@@ -174,9 +115,7 @@ namespace PlaywrightNative.Helpers
     Wrapped.OPEN = OrigWS.OPEN;
     Wrapped.CLOSING = OrigWS.CLOSING;
     Wrapped.CLOSED = OrigWS.CLOSED;
-    try {
-      Object.setPrototypeOf(Wrapped, OrigWS);
-    } catch (e) {}
+    try { Object.setPrototypeOf(Wrapped, OrigWS); } catch (e) {}
     globalThis.WebSocket = Wrapped;
   }
   const OrigBlob = globalThis.Blob;
@@ -189,9 +128,7 @@ namespace PlaywrightNative.Helpers
       return new OrigBlob(next, options);
     };
     WrappedBlob.prototype = OrigBlob.prototype;
-    try {
-      Object.setPrototypeOf(WrappedBlob, OrigBlob);
-    } catch (e) {}
+    try { Object.setPrototypeOf(WrappedBlob, OrigBlob); } catch (e) {}
     globalThis.Blob = WrappedBlob;
   }
 })()";

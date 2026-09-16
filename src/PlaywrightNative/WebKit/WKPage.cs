@@ -7485,9 +7485,9 @@ namespace PlaywrightNative.WebKit
                     clickCount = 1,
                 }).ConfigureAwait(false);
 
-                // Re-assert page activity after the click (iframe focus is expected
-                // for requestStorageAccess; page-proxy active flag must stay set).
-                await EnsureActiveAndFocusedAsync().ConfigureAwait(false);
+                // Do not call EnsureActiveAndFocusedAsync here — re-activating the
+                // page proxy after the iframe click clears transient user activation
+                // that requestStorageAccess needs on Darwin.
             }
             catch (PlaywrightException ex)
             {
