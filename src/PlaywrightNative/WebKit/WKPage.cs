@@ -3702,6 +3702,17 @@ namespace PlaywrightNative.WebKit
                         // / synthetic click inside callFunctionOn (those break
                         // document.hasFocus() for unrelated child-frame evaluates).
                         await PulseTrustedGestureOnFrameAsync(frame).ConfigureAwait(false);
+
+                        // Prefer a real element click through the page mouse stack when
+                        // the iframe is addressable — Darwin CFNetwork+proxy setups
+                        // sometimes drop the raw Input.dispatchMouseEvent activation.
+                        try
+                        {
+                            await ClickAsync("iframe", timeout: 1000).ConfigureAwait(false);
+                        }
+                        catch (PlaywrightException)
+                        {
+                        }
                     }
                 }
 

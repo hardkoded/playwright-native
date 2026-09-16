@@ -1105,6 +1105,23 @@ namespace PlaywrightNative.Helpers
                         // parsing it as HTTP hangs (IgnoreHTTPSErrors / cookies).
                         if (WebKitMacLocaleWebSocketShim.IsFakeLoopbackHost(host))
                         {
+                            // Peek one byte: TLS handshake records start with 0x16.
+                            byte[] peek = new byte[1];
+                            int peeked = await client.Stream.ReadAsync(peek.AsMemory(0, 1), token)
+                                .ConfigureAwait(false);
+                            if (peeked == 0)
+                            {
+                                return;
+                            }
+
+                            if (peek[0] == 0x16)
+                            {
+                                client.Unread(peek, 0, 1);
+                                await TunnelAsync(client, serverIo, token).ConfigureAwait(false);
+                                return;
+                            }
+
+                            client.Unread(peek, 0, 1);
                             byte[] tunneled = await ReadHttpMessageAsync(client, token).ConfigureAwait(false);
                             if (tunneled == null || tunneled.Length == 0)
                             {

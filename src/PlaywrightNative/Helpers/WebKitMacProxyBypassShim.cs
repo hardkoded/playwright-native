@@ -344,6 +344,61 @@ namespace PlaywrightNative.Helpers
         }
 
         /// <summary>
+        /// Removes <c>Proxy-Connection</c> / <c>Proxy-Authorization</c> before an
+        /// origin hop so the test server's view matches <c>Request.AllHeaders</c>.
+        /// </summary>
+        /// <param name="headerBytes">Origin-form request headers.</param>
+        /// <returns>Headers without proxy hop fields.</returns>
+        private static byte[] StripProxyHopHeaders(byte[] headerBytes)
+        {
+            if (headerBytes == null || headerBytes.Length == 0)
+            {
+                return headerBytes;
+            }
+
+            string text = Latin1.GetString(headerBytes);
+            int headerEnd = text.IndexOf("\r\n\r\n", StringComparison.Ordinal);
+            if (headerEnd < 0)
+            {
+                return headerBytes;
+            }
+
+            string[] lines = text.Substring(0, headerEnd).Split(HeaderLineSeparators, StringSplitOptions.None);
+            if (lines.Length == 0)
+            {
+                return headerBytes;
+            }
+
+            StringBuilder rebuilt = new();
+            bool changed = false;
+            for (int i = 0; i < lines.Length; i++)
+            {
+                if (i > 0
+                    && (lines[i].StartsWith("Proxy-Connection:", StringComparison.OrdinalIgnoreCase)
+                        || lines[i].StartsWith("Proxy-Authorization:", StringComparison.OrdinalIgnoreCase)))
+                {
+                    changed = true;
+                    continue;
+                }
+
+                if (rebuilt.Length > 0)
+                {
+                    rebuilt.Append("\r\n");
+                }
+
+                rebuilt.Append(lines[i]);
+            }
+
+            if (!changed)
+            {
+                return headerBytes;
+            }
+
+            rebuilt.Append(text.AsSpan(headerEnd));
+            return Latin1.GetBytes(rebuilt.ToString());
+        }
+
+        /// <summary>
         /// Returns whether <paramref name="headerBytes"/> is a WebSocket upgrade
         /// handshake (absolute-form or origin-form).
         /// </summary>
@@ -731,7 +786,10 @@ namespace PlaywrightNative.Helpers
                     // Direct origin connect: keep the browser's Connection header.
                     // Forcing close here made AllHeaders report keep-alive while the
                     // test server saw Connection: close (ShouldReportRawHeaders).
-                    outbound = RewriteRequestTarget(headerBytes, method, originForm, forceConnectionClose: false);
+                    // Still strip Proxy-* so the origin does not see hop headers that
+                    // Network.allHeaders never reports (ShouldGetTheSameHeadersAsTheServer).
+                    outbound = StripProxyHopHeaders(
+                        RewriteRequestTarget(headerBytes, method, originForm, forceConnectionClose: false));
                 }
                 else
                 {

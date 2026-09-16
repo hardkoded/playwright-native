@@ -25,12 +25,11 @@ namespace PlaywrightNative.Helpers
     /// same reason. This init script rewrites loopback WebSocket URLs (and Blob
     /// worker sources that embed them) to distinct fake hosts so the
     /// handshake proxy sees the upgrade; the proxy maps that host back to
-    /// the original loopback when connecting. <c>WebSocket.url</c> is restored
-    /// to the caller-facing loopback URL. Message <c>origin</c> is left as the
-    /// wire origin — wrapping message listeners with <c>Proxy</c> broke
-    /// await-in-evaluate Promise resolution for <c>message</c> events.
-    /// Network/HAR events see the wire host; <see cref="ToPublicUrl"/> maps
-    /// them back for the public API.
+    /// the original loopback when connecting. <c>WebSocket.url</c> and message
+    /// <c>origin</c> are restored to the caller-facing loopback URL via a
+    /// plain event facade (not <c>Proxy</c>/<c>Object.create</c>, which broke
+    /// message delivery under WebKit). Network/HAR events see the wire host;
+    /// <see cref="ToPublicUrl"/> maps them back for the public API.
     /// </summary>
     internal static class WebKitMacLocaleWebSocketShim
     {
@@ -71,14 +70,17 @@ namespace PlaywrightNative.Helpers
   const rewriteUrl = (url) => {
     const original = parseWs(url);
     if (!original || (original.protocol !== 'ws:' && original.protocol !== 'wss:'))
-      return { wire: url, publicUrl: String(url) };
+      return { wire: url, publicUrl: String(url), publicOrigin: null, fakeOrigins: null };
     const fake = fakeFor(original.hostname);
     if (!fake)
-      return { wire: url, publicUrl: String(url) };
+      return { wire: url, publicUrl: String(url), publicOrigin: null, fakeOrigins: null };
     const publicUrl = original.toString();
+    const publicOrigin = original.protocol + '//' + original.host;
     const wireUrl = new URL(publicUrl);
     wireUrl.hostname = fake;
-    return { wire: wireUrl.toString(), publicUrl };
+    const fakeWs = wireUrl.protocol + '//' + wireUrl.host;
+    const fakeHttp = fakeWs.replace(/^ws/i, 'http').replace(/^wss/i, 'https');
+    return { wire: wireUrl.toString(), publicUrl, publicOrigin, fakeOrigins: [fakeWs, fakeHttp] };
   };
   const rewriteText = (text) => {
     if (typeof text !== 'string') return text;
@@ -90,23 +92,85 @@ namespace PlaywrightNative.Helpers
       .replace(/ws:\/\/(localhost|[a-z0-9-]+\.localhost)/gi, 'ws://local.playwright')
       .replace(/wss:\/\/(localhost|[a-z0-9-]+\.localhost)/gi, 'wss://local.playwright');
   };
+  // Restore message.origin without Proxy/Object.create(MessageEvent) —
+  // both break message delivery under WebKit (await-in-evaluate hangs or
+  // page log never sees .data). Use a plain facade for the fields page
+  // scripts read (data/origin/lastEventId).
+  const withPublicOrigin = (event, publicOrigin, fakeOrigins) => {
+    if (!publicOrigin || !fakeOrigins || fakeOrigins.indexOf(event.origin) < 0)
+      return event;
+    return {
+      data: event.data,
+      origin: publicOrigin,
+      lastEventId: event.lastEventId || '',
+      type: event.type,
+      ports: event.ports,
+      source: event.source,
+      target: event.target,
+      currentTarget: event.currentTarget,
+      isTrusted: event.isTrusted,
+      timeStamp: event.timeStamp,
+      bubbles: event.bubbles,
+      cancelable: event.cancelable,
+      defaultPrevented: event.defaultPrevented,
+      eventPhase: event.eventPhase,
+      preventDefault: function() { return event.preventDefault(); },
+      stopPropagation: function() { return event.stopPropagation(); },
+      stopImmediatePropagation: function() { return event.stopImmediatePropagation(); },
+    };
+  };
   const OrigWS = globalThis.WebSocket;
   if (typeof OrigWS === 'function') {
     const Wrapped = function(url, protocols) {
       const rewritten = rewriteUrl(url);
       const ws = protocols === undefined ? new OrigWS(rewritten.wire) : new OrigWS(rewritten.wire, protocols);
-      // Restore caller-facing URL only. Do not wrap message listeners — Proxy /
-      // rebinding breaks await-in-evaluate Promise resolution for message events
-      // (capabilities WebSocketShouldWork / web-socket should work).
-      if (rewritten.wire !== rewritten.publicUrl) {
-        try {
-          Object.defineProperty(ws, 'url', {
-            configurable: true,
-            enumerable: true,
-            get: () => rewritten.publicUrl,
-          });
-        } catch (e) {}
-      }
+      if (rewritten.wire === rewritten.publicUrl)
+        return ws;
+      try {
+        Object.defineProperty(ws, 'url', {
+          configurable: true,
+          enumerable: true,
+          get: () => rewritten.publicUrl,
+        });
+      } catch (e) {}
+      const wrapListener = (listener) => {
+        if (typeof listener !== 'function') return listener;
+        const wrapped = function(event) {
+          return listener.call(this, withPublicOrigin(event, rewritten.publicOrigin, rewritten.fakeOrigins));
+        };
+        wrapped.__pw_orig_listener = listener;
+        listener.__pw_wrapped_listener = wrapped;
+        return wrapped;
+      };
+      const origAdd = ws.addEventListener.bind(ws);
+      ws.addEventListener = function(type, listener, options) {
+        if (type === 'message')
+          return origAdd(type, wrapListener(listener), options);
+        return origAdd(type, listener, options);
+      };
+      const origRemove = ws.removeEventListener.bind(ws);
+      ws.removeEventListener = function(type, listener, options) {
+        if (type === 'message' && listener && listener.__pw_wrapped_listener)
+          return origRemove(type, listener.__pw_wrapped_listener, options);
+        return origRemove(type, listener, options);
+      };
+      let userOnMessage = null;
+      let wrappedOnMessage = null;
+      try {
+        Object.defineProperty(ws, 'onmessage', {
+          configurable: true,
+          enumerable: true,
+          get: () => userOnMessage,
+          set: (listener) => {
+            if (wrappedOnMessage)
+              origRemove('message', wrappedOnMessage);
+            userOnMessage = listener;
+            wrappedOnMessage = typeof listener === 'function' ? wrapListener(listener) : null;
+            if (wrappedOnMessage)
+              origAdd('message', wrappedOnMessage);
+          }
+        });
+      } catch (e) {}
       return ws;
     };
     Wrapped.prototype = OrigWS.prototype;
