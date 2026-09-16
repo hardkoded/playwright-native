@@ -1139,7 +1139,8 @@ namespace PlaywrightNative.WebKit
         /// On macOS WebKit, loopback WebSockets bypass HTTP proxies. When a
         /// <see cref="LocaleHandshakeProxy"/> is attached, install an init
         /// script that rewrites <c>ws://localhost</c> to <c>local.playwright</c>
-        /// so Accept-Language rewriting still applies.
+        /// so Accept-Language rewriting still applies. Linux uses SOCKS without
+        /// loopback bypass, so the shim is unnecessary there.
         /// </summary>
         /// <returns>A task that completes when the shim is registered.</returns>
         internal async Task ApplyMacLocaleWebSocketShimAsync()

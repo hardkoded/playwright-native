@@ -4919,11 +4919,24 @@ namespace PlaywrightNative.WebKit
                 return;
             }
 
+            // Suppressed duplicates (COOP / process-swap) must only complete the
+            // public pending navigation. Falling back to the suppressed request
+            // itself re-emits requestfinished after pending was cleared.
             WKRequest publicRequest = request.SuppressPageEvents
-                ? _firstPendingNavigationRequest ?? request
+                ? _firstPendingNavigationRequest
                 : request;
+            if (publicRequest == null)
+            {
+                return;
+            }
+
             if (ReferenceEquals(publicRequest, _firstPendingNavigationRequest)
                 && _emittedPendingNavigationFinished)
+            {
+                return;
+            }
+
+            if (!publicRequest.TryMarkPageFinishedRaised())
             {
                 return;
             }

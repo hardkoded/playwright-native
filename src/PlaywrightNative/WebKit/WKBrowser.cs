@@ -276,12 +276,12 @@ namespace PlaywrightNative.WebKit
                 // SetExtraHTTPHeaders stamp WS handshakes. Skip when a client-
                 // certificate MITM already owns the browser proxy.
                 //
-                // Darwin: bypass loopback for regular HTTP so CFNetwork multipart /
-                // HAR / post bodies are not truncated by the handshake MITM.
-                // WebKitMacLocaleWebSocketShim rewrites ws://localhost to
-                // local.playwright so upgrades still reach the proxy (and pick up
-                // ExtraHTTPHeaders / Accept-Language). Linux libsoup proxies
-                // localhost directly, so keep bypassLoopback false there.
+                // Darwin: HTTP CONNECT + loopback bypass (CFNetwork truncates
+                // multipart/HAR through the MITM). WebKitMacLocaleWebSocketShim
+                // rewrites ws://localhost to local.playwright so upgrades still
+                // reach the proxy. Linux: SOCKS5 without bypass - HTTP CONNECT
+                // proxies disable WebKit HTTP/2 ALPN on h2-only origins, while
+                // SOCKS keeps ALPN and still sees cleartext WS upgrades.
                 bool isDarwin = RuntimeInformation.IsOSPlatform(OSPlatform.OSX);
                 LocaleHandshakeProxy handshake = certsProxy == null
                     ? LocaleHandshakeProxy.TryStart(
@@ -289,14 +289,15 @@ namespace PlaywrightNative.WebKit
                         browserProxy,
                         force: true,
                         bypassLoopback: isDarwin,
+                        useSocks: !isDarwin,
                         out browserProxy)
                     : null;
 
                 // macOS CFNetwork excludes localhost/link-local whenever any
                 // bypass list is set, and also fails localhost through a raw
                 // HTTP MITM (client certs / handshake). Always wrap HTTP(S)
-                // proxies — including Darwin client-certificate HttpBrowserProxy —
-                // so loopback-mapped hosts (local.playwright → 127.0.0.1) stay
+                // proxies - including Darwin client-certificate HttpBrowserProxy -
+                // so loopback-mapped hosts (local.playwright -> 127.0.0.1) stay
                 // proxied. SOCKS (Linux certs) is not wrapped.
                 WebKitMacProxyBypassShim bypassShim =
                     WebKitMacProxyBypassShim.TryStart(browserProxy, out browserProxy);
@@ -501,7 +502,7 @@ namespace PlaywrightNative.WebKit
 
             try
             {
-                // Sentinel id — the response will be discarded by WKConnection.
+                // Sentinel id - the response will be discarded by WKConnection.
                 await _connection.BrowserSession
                     .SendAsync("Playwright.close", parameters: null, messageId: WKConnection.BrowserCloseMessageId)
                     .ConfigureAwait(false);
@@ -621,7 +622,7 @@ namespace PlaywrightNative.WebKit
 
         /// <summary>
         /// Creates a new isolated browser context. This is the way to get
-        /// a usable context — there is no implicit default context.
+        /// a usable context - there is no implicit default context.
         /// </summary>
         /// <returns>The new <see cref="WKBrowserContext"/>.</returns>
         internal async Task<WKBrowserContext> NewWKContextAsync(Proxy proxy = null)
@@ -845,7 +846,7 @@ namespace PlaywrightNative.WebKit
                 context = _defaultContext;
             }
 
-            // Per-page session — sessionId is unused on the wire; the routing key is pageProxyId,
+            // Per-page session - sessionId is unused on the wire; the routing key is pageProxyId,
             // which the session stamps on every outbound message.
             WKSession pageSession = new(_connection, sessionId: string.Empty, pageProxyId: pageProxyId);
 
@@ -868,7 +869,7 @@ namespace PlaywrightNative.WebKit
             else if (context == null || !context.CreatePageIsInFlight())
             {
                 // Official only sets opener from protocol openerId. Infer a
-                // sibling solely for noopener popups that omit it — never for
+                // sibling solely for noopener popups that omit it - never for
                 // Playwright.createPage (context.newPage), or the new page
                 // takes the popup-navigation path and can close on first goto.
                 WKPage inferred = PopupOpenedHelper.InferListenerOrSoleSibling(

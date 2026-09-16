@@ -47,6 +47,7 @@ namespace PlaywrightNative.Helpers
             if (reason.Contains("network connection was lost", StringComparison.OrdinalIgnoreCase)
                 || reason.Contains("Could not connect to the server", StringComparison.OrdinalIgnoreCase)
                 || reason.Contains("Connection refused", StringComparison.OrdinalIgnoreCase)
+                || reason.Contains("Connection terminated unexpectedly", StringComparison.OrdinalIgnoreCase)
                 || reason.Contains("NSURLErrorCannotConnectToHost", StringComparison.OrdinalIgnoreCase)
                 || reason.Contains("NSURLErrorNetworkConnectionLost", StringComparison.OrdinalIgnoreCase)
                 || reason.Contains("NSURLErrorTimedOut", StringComparison.OrdinalIgnoreCase))

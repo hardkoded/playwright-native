@@ -44,15 +44,17 @@ namespace PlaywrightNative.Helpers
         private static readonly Encoding Latin1 = Encoding.Latin1;
 
         private readonly string _locale;
+        private readonly bool _useSocks;
         private readonly TcpListener _listener;
         private readonly CancellationTokenSource _cts = new();
         private readonly Task _acceptLoop;
         private volatile IReadOnlyDictionary<string, string> _extraHeaders;
         private int _disposed;
 
-        private LocaleHandshakeProxy(string locale)
+        private LocaleHandshakeProxy(string locale, bool useSocks)
         {
             _locale = locale;
+            _useSocks = useSocks;
             _listener = new TcpListener(IPAddress.Loopback, 0);
             _listener.Start();
             Port = ((IPEndPoint)_listener.LocalEndpoint).Port;
@@ -140,6 +142,32 @@ namespace PlaywrightNative.Helpers
             bool force,
             bool bypassLoopback,
             out Proxy effectiveProxy)
+            => TryStart(locale, userProxy, force, bypassLoopback, useSocks: false, out effectiveProxy);
+
+        /// <summary>
+        /// Starts a handshake proxy when <paramref name="locale"/> is set,
+        /// <paramref name="force"/> is <see langword="true"/>, and the caller
+        /// did not already supply a proxy.
+        /// </summary>
+        /// <param name="locale">Context locale, or <see langword="null"/>.</param>
+        /// <param name="userProxy">Caller-supplied proxy, or <see langword="null"/>.</param>
+        /// <param name="force">Start even when no locale is configured.</param>
+        /// <param name="bypassLoopback">
+        /// When <see langword="true"/>, localhost bypasses the proxy.
+        /// </param>
+        /// <param name="useSocks">
+        /// When <see langword="true"/>, expose <c>socks5://</c> so WebKit keeps
+        /// HTTP/2 ALPN (HTTP CONNECT proxies disable it on Linux libsoup).
+        /// </param>
+        /// <param name="effectiveProxy">Proxy to pass to createContext.</param>
+        /// <returns>The proxy to dispose with the context, or <see langword="null"/>.</returns>
+        internal static LocaleHandshakeProxy TryStart(
+            string locale,
+            Proxy userProxy,
+            bool force,
+            bool bypassLoopback,
+            bool useSocks,
+            out Proxy effectiveProxy)
         {
             effectiveProxy = userProxy;
             if (userProxy != null || (string.IsNullOrEmpty(locale) && !force))
@@ -147,10 +175,11 @@ namespace PlaywrightNative.Helpers
                 return null;
             }
 
-            LocaleHandshakeProxy handshake = new(locale);
+            LocaleHandshakeProxy handshake = new(locale, useSocks);
+            string scheme = useSocks ? "socks5://" : "http://";
             effectiveProxy = new Proxy
             {
-                Server = "http://127.0.0.1:" + handshake.Port.ToString(CultureInfo.InvariantCulture),
+                Server = scheme + "127.0.0.1:" + handshake.Port.ToString(CultureInfo.InvariantCulture),
                 Bypass = bypassLoopback ? "<-loopback>" : null,
             };
             return handshake;
@@ -658,6 +687,145 @@ namespace PlaywrightNative.Helpers
             }
         }
 
+        private static async Task<bool> SocksHandshakeAsync(Stream stream, CancellationToken token)
+        {
+            int ver = await ReadSocksByteAsync(stream, token).ConfigureAwait(false);
+            int nmethods = await ReadSocksByteAsync(stream, token).ConfigureAwait(false);
+            if (ver != 0x05 || nmethods < 0)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < nmethods; i++)
+            {
+                if (await ReadSocksByteAsync(stream, token).ConfigureAwait(false) < 0)
+                {
+                    return false;
+                }
+            }
+
+            await stream.WriteAsync(new byte[] { 0x05, 0x00 }, token).ConfigureAwait(false);
+            return true;
+        }
+
+        private static async Task<(string Host, int Port)?> TryReadSocksConnectAsync(
+            Stream stream,
+            CancellationToken token)
+        {
+            int ver = await ReadSocksByteAsync(stream, token).ConfigureAwait(false);
+            int cmd = await ReadSocksByteAsync(stream, token).ConfigureAwait(false);
+            int rsv = await ReadSocksByteAsync(stream, token).ConfigureAwait(false);
+            int atyp = await ReadSocksByteAsync(stream, token).ConfigureAwait(false);
+            if (ver != 0x05 || cmd != 0x01 || rsv != 0x00)
+            {
+                return null;
+            }
+
+            string host;
+            if (atyp == 0x01)
+            {
+                byte[] addr = new byte[4];
+                if (!await ReadSocksExactAsync(stream, addr, token).ConfigureAwait(false))
+                {
+                    return null;
+                }
+
+                host = new IPAddress(addr).ToString();
+            }
+            else if (atyp == 0x04)
+            {
+                byte[] addr = new byte[16];
+                if (!await ReadSocksExactAsync(stream, addr, token).ConfigureAwait(false))
+                {
+                    return null;
+                }
+
+                host = new IPAddress(addr).ToString();
+            }
+            else if (atyp == 0x03)
+            {
+                int len = await ReadSocksByteAsync(stream, token).ConfigureAwait(false);
+                if (len <= 0)
+                {
+                    return null;
+                }
+
+                byte[] name = new byte[len];
+                if (!await ReadSocksExactAsync(stream, name, token).ConfigureAwait(false))
+                {
+                    return null;
+                }
+
+                host = Encoding.ASCII.GetString(name);
+            }
+            else
+            {
+                return null;
+            }
+
+            byte[] portBytes = new byte[2];
+            if (!await ReadSocksExactAsync(stream, portBytes, token).ConfigureAwait(false))
+            {
+                return null;
+            }
+
+            int port = (portBytes[0] << 8) | portBytes[1];
+            return (host, port);
+        }
+
+        private static async Task WriteSocksSuccessAsync(Stream stream, CancellationToken token)
+        {
+            byte[] reply =
+            {
+                0x05, 0x00, 0x00, 0x01,
+                127, 0, 0, 1,
+                0x00, 0x00,
+            };
+            await stream.WriteAsync(reply, token).ConfigureAwait(false);
+        }
+
+        private static async Task WriteSocksFailureAsync(Stream stream, CancellationToken token)
+        {
+            byte[] refused =
+            {
+                0x05, 0x05, 0x00, 0x01,
+                127, 0, 0, 1,
+                0x00, 0x00,
+            };
+            try
+            {
+                await stream.WriteAsync(refused, token).ConfigureAwait(false);
+            }
+            catch (IOException)
+            {
+            }
+        }
+
+        private static async Task<int> ReadSocksByteAsync(Stream stream, CancellationToken token)
+        {
+            byte[] one = new byte[1];
+            int n = await stream.ReadAsync(one.AsMemory(0, 1), token).ConfigureAwait(false);
+            return n == 0 ? -1 : one[0];
+        }
+
+        private static async Task<bool> ReadSocksExactAsync(Stream stream, byte[] buffer, CancellationToken token)
+        {
+            int offset = 0;
+            while (offset < buffer.Length)
+            {
+                int n = await stream.ReadAsync(buffer.AsMemory(offset, buffer.Length - offset), token)
+                    .ConfigureAwait(false);
+                if (n == 0)
+                {
+                    return false;
+                }
+
+                offset += n;
+            }
+
+            return true;
+        }
+
         private static async Task<TcpClient> ConnectAsync(string host, int port, CancellationToken token)
         {
             // macOS WebKit routes loopback WS via local.playwright (see
@@ -721,6 +889,12 @@ namespace PlaywrightNative.Helpers
                 using (client)
                 using (NetworkStream clientStream = client.GetStream())
                 {
+                    if (_useSocks)
+                    {
+                        await HandleSocksClientAsync(clientStream).ConfigureAwait(false);
+                        return;
+                    }
+
                     await HandleStreamAsync(new HttpIO(clientStream), predetermined: null).ConfigureAwait(false);
                 }
             }
@@ -735,6 +909,75 @@ namespace PlaywrightNative.Helpers
             }
             catch (ObjectDisposedException)
             {
+            }
+        }
+
+        private async Task HandleSocksClientAsync(NetworkStream clientStream)
+        {
+            CancellationToken token = _cts.Token;
+            if (!await SocksHandshakeAsync(clientStream, token).ConfigureAwait(false))
+            {
+                return;
+            }
+
+            (string Host, int Port)? target = await TryReadSocksConnectAsync(clientStream, token)
+                .ConfigureAwait(false);
+            if (target == null)
+            {
+                await WriteSocksFailureAsync(clientStream, token).ConfigureAwait(false);
+                return;
+            }
+
+            TcpClient server = null;
+            try
+            {
+                server = await ConnectAsync(target.Value.Host, target.Value.Port, token).ConfigureAwait(false);
+            }
+            catch (IOException)
+            {
+                await WriteSocksFailureAsync(clientStream, token).ConfigureAwait(false);
+                return;
+            }
+            catch (SocketException)
+            {
+                await WriteSocksFailureAsync(clientStream, token).ConfigureAwait(false);
+                return;
+            }
+
+            try
+            {
+                await WriteSocksSuccessAsync(clientStream, token).ConfigureAwait(false);
+                HttpIO client = new HttpIO(clientStream);
+                HttpIO serverIo = new HttpIO(server.GetStream());
+
+                // HTTPS / WSS: first byte is TLS handshake (0x16). Tunnel opaquely
+                // so HTTP/2 ALPN stays between browser and origin. Cleartext WS
+                // upgrades are rewritten like the HTTP-proxy path.
+                int first = await ReadSocksByteAsync(clientStream, token).ConfigureAwait(false);
+                if (first < 0)
+                {
+                    return;
+                }
+
+                client.Unread(new byte[] { (byte)first }, 0, 1);
+                if (first == 0x16)
+                {
+                    await TunnelAsync(client, serverIo, token).ConfigureAwait(false);
+                    return;
+                }
+
+                // Drop the SOCKS-origin socket; HandleStreamAsync opens its own
+                // for the cleartext rewrite path.
+                server.Dispose();
+                server = null;
+                await HandleStreamAsync(
+                        client,
+                        predetermined: Tuple.Create(target.Value.Host, target.Value.Port))
+                    .ConfigureAwait(false);
+            }
+            finally
+            {
+                server?.Dispose();
             }
         }
 

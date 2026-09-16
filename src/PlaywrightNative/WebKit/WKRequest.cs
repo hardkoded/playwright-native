@@ -21,6 +21,7 @@ using System.Net;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Playwright;
 using PlaywrightNative.Helpers;
@@ -48,6 +49,7 @@ namespace PlaywrightNative.WebKit
         private readonly IFrame _frame;
         private byte[] _postDataBuffer;
         private WKRequest _redirectedTo;
+        private int _pageFinishedRaised;
         private WKResponse _wkResponse;
 
         /// <summary>
@@ -432,6 +434,15 @@ namespace PlaywrightNative.WebKit
             _responseReady.TrySetResult(Response);
             _finished.TrySetResult(FailureText);
         }
+
+        /// <summary>
+        /// Marks the page-level <c>requestfinished</c> event as raised once.
+        /// COOP / process-swap can finish the same navigation via both
+        /// <c>Network.loadingFinished</c> and session dispose.
+        /// </summary>
+        /// <returns><see langword="true"/> on the first call.</returns>
+        internal bool TryMarkPageFinishedRaised()
+            => Interlocked.Exchange(ref _pageFinishedRaised, 1) == 0;
 
         /// <summary>
         /// Rejects waiters when the owning page closes.

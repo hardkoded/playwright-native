@@ -55,23 +55,31 @@ namespace PlaywrightNative.Helpers
         internal const string WritePrefixFunction = @"(p) => { window.__pwAriaFramePrefix = String(p); return true; }";
 
         /// <summary>
-        /// True when the iframe has a same-origin document that is past
-        /// <c>loading</c>. Lazy-unloaded and redirect-loop frames return
-        /// false so AI stitch can skip <c>DOM.describeNode</c> (which hangs
-        /// indefinitely on Darwin WebKit target sessions).
-        /// Cross-origin frames throw on <c>contentDocument</c> access and
-        /// return true so protocol ContentFrame still runs.
+        /// True when the iframe is safe to resolve via protocol ContentFrame.
+        /// Same-origin documents must be past <c>loading</c>. Opaque frames
+        /// such as <c>data:</c> expose <c>contentWindow</c> with a null
+        /// <c>contentDocument</c> and must still return true. Cross-origin
+        /// frames throw on <c>contentDocument</c> and return true. Lazy-
+        /// unloaded frames without a window return false so Darwin WebKit
+        /// can skip hanging <c>DOM.describeNode</c>.
         /// </summary>
         private const string IframeCaptureReadyFunction = @"(el) => {
   try {
     const doc = el.contentDocument;
-    if (!doc || !doc.documentElement) {
-      return false;
+    if (doc) {
+      if (!doc.documentElement) {
+        return false;
+      }
+      if (doc.readyState === 'loading') {
+        return false;
+      }
+      return true;
     }
-    if (doc.readyState === 'loading') {
-      return false;
-    }
-    return true;
+    // Opaque / cross-origin frames (e.g. data:) expose contentWindow but
+    // null contentDocument without throwing. Still ask the protocol for the
+    // content frame so AI stitch can capture them. Unloaded lazy iframes
+    // typically have neither a usable document nor a contentWindow yet.
+    return !!el.contentWindow;
   } catch (e) {
     return true;
   }

@@ -106,9 +106,11 @@ namespace PlaywrightNative.Helpers
         /// Starts a WebKit HTTP(S) proxy shim on Darwin/Linux when needed.
         /// CFNetwork refuses to proxy <c>localhost</c> even with an empty
         /// bypass list (<c>kCFErrorHTTPProxyConnectionFailure</c> / 306), so
-        /// Darwin always wraps HTTP(S) proxies. Linux only wraps when a bypass
-        /// list is present (libsoup then drops localhost / link-local). SOCKS
-        /// is not framed here. Windows uses curl's noproxy and skips this.
+        /// Darwin always wraps HTTP(S) proxies. Linux wraps when a non-loopback
+        /// bypass list is present (libsoup then also drops localhost /
+        /// link-local); a sole <c>&lt;-loopback&gt;</c> bypass is left to
+        /// libsoup so HTTP/2 ALPN on localhost survives. SOCKS is not framed
+        /// here. Windows uses curl's noproxy and skips this.
         /// </summary>
         /// <param name="userProxy">Caller proxy, or <see langword="null"/>.</param>
         /// <param name="browserProxy">Proxy to pass to WebKit.</param>
@@ -131,6 +133,16 @@ namespace PlaywrightNative.Helpers
             string bypass = ProxySettings.NormalizeBypass(userProxy.Bypass);
             bool isDarwin = RuntimeInformation.IsOSPlatform(OSPlatform.OSX);
             if (string.IsNullOrEmpty(bypass) && !isDarwin)
+            {
+                return null;
+            }
+
+            // Linux libsoup honors <-loopback> without needing this shim.
+            // Wrapping would present an empty-bypass HTTP proxy to WebKit, so
+            // even localhost navigations use CONNECT and lose HTTP/2 ALPN
+            // ("No supported application protocol" on h2-only origins).
+            if (!isDarwin
+                && string.Equals(bypass, "<-loopback>", StringComparison.OrdinalIgnoreCase))
             {
                 return null;
             }
