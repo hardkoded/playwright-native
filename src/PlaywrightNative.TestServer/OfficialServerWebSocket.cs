@@ -24,6 +24,7 @@ namespace PlaywrightNative.TestServer
         private readonly List<string> _bufferedMessages = new List<string>();
         private bool _receiveStarted;
         private bool _closed;
+        private bool _closeSent;
         private readonly SemaphoreSlim _writeLock = new SemaphoreSlim(1, 1);
         private readonly TaskCompletionSource<bool> _closedTcs =
             new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -162,6 +163,9 @@ namespace PlaywrightNative.TestServer
                 payload[0] = (byte)((code >> 8) & 0xFF);
                 payload[1] = (byte)(code & 0xFF);
                 Buffer.BlockCopy(reasonBytes, 0, payload, 2, reasonBytes.Length);
+                // Mark before write so a concurrent peer close does not echo a
+                // second close frame (Chromium then surfaces error+1006).
+                _closeSent = true;
                 WriteFrame(opcode: 8, payload);
                 return;
             }
@@ -344,7 +348,15 @@ namespace PlaywrightNative.TestServer
                     byte[] reason = payload.Length > 2
                         ? payload.AsSpan(2).ToArray()
                         : Array.Empty<byte>();
-                    WriteFrame(opcode: 8, payload);
+                    // RFC 6455: only reply with Close if we have not already sent one.
+                    // Echoing after a server-initiated Close confuses Chromium into
+                    // error + 1006 (ShouldWorkWithTextMessage).
+                    if (!_closeSent)
+                    {
+                        _closeSent = true;
+                        WriteFrame(opcode: 8, payload);
+                    }
+
                     NotifyClose(code, reason);
                     return;
                 }
