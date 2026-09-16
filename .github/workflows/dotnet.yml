@@ -70,22 +70,34 @@ jobs:
       if: matrix.os == 'windows-latest'
       shell: pwsh
       run: |
-        # community.chocolatey.org occasionally returns 504 while resolving
-        # ffmpeg; retry so Windows shards do not fail before tests start.
-        $ok = $false
-        for ($i = 1; $i -le 5; $i++) {
-          choco install ffmpeg -y --no-progress
-          if ($LASTEXITCODE -eq 0) {
-            $ok = $true
+        # Bypass Chocolatey — community.chocolatey.org regularly 504s on the
+        # ffmpeg package and can still exit 0, which made retries ineffective.
+        $ErrorActionPreference = 'Stop'
+        $zip = Join-Path $env:RUNNER_TEMP 'ffmpeg.zip'
+        $dir = Join-Path $env:RUNNER_TEMP 'ffmpeg'
+        $url = 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip'
+        New-Item -ItemType Directory -Force -Path $dir | Out-Null
+        $downloaded = $false
+        for ($attempt = 1; $attempt -le 5; $attempt++) {
+          Write-Host "Downloading ffmpeg (attempt $attempt/5) from $url"
+          try {
+            Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing
+            $downloaded = $true
             break
+          } catch {
+            Write-Warning "Download failed: $($_.Exception.Message)"
+            if ($attempt -eq 5) { throw }
+            Start-Sleep -Seconds (15 * $attempt)
           }
-          Write-Host "choco install ffmpeg failed (attempt $i); retrying in $($i * 15)s..."
-          Start-Sleep -Seconds ($i * 15)
         }
-        if (-not $ok) {
-          throw "choco install ffmpeg failed after retries"
-        }
-        ffmpeg -version
+        if (-not $downloaded) { throw 'ffmpeg download failed' }
+        Expand-Archive -Path $zip -DestinationPath $dir -Force
+        $bin = Get-ChildItem -Path $dir -Recurse -Filter 'ffmpeg.exe' | Select-Object -First 1
+        if (-not $bin) { throw 'ffmpeg.exe not found after extract' }
+        Add-Content -Path $env:GITHUB_PATH -Value $bin.Directory.FullName
+        & $bin.FullName -version
+        $probe = Join-Path $bin.Directory.FullName 'ffprobe.exe'
+        if (Test-Path $probe) { & $probe -version }
     - name: Install ffmpeg (macOS)
       if: startsWith(matrix.os, 'macos')
       run: |
