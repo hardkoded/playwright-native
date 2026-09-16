@@ -492,6 +492,28 @@ namespace PlaywrightNative.Helpers
             }
         }
 
+        private static async Task CopyExactFromStreamAsync(
+            NetworkStream source,
+            NetworkStream dest,
+            int length,
+            CancellationToken token)
+        {
+            byte[] buffer = new byte[Math.Min(length, 8192)];
+            int remaining = length;
+            while (remaining > 0)
+            {
+                int read = await source.ReadAsync(buffer.AsMemory(0, Math.Min(buffer.Length, remaining)), token)
+                    .ConfigureAwait(false);
+                if (read == 0)
+                {
+                    return;
+                }
+
+                await dest.WriteAsync(buffer.AsMemory(0, read), token).ConfigureAwait(false);
+                remaining -= read;
+            }
+        }
+
         private static async Task CopyChunkedBodyAsync(LeftoverReader source, NetworkStream dest, CancellationToken token)
         {
             // Relay chunk-size lines + payload + trailers until the 0-chunk.
@@ -723,6 +745,25 @@ namespace PlaywrightNative.Helpers
                 if (requestLeftover != null && requestLeftover.Length > 0)
                 {
                     await upStream.WriteAsync(requestLeftover).ConfigureAwait(false);
+                }
+
+                // WebKit often sends interceptWithRequest POST bodies after the
+                // headers (separate TCP write). ReadHeadersAsync only returns
+                // bytes already buffered with the headers — drain the rest of
+                // Content-Length before waiting on the upstream response, or
+                // both sides hang (Darwin Fallback amend postData timeouts).
+                if (!webSocketUpgrade)
+                {
+                    int contentLength = ParseContentLength(Latin1.GetString(headerBytes));
+                    int already = requestLeftover?.Length ?? 0;
+                    if (contentLength > already)
+                    {
+                        await CopyExactFromStreamAsync(
+                            clientStream,
+                            upStream,
+                            contentLength - already,
+                            _cts.Token).ConfigureAwait(false);
+                    }
                 }
 
                 // WebSocket upgrades must stay a bidirectional tunnel after the

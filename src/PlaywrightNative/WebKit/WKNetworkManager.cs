@@ -583,10 +583,11 @@ namespace PlaywrightNative.WebKit
                 return;
             }
 
+            string publicUrl = WebKitMacLocaleWebSocketShim.ToPublicUrl(url);
             foreach (WKWebSocket existing in _webSockets.Values)
             {
                 if (!existing.IsClosed
-                    && string.Equals(existing.Url, url, StringComparison.Ordinal))
+                    && string.Equals(existing.Url, publicUrl, StringComparison.Ordinal))
                 {
                     _webSockets.TryAdd(requestId, existing);
                     if (_requestsById.TryGetValue(requestId, out WKRequest reused))
@@ -602,7 +603,9 @@ namespace PlaywrightNative.WebKit
                 }
             }
 
-            WKWebSocket socket = new(requestId, url, _page);
+            // Mac WS shim rewrites loopback to local.playwright*; expose the
+            // caller-facing URL on IWebSocket / HAR (matches page WebSocket.url).
+            WKWebSocket socket = new(requestId, publicUrl, _page);
             if (!_webSockets.TryAdd(requestId, socket))
             {
                 return;

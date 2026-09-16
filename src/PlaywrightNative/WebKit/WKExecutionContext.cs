@@ -142,12 +142,17 @@ namespace PlaywrightNative.WebKit
                 // emulateUserGesture only. Do not window.focus()/click here:
                 // that steals iframe document focus and breaks
                 // document.hasFocus() checks (emulation-focus.spec.ts).
+                //
+                // AsFunction (not "return (expression)") so () => promise
+                // expressions are *invoked* by callFunctionOn. Returning the
+                // arrow without calling it made requestStorageAccess resolve
+                // to a function handle and materialize as false on Darwin.
                 JsonElement? response = await _session.SendAsync(
                     "Runtime.callFunctionOn",
                     new
                     {
                         objectId = anchorId,
-                        functionDeclaration = "function() { return (" + expression + "); }",
+                        functionDeclaration = EvaluateWithArg.AsFunction(expression),
                         returnByValue = false,
                         emulateUserGesture = true,
                         awaitPromise = true,

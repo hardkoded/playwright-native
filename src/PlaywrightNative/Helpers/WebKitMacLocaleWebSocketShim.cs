@@ -13,6 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+using System;
+
 namespace PlaywrightNative.Helpers
 {
     /// <summary>
@@ -21,19 +23,31 @@ namespace PlaywrightNative.Helpers
     /// <c>Accept-Language</c> on <c>ws://localhost</c> upgrades. Official
     /// client-certificate fixtures already use <c>local.playwright</c> for the
     /// same reason. This init script rewrites loopback WebSocket URLs (and Blob
-    /// worker sources that embed them) to <c>local.playwright</c> so the
+    /// worker sources that embed them) to distinct fake hosts so the
     /// handshake proxy sees the upgrade; the proxy maps that host back to
-    /// localhost when connecting. <c>WebSocket.url</c> and message
+    /// the original loopback when connecting. <c>WebSocket.url</c> and message
     /// <c>origin</c> are restored to the caller-facing loopback URL so page
-    /// scripts still observe <c>ws://localhost</c>.
+    /// scripts still observe <c>ws://localhost</c> / <c>ws://127.0.0.1</c>.
+    /// Network/HAR events see the wire host; <see cref="ToPublicUrl"/> maps
+    /// them back for the public API.
     /// </summary>
     internal static class WebKitMacLocaleWebSocketShim
     {
         /// <summary>
-        /// Host used for loopback WebSockets so macOS WebKit routes them via
-        /// <see cref="LocaleHandshakeProxy"/>.
+        /// Fake host for <c>localhost</c> / <c>*.localhost</c> WebSockets.
         /// </summary>
         internal const string FakeLoopbackHost = "local.playwright";
+
+        /// <summary>
+        /// Fake host for <c>127.0.0.1</c> WebSockets (preserves the public URL
+        /// when rewriting HAR / <see cref="IWebSocket.Url"/>).
+        /// </summary>
+        internal const string FakeIpv4LoopbackHost = "local.playwright.ipv4";
+
+        /// <summary>
+        /// Fake host for <c>::1</c> WebSockets.
+        /// </summary>
+        internal const string FakeIpv6LoopbackHost = "local.playwright.ipv6";
 
         /// <summary>
         /// Page init script that rewrites loopback <c>WebSocket</c> URLs and
@@ -43,8 +57,13 @@ namespace PlaywrightNative.Helpers
             @"(() => {
   if (globalThis.__pw_mac_locale_ws_shim__) return;
   globalThis.__pw_mac_locale_ws_shim__ = true;
-  const fake = 'local.playwright';
-  const isLoopback = (host) => host === 'localhost' || host === '127.0.0.1' || host === '[::1]' || host === '::1';
+  const fakeFor = (host) => {
+    if (host === '127.0.0.1') return 'local.playwright.ipv4';
+    if (host === '[::1]' || host === '::1') return 'local.playwright.ipv6';
+    if (host === 'localhost' || (typeof host === 'string' && host.endsWith('.localhost')))
+      return 'local.playwright';
+    return null;
+  };
   const parseWs = (url) => {
     try {
       return new URL(String(url), location.href);
@@ -54,7 +73,10 @@ namespace PlaywrightNative.Helpers
   };
   const rewriteUrl = (url) => {
     const original = parseWs(url);
-    if (!original || (original.protocol !== 'ws:' && original.protocol !== 'wss:') || !isLoopback(original.hostname))
+    if (!original || (original.protocol !== 'ws:' && original.protocol !== 'wss:'))
+      return { wire: url, publicUrl: String(url), publicOrigin: null, fakeOrigin: null };
+    const fake = fakeFor(original.hostname);
+    if (!fake)
       return { wire: url, publicUrl: String(url), publicOrigin: null, fakeOrigin: null };
     const publicOrigin = original.protocol + '//' + original.host;
     const publicUrl = original.toString();
@@ -70,8 +92,12 @@ namespace PlaywrightNative.Helpers
   const rewriteText = (text) => {
     if (typeof text !== 'string') return text;
     return text
-      .replace(/ws:\/\/(localhost|127\.0\.0\.1|\[::1\]|::1)/gi, 'ws://' + fake)
-      .replace(/wss:\/\/(localhost|127\.0\.0\.1|\[::1\]|::1)/gi, 'wss://' + fake);
+      .replace(/ws:\/\/127\.0\.0\.1/gi, 'ws://local.playwright.ipv4')
+      .replace(/wss:\/\/127\.0\.0\.1/gi, 'wss://local.playwright.ipv4')
+      .replace(/ws:\/\/(\[::1\]|::1)/gi, 'ws://local.playwright.ipv6')
+      .replace(/wss:\/\/(\[::1\]|::1)/gi, 'wss://local.playwright.ipv6')
+      .replace(/ws:\/\/(localhost|[a-z0-9-]+\.localhost)/gi, 'ws://local.playwright')
+      .replace(/wss:\/\/(localhost|[a-z0-9-]+\.localhost)/gi, 'wss://local.playwright');
   };
   const wrapMessageEvent = (event, publicOrigin, fakeOrigin) => {
     if (!publicOrigin || !fakeOrigin || event.origin !== fakeOrigin)
@@ -169,5 +195,73 @@ namespace PlaywrightNative.Helpers
     globalThis.Blob = WrappedBlob;
   }
 })()";
+
+        /// <summary>
+        /// Maps a wire host used by the Mac WS shim back to the public loopback
+        /// hostname page scripts passed to <c>new WebSocket</c>.
+        /// </summary>
+        /// <param name="host">Hostname from the network stack (may be fake).</param>
+        /// <returns>The public loopback host, or <paramref name="host"/> unchanged.</returns>
+        internal static string ToPublicHost(string host)
+        {
+            if (string.IsNullOrEmpty(host))
+            {
+                return host;
+            }
+
+            if (string.Equals(host, FakeLoopbackHost, StringComparison.OrdinalIgnoreCase))
+            {
+                return "localhost";
+            }
+
+            if (string.Equals(host, FakeIpv4LoopbackHost, StringComparison.OrdinalIgnoreCase))
+            {
+                return "127.0.0.1";
+            }
+
+            if (string.Equals(host, FakeIpv6LoopbackHost, StringComparison.OrdinalIgnoreCase))
+            {
+                return "::1";
+            }
+
+            return host;
+        }
+
+        /// <summary>
+        /// Maps a wire WebSocket URL (<c>local.playwright*</c>) back to the
+        /// caller-facing loopback URL for <see cref="IWebSocket.Url"/> / HAR.
+        /// </summary>
+        /// <param name="url">URL reported by <c>Network.webSocketCreated</c>.</param>
+        /// <returns>The public URL, or <paramref name="url"/> when not rewritten.</returns>
+        internal static string ToPublicUrl(string url)
+        {
+            if (string.IsNullOrEmpty(url)
+                || !Uri.TryCreate(url, UriKind.Absolute, out Uri uri))
+            {
+                return url;
+            }
+
+            string publicHost = ToPublicHost(uri.IdnHost);
+            if (string.Equals(publicHost, uri.IdnHost, StringComparison.OrdinalIgnoreCase))
+            {
+                return url;
+            }
+
+            UriBuilder builder = new UriBuilder(uri)
+            {
+                Host = publicHost,
+            };
+            return builder.Uri.AbsoluteUri;
+        }
+
+        /// <summary>
+        /// Whether <paramref name="host"/> is a Mac WS shim fake loopback host.
+        /// </summary>
+        /// <param name="host">Hostname without brackets.</param>
+        /// <returns><see langword="true"/> for shim fake hosts.</returns>
+        internal static bool IsFakeLoopbackHost(string host)
+            => string.Equals(host, FakeLoopbackHost, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(host, FakeIpv4LoopbackHost, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(host, FakeIpv6LoopbackHost, StringComparison.OrdinalIgnoreCase);
     }
 }

@@ -848,6 +848,88 @@ namespace PlaywrightNative.Helpers
             }
         }
 
+        /// <summary>
+        /// After <see cref="ConnectAsync"/> maps <c>local.playwright*</c> to
+        /// loopback, rewrite the <c>Host</c> header to the public loopback host
+        /// so origin servers see localhost / 127.0.0.1 / ::1.
+        /// </summary>
+        /// <param name="message">HTTP request bytes.</param>
+        /// <returns>Request with Host rewritten when needed.</returns>
+        private static byte[] RewriteFakeLoopbackHostHeader(byte[] message)
+        {
+            if (message == null || message.Length == 0)
+            {
+                return message;
+            }
+
+            string text = Latin1.GetString(message);
+            int headerEnd = text.IndexOf("\r\n\r\n", StringComparison.Ordinal);
+            if (headerEnd < 0)
+            {
+                return message;
+            }
+
+            string[] lines = text.Substring(0, headerEnd).Split(HeaderSeparators, StringSplitOptions.None);
+            bool changed = false;
+            for (int i = 1; i < lines.Length; i++)
+            {
+                int colon = lines[i].IndexOf(':');
+                if (colon < 0)
+                {
+                    continue;
+                }
+
+                if (!lines[i].Substring(0, colon).Trim().Equals("Host", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                string value = lines[i].Substring(colon + 1).Trim();
+                string host;
+                int port = 0;
+                if (TryParseAuthority(value, out host, out port))
+                {
+                    // Host: name:port
+                }
+                else
+                {
+                    host = value.Trim('[', ']');
+                }
+
+                if (!WebKitMacLocaleWebSocketShim.IsFakeLoopbackHost(host))
+                {
+                    break;
+                }
+
+                string publicHost = WebKitMacLocaleWebSocketShim.ToPublicHost(host);
+                string newHost = port > 0
+                    ? publicHost + ":" + port.ToString(CultureInfo.InvariantCulture)
+                    : publicHost;
+                lines[i] = "Host: " + newHost;
+                changed = true;
+                break;
+            }
+
+            if (!changed)
+            {
+                return message;
+            }
+
+            StringBuilder builder = new();
+            for (int i = 0; i < lines.Length; i++)
+            {
+                if (i > 0)
+                {
+                    builder.Append("\r\n");
+                }
+
+                builder.Append(lines[i]);
+            }
+
+            builder.Append(text.AsSpan(headerEnd));
+            return Latin1.GetBytes(builder.ToString());
+        }
+
         private byte[] RewriteHandshake(byte[] request)
         {
             if (!string.IsNullOrEmpty(_locale))
@@ -855,6 +937,7 @@ namespace PlaywrightNative.Helpers
                 request = RewriteAcceptLanguage(request, _locale);
             }
 
+            request = RewriteFakeLoopbackHostHeader(request);
             return RewriteExtraHeaders(request, _extraHeaders);
         }
 
@@ -1015,6 +1098,33 @@ namespace PlaywrightNative.Helpers
                         byte[] established = Latin1.GetBytes("HTTP/1.1 200 Connection Established\r\n\r\n");
                         await client.Stream.WriteAsync(established, token).ConfigureAwait(false);
 
+                        // Plain ws:// via Mac shim uses CONNECT to local.playwright*
+                        // then an HTTP Upgrade on the tunnel. Rewrite Host on that
+                        // first request so the origin sees localhost/127.0.0.1.
+                        // TLS (wss/https) ClientHello must stay an opaque tunnel —
+                        // parsing it as HTTP hangs (IgnoreHTTPSErrors / cookies).
+                        if (WebKitMacLocaleWebSocketShim.IsFakeLoopbackHost(host))
+                        {
+                            byte[] tunneled = await ReadHttpMessageAsync(client, token).ConfigureAwait(false);
+                            if (tunneled == null || tunneled.Length == 0)
+                            {
+                                return;
+                            }
+
+                            if (IsWebSocketUpgrade(tunneled))
+                            {
+                                tunneled = RewriteHandshake(tunneled);
+                            }
+                            else
+                            {
+                                tunneled = RewriteFakeLoopbackHostHeader(tunneled);
+                            }
+
+                            await serverIo.Stream.WriteAsync(tunneled, token).ConfigureAwait(false);
+                            await TunnelAsync(client, serverIo, token).ConfigureAwait(false);
+                            return;
+                        }
+
                         // CONNECT is always an opaque tunnel (https/wss), including
                         // loopback on non-443 test-server ports. Parsing the post-CONNECT
                         // bytes as HTTP hangs on the TLS ClientHello (WebKit HTTPS
@@ -1060,6 +1170,14 @@ namespace PlaywrightNative.Helpers
                     }
 
                     byte[] forwarded = predetermined == null ? ToOriginForm(request) : StripProxyHeaders(request);
+                    if (predetermined == null
+                        && TryParseRequestTarget(request, out string forwardTarget)
+                        && TryParseAuthority(forwardTarget, out string forwardHost, out _)
+                        && WebKitMacLocaleWebSocketShim.IsFakeLoopbackHost(forwardHost))
+                    {
+                        forwarded = RewriteFakeLoopbackHostHeader(forwarded);
+                    }
+
                     await serverIo.Stream.WriteAsync(forwarded, token).ConfigureAwait(false);
                     if (IsWebSocketUpgrade(request))
                     {

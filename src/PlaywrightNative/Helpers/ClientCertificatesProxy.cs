@@ -179,9 +179,31 @@ namespace PlaywrightNative.Helpers
         }
 
         internal static string RewriteToLocalhostIfNeeded(string host)
-            => string.Equals(host, "local.playwright", StringComparison.OrdinalIgnoreCase)
-                ? "localhost"
-                : host;
+        {
+            if (string.IsNullOrEmpty(host))
+            {
+                return host;
+            }
+
+            // Mac WS shim uses distinct fake hosts so HAR / IWebSocket.Url can
+            // restore localhost vs 127.0.0.1 vs ::1 after the proxy hop.
+            if (string.Equals(host, WebKitMacLocaleWebSocketShim.FakeLoopbackHost, StringComparison.OrdinalIgnoreCase))
+            {
+                return "localhost";
+            }
+
+            if (string.Equals(host, WebKitMacLocaleWebSocketShim.FakeIpv4LoopbackHost, StringComparison.OrdinalIgnoreCase))
+            {
+                return "127.0.0.1";
+            }
+
+            if (string.Equals(host, WebKitMacLocaleWebSocketShim.FakeIpv6LoopbackHost, StringComparison.OrdinalIgnoreCase))
+            {
+                return "::1";
+            }
+
+            return host;
+        }
 
         internal static IReadOnlyList<string> ParseAlpnFromClientHello(byte[] buffer)
         {
