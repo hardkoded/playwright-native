@@ -8677,6 +8677,16 @@ namespace PlaywrightNative.WebKit
 
                 MarkReportAsNewNavigation(_mainFrameUrl);
 
+                // data:/about: navigations skip Network.* events. On some Darwin
+                // WebKit builds Page.loadEventFired can also race past our waiter
+                // arming; seed load/DOMContentLoaded from readyState after commit.
+                if (!string.IsNullOrEmpty(_mainFrameUrl)
+                    && (_mainFrameUrl.StartsWith("data:", StringComparison.OrdinalIgnoreCase)
+                        || _mainFrameUrl.StartsWith("about:", StringComparison.OrdinalIgnoreCase)))
+                {
+                    _ = SeedLifecycleFromReadyStateAfterDataNavigationAsync();
+                }
+
                 // Match Chromium Page: re-assert file-chooser interception on each new
                 // main document so listeners subscribed before a navigation still work
                 // after same-process navigations that recreate page state.
@@ -8699,6 +8709,53 @@ namespace PlaywrightNative.WebKit
             {
             }
             catch (InvalidOperationException)
+            {
+            }
+        }
+
+        private async Task SeedLifecycleFromReadyStateAfterDataNavigationAsync()
+        {
+            try
+            {
+                for (int attempt = 0; attempt < 40; attempt++)
+                {
+                    string readyState = await EvaluateExpressionAsync<string>("document.readyState")
+                        .ConfigureAwait(false);
+                    if (string.Equals(readyState, "interactive", StringComparison.Ordinal)
+                        || string.Equals(readyState, "complete", StringComparison.Ordinal))
+                    {
+                        RecordLifecycleFromDocumentSeed("DOMContentLoaded");
+                        TaskCompletionSource<bool> domTcs;
+                        lock (_navigationLock)
+                        {
+                            domTcs = _pendingDomContentTcs;
+                            _pendingDomContentTcs = null;
+                        }
+
+                        domTcs?.TrySetResult(true);
+                    }
+
+                    if (string.Equals(readyState, "complete", StringComparison.Ordinal))
+                    {
+                        RecordLifecycleFromDocumentSeed("load");
+                        TaskCompletionSource<bool> loadTcs;
+                        lock (_navigationLock)
+                        {
+                            loadTcs = _pendingLoadTcs;
+                            _pendingLoadTcs = null;
+                        }
+
+                        loadTcs?.TrySetResult(true);
+                        return;
+                    }
+
+                    await Task.Delay(25).ConfigureAwait(false);
+                }
+            }
+            catch (PlaywrightException)
+            {
+            }
+            catch (ObjectDisposedException)
             {
             }
         }
