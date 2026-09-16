@@ -1553,6 +1553,24 @@ namespace PlaywrightNative.WebKit
 
             await _initScripts.ApplyAllAsync(page).ConfigureAwait(false);
             await _initScripts.EvaluateOnCurrentAsync(page).ConfigureAwait(false);
+
+            // about:blank is created before addScriptToEvaluateOnNewDocument runs.
+            // Re-assert the Mac WS shim on the current document so loopback
+            // WebSockets are rewritten even when EvaluateOnCurrentAsync swallowed
+            // an earlier init-script failure (CFNetwork otherwise fails localhost
+            // through the HTTP handshake proxy with Error / 306).
+            if (_localeHandshake != null
+                && (RuntimeInformation.IsOSPlatform(OSPlatform.OSX)
+                    || Environment.GetEnvironmentVariable("PW_FORCE_MAC_WS_SHIM") == "1"))
+            {
+                try
+                {
+                    await page.EvaluateAsync(WebKitMacLocaleWebSocketShim.Source).ConfigureAwait(false);
+                }
+                catch (PlaywrightException)
+                {
+                }
+            }
         }
 
         private static IEnumerable<Cookie> FilterCookiesForWebKitHost(IEnumerable<Cookie> cookies)
