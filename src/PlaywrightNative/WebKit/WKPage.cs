@@ -9051,6 +9051,21 @@ namespace PlaywrightNative.WebKit
             }
         }
 
+        /// <summary>
+        /// Fires context <c>page</c> for a popup before an exposeFunction / binding
+        /// callback so official ordering stays <c>page|binding</c>.
+        /// </summary>
+        private void ReportPopupBeforeBinding()
+        {
+            if (_opener == null)
+            {
+                return;
+            }
+
+            WKBrowserContext context = _context ?? OwnerContext as WKBrowserContext;
+            context?.ReportPopupAsNew(this);
+        }
+
         private void OnBindingCalled(JsonElement? parameters)
         {
             if (!parameters.HasValue)
@@ -9132,6 +9147,8 @@ namespace PlaywrightNative.WebKit
                     return true;
                 }
 
+                // Official popup.spec: context "page" precedes exposeFunction callback.
+                ReportPopupBeforeBinding();
                 Task<object> invoked = CoalesceBindingInvocationAsync(contextId, argument, args, handler);
                 _ = Task.Run(() => DeliverInvokedBindingAsync(invoked, contextId, seq));
                 return true;
@@ -9268,6 +9285,8 @@ namespace PlaywrightNative.WebKit
                         return;
                     }
 
+                    // Official popup.spec: context "page" precedes exposeFunction callback.
+                    ReportPopupBeforeBinding();
                     WKTargetSession target = _targetSession
                         ?? throw new PlaywrightException("Inner target session is not yet available.");
                     WKExecutionContext context = new WKExecutionContext(target, contextId);
@@ -9290,6 +9309,8 @@ namespace PlaywrightNative.WebKit
                     return;
                 }
 
+                // Official popup.spec: context "page" precedes exposeFunction callback.
+                ReportPopupBeforeBinding();
                 object result = await handler(args).ConfigureAwait(false);
                 await DeliverBindingResultAsync(contextId, seq, result).ConfigureAwait(false);
             }

@@ -1126,6 +1126,14 @@ namespace PlaywrightNative.WebKit
             => _macProxyBypassShim = shim;
 
         /// <summary>
+        /// Official popup <c>page</c> event must fire before the opener calls
+        /// a context <c>exposeFunction</c> on the new window.
+        /// </summary>
+        /// <param name="page">The popup instance.</param>
+        internal void ReportPopupAsNew(WKPage page)
+            => ReportAsNew(page);
+
+        /// <summary>
         /// Re-runs context init scripts on the current document after
         /// <c>document.open</c>/<c>write</c>/<c>close</c> wipes listeners
         /// (native context-menu suppress, locale WS shim).
