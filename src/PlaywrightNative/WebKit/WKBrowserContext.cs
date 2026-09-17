@@ -1615,7 +1615,8 @@ namespace PlaywrightNative.WebKit
         /// host, so mirror loopback cookies onto the fake hosts. Keep the caller's
         /// cookie objects unchanged (do not <see cref="ContextCookies.Rewrite"/> —
         /// that would stamp Domain onto Url cookies and make a later ToProtocol
-        /// Rewrite throw "either url or domain").
+        /// Rewrite throw "either url or domain"). Mirror with Domain+Path+
+        /// SameSite=None+Secure so the cross-site WSS upgrade still attaches them.
         /// </summary>
         private static IEnumerable<Cookie> ExpandLoopbackCookiesForMacWsShim(IEnumerable<Cookie> cookies)
         {
@@ -1668,20 +1669,22 @@ namespace PlaywrightNative.WebKit
                     continue;
                 }
 
-                // Prefer Url over Domain so ToProtocol Rewrite stays valid, and
-                // WebKit stores a host cookie for the shim name (Domain-only
-                // local.playwright rows were not sent on wss upgrades).
-                bool useHttps = secure == true;
+                // Mirror onto the Mac WS shim host. Domain+Path+Secure+SameSite=None:
+                // the page stays on localhost while the wire host is local.playwright*,
+                // so the cookie is always cross-site and must be SameSite=None to be
+                // attached on the WSS upgrade. Url-only mirrors were expanded back to
+                // Domain by Rewrite/ToProtocol and previously omitted SameSite=None.
+                bool useHttps = secure == true || cookie.Secure == true;
                 expanded.Add(new Cookie
                 {
                     Name = cookie.Name,
                     Value = cookie.Value,
-                    Url = (useHttps ? "https://" : "http://") + fakeHost +
-                        (string.IsNullOrEmpty(path) || path == "/" ? "/" : path),
+                    Domain = fakeHost,
+                    Path = string.IsNullOrEmpty(path) ? "/" : path,
                     Expires = cookie.Expires,
                     HttpOnly = cookie.HttpOnly,
-                    Secure = secure ?? cookie.Secure,
-                    SameSite = cookie.SameSite,
+                    Secure = useHttps,
+                    SameSite = Microsoft.Playwright.SameSiteAttribute.None,
                     PartitionKey = cookie.PartitionKey,
                 });
             }

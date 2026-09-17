@@ -136,9 +136,19 @@ namespace PlaywrightNative.WebKit
                 "  return await __pwRet;" +
                 "}";
 
+            // Pulse first so Darwin has transient activation before the
+            // objectId-anchor evaluate. A post-only pulse raced the
+            // callFunctionOn window on CI (requestStorageAccess → false).
+            if (pulseTrustedGestureAsync != null)
+            {
+                await pulseTrustedGestureAsync().ConfigureAwait(false);
+            }
+
+            // Bind to document so callFunctionOn runs in the page world with
+            // a stable objectId (mirrors upstream utilityScript binding).
             JsonElement? anchorResponse = await _session.SendAsync(
                 "Runtime.evaluate",
-                BuildEvaluateParams("({})", returnByValue: false)).ConfigureAwait(false);
+                BuildEvaluateParams("document", returnByValue: false)).ConfigureAwait(false);
             if (anchorResponse == null)
             {
                 return null;
@@ -158,8 +168,8 @@ namespace PlaywrightNative.WebKit
 
             try
             {
-                // Pulse after the anchor evaluate — that round-trip otherwise
-                // clears Darwin transient activation from an earlier iframe click.
+                // Re-pulse immediately before callFunctionOn — the anchor
+                // evaluate round-trip otherwise clears Darwin activation.
                 if (pulseTrustedGestureAsync != null)
                 {
                     await pulseTrustedGestureAsync().ConfigureAwait(false);

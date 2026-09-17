@@ -736,7 +736,7 @@ namespace PlaywrightNative.Helpers
                 // echo to CFNetwork before TcpClient.Dispose.
                 try
                 {
-                    await Task.Delay(100, CancellationToken.None).ConfigureAwait(false);
+                    await Task.Delay(250, CancellationToken.None).ConfigureAwait(false);
                 }
                 catch (ObjectDisposedException)
                 {
@@ -778,6 +778,17 @@ namespace PlaywrightNative.Helpers
             {
                 try
                 {
+                    try
+                    {
+                        destination.Socket.LingerState = new LingerOption(true, 10);
+                    }
+                    catch (SocketException)
+                    {
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                    }
+
                     destination.Socket?.Shutdown(SocketShutdown.Send);
                 }
                 catch (SocketException)

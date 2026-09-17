@@ -2123,27 +2123,34 @@ namespace PlaywrightNative.Helpers
         private static async Task RafAsync(IElementHandle handle)
         {
             // Prefer in-page double-rAF so CSS transitions move between
-            // stability samples (ShouldTimeoutWaitingForStablePosition). Race a
-            // short host timeout so a paused background opener (window.open)
-            // cannot stall Runtime.evaluate past the action timeout.
-            if (handle == null)
+            // stability samples (ShouldTimeoutWaitingForStablePosition). On
+            // WebKit, Task.WhenAny abandoning an in-flight Runtime.evaluate
+            // wedges the target session and poisons later clicks (scroll=none
+            // / scrollbar hit-test timeouts on Darwin). Use a host delay there.
+            if (handle == null || IsWebKitHandle(handle))
             {
-                await DelayOrAbortAsync(16).ConfigureAwait(false);
+                await DelayOrAbortAsync(32).ConfigureAwait(false);
                 return;
             }
 
             try
             {
-                Task pageRaf = handle.EvaluateAsync(
-                    "() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => r())))");
-                Task host = DelayOrAbortAsync(50);
-                await Task.WhenAny(pageRaf, host).ConfigureAwait(false);
+                await handle.EvaluateAsync(
+                    "() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => r())))")
+                    .ConfigureAwait(false);
             }
             catch (PlaywrightException)
             {
                 await DelayOrAbortAsync(16).ConfigureAwait(false);
             }
         }
+
+        private static bool IsWebKitHandle(IElementHandle handle)
+            => handle?.GetType().Name.IndexOf("WK", StringComparison.Ordinal) >= 0
+                || string.Equals(
+                    Environment.GetEnvironmentVariable("PRODUCT"),
+                    "WEBKIT",
+                    StringComparison.OrdinalIgnoreCase);
 
         private static void ThrowIfAborted(string apiName, StringBuilder log = null)
         {

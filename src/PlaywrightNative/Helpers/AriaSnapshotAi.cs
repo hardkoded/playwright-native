@@ -130,9 +130,18 @@ namespace PlaywrightNative.Helpers
 
             try
             {
+                // Lazy unloaded iframes can keep readyState from ever reaching
+                // complete on Darwin WebKit; never block past a short budget so
+                // SnapshotForAI(timeout: 3000) cannot hit the 30s NUnit kill.
+                float waitMs = timeout ?? 3000f;
+                if (waitMs > 1500f)
+                {
+                    waitMs = 1500f;
+                }
+
                 await page.WaitForFunctionAsync(
-                    "() => document.readyState === 'complete'",
-                    timeout: timeout).ConfigureAwait(false);
+                    "() => document.readyState === 'complete' || document.readyState === 'interactive'",
+                    timeout: waitMs).ConfigureAwait(false);
             }
             catch (TimeoutException)
             {
@@ -181,9 +190,15 @@ namespace PlaywrightNative.Helpers
 
             try
             {
+                float waitMs = timeout ?? 3000f;
+                if (waitMs > 1500f)
+                {
+                    waitMs = 1500f;
+                }
+
                 await page.WaitForFunctionAsync(
-                    "() => document.readyState === 'complete'",
-                    timeout: timeout).ConfigureAwait(false);
+                    "() => document.readyState === 'complete' || document.readyState === 'interactive'",
+                    timeout: waitMs).ConfigureAwait(false);
             }
             catch (TimeoutException)
             {
@@ -671,8 +686,13 @@ namespace PlaywrightNative.Helpers
                 // Never call DOM.describeNode for loading=lazy iframes. Darwin
                 // WebKit often never replies for unloaded lazy frames, and a
                 // stuck describeNode blocks the target session until NUnit's
-                // 30s timeout (poisoning the next PageTest setup).
-                string loading = await iframeEl.GetAttributeAsync("loading").ConfigureAwait(false);
+                // 30s timeout (poisoning the next PageTest setup). Race attribute
+                // / ready probes so a wedged evaluate cannot exceed the budget.
+                string loading = await RaceOrDefaultAsync(
+                    () => iframeEl.GetAttributeAsync("loading"),
+                    Stopwatch.StartNew(),
+                    500,
+                    fallback: null).ConfigureAwait(false);
                 if (string.Equals(loading, "lazy", StringComparison.OrdinalIgnoreCase))
                 {
                     return null;
@@ -681,14 +701,21 @@ namespace PlaywrightNative.Helpers
                 // Avoid DOM.describeNode on unloaded / still-loading iframes:
                 // Darwin WebKit target sessions never reply, and a stuck
                 // describeNode blocks CaptureYaml evaluates behind it.
-                bool ready = await iframeEl.EvaluateAsync<bool>(IframeCaptureReadyFunction)
-                    .ConfigureAwait(false);
+                bool ready = await RaceOrDefaultAsync(
+                    () => iframeEl.EvaluateAsync<bool>(IframeCaptureReadyFunction),
+                    Stopwatch.StartNew(),
+                    500,
+                    fallback: false).ConfigureAwait(false);
                 if (!ready)
                 {
                     return null;
                 }
 
-                return await iframeEl.ContentFrameAsync().ConfigureAwait(false);
+                return await RaceOrDefaultAsync(
+                    () => iframeEl.ContentFrameAsync(),
+                    Stopwatch.StartNew(),
+                    500,
+                    fallback: null).ConfigureAwait(false);
             }
             catch (PlaywrightException)
             {

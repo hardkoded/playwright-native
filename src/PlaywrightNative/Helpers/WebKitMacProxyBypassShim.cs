@@ -229,11 +229,11 @@ namespace PlaywrightNative.Helpers
                 {
                 }
 
-                // Give dual-hop Darwin proxies a beat to flush the close echo
+                // Give dual-hop Darwin proxies time to flush the close echo
                 // before TcpClient.Dispose RSTs the browser-facing socket.
                 try
                 {
-                    await Task.Delay(100).ConfigureAwait(false);
+                    await Task.Delay(250).ConfigureAwait(false);
                 }
                 catch (ObjectDisposedException)
                 {
@@ -275,6 +275,17 @@ namespace PlaywrightNative.Helpers
             {
                 try
                 {
+                    try
+                    {
+                        destination.Socket.LingerState = new LingerOption(true, 10);
+                    }
+                    catch (SocketException)
+                    {
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                    }
+
                     destination.Socket?.Shutdown(SocketShutdown.Send);
                 }
                 catch (SocketException)

@@ -543,13 +543,55 @@ namespace PlaywrightNative.Helpers
 
         /// <summary>
         /// JavaScript function <c>el => boolean</c> that checks a checkbox/radio if needed.
+        /// Honors checkable ARIA roles via <c>aria-checked</c> (native <c>el.checked</c>
+        /// is falsy on <c>role=checkbox</c> divs, which previously skipped the click and
+        /// fell through to a full actionability click that hung on Darwin WebKit).
         /// </summary>
-        internal const string CheckFunction = @"el => { if (el && el.nodeName === 'LABEL' && el.control) el = el.control; if (!el.checked) el.click(); return true; }";
+        internal const string CheckFunction = @"el => {
+    let node = el;
+    if (node && node.nodeName === 'LABEL' && node.control) {
+        node = node.control;
+    }
+    if (!node) {
+        return true;
+    }
+    const type = String(node.type || '').toLowerCase();
+    const isInput = node.nodeName === 'INPUT' && (type === 'checkbox' || type === 'radio');
+    const role = String(node.getAttribute('role') || '').toLowerCase();
+    const checkable = { checkbox: 1, menuitemcheckbox: 1, option: 1, radio: 1, switch: 1, menuitemradio: 1, treeitem: 1 };
+    const checked = isInput
+        ? !!node.checked
+        : (checkable[role] ? String(node.getAttribute('aria-checked') || '').toLowerCase() === 'true' : !!node.checked);
+    if (!checked) {
+        node.click();
+    }
+    return true;
+}";
 
         /// <summary>
         /// JavaScript function <c>el => boolean</c> that unchecks a checkbox if needed.
+        /// Same ARIA <c>aria-checked</c> handling as <see cref="CheckFunction"/>.
         /// </summary>
-        internal const string UncheckFunction = @"el => { if (el && el.nodeName === 'LABEL' && el.control) el = el.control; if (el.checked) el.click(); return true; }";
+        internal const string UncheckFunction = @"el => {
+    let node = el;
+    if (node && node.nodeName === 'LABEL' && node.control) {
+        node = node.control;
+    }
+    if (!node) {
+        return true;
+    }
+    const type = String(node.type || '').toLowerCase();
+    const isInput = node.nodeName === 'INPUT' && (type === 'checkbox' || type === 'radio');
+    const role = String(node.getAttribute('role') || '').toLowerCase();
+    const checkable = { checkbox: 1, menuitemcheckbox: 1, option: 1, radio: 1, switch: 1, menuitemradio: 1, treeitem: 1 };
+    const checked = isInput
+        ? !!node.checked
+        : (checkable[role] ? String(node.getAttribute('aria-checked') || '').toLowerCase() === 'true' : !!node.checked);
+    if (checked) {
+        node.click();
+    }
+    return true;
+}";
 
         /// <summary>
         /// JavaScript function <c>el => boolean</c> that dispatches a dblclick.

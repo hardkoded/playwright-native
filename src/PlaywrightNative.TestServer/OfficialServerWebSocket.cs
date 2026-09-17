@@ -368,7 +368,8 @@ namespace PlaywrightNative.TestServer
                         {
                             try
                             {
-                                network.Socket.LingerState = new LingerOption(true, 5);
+                                network.Socket.LingerState = new LingerOption(true, 10);
+                                network.Socket.NoDelay = true;
                             }
                             catch (SocketException)
                             {
@@ -384,18 +385,14 @@ namespace PlaywrightNative.TestServer
                     {
                     }
 
-                    // Brief settle so dual-hop Darwin proxies (Mac bypass shim →
-                    // LocaleHandshakeProxy) finish copying the close echo to
-                    // CFNetwork. Do NOT drain until peer EOF: under MITM the
-                    // client often waits for a clean close first, so a long
-                    // drain times out, Kestrel disposes, and WebKit reports
-                    // error+1006 instead of application close 3002. A short
-                    // optional drain plus settle covers the common case.
+                    // Wait for the peer (proxy hop) to finish reading the close
+                    // echo and half-close. A short drain+sleep still raced
+                    // Kestrel dispose → CFNetwork error+1006 on Darwin CI.
                     try
                     {
                         byte[] sink = new byte[256];
                         using CancellationTokenSource drainCts =
-                            new CancellationTokenSource(TimeSpan.FromMilliseconds(300));
+                            new CancellationTokenSource(TimeSpan.FromSeconds(2));
                         while (true)
                         {
                             int n = await _stream.ReadAsync(sink.AsMemory(0, sink.Length), drainCts.Token)
@@ -415,8 +412,6 @@ namespace PlaywrightNative.TestServer
                     catch (OperationCanceledException)
                     {
                     }
-
-                    await Task.Delay(150).ConfigureAwait(false);
 
                     NotifyClose(code, reason);
                     return;

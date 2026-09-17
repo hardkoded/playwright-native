@@ -80,8 +80,14 @@ namespace PlaywrightNative.Helpers
             timing.RequestStart = ReadMs(resourceTiming, "requestStart", "sendStart");
             timing.ResponseStart = ReadMs(resourceTiming, "responseStart", "receiveHeadersEnd");
 
-            // WebKit occasionally reports sslStart after connectEnd on local HTTPS.
-            // Upstream VerifyConnectionTimingConsistency requires monotonic order.
+            // WebKit occasionally reports out-of-order connection timing (ssl after
+            // connectEnd, dnsEnd before dnsStart, etc.). Upstream
+            // VerifyConnectionTimingConsistency requires each positive value to be
+            // >= the previous; clamp violators to -1 (unavailable).
+            timing.DomainLookupEnd = ClampMonotonic(timing.DomainLookupEnd, timing.DomainLookupStart);
+            timing.ConnectStart = ClampMonotonic(timing.ConnectStart, timing.DomainLookupEnd);
+            timing.SecureConnectionStart = ClampMonotonic(timing.SecureConnectionStart, timing.ConnectStart);
+            timing.ConnectEnd = ClampMonotonic(timing.ConnectEnd, timing.SecureConnectionStart);
             if (timing.SecureConnectionStart > 0
                 && timing.ConnectEnd > 0
                 && timing.SecureConnectionStart > timing.ConnectEnd)
@@ -191,6 +197,16 @@ namespace PlaywrightNative.Helpers
             }
 
             return value.GetDouble();
+        }
+
+        private static float ClampMonotonic(float value, float previous)
+        {
+            if (value > 0 && previous > 0 && value < previous)
+            {
+                return -1;
+            }
+
+            return value;
         }
 
         private static float ReadMs(JsonElement element, params string[] names)
