@@ -395,7 +395,7 @@ namespace PlaywrightNative.TestServer
                     {
                         byte[] sink = new byte[256];
                         using CancellationTokenSource drainCts =
-                            new CancellationTokenSource(TimeSpan.FromMilliseconds(150));
+                            new CancellationTokenSource(TimeSpan.FromMilliseconds(300));
                         while (true)
                         {
                             int n = await _stream.ReadAsync(sink.AsMemory(0, sink.Length), drainCts.Token)
@@ -416,7 +416,7 @@ namespace PlaywrightNative.TestServer
                     {
                     }
 
-                    await Task.Delay(50).ConfigureAwait(false);
+                    await Task.Delay(150).ConfigureAwait(false);
 
                     NotifyClose(code, reason);
                     return;

@@ -219,8 +219,8 @@ namespace PlaywrightNative.Helpers
 
             // WebKit form navigations often request after the input command
             // returns. Hold the constructor retain until that signal lands —
-            // Ubuntu WebKit form GETs routinely need >16ms after click.
-            for (int i = 0; i < 16; i++)
+            // Ubuntu WebKit form GETs routinely need well over 256ms after click.
+            for (int i = 0; i < 40; i++)
             {
                 if (sawDocumentRequest != null && sawDocumentRequest())
                 {

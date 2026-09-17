@@ -608,6 +608,16 @@ namespace PlaywrightNative.Helpers
 
                 string boundary = MultipartBoundary(headers);
                 string candidateBoundary = MultipartBoundary(candidate.RequestHeaders);
+                if (string.IsNullOrEmpty(boundary))
+                {
+                    boundary = MultipartBoundaryFromBody(postData);
+                }
+
+                if (string.IsNullOrEmpty(candidateBoundary))
+                {
+                    candidateBoundary = MultipartBoundaryFromBody(candidate.PostData);
+                }
+
                 if (string.IsNullOrEmpty(boundary) || string.IsNullOrEmpty(candidateBoundary))
                 {
                     return false;
@@ -616,6 +626,32 @@ namespace PlaywrightNative.Helpers
                 string left = Encoding.UTF8.GetString(postData).Replace(boundary, string.Empty, StringComparison.Ordinal);
                 string right = Encoding.UTF8.GetString(candidate.PostData).Replace(candidateBoundary, string.Empty, StringComparison.Ordinal);
                 return string.Equals(left, right, StringComparison.Ordinal);
+            }
+
+            /// <summary>
+            /// Reads the multipart boundary from the first <c>--…</c> line when
+            /// <c>Content-Type</c> omitted <c>boundary=</c> (common on Chromium
+            /// intercepted request header maps).
+            /// </summary>
+            private static string MultipartBoundaryFromBody(byte[] body)
+            {
+                if (body == null || body.Length < 4 || body[0] != (byte)'-' || body[1] != (byte)'-')
+                {
+                    return null;
+                }
+
+                int end = 2;
+                while (end < body.Length && body[end] != (byte)'\r' && body[end] != (byte)'\n')
+                {
+                    end++;
+                }
+
+                if (end <= 2)
+                {
+                    return null;
+                }
+
+                return Encoding.UTF8.GetString(body, 2, end - 2);
             }
 
             private static int CountMatchingHeaders(List<KeyValuePair<string, string>> harHeaders, List<KeyValuePair<string, string>> headers)

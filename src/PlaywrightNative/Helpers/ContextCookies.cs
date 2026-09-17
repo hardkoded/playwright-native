@@ -62,15 +62,15 @@ namespace PlaywrightNative.Helpers
                     ["value"] = rewritten.Value ?? string.Empty,
                 };
 
-                // Official toChromiumCookie keeps url after rewriteCookies.
-                if (!string.IsNullOrEmpty(rewritten.Url))
-                {
-                    item["url"] = rewritten.Url;
-                }
-
+                // After Rewrite, Url-only cookies are expanded to Domain/Path.
+                // Prefer domain/path for the protocol payload (Chromium and WebKit).
                 if (!string.IsNullOrEmpty(rewritten.Domain))
                 {
                     item["domain"] = rewritten.Domain;
+                }
+                else if (!string.IsNullOrEmpty(rewritten.Url))
+                {
+                    item["url"] = rewritten.Url;
                 }
 
                 if (!string.IsNullOrEmpty(rewritten.Path))
@@ -330,11 +330,14 @@ namespace PlaywrightNative.Helpers
 
             string pathname = uri.AbsolutePath;
             int slash = pathname.LastIndexOf('/');
+
+            // Official rewriteCookies expands Url → Domain/Path/Secure and drops
+            // Url. Keeping both makes WebKit Network.setCookies reject the cookie
+            // ("either url or domain") so mirrored local.playwright rows never land.
             Cookie result = new Cookie
             {
                 Name = cookie.Name,
                 Value = cookie.Value,
-                Url = cookie.Url,
                 Domain = uri.Host,
                 Path = slash >= 0 ? pathname.Substring(0, slash + 1) : "/",
                 Expires = cookie.Expires,

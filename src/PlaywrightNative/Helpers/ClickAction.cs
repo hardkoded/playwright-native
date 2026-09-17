@@ -2122,12 +2122,27 @@ namespace PlaywrightNative.Helpers
 
         private static async Task RafAsync(IElementHandle handle)
         {
-            // Do not wait on in-page requestAnimationFrame: after window.open
-            // Chromium may pause rAF (and timers) on the background opener,
-            // which would stall Runtime.evaluate forever and skip the action
-            // timeout. Host-side delay still spaces stability samples.
-            _ = handle;
-            await DelayOrAbortAsync(16).ConfigureAwait(false);
+            // Prefer in-page double-rAF so CSS transitions move between
+            // stability samples (ShouldTimeoutWaitingForStablePosition). Race a
+            // short host timeout so a paused background opener (window.open)
+            // cannot stall Runtime.evaluate past the action timeout.
+            if (handle == null)
+            {
+                await DelayOrAbortAsync(16).ConfigureAwait(false);
+                return;
+            }
+
+            try
+            {
+                Task pageRaf = handle.EvaluateAsync(
+                    "() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => r())))");
+                Task host = DelayOrAbortAsync(50);
+                await Task.WhenAny(pageRaf, host).ConfigureAwait(false);
+            }
+            catch (PlaywrightException)
+            {
+                await DelayOrAbortAsync(16).ConfigureAwait(false);
+            }
         }
 
         private static void ThrowIfAborted(string apiName, StringBuilder log = null)

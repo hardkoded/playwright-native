@@ -237,12 +237,30 @@ namespace PlaywrightNative.Helpers
             {
                 string lockPath = Path.Combine(userDataDir, "SingletonLock");
                 string cookiePath = Path.Combine(userDataDir, "SingletonCookie");
+                string socketPath = Path.Combine(userDataDir, "SingletonSocket");
+                string runningPath = Path.Combine(userDataDir, "RunningChromeVersion");
+                string lockfilePath = Path.Combine(userDataDir, "lockfile");
                 if (File.Exists(lockPath)
                     || Directory.Exists(lockPath)
                     || File.Exists(cookiePath)
-                    || Directory.Exists(cookiePath))
+                    || Directory.Exists(cookiePath)
+                    || File.Exists(socketPath)
+                    || Directory.Exists(socketPath)
+                    || File.Exists(runningPath)
+                    || File.Exists(lockfilePath))
                 {
                     return RewriteProfileInUse(message + "\n[profile-lock] SingletonLock");
+                }
+
+                // Windows Chromium often exits with an empty stderr and removes
+                // Singleton* before we inspect the directory. A populated
+                // Default/ profile after a generic "Failed to launch" is still
+                // the profile-in-use case for the double-connect tests.
+                string defaultDir = Path.Combine(userDataDir, "Default");
+                if (Directory.Exists(defaultDir)
+                    && message.Contains("Failed to launch browser", StringComparison.OrdinalIgnoreCase))
+                {
+                    return RewriteProfileInUse(message + "\n[profile-lock] Default");
                 }
             }
             catch (IOException)

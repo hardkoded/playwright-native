@@ -109,8 +109,22 @@ namespace PlaywrightNative.Helpers
                     return;
                 }
 
-                navigatedUrls.Add(frame.Url ?? string.Empty);
-                if (MatchesUrl(frame.Url, urlString, urlRegex, urlFunc))
+                string frameUrl = frame.Url ?? string.Empty;
+
+                // Without an explicit URL predicate, ignore the initial about:blank
+                // commit so waitForNavigation({ waitUntil: 'commit' }) resolves on
+                // the real document (ShouldWorkWithCommit).
+                if (urlString == null
+                    && urlRegex == null
+                    && urlFunc == null
+                    && (string.IsNullOrEmpty(frameUrl)
+                        || string.Equals(frameUrl, "about:blank", StringComparison.Ordinal)))
+                {
+                    return;
+                }
+
+                navigatedUrls.Add(frameUrl);
+                if (MatchesUrl(frameUrl, urlString, urlRegex, urlFunc))
                 {
                     navigatedTcs.TrySetResult(true);
                 }

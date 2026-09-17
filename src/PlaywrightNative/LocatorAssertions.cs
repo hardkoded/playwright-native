@@ -2443,30 +2443,10 @@ namespace PlaywrightNative
                 }
                 catch (Exception ex) when (ClosedTarget.IsClosed(ex))
                 {
-                    if (sawElement)
-                    {
-                        throw CreateTextExpectException(
-                            FormatTextExpectFailure(
-                                header,
-                                expectLog,
-                                method,
-                                needles,
-                                lastReceived,
-                                sawElement,
-                                single,
-                                exact,
-                                ignoreCase,
-                                timeoutMs,
-                                lastPreview),
-                            needles,
-                            lastReceived,
-                            method,
-                            pass: _negate,
-                            timeoutMs,
-                            ariaSnapshot: null);
-                    }
-
-                    throw new PlaywrightException(header + "\n" + ex.Message, ex);
+                    // Mid-navigation ClosedTarget while the page is still open is
+                    // transient (ShouldNotThrowWhenNavigatingDuringOneShotCheck).
+                    // Keep polling like DestroyedContext instead of failing early.
+                    all = Array.Empty<IElementHandle>();
                 }
 
                 if (single && all.Count > 1)
@@ -2523,30 +2503,9 @@ namespace PlaywrightNative
                 }
                 catch (Exception ex) when (ClosedTarget.IsClosed(ex))
                 {
-                    if (sawElement)
-                    {
-                        throw CreateTextExpectException(
-                            FormatTextExpectFailure(
-                                header,
-                                expectLog,
-                                method,
-                                needles,
-                                lastReceived,
-                                sawElement,
-                                single,
-                                exact,
-                                ignoreCase,
-                                timeoutMs,
-                                lastPreview),
-                            needles,
-                            lastReceived,
-                            method,
-                            pass: _negate,
-                            timeoutMs,
-                            ariaSnapshot: null);
-                    }
-
-                    throw new PlaywrightException(header + "\n" + ex.Message, ex);
+                    all = Array.Empty<IElementHandle>();
+                    received = Array.Empty<string>();
+                    readFailed = true;
                 }
 
                 bool matched;
@@ -2838,7 +2797,7 @@ namespace PlaywrightNative
             }
             catch (Exception ex) when (ClosedTarget.IsClosed(ex))
             {
-                throw;
+                return Array.Empty<IElementHandle>();
             }
             catch (PlaywrightException ex) when (
                 PlaywrightNative.Helpers.DestroyedContext.IsDestroyedContext(ex)

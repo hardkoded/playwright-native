@@ -348,7 +348,10 @@ namespace PlaywrightNative.Chromium
             Task optional = Task.WhenAll(optionalTasks);
             if (Opener != null)
             {
-                await Task.WhenAny(critical, Task.Delay(2_000)).ConfigureAwait(false);
+                // Popups must finish Page/Runtime/Network enable before resume so
+                // inline prompt()/alert() fire javascriptDialogOpening. Timing out
+                // critical left headful dialog tests hanging until NUnit abort.
+                await critical.ConfigureAwait(false);
                 await Task.WhenAny(optional, Task.Delay(1_000)).ConfigureAwait(false);
             }
             else

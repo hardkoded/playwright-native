@@ -80,6 +80,15 @@ namespace PlaywrightNative.Helpers
             timing.RequestStart = ReadMs(resourceTiming, "requestStart", "sendStart");
             timing.ResponseStart = ReadMs(resourceTiming, "responseStart", "receiveHeadersEnd");
 
+            // WebKit occasionally reports sslStart after connectEnd on local HTTPS.
+            // Upstream VerifyConnectionTimingConsistency requires monotonic order.
+            if (timing.SecureConnectionStart > 0
+                && timing.ConnectEnd > 0
+                && timing.SecureConnectionStart > timing.ConnectEnd)
+            {
+                timing.SecureConnectionStart = -1;
+            }
+
             return ReadDouble(resourceTiming, "requestTime");
         }
 

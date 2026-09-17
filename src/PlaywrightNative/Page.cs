@@ -2087,7 +2087,6 @@ namespace PlaywrightNative
                 }
                 catch (PlaywrightException ex) when (
                     DestroyedContext.IsDestroyedContext(ex)
-                    && !(ex.Message?.Contains("most likely because of a navigation", StringComparison.Ordinal) ?? false)
                     && attempt < maxAttempts - 1)
                 {
                     _crPage.InvalidateExecutionContext(context);

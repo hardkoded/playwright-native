@@ -322,11 +322,12 @@ namespace PlaywrightNative.TestServer
         public void SetCSP(string path, string csp) => _csp.Add(path, csp);
 
         /// <summary>
-        /// Loads a TLS server certificate. CI sets <c>PLAYWRIGHT_TEST_CERT_PATH</c> to
-        /// a DER/PEM <c>testCert.cer</c> from <c>dotnet dev-certs https -ep</c>, which
-        /// has no private key and is not PKCS12 — <c>LoadPkcs12FromFile</c> throws
-        /// ASN1 corrupted data. Prefer PKCS12 paths as-is; for public certs use the
-        /// sibling <c>key.pfx</c> / PEM fixtures that include a private key.
+        /// Loads a TLS server certificate. CI exports <c>key.pfx</c> (password
+        /// <c>playwright</c>) via <c>dotnet dev-certs https -ep</c>. A public-only
+        /// DER <c>testCert.cer</c> cannot terminate TLS (browsers see
+        /// <c>ERR_CONNECTION_CLOSED</c>). Prefer PKCS12; rematerialize PEM into a
+        /// password-protected PKCS12 with <see cref="X509KeyStorageFlags.EphemeralKeySet"/>
+        /// on Windows so Kestrel/SslStream can use the key.
         /// </summary>
         /// <param name="certificatePath">Path from <c>PLAYWRIGHT_TEST_CERT_PATH</c>.</param>
         /// <param name="certificatePassword">Optional PKCS12 password.</param>
@@ -335,23 +336,20 @@ namespace PlaywrightNative.TestServer
         {
             string fullPath = Path.GetFullPath(certificatePath);
             string extension = Path.GetExtension(fullPath);
+            string pfxPassword = string.IsNullOrEmpty(certificatePassword)
+                ? "playwright"
+                : certificatePassword;
 
-            // EphemeralKeySet is required on Windows so PEM-imported keys are
-            // usable by Kestrel/SslStream. Without it the handshake aborts with
-            // "unexpected EOF or 0 bytes from the transport stream". macOS/Linux
-            // reject the flag (PlatformNotSupportedException).
-            X509KeyStorageFlags flags = X509KeyStorageFlags.Exportable;
-            if (OperatingSystem.IsWindows())
-            {
-                flags |= X509KeyStorageFlags.EphemeralKeySet;
-            }
+            // File-based PKCS12: Exportable is enough. EphemeralKeySet is reserved
+            // for in-memory PEM rematerialization on Windows (macOS/Linux reject it).
+            X509KeyStorageFlags fileFlags = X509KeyStorageFlags.Exportable;
             if (extension.Equals(".pfx", StringComparison.OrdinalIgnoreCase)
                 || extension.Equals(".p12", StringComparison.OrdinalIgnoreCase))
             {
                 return X509CertificateLoader.LoadPkcs12FromFile(
                     fullPath,
-                    certificatePassword ?? string.Empty,
-                    flags);
+                    certificatePassword ?? pfxPassword,
+                    fileFlags);
             }
 
             string directory = Directory.Exists(fullPath)
@@ -360,19 +358,26 @@ namespace PlaywrightNative.TestServer
             string siblingPfx = Path.Combine(directory, "key.pfx");
             if (File.Exists(siblingPfx))
             {
-                string pfxPassword = string.IsNullOrEmpty(certificatePassword)
-                    ? "playwright"
-                    : certificatePassword;
-                return X509CertificateLoader.LoadPkcs12FromFile(siblingPfx, pfxPassword, flags);
+                return X509CertificateLoader.LoadPkcs12FromFile(siblingPfx, pfxPassword, fileFlags);
             }
 
             string pemCert = Path.Combine(directory, "playwright-test.pem");
             string pemKey = Path.Combine(directory, "playwright-test-key.pem");
             if (File.Exists(pemCert) && File.Exists(pemKey))
             {
+                X509KeyStorageFlags pemFlags = X509KeyStorageFlags.Exportable;
+                if (OperatingSystem.IsWindows())
+                {
+                    // Without EphemeralKeySet, Windows SslStream aborts the
+                    // handshake (unexpected EOF / ERR_CONNECTION_CLOSED).
+                    pemFlags |= X509KeyStorageFlags.EphemeralKeySet;
+                }
+
                 X509Certificate2 pem = X509Certificate2.CreateFromPemFile(pemCert, pemKey);
-                byte[] pfxBytes = pem.Export(X509ContentType.Pkcs12);
-                return X509CertificateLoader.LoadPkcs12(pfxBytes, string.Empty, flags);
+                // Password-protected export is reliable across .NET/Windows;
+                // empty-password PKCS12 often yields an unusable private key.
+                byte[] pfxBytes = pem.Export(X509ContentType.Pkcs12, pfxPassword);
+                return X509CertificateLoader.LoadPkcs12(pfxBytes, pfxPassword, pemFlags);
             }
 
             X509Certificate2 publicOnly = X509CertificateLoader.LoadCertificateFromFile(fullPath);

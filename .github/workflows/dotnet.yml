@@ -174,10 +174,13 @@ jobs:
         # No restore-keys fallback: we want a stale cache to be a clean miss
         # rather than a partial restore that masks broken binaries.
     - name: Create HTTPS certificate (Linux)
-      if: matrix.os == 'ubuntu-latest' && matrix.browser == 'chromium'
+      if: matrix.os == 'ubuntu-latest'
       run: |
         mkdir -p src/PlaywrightNative.TestServer
         dotnet dev-certs https --clean
+        # PKCS12 with private key for Kestrel. Public DER alone makes the
+        # handshake abort (ERR_CONNECTION_CLOSED / TLS EOF).
+        dotnet dev-certs https -ep src/PlaywrightNative.TestServer/key.pfx -p playwright
         dotnet dev-certs https -ep src/PlaywrightNative.TestServer/testCert.cer
         sudo openssl x509 -inform der -in src/PlaywrightNative.TestServer/testCert.cer -out /usr/local/share/ca-certificates/testCert.crt -outform pem
         sudo update-ca-certificates
@@ -186,6 +189,18 @@ jobs:
       shell: pwsh
       run: |
         dotnet dev-certs https --clean
+        # Export PKCS12 so SimpleServer.LoadHttpsCertificate can feed Kestrel a
+        # private key. Public-only testCert.cer / PEM rematerialization still
+        # yields ERR_CONNECTION_CLOSED on Windows runners.
+        New-Item -ItemType Directory -Force -Path src/PlaywrightNative.TestServer | Out-Null
+        dotnet dev-certs https -ep src/PlaywrightNative.TestServer/key.pfx -p playwright
+        dotnet dev-certs https -ep src/PlaywrightNative.TestServer/testCert.cer
+    - name: Create HTTPS certificate (macOS)
+      if: startsWith(matrix.os, 'macos')
+      run: |
+        mkdir -p src/PlaywrightNative.TestServer
+        dotnet dev-certs https --clean
+        dotnet dev-certs https -ep src/PlaywrightNative.TestServer/key.pfx -p playwright
         dotnet dev-certs https -ep src/PlaywrightNative.TestServer/testCert.cer
     - name: Check formatting
       if: ${{ matrix.os == 'ubuntu-latest' && matrix.browser == 'chromium' && matrix.mode == 'headless' }}

@@ -213,7 +213,25 @@ namespace PlaywrightNative.WebKit
                 parameters["method"] = sendMethod;
             }
 
-            if (protocolHeaders != null)
+            // Changing method to POST/PUT/… without a body still needs an empty
+            // postData on Linux WebKit or the continued navigation never fires
+            // (ShouldOverrideMethodAlongWithUrl).
+            if (sendBody == null
+                && sendMethod != null
+                && !string.Equals(sendMethod, "GET", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(sendMethod, "HEAD", StringComparison.OrdinalIgnoreCase))
+            {
+                sendBody = Array.Empty<byte>();
+                protocolHeaders = WithContentLength(
+                    protocolHeaders ?? RouteContinue.RemoveCookie(Request.Headers),
+                    0);
+                if (protocolHeaders != null)
+                {
+                    parameters["headers"] = protocolHeaders;
+                }
+            }
+
+            if (protocolHeaders != null && !parameters.ContainsKey("headers"))
             {
                 parameters["headers"] = protocolHeaders;
             }

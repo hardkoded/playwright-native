@@ -3704,7 +3704,15 @@ namespace PlaywrightNative.WebKit
                     }
                 }
 
-                if (EvaluateSerialization.CanWrapExpression(expression))
+                // Child-frame requestStorageAccess must run under
+                // callFunctionOn+emulateUserGesture — Runtime.evaluate's gesture
+                // flag is not enough after OOPIF load on macOS. Check before the
+                // serialized-wrap path so RSA is never routed through plain evaluate.
+                bool needsUserGesture = frame?.ParentFrame != null
+                    && expression != null
+                    && expression.Contains("requestStorageAccess", StringComparison.Ordinal);
+
+                if (!needsUserGesture && EvaluateSerialization.CanWrapExpression(expression))
                 {
                     JsonElement? wrapped = await context
                         .EvaluateSerializedRemoteAsync(EvaluateSerialization.WithSerializedResult(expression))
@@ -3712,14 +3720,6 @@ namespace PlaywrightNative.WebKit
                     return EvaluateSerialization.ParseRemote<T>(wrapped);
                 }
 
-                // Child-frame requestStorageAccess must run under
-                // callFunctionOn+emulateUserGesture — Runtime.evaluate's gesture
-                // flag is not enough after OOPIF load on macOS. Do not wrap every
-                // child-frame evaluate: expressions like the page global `result`
-                // collide with a wrapper `let result` (TDZ / frameset click).
-                bool needsUserGesture = frame?.ParentFrame != null
-                    && expression != null
-                    && expression.Contains("requestStorageAccess", StringComparison.Ordinal);
                 JsonElement? remote = needsUserGesture
                     ? await context.EvaluateHandleWithUserGestureAsync(
                         expression,

@@ -1707,7 +1707,7 @@ namespace PlaywrightNative.Helpers
             // before TcpClient.Dispose RSTs the browser-facing socket.
             try
             {
-                await Task.Delay(200).ConfigureAwait(false);
+                await Task.Delay(400).ConfigureAwait(false);
             }
             catch (ObjectDisposedException)
             {
