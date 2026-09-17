@@ -788,12 +788,10 @@ namespace PlaywrightNative.Helpers
         if (!hit) {
             return false;
         }
-        // Overlay scrollbars often keep clientWidth == offsetWidth; still reject
-        // when the top hit is a scrollable ancestor (not the target itself).
-        if (hit !== target && hit !== el && isScrollable(hit)
-            && !isComposedDescendant(hit, target) && !isComposedDescendant(hit, el)) {
-            return true;
-        }
+        // Overlay scrollbars often keep clientWidth == offsetWidth. Reject only
+        // when the point sits in the typical overlay gutter of a scrollable
+        // ancestor — treating any scroller hit as a scrollbar blocked every
+        // candidate on Darwin WebKit (scroll=none / NotHitScrollBar timeouts).
         let n = hit;
         while (n) {
             if (n !== target && n !== el && isScrollable(n)) {
@@ -801,6 +799,17 @@ namespace PlaywrightNative.Helpers
                 const clientRight = r.left + n.clientWidth;
                 const clientBottom = r.top + n.clientHeight;
                 if ((x >= clientRight && x <= r.right) || (y >= clientBottom && y <= r.bottom)) {
+                    return true;
+                }
+                // Overlay gutter (~15px) when classic client/offset metrics match.
+                const gutter = 15;
+                const overlayX = n.scrollWidth > n.clientWidth + 1
+                    && Math.abs(n.offsetWidth - n.clientWidth) <= 1
+                    && x >= r.right - gutter && x <= r.right;
+                const overlayY = n.scrollHeight > n.clientHeight + 1
+                    && Math.abs(n.offsetHeight - n.clientHeight) <= 1
+                    && y >= r.bottom - gutter && y <= r.bottom;
+                if (overlayX || overlayY) {
                     return true;
                 }
             }

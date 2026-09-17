@@ -679,22 +679,34 @@ namespace PlaywrightNative.Helpers
 
             try
             {
-                // Never evaluate / describeNode for loading=lazy — Darwin WebKit
-                // can hang the target session for the full NUnit timeout.
-                string loading = await iframeEl.GetAttributeAsync("loading").ConfigureAwait(false);
+                // Avoid GetAttributeAsync / bare Evaluate on loading=lazy iframes:
+                // Darwin WebKit can wedge the target session for the full NUnit
+                // timeout. Race a short budget; on timeout treat as unloaded.
+                string loading = await RaceOrDefaultAsync(
+                    () => iframeEl.GetAttributeAsync("loading"),
+                    Stopwatch.StartNew(),
+                    400,
+                    fallback: null).ConfigureAwait(false);
                 if (string.Equals(loading, "lazy", StringComparison.OrdinalIgnoreCase))
                 {
                     return null;
                 }
 
-                bool ready = await iframeEl.EvaluateAsync<bool>(IframeCaptureReadyFunction)
-                    .ConfigureAwait(false);
+                bool ready = await RaceOrDefaultAsync(
+                    () => iframeEl.EvaluateAsync<bool>(IframeCaptureReadyFunction),
+                    Stopwatch.StartNew(),
+                    800,
+                    fallback: false).ConfigureAwait(false);
                 if (!ready)
                 {
                     return null;
                 }
 
-                return await iframeEl.ContentFrameAsync().ConfigureAwait(false);
+                return await RaceOrDefaultAsync(
+                    () => iframeEl.ContentFrameAsync(),
+                    Stopwatch.StartNew(),
+                    800,
+                    fallback: null).ConfigureAwait(false);
             }
             catch (PlaywrightException)
             {

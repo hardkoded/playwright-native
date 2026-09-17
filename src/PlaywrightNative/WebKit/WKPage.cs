@@ -4121,20 +4121,12 @@ namespace PlaywrightNative.WebKit
                 _initScripts.Add(script);
             }
 
+            // Upstream addInitScript only updates Page.setBootstrapScript. Evaluating
+            // here would double-run with ContextInitScriptSet.EvaluateOnCurrentAsync
+            // (context,context) and with navigation bootstrap (clock 2x, init callbacks
+            // never matching exact counts). Current-document coverage is explicit:
+            // EvaluateOnCurrentAsync, ExposeFunction's EvaluateInAllFrames, Replay*.
             await SyncBootstrapScriptAsync().ConfigureAwait(false);
-
-            // Upstream wkPage.addInitScript also evaluates the bootstrap on existing
-            // frames so about:blank created before setBootstrapScript still sees it.
-            try
-            {
-                await EvaluateInAllFramesAsync(script).ConfigureAwait(false);
-            }
-            catch (PlaywrightException)
-            {
-            }
-            catch (TimeoutException)
-            {
-            }
         }
 
         /// <summary>
@@ -7280,11 +7272,22 @@ namespace PlaywrightNative.WebKit
         /// <returns>A task that completes when page-proxy session setup finishes.</returns>
         private async Task InitializePageProxySessionAsync()
         {
-            // Match upstream Promise.all([Dialog.enable, Emulation.setActiveAndFocused, _updateViewport]).
+            // Match upstream Promise.all([Dialog.enable, Emulation.setActiveAndFocused,
+            // setJavaScriptEnabled, _updateViewport]).
             Task dialogTask = _session.SendAsync("Dialog.enable");
             Task focusTask = EnsureActiveAndFocusedAsync();
             Task viewportTask = ApplyEmulatedViewportFromContextAsync();
-            await Task.WhenAll(dialogTask, focusTask, viewportTask).ConfigureAwait(false);
+            Task jsTask = Task.CompletedTask;
+            WKBrowserContext jsContext = _context ?? OwnerContext as WKBrowserContext;
+            if (jsContext != null && jsContext.IsJavaScriptDisabled)
+            {
+                // Upstream disables JS during page-proxy init (before resume) so
+                // bootstrap / about:blank scripts never run. Applying only in
+                // ApplyContextChrome races page init on Darwin.
+                jsTask = _session.SendAsync("Emulation.setJavaScriptEnabled", new { enabled = false });
+            }
+
+            await Task.WhenAll(dialogTask, focusTask, viewportTask, jsTask).ConfigureAwait(false);
             _dialogEnabled = true;
 
             // Official always applies auth credentials during page-proxy
@@ -7475,11 +7478,21 @@ namespace PlaywrightNative.WebKit
                 double x = point[0];
                 double y = point[1];
 
-                // Use the full mouse stack (WKRawMouse) so Darwin CFNetwork+proxy
-                // setups that drop bare Input.dispatchMouseEvent still get a
-                // trusted click on the iframe's content. Avoid page ClickAsync
-                // actionability — it is too slow and activation expires.
-                await _mouse.ClickAsync(x, y).ConfigureAwait(false);
+                // Fast raw mouse down/up so Darwin retains transient activation
+                // into the subsequent callFunctionOn. Input.Mouse.ClickAsync can
+                // take long enough that activation expires before RSA runs.
+                await _session.SendAsync(
+                    "Input.dispatchMouseEvent",
+                    new { type = "move", button = "none", x, y, modifiers = 0, buttons = 0 })
+                    .ConfigureAwait(false);
+                await _session.SendAsync(
+                    "Input.dispatchMouseEvent",
+                    new { type = "down", button = "left", x, y, modifiers = 0, buttons = 1, clickCount = 1 })
+                    .ConfigureAwait(false);
+                await _session.SendAsync(
+                    "Input.dispatchMouseEvent",
+                    new { type = "up", button = "left", x, y, modifiers = 0, buttons = 0, clickCount = 1 })
+                    .ConfigureAwait(false);
 
                 // Do not call EnsureActiveAndFocusedAsync here — re-activating the
                 // page proxy after the iframe click clears transient user activation
