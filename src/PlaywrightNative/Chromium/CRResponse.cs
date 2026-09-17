@@ -353,39 +353,26 @@ namespace PlaywrightNative.Chromium
                 return false;
             }
 
-            if (IsRefetchSafeResourceType(Request.ResourceType))
+            string resourceType = Request.ResourceType;
+            bool safeType = !string.IsNullOrEmpty(resourceType)
+                && (resourceType.Equals("font", StringComparison.OrdinalIgnoreCase)
+                    || resourceType.Equals("image", StringComparison.OrdinalIgnoreCase)
+                    || resourceType.Equals("manifest", StringComparison.OrdinalIgnoreCase)
+                    || resourceType.Equals("media", StringComparison.OrdinalIgnoreCase)
+                    || resourceType.Equals("script", StringComparison.OrdinalIgnoreCase)
+                    || resourceType.Equals("stylesheet", StringComparison.OrdinalIgnoreCase)
+                    || resourceType.Equals("texttrack", StringComparison.OrdinalIgnoreCase));
+            if (safeType)
             {
                 return true;
             }
 
-            return IsPrefetchRequest(Request);
-        }
-
-        private static bool IsRefetchSafeResourceType(string resourceType)
-        {
-            if (string.IsNullOrEmpty(resourceType))
+            if (Request.Headers == null)
             {
                 return false;
             }
 
-            // Official kRefetchSafeResourceTypes (Playwright resource-type names).
-            return resourceType.Equals("font", StringComparison.OrdinalIgnoreCase)
-                || resourceType.Equals("image", StringComparison.OrdinalIgnoreCase)
-                || resourceType.Equals("manifest", StringComparison.OrdinalIgnoreCase)
-                || resourceType.Equals("media", StringComparison.OrdinalIgnoreCase)
-                || resourceType.Equals("script", StringComparison.OrdinalIgnoreCase)
-                || resourceType.Equals("stylesheet", StringComparison.OrdinalIgnoreCase)
-                || resourceType.Equals("texttrack", StringComparison.OrdinalIgnoreCase);
-        }
-
-        private static bool IsPrefetchRequest(CRRequest request)
-        {
-            if (request?.Headers == null)
-            {
-                return false;
-            }
-
-            foreach (KeyValuePair<string, string> header in request.Headers)
+            foreach (KeyValuePair<string, string> header in Request.Headers)
             {
                 if (header.Key.Equals("sec-purpose", StringComparison.OrdinalIgnoreCase)
                     && header.Value != null
