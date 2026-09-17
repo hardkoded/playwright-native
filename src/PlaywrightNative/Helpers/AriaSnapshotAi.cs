@@ -47,6 +47,13 @@ namespace PlaywrightNative.Helpers
   return visit(document.documentElement);
 }";
 
+        internal const string ReadPrefixFunction = @"() => {
+  if (window.__pwAriaFramePrefix === undefined) return null;
+  return String(window.__pwAriaFramePrefix);
+}";
+
+        internal const string WritePrefixFunction = @"(p) => { window.__pwAriaFramePrefix = String(p); return true; }";
+
         /// <summary>
         /// Parent-document check for <c>loading=lazy</c> without callFunctionOn
         /// on the iframe objectId (Darwin wedges that path for unloaded lazy frames).
@@ -74,13 +81,6 @@ namespace PlaywrightNative.Helpers
   if (!el) return false;
   return (el.getAttribute('loading') || '').toLowerCase() === 'lazy';
 }";
-
-        internal const string ReadPrefixFunction = @"() => {
-  if (window.__pwAriaFramePrefix === undefined) return null;
-  return String(window.__pwAriaFramePrefix);
-}";
-
-        internal const string WritePrefixFunction = @"(p) => { window.__pwAriaFramePrefix = String(p); return true; }";
 
         /// <summary>
         /// True when the iframe is safe to resolve via protocol ContentFrame.
