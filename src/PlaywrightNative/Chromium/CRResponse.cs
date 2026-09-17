@@ -332,6 +332,10 @@ namespace PlaywrightNative.Chromium
 
         private bool CanRefetchBody()
         {
+            // Official crNetworkManager createResponseBodyCallback: re-fetching may
+            // produce server side effects (e.g. Set-Cookie). Only GETs of static
+            // subresources and Sec-Purpose prefetch requests may call
+            // Network.loadNetworkResource. Document navigations must not.
             if (!string.Equals(Request.Method, "GET", StringComparison.OrdinalIgnoreCase))
             {
                 return false;
@@ -342,9 +346,56 @@ namespace PlaywrightNative.Chromium
                 return false;
             }
 
-            return Headers == null
-                || !Headers.TryGetValue("Content-Length", out string contentLength)
-                || !string.Equals(contentLength, "0", StringComparison.Ordinal);
+            if (Headers != null
+                && Headers.TryGetValue("Content-Length", out string contentLength)
+                && string.Equals(contentLength, "0", StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            if (IsRefetchSafeResourceType(Request.ResourceType))
+            {
+                return true;
+            }
+
+            return IsPrefetchRequest(Request);
+        }
+
+        private static bool IsRefetchSafeResourceType(string resourceType)
+        {
+            if (string.IsNullOrEmpty(resourceType))
+            {
+                return false;
+            }
+
+            // Official kRefetchSafeResourceTypes (Playwright resource-type names).
+            return resourceType.Equals("font", StringComparison.OrdinalIgnoreCase)
+                || resourceType.Equals("image", StringComparison.OrdinalIgnoreCase)
+                || resourceType.Equals("manifest", StringComparison.OrdinalIgnoreCase)
+                || resourceType.Equals("media", StringComparison.OrdinalIgnoreCase)
+                || resourceType.Equals("script", StringComparison.OrdinalIgnoreCase)
+                || resourceType.Equals("stylesheet", StringComparison.OrdinalIgnoreCase)
+                || resourceType.Equals("texttrack", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool IsPrefetchRequest(CRRequest request)
+        {
+            if (request?.Headers == null)
+            {
+                return false;
+            }
+
+            foreach (KeyValuePair<string, string> header in request.Headers)
+            {
+                if (header.Key.Equals("sec-purpose", StringComparison.OrdinalIgnoreCase)
+                    && header.Value != null
+                    && header.Value.StartsWith("prefetch", StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private async Task<byte[]> TryLoadNetworkResourceAsync()
