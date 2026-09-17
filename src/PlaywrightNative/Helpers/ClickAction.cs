@@ -814,7 +814,6 @@ namespace PlaywrightNative.Helpers
             }
         }
     }
-    let fallback = null;
     for (let i = 0; i < rects.length; i++) {
         const r = rects[i];
         if (!r || (r.width <= 0 && r.height <= 0)) {
@@ -839,15 +838,15 @@ namespace PlaywrightNative.Helpers
         }
         for (let j = 0; j < candidates.length; j++) {
             const p = candidates[j];
-            if (!fallback) {
-                fallback = p;
-            }
             if (hitOk(p[0], p[1])) {
                 return p;
             }
         }
     }
-    return fallback;
+    // Never return a point that elementFromPoint rejects — that lands on a
+    // parent scrollbar (horizontal flex overflow) and loops until timeout
+    // (ShouldNotHitScrollBar on Darwin WebKit).
+    return null;
 }";
 
         /// <summary>
@@ -2123,10 +2122,11 @@ namespace PlaywrightNative.Helpers
         private static async Task RafAsync(IElementHandle handle)
         {
             // Prefer in-page double-rAF so CSS transitions move between
-            // stability samples (ShouldTimeoutWaitingForStablePosition). On
-            // WebKit, Task.WhenAny abandoning an in-flight Runtime.evaluate
-            // wedges the target session and poisons later clicks (scroll=none
-            // / scrollbar hit-test timeouts on Darwin). Use a host delay there.
+            // stability samples (ShouldTimeoutWaitingForStablePosition).
+            // Race a short host timeout so a modal alert / paused opener
+            // cannot stall Runtime.evaluate past the action timeout
+            // (Chromium dialog clicks). On WebKit, abandoning that evaluate
+            // wedges the target session — use a host-only delay there.
             if (handle == null || IsWebKitHandle(handle))
             {
                 await DelayOrAbortAsync(32).ConfigureAwait(false);
@@ -2135,9 +2135,10 @@ namespace PlaywrightNative.Helpers
 
             try
             {
-                await handle.EvaluateAsync(
-                    "() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => r())))")
-                    .ConfigureAwait(false);
+                Task pageRaf = handle.EvaluateAsync(
+                    "() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => r())))");
+                Task host = DelayOrAbortAsync(50);
+                await Task.WhenAny(pageRaf, host).ConfigureAwait(false);
             }
             catch (PlaywrightException)
             {

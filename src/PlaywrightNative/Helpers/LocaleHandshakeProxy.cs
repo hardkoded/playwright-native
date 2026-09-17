@@ -736,7 +736,7 @@ namespace PlaywrightNative.Helpers
                 // echo to CFNetwork before TcpClient.Dispose.
                 try
                 {
-                    await Task.Delay(250, CancellationToken.None).ConfigureAwait(false);
+                    await Task.Delay(400, CancellationToken.None).ConfigureAwait(false);
                 }
                 catch (ObjectDisposedException)
                 {

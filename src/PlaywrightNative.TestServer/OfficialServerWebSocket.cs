@@ -385,33 +385,12 @@ namespace PlaywrightNative.TestServer
                     {
                     }
 
-                    // Wait for the peer (proxy hop) to finish reading the close
-                    // echo and half-close. A short drain+sleep still raced
-                    // Kestrel dispose → CFNetwork error+1006 on Darwin CI.
-                    try
-                    {
-                        byte[] sink = new byte[256];
-                        using CancellationTokenSource drainCts =
-                            new CancellationTokenSource(TimeSpan.FromSeconds(2));
-                        while (true)
-                        {
-                            int n = await _stream.ReadAsync(sink.AsMemory(0, sink.Length), drainCts.Token)
-                                .ConfigureAwait(false);
-                            if (n == 0)
-                            {
-                                break;
-                            }
-                        }
-                    }
-                    catch (IOException)
-                    {
-                    }
-                    catch (ObjectDisposedException)
-                    {
-                    }
-                    catch (OperationCanceledException)
-                    {
-                    }
+                    // Do NOT drain until peer EOF: the browser waits for this
+                    // close echo before half-closing, so a long drain deadlocks
+                    // under Darwin dual proxies and Kestrel dispose becomes RST
+                    // (error+1006 instead of application close 3002). A short
+                    // settle lets the proxy hops copy the already-written echo.
+                    await Task.Delay(200).ConfigureAwait(false);
 
                     NotifyClose(code, reason);
                     return;

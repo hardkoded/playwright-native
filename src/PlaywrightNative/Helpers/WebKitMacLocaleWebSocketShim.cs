@@ -69,7 +69,12 @@ namespace PlaywrightNative.Helpers
   };
   const rewriteUrl = (url) => {
     const original = parseWs(url);
-    if (!original || (original.protocol !== 'ws:' && original.protocol !== 'wss:'))
+    // Only rewrite plain ws:// loopback. Darwin CFNetwork excludes localhost
+    // from HTTP proxies, so ws:// must use local.playwright* to reach the
+    // LocaleHandshakeProxy (ExtraHTTPHeaders / Accept-Language). wss:// stays
+    // on localhost and goes direct (bypassLoopback) so Secure cookies set for
+    // Domain=localhost still attach (ShouldSetSecureCookiesOnSecureWebSocket).
+    if (!original || original.protocol !== 'ws:')
       return { wire: url, publicUrl: String(url), publicOrigin: null, fakeOrigins: null };
     const fake = fakeFor(original.hostname);
     if (!fake)
@@ -79,18 +84,15 @@ namespace PlaywrightNative.Helpers
     const wireUrl = new URL(publicUrl);
     wireUrl.hostname = fake;
     const fakeWs = wireUrl.protocol + '//' + wireUrl.host;
-    const fakeHttp = fakeWs.replace(/^ws/i, 'http').replace(/^wss/i, 'https');
+    const fakeHttp = fakeWs.replace(/^ws/i, 'http');
     return { wire: wireUrl.toString(), publicUrl, publicOrigin, fakeOrigins: [fakeWs, fakeHttp] };
   };
   const rewriteText = (text) => {
     if (typeof text !== 'string') return text;
     return text
       .replace(/ws:\/\/127\.0\.0\.1/gi, 'ws://local.playwright.ipv4')
-      .replace(/wss:\/\/127\.0\.0\.1/gi, 'wss://local.playwright.ipv4')
       .replace(/ws:\/\/(\[::1\]|::1)/gi, 'ws://local.playwright.ipv6')
-      .replace(/wss:\/\/(\[::1\]|::1)/gi, 'wss://local.playwright.ipv6')
-      .replace(/ws:\/\/(localhost|[a-z0-9-]+\.localhost)/gi, 'ws://local.playwright')
-      .replace(/wss:\/\/(localhost|[a-z0-9-]+\.localhost)/gi, 'wss://local.playwright');
+      .replace(/ws:\/\/(localhost|[a-z0-9-]+\.localhost)/gi, 'ws://local.playwright');
   };
   // Restore message.origin without Proxy/Object.create(MessageEvent) —
   // both break message delivery under WebKit (await-in-evaluate hangs or

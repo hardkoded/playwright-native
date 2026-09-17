@@ -7462,10 +7462,21 @@ namespace PlaywrightNative.WebKit
                 double x = point[0];
                 double y = point[1];
 
-                // Use the full mouse stack (WKRawMouse) so Darwin CFNetwork+proxy
-                // setups that drop bare Input.dispatchMouseEvent still get a
-                // trusted click on the iframe's content.
-                await _mouse.ClickAsync(x, y).ConfigureAwait(false);
+                // Use a fast raw mouse down/up so Darwin retains transient
+                // activation into the subsequent callFunctionOn. Full ClickAsync
+                // actionability can take long enough that activation expires.
+                await _session.SendAsync(
+                    "Input.dispatchMouseEvent",
+                    new { type = "move", button = "none", x, y, modifiers = 0, buttons = 0 })
+                    .ConfigureAwait(false);
+                await _session.SendAsync(
+                    "Input.dispatchMouseEvent",
+                    new { type = "down", button = "left", x, y, modifiers = 0, buttons = 1, clickCount = 1 })
+                    .ConfigureAwait(false);
+                await _session.SendAsync(
+                    "Input.dispatchMouseEvent",
+                    new { type = "up", button = "left", x, y, modifiers = 0, buttons = 0, clickCount = 1 })
+                    .ConfigureAwait(false);
 
                 // Do not call EnsureActiveAndFocusedAsync here — re-activating the
                 // page proxy after the iframe click clears transient user activation
