@@ -720,8 +720,42 @@ namespace PlaywrightNative.Helpers
         if (!hit) {
             return false;
         }
+        if (hit === target || hit === el) {
+            return true;
+        }
         if (isComposedDescendant(hit, target) || isComposedDescendant(hit, el)) {
             return true;
+        }
+        // Closed shadow: elementFromPoint returns the host (shadowRoot is null).
+        // Accept when the clickable is a composed descendant of that host.
+        if (isComposedDescendant(target, hit) || isComposedDescendant(el, hit)) {
+            return true;
+        }
+        // Closed shadow: elementFromPoint returns the host; accept when the
+        // clickable lives under that host's shadow root.
+        try {
+            if (hit.shadowRoot && (hit.shadowRoot.contains(el) || hit.shadowRoot.contains(target))) {
+                return true;
+            }
+        } catch (e) {
+        }
+        try {
+            const stack = doc.elementsFromPoint ? doc.elementsFromPoint(x, y) : null;
+            if (stack) {
+                for (let i = 0; i < stack.length; i++) {
+                    const n = stack[i];
+                    if (n === target || n === el || isComposedDescendant(n, target) || isComposedDescendant(n, el)) {
+                        return true;
+                    }
+                    try {
+                        if (n.shadowRoot && (n.shadowRoot.contains(el) || n.shadowRoot.contains(target))) {
+                            return true;
+                        }
+                    } catch (e2) {
+                    }
+                }
+            }
+        } catch (e) {
         }
         return false;
     }
@@ -750,6 +784,15 @@ namespace PlaywrightNative.Helpers
             hit = doc.elementFromPoint(x, y);
         } catch (e) {
             return false;
+        }
+        if (!hit) {
+            return false;
+        }
+        // Overlay scrollbars often keep clientWidth == offsetWidth; still reject
+        // when the top hit is a scrollable ancestor (not the target itself).
+        if (hit !== target && hit !== el && isScrollable(hit)
+            && !isComposedDescendant(hit, target) && !isComposedDescendant(hit, el)) {
+            return true;
         }
         let n = hit;
         while (n) {
@@ -882,15 +925,15 @@ namespace PlaywrightNative.Helpers
             if (isOnScrollbar(p[0], p[1])) {
                 continue;
             }
-            if (!fallback) {
-                fallback = p;
-            }
             if (hitOk(p[0], p[1])) {
                 return p;
             }
         }
     }
-    return fallback;
+    // Never return a point that elementFromPoint rejects — that lands on a
+    // parent scrollbar (horizontal flex overflow) and loops until timeout
+    // (ShouldNotHitScrollBar on Darwin WebKit).
+    return null;
 }";
 
         /// <summary>
@@ -1834,8 +1877,8 @@ namespace PlaywrightNative.Helpers
             {
                 ClickOffset offset = position == null ? null : new ClickOffset { X = position.X, Y = position.Y };
                 localPoint = offset == null
-                    ? await handle.EvaluateAsync<double[]>(PointFunction).ConfigureAwait(false)
-                    : await handle.EvaluateAsync<double[]>(PointFunction, offset).ConfigureAwait(false);
+                    ? await handle.EvaluateAsync<double[]>(PickPointFunction).ConfigureAwait(false)
+                    : await handle.EvaluateAsync<double[]>(PickPointFunction, offset).ConfigureAwait(false);
             }
             catch (PlaywrightException)
             {

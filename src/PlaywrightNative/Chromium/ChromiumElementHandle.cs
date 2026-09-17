@@ -87,7 +87,7 @@ namespace PlaywrightNative.Chromium
                     async point =>
                     {
                         await _crElement.Page.RunWithSignalsAsync(
-                            noWaitAfter != true,
+                            waitAfter: false,
                             timeout,
                             () => ClickAction.RunModifiersAsync(
                                 modifiers,

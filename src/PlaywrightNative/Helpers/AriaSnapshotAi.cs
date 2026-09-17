@@ -139,6 +139,10 @@ namespace PlaywrightNative.Helpers
             IElementHandle root = await page.Locator("body, frameset").First.ElementHandleAsync(timeout).ConfigureAwait(false);
             Stopwatch deadlineClock = Stopwatch.StartNew();
             int budgetMs = TimeoutSettings.TimeoutMs(timeout);
+            if (budgetMs > 3_000)
+            {
+                budgetMs = 3_000;
+            }
 
             await EnsurePrefixesAsync(page, deadlineClock, budgetMs).ConfigureAwait(false);
             IFrame frame = page.MainFrame;
@@ -197,6 +201,10 @@ namespace PlaywrightNative.Helpers
             IElementHandle root = await page.Locator("body, frameset").First.ElementHandleAsync(timeout).ConfigureAwait(false);
             Stopwatch deadlineClock = Stopwatch.StartNew();
             int budgetMs = TimeoutSettings.TimeoutMs(timeout);
+            if (budgetMs > 3_000)
+            {
+                budgetMs = 3_000;
+            }
 
             await EnsurePrefixesAsync(page, deadlineClock, budgetMs).ConfigureAwait(false);
             IFrame frame = page.MainFrame;
@@ -671,9 +679,14 @@ namespace PlaywrightNative.Helpers
 
             try
             {
-                // Single evaluate avoids GetAttribute / describeNode races that
-                // abandon in-flight WIP commands and wedge Darwin target sessions
-                // for the full 30s NUnit timeout.
+                // Never evaluate / describeNode for loading=lazy — Darwin WebKit
+                // can hang the target session for the full NUnit timeout.
+                string loading = await iframeEl.GetAttributeAsync("loading").ConfigureAwait(false);
+                if (string.Equals(loading, "lazy", StringComparison.OrdinalIgnoreCase))
+                {
+                    return null;
+                }
+
                 bool ready = await iframeEl.EvaluateAsync<bool>(IframeCaptureReadyFunction)
                     .ConfigureAwait(false);
                 if (!ready)

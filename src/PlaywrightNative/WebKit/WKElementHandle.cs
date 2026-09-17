@@ -108,7 +108,7 @@ namespace PlaywrightNative.WebKit
                     async point =>
                     {
                         await _page.RunWithSignalsAsync(
-                            noWaitAfter != true,
+                            waitAfter: false,
                             timeout,
                             () => ClickAction.RunModifiersAsync(
                                 modifiers,

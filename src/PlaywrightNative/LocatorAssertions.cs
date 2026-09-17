@@ -2445,7 +2445,37 @@ namespace PlaywrightNative
                 {
                     // Mid-navigation ClosedTarget while the page is still open is
                     // transient (ShouldNotThrowWhenNavigatingDuringOneShotCheck).
-                    // Keep polling like DestroyedContext instead of failing early.
+                    // A closed page must fail the expect immediately so
+                    // ExpectShouldNotPrintTimedOutErrorMessageWhenPageCloses does
+                    // not poll until the NUnit session timeout.
+                    if (_locator.Page?.IsClosed == true)
+                    {
+                        if (sawElement)
+                        {
+                            throw CreateTextExpectException(
+                                FormatTextExpectFailure(
+                                    header,
+                                    expectLog,
+                                    method,
+                                    needles,
+                                    lastReceived,
+                                    sawElement,
+                                    single,
+                                    exact,
+                                    ignoreCase,
+                                    timeoutMs,
+                                    lastPreview),
+                                needles,
+                                lastReceived,
+                                method,
+                                pass: _negate,
+                                timeoutMs,
+                                ariaSnapshot: null);
+                        }
+
+                        throw new PlaywrightException(header + "\n" + ex.Message, ex);
+                    }
+
                     all = Array.Empty<IElementHandle>();
                 }
 
@@ -2503,6 +2533,34 @@ namespace PlaywrightNative
                 }
                 catch (Exception ex) when (ClosedTarget.IsClosed(ex))
                 {
+                    if (_locator.Page?.IsClosed == true)
+                    {
+                        if (sawElement)
+                        {
+                            throw CreateTextExpectException(
+                                FormatTextExpectFailure(
+                                    header,
+                                    expectLog,
+                                    method,
+                                    needles,
+                                    lastReceived,
+                                    sawElement,
+                                    single,
+                                    exact,
+                                    ignoreCase,
+                                    timeoutMs,
+                                    lastPreview),
+                                needles,
+                                lastReceived,
+                                method,
+                                pass: _negate,
+                                timeoutMs,
+                                ariaSnapshot: null);
+                        }
+
+                        throw new PlaywrightException(header + "\n" + ex.Message, ex);
+                    }
+
                     all = Array.Empty<IElementHandle>();
                     received = Array.Empty<string>();
                     readFailed = true;
@@ -2797,6 +2855,11 @@ namespace PlaywrightNative
             }
             catch (Exception ex) when (ClosedTarget.IsClosed(ex))
             {
+                if (_locator.Page?.IsClosed == true)
+                {
+                    throw;
+                }
+
                 return Array.Empty<IElementHandle>();
             }
             catch (PlaywrightException ex) when (

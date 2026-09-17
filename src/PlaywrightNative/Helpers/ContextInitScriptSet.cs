@@ -179,7 +179,10 @@ namespace PlaywrightNative.Helpers
 
             if (string.IsNullOrEmpty(script) && !string.IsNullOrEmpty(scriptPath))
             {
-                script = PathIo.ReadText(scriptPath);
+                // Use Resolve so path scripts get sourceURL + trailing newline like
+                // inline content (AddInitScriptAsyncShouldReadScriptPath).
+                script = AddInitScriptHelper.Resolve(string.Empty, scriptPath);
+                scriptPath = null;
             }
 
             if (arg != null && !string.IsNullOrEmpty(script))

@@ -388,9 +388,9 @@ namespace PlaywrightNative.TestServer
                     // Do NOT drain until peer EOF: the browser waits for this
                     // close echo before half-closing, so a long drain deadlocks
                     // under Darwin dual proxies and Kestrel dispose becomes RST
-                    // (error+1006 instead of application close 3002). A short
-                    // settle lets the proxy hops copy the already-written echo.
-                    await Task.Delay(200).ConfigureAwait(false);
+                    // (error+1006 instead of application close 3002). Settle long
+                    // enough for proxy hops (each ~400ms linger) to copy the echo.
+                    await Task.Delay(800).ConfigureAwait(false);
 
                     NotifyClose(code, reason);
                     return;
