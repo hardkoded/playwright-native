@@ -1703,11 +1703,11 @@ namespace PlaywrightNative.Helpers
             {
             }
 
-            // Brief settle so the Darwin bypass-shim hop can flush TLS records
-            // before TcpClient.Dispose RSTs the browser-facing socket.
+            // Settle long enough for the Darwin bypass-shim hop to flush TLS
+            // records before TcpClient.Dispose RSTs the browser-facing socket.
             try
             {
-                await Task.Delay(400).ConfigureAwait(false);
+                await Task.Delay(1200).ConfigureAwait(false);
             }
             catch (ObjectDisposedException)
             {

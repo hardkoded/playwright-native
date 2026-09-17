@@ -47,6 +47,34 @@ namespace PlaywrightNative.Helpers
   return visit(document.documentElement);
 }";
 
+        /// <summary>
+        /// Parent-document check for <c>loading=lazy</c> without callFunctionOn
+        /// on the iframe objectId (Darwin wedges that path for unloaded lazy frames).
+        /// </summary>
+        private const string IsLazyIframeRefFunction = @"(ref) => {
+  const want = String(ref || '');
+  const visit = (el) => {
+    if (!el || el.nodeType !== 1) return null;
+    if (el._ariaRef && el._ariaRef.ref === want) return el;
+    const kids = el.children || [];
+    for (let i = 0; i < kids.length; i++) {
+      const hit = visit(kids[i]);
+      if (hit) return hit;
+    }
+    if (el.shadowRoot) {
+      const sk = el.shadowRoot.children || [];
+      for (let i = 0; i < sk.length; i++) {
+        const hit = visit(sk[i]);
+        if (hit) return hit;
+      }
+    }
+    return null;
+  };
+  const el = visit(document.documentElement);
+  if (!el) return false;
+  return (el.getAttribute('loading') || '').toLowerCase() === 'lazy';
+}";
+
         internal const string ReadPrefixFunction = @"() => {
   if (window.__pwAriaFramePrefix === undefined) return null;
   return String(window.__pwAriaFramePrefix);
@@ -435,6 +463,11 @@ namespace PlaywrightNative.Helpers
             int budgetMs,
             int startDepth)
         {
+            if (await IsLazyIframeRefAsync(frame, ariaRef).ConfigureAwait(false))
+            {
+                return null;
+            }
+
             IElementHandle iframeEl = await FindInFrameAsync(frame, ariaRef).ConfigureAwait(false);
             IFrame child = await ContentFrameOrNullAsync(iframeEl).ConfigureAwait(false);
             if (child == null || child.IsDetached)
@@ -549,6 +582,11 @@ namespace PlaywrightNative.Helpers
             bool boxes,
             int startDepth)
         {
+            if (await IsLazyIframeRefAsync(frame, ariaRef).ConfigureAwait(false))
+            {
+                return (null, null);
+            }
+
             IElementHandle iframeEl = await FindInFrameAsync(frame, ariaRef).ConfigureAwait(false);
             IFrame child = await ContentFrameOrNullAsync(iframeEl).ConfigureAwait(false);
             if (child == null || child.IsDetached)
@@ -630,7 +668,7 @@ namespace PlaywrightNative.Helpers
                 try
                 {
                     hosts = await RaceOrDefaultAsync(
-                        () => frame.QuerySelectorAllAsync("iframe, frame"),
+                        () => frame.QuerySelectorAllAsync("iframe:not([loading=lazy]), frame"),
                         deadlineClock,
                         budgetMs,
                         fallback: (IReadOnlyList<IElementHandle>)Array.Empty<IElementHandle>()).ConfigureAwait(false);
@@ -679,34 +717,17 @@ namespace PlaywrightNative.Helpers
 
             try
             {
-                // Avoid GetAttributeAsync / bare Evaluate on loading=lazy iframes:
-                // Darwin WebKit can wedge the target session for the full NUnit
-                // timeout. Race a short budget; on timeout treat as unloaded.
-                string loading = await RaceOrDefaultAsync(
-                    () => iframeEl.GetAttributeAsync("loading"),
-                    Stopwatch.StartNew(),
-                    400,
-                    fallback: null).ConfigureAwait(false);
-                if (string.Equals(loading, "lazy", StringComparison.OrdinalIgnoreCase))
-                {
-                    return null;
-                }
-
-                bool ready = await RaceOrDefaultAsync(
-                    () => iframeEl.EvaluateAsync<bool>(IframeCaptureReadyFunction),
-                    Stopwatch.StartNew(),
-                    800,
-                    fallback: false).ConfigureAwait(false);
+                // Prefer parent-document lazy checks (IsLazyIframeRefAsync /
+                // iframe:not([loading=lazy])) before this path. Ready script
+                // returns false for lazy without touching contentDocument.
+                bool ready = await iframeEl.EvaluateAsync<bool>(IframeCaptureReadyFunction)
+                    .ConfigureAwait(false);
                 if (!ready)
                 {
                     return null;
                 }
 
-                return await RaceOrDefaultAsync(
-                    () => iframeEl.ContentFrameAsync(),
-                    Stopwatch.StartNew(),
-                    800,
-                    fallback: null).ConfigureAwait(false);
+                return await iframeEl.ContentFrameAsync().ConfigureAwait(false);
             }
             catch (PlaywrightException)
             {
@@ -715,6 +736,28 @@ namespace PlaywrightNative.Helpers
             catch (TimeoutException)
             {
                 return null;
+            }
+        }
+
+        private static async Task<bool> IsLazyIframeRefAsync(IFrame frame, string ariaRef)
+        {
+            if (frame == null || frame.IsDetached || string.IsNullOrEmpty(ariaRef))
+            {
+                return false;
+            }
+
+            try
+            {
+                return await frame.EvaluateAsync<bool>(IsLazyIframeRefFunction, ariaRef)
+                    .ConfigureAwait(false);
+            }
+            catch (PlaywrightException)
+            {
+                return false;
+            }
+            catch (TimeoutException)
+            {
+                return false;
             }
         }
 

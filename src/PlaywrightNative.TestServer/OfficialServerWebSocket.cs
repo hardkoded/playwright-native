@@ -393,6 +393,9 @@ namespace PlaywrightNative.TestServer
                     await Task.Delay(1600).ConfigureAwait(false);
 
                     NotifyClose(code, reason);
+                    // Keep the upgrade handler alive briefly so Kestrel does not
+                    // dispose the stream while bypass/handshake shims still flush.
+                    await Task.Delay(400).ConfigureAwait(false);
                     return;
                 }
 
