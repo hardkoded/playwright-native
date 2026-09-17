@@ -1109,13 +1109,10 @@ namespace PlaywrightNative.Helpers
 
                 if (!pathsMatch)
                 {
-                    // Same-host navigations under load often mismatch only on the
-                    // transient about:blank / prior URL; keep non-empty HTML.
-                    if (!string.IsNullOrEmpty(pageUrl)
-                        && !string.IsNullOrEmpty(requestUrl)
-                        && Uri.TryCreate(pageUrl, UriKind.Absolute, out Uri pageUri)
-                        && Uri.TryCreate(requestUrl, UriKind.Absolute, out Uri requestUri)
-                        && !string.Equals(pageUri.Host, requestUri.Host, StringComparison.OrdinalIgnoreCase))
+                    // Do not scrape a later document for an earlier navigation
+                    // (empty.html HAR entries were overwritten by form.html).
+                    // about:blank is the only transient mismatch we tolerate.
+                    if (!pageUrl.StartsWith("about:", StringComparison.OrdinalIgnoreCase))
                     {
                         return null;
                     }
@@ -1482,6 +1479,7 @@ namespace PlaywrightNative.Helpers
             private readonly List<PendingEntry> _entries = new();
             private readonly Dictionary<IRequest, PendingEntry> _byRequest = new();
             private readonly Dictionary<IPage, PageRecord> _pages = new();
+            private readonly Dictionary<string, byte[]> _htmlAtLoadByPath = new(StringComparer.Ordinal);
             private readonly List<JsonObject> _apiEntries = new();
             private bool _detached;
 
@@ -1704,7 +1702,8 @@ namespace PlaywrightNative.Helpers
                             continue;
                         }
 
-                        byte[] fromPage = PageText(pending.Request)
+                        byte[] fromPage = HtmlAtLoadFor(pending.Request)
+                            ?? PageText(pending.Request)
                             ?? await BodyFromPageAsync(pending.Request).ConfigureAwait(false)
                             ?? await BodyFromTrackedPagesAsync(pending.Request).ConfigureAwait(false);
                         if (fromPage != null && fromPage.Length > 0)
@@ -1778,6 +1777,27 @@ namespace PlaywrightNative.Helpers
                     }
                     catch (IOException)
                     {
+                    }
+                }
+            }
+
+            internal void RememberHtmlAtLoad(string url, byte[] html)
+            {
+                if (string.IsNullOrEmpty(url) || html == null || html.Length == 0)
+                {
+                    return;
+                }
+
+                if (!Uri.TryCreate(url, UriKind.Absolute, out Uri uri))
+                {
+                    return;
+                }
+
+                lock (_gate)
+                {
+                    if (!_htmlAtLoadByPath.ContainsKey(uri.AbsolutePath))
+                    {
+                        _htmlAtLoadByPath[uri.AbsolutePath] = html;
                     }
                 }
             }
@@ -1897,7 +1917,8 @@ namespace PlaywrightNative.Helpers
                     {
                         for (int attempt = 0; attempt < 12; attempt++)
                         {
-                            byte[] fromPage = PageText(pending.Request)
+                            byte[] fromPage = HtmlAtLoadFor(pending.Request)
+                                ?? PageText(pending.Request)
                                 ?? await BodyFromPageAsync(pending.Request).ConfigureAwait(false)
                                 ?? await BodyFromTrackedPagesAsync(pending.Request).ConfigureAwait(false);
                             if (fromPage != null && fromPage.Length > 0)
@@ -1972,6 +1993,7 @@ namespace PlaywrightNative.Helpers
                         Page = page,
                         Id = Guid.NewGuid().ToString(),
                         Started = DateTimeOffset.UtcNow,
+                        Owner = this,
                     };
                     record.Attach();
                     page.WebSocket += OnPageWebSocket;
@@ -2348,14 +2370,20 @@ namespace PlaywrightNative.Helpers
                 if (!_omitContent)
                 {
                     body = MaybeDecompressGzip(body, responseHeaders);
+
+                    // Only fill missing navigation bodies from the live page.
+                    // Replacing small (<1000 byte) network bodies with later page
+                    // HTML corrupts entries after a subsequent navigation (multipart
+                    // empty.html form was overwritten by form.html's "done").
                     if (request != null
                         && request.IsNavigationRequest
-                        && (body == null || body.Length < 1000))
+                        && (body == null || body.Length == 0))
                     {
-                        byte[] fromPage = PageText(request)
+                        byte[] fromPage = HtmlAtLoadFor(request)
+                            ?? PageText(request)
                             ?? await BodyFromPageAsync(request).ConfigureAwait(false)
                             ?? await BodyFromTrackedPagesAsync(request).ConfigureAwait(false);
-                        if (fromPage != null && fromPage.Length > (body == null ? 0 : body.Length))
+                        if (fromPage != null && fromPage.Length > 0)
                         {
                             body = fromPage;
                         }
@@ -2693,8 +2721,31 @@ namespace PlaywrightNative.Helpers
                 return entry;
             }
 
+            private byte[] HtmlAtLoadFor(IRequest request)
+            {
+                if (request == null || string.IsNullOrEmpty(request.Url))
+                {
+                    return null;
+                }
+
+                if (!Uri.TryCreate(request.Url, UriKind.Absolute, out Uri uri))
+                {
+                    return null;
+                }
+
+                lock (_gate)
+                {
+                    return _htmlAtLoadByPath.TryGetValue(uri.AbsolutePath, out byte[] html) ? html : null;
+                }
+            }
+
             private byte[] PageText(IRequest request)
             {
+                if (request == null || string.IsNullOrEmpty(request.Url))
+                {
+                    return null;
+                }
+
                 IPage page = PageOf(request);
                 if (page == null)
                 {
@@ -2708,23 +2759,23 @@ namespace PlaywrightNative.Helpers
 
                 lock (_gate)
                 {
+                    // Require the page to still be on this request URL. After a
+                    // later navigation, refreshed PageRecord.Text is the new
+                    // document and must not overwrite the earlier HAR entry
+                    // (multipart empty.html was getting form.html's "done").
                     if (_pages.TryGetValue(page, out PageRecord record)
-                        && !string.IsNullOrEmpty(record.Text))
+                        && !string.IsNullOrEmpty(record.Text)
+                        && PathsMatch(page.Url ?? string.Empty, request.Url))
                     {
                         return Encoding.UTF8.GetBytes(record.Text);
                     }
 
-                    // Persistent contexts may navigate a page whose request lost its
-                    // frame binding; use any tracked page whose captured text matches.
-                    if (request != null && !string.IsNullOrEmpty(request.Url))
+                    foreach (KeyValuePair<IPage, PageRecord> entry in _pages)
                     {
-                        foreach (KeyValuePair<IPage, PageRecord> entry in _pages)
+                        if (!string.IsNullOrEmpty(entry.Value.Text)
+                            && PathsMatch(entry.Key.Url ?? string.Empty, request.Url))
                         {
-                            if (!string.IsNullOrEmpty(entry.Value.Text)
-                                && PathsMatch(entry.Key.Url ?? string.Empty, request.Url))
-                            {
-                                return Encoding.UTF8.GetBytes(entry.Value.Text);
-                            }
+                            return Encoding.UTF8.GetBytes(entry.Value.Text);
                         }
                     }
                 }
@@ -2749,14 +2800,8 @@ namespace PlaywrightNative.Helpers
                         }
                     }
 
-                    // Last resort: single tracked page in this HAR session.
-                    if (_pages.Count == 1)
-                    {
-                        foreach (IPage only in _pages.Keys)
-                        {
-                            return only;
-                        }
-                    }
+                    // Do not fall back to an arbitrary single page — that returns
+                    // the wrong document after a subsequent navigation.
                 }
 
                 return null;
@@ -2820,27 +2865,15 @@ namespace PlaywrightNative.Helpers
                             continue;
                         }
 
-                        // Only scrape a non-matching page for HTML navigations.
-                        if (!urlMatches && restrictToHtml)
+                        // Never scrape a page that has navigated away from this
+                        // request URL — that overwrote empty.html with form.html.
+                        if (!urlMatches)
                         {
                             continue;
                         }
 
-                        if (!urlMatches && existing != null)
-                        {
-                            try
-                            {
-                                string contentType = await existing.HeaderValueAsync("content-type").ConfigureAwait(false);
-                                if (!string.IsNullOrEmpty(contentType)
-                                    && contentType.IndexOf("html", StringComparison.OrdinalIgnoreCase) < 0)
-                                {
-                                    continue;
-                                }
-                            }
-                            catch (PlaywrightException)
-                            {
-                            }
-                        }
+                        _ = restrictToHtml;
+                        _ = existing;
 
                         string text = await page.EvaluateAsync<string>(
                             @"(() => {
@@ -2941,6 +2974,8 @@ namespace PlaywrightNative.Helpers
 
         private sealed class PageRecord
         {
+            internal Session Owner { get; set; }
+
             internal IPage Page { get; set; }
 
             internal string Id { get; set; }
@@ -3054,6 +3089,7 @@ namespace PlaywrightNative.Helpers
                 }
 
                 _ = CaptureTitleAsync();
+                _ = CaptureHtmlAtLoadAsync();
             }
 
             private void OnLoadEvent(object sender, IPage page)
@@ -3064,6 +3100,29 @@ namespace PlaywrightNative.Helpers
                 }
 
                 _ = CaptureTitleAsync();
+                _ = CaptureHtmlAtLoadAsync();
+            }
+
+            private async Task CaptureHtmlAtLoadAsync()
+            {
+                if (Page == null || Owner == null)
+                {
+                    return;
+                }
+
+                try
+                {
+                    string url = Page.Url ?? string.Empty;
+                    string html = await Page.EvaluateAsync<string>(
+                        "() => document.documentElement ? document.documentElement.outerHTML : ''").ConfigureAwait(false);
+                    if (!string.IsNullOrEmpty(html))
+                    {
+                        Owner.RememberHtmlAtLoad(url, Encoding.UTF8.GetBytes(html));
+                    }
+                }
+                catch (PlaywrightException)
+                {
+                }
             }
 
             private async Task CaptureTitleAsync()

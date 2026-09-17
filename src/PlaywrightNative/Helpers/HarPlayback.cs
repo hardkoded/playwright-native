@@ -436,6 +436,7 @@ namespace PlaywrightNative.Helpers
                 }
 
                 byte[] postData = null;
+                string postMimeType = null;
                 if (request.TryGetProperty("postData", out JsonElement post)
                     && post.ValueKind == JsonValueKind.Object)
                 {
@@ -444,6 +445,29 @@ namespace PlaywrightNative.Helpers
                         && postText.ValueKind == JsonValueKind.String)
                     {
                         postData = Encoding.UTF8.GetBytes(postText.GetString() ?? string.Empty);
+                    }
+
+                    postMimeType = ReadString(post, "mimeType");
+                }
+
+                if (!string.IsNullOrEmpty(postMimeType)
+                    && HeaderValue(requestHeaders, "content-type") == null)
+                {
+                    requestHeaders.Add(new KeyValuePair<string, string>("content-type", postMimeType));
+                }
+
+                if (HeaderValue(requestHeaders, "content-type") == null
+                    && postData != null
+                    && postData.Length >= 4
+                    && postData[0] == (byte)'-'
+                    && postData[1] == (byte)'-')
+                {
+                    string boundary = MultipartBoundaryFromBody(postData);
+                    if (!string.IsNullOrEmpty(boundary))
+                    {
+                        requestHeaders.Add(new KeyValuePair<string, string>(
+                            "content-type",
+                            "multipart/form-data; boundary=" + boundary));
                     }
                 }
 
@@ -511,6 +535,21 @@ namespace PlaywrightNative.Helpers
                     foreach (KeyValuePair<string, string> header in request.Headers)
                     {
                         headers.Add(header);
+                    }
+                }
+
+                if (HeaderValue(headers, "content-type") == null
+                    && request?.PostDataBuffer != null
+                    && request.PostDataBuffer.Length >= 4
+                    && request.PostDataBuffer[0] == (byte)'-'
+                    && request.PostDataBuffer[1] == (byte)'-')
+                {
+                    string boundary = MultipartBoundaryFromBody(request.PostDataBuffer);
+                    if (!string.IsNullOrEmpty(boundary))
+                    {
+                        headers.Add(new KeyValuePair<string, string>(
+                            "content-type",
+                            "multipart/form-data; boundary=" + boundary));
                     }
                 }
 
