@@ -2123,12 +2123,15 @@ namespace PlaywrightNative
         private void OnDialogOpening(CRDialog crDialog)
         {
             IDialog dialog = _dialogTracker.Wrap(new ChromiumDialog(crDialog, this), EmitDialogClosed);
-            IDialogHost host = _context as IDialogHost;
-            EventHandler<IDialog> pageDialog = Dialog;
-            bool contextHasListeners = host != null && host.HasDialogListeners();
-            pageDialog?.Invoke(this, dialog);
-            host?.RaiseDialog(dialog);
-            PageDialogTracker.AutoDismissIfNeeded(dialog, pageDialog, contextHasListeners);
+            PageDialogTracker.ScheduleOpen(() =>
+            {
+                IDialogHost host = _context as IDialogHost;
+                EventHandler<IDialog> pageDialog = Dialog;
+                bool contextHasListeners = host != null && host.HasDialogListeners();
+                pageDialog?.Invoke(this, dialog);
+                host?.RaiseDialog(dialog);
+                PageDialogTracker.AutoDismissIfNeeded(dialog, pageDialog, contextHasListeners);
+            });
         }
 
         private void EmitDialogClosed(IDialog dialog) => DialogClosed?.Invoke(this, dialog);

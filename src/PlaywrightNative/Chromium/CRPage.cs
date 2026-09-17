@@ -323,8 +323,8 @@ namespace PlaywrightNative.Chromium
             // and will capture events as soon as Network.enable is acknowledged.
             // Popup targets omit waitForDebuggerOnStart — a paused noopener
             // successor otherwise never reaches Runtime.executionContextCreated.
-            // Network/Page/lifecycle must be enabled before resume so popup
-            // navigations (target=_blank) are recorded. Optional CDP may hang.
+            // NewPage (Opener == null) still pauses child targets; opener and
+            // noopener popups both have Opener set before InitializeAsync.
             bool waitForDebuggerOnStart = Opener == null;
             Task critical = Task.WhenAll(
                 _client.SendAsync("Page.enable"),
@@ -348,11 +348,12 @@ namespace PlaywrightNative.Chromium
             Task optional = Task.WhenAll(optionalTasks);
             if (Opener != null)
             {
-                // Popups must finish Page/Runtime/Network enable before resume so
-                // inline prompt()/alert() fire javascriptDialogOpening. Timing out
-                // critical left headful dialog tests hanging until NUnit abort.
-                await critical.ConfigureAwait(false);
-                await Task.WhenAny(optional, Task.Delay(1_000)).ConfigureAwait(false);
+                // Popup sessions often do not ack Page/Runtime/Network enable until
+                // after Runtime.runIfWaitingForDebugger. Awaiting critical first
+                // deadlocks InitializeAsync (target never resumes → no dialog /
+                // network / execution context). Fire enables, briefly poll, resume.
+                await Task.WhenAny(critical, Task.Delay(100)).ConfigureAwait(false);
+                await Task.WhenAny(optional, Task.Delay(100)).ConfigureAwait(false);
             }
             else
             {
@@ -418,6 +419,13 @@ namespace PlaywrightNative.Chromium
 
             await _client.SendAsync("Runtime.runIfWaitingForDebugger").ConfigureAwait(false);
             _debuggerResumed = true;
+
+            if (Opener != null)
+            {
+                // Enables sent while paused usually complete immediately after resume.
+                await Task.WhenAny(critical, Task.Delay(1_000)).ConfigureAwait(false);
+                await Task.WhenAny(optional, Task.Delay(250)).ConfigureAwait(false);
+            }
 
             if (PublicPage != null && owner?.PublicContext != null
                 && (Opener == null || !initScripts.IsCompletedSuccessfully))

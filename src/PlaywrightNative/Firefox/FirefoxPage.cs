@@ -1050,12 +1050,15 @@ namespace PlaywrightNative.Firefox
         private void OnDialogOpened(FFDialog ffDialog)
         {
             IDialog dialog = _dialogTracker.Wrap(new FirefoxDialog(ffDialog, this), EmitDialogClosed);
-            IDialogHost host = _context as IDialogHost;
-            EventHandler<IDialog> pageDialog = Dialog;
-            bool contextHasListeners = host != null && host.HasDialogListeners();
-            pageDialog?.Invoke(this, dialog);
-            host?.RaiseDialog(dialog);
-            PageDialogTracker.AutoDismissIfNeeded(dialog, pageDialog, contextHasListeners);
+            PageDialogTracker.ScheduleOpen(() =>
+            {
+                IDialogHost host = _context as IDialogHost;
+                EventHandler<IDialog> pageDialog = Dialog;
+                bool contextHasListeners = host != null && host.HasDialogListeners();
+                pageDialog?.Invoke(this, dialog);
+                host?.RaiseDialog(dialog);
+                PageDialogTracker.AutoDismissIfNeeded(dialog, pageDialog, contextHasListeners);
+            });
         }
 
         private void EmitDialogClosed(IDialog dialog) => DialogClosed?.Invoke(this, dialog);

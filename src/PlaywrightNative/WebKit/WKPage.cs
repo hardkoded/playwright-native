@@ -8503,12 +8503,15 @@ namespace PlaywrightNative.WebKit
             string defaultValue = payload.TryGetProperty("defaultPrompt", out JsonElement defEl) ? defEl.GetString() : string.Empty;
             WKDialog inner = new(_session, type, message, defaultValue, this);
             IDialog dialog = _dialogTracker.Wrap(inner, EmitDialogClosed);
-            IDialogHost host = (_ownerContext ?? (IBrowserContext)_context) as IDialogHost;
-            EventHandler<IDialog> pageDialog = Dialog;
-            bool contextHasListeners = host != null && host.HasDialogListeners();
-            pageDialog?.Invoke(this, dialog);
-            host?.RaiseDialog(dialog);
-            PageDialogTracker.AutoDismissIfNeeded(dialog, pageDialog, contextHasListeners);
+            PageDialogTracker.ScheduleOpen(() =>
+            {
+                IDialogHost host = (_ownerContext ?? (IBrowserContext)_context) as IDialogHost;
+                EventHandler<IDialog> pageDialog = Dialog;
+                bool contextHasListeners = host != null && host.HasDialogListeners();
+                pageDialog?.Invoke(this, dialog);
+                host?.RaiseDialog(dialog);
+                PageDialogTracker.AutoDismissIfNeeded(dialog, pageDialog, contextHasListeners);
+            });
         }
 
         private void EmitDialogClosed(IDialog dialog) => DialogClosed?.Invoke(this, dialog);

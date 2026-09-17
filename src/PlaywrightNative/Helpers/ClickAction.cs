@@ -725,6 +725,46 @@ namespace PlaywrightNative.Helpers
         }
         return false;
     }
+    function isScrollable(node) {
+        if (!node || node.nodeType !== 1) {
+            return false;
+        }
+        let style = null;
+        try {
+            style = ((node.ownerDocument && node.ownerDocument.defaultView) || window).getComputedStyle(node);
+        } catch (e) {
+            return false;
+        }
+        if (!style) {
+            return false;
+        }
+        const ox = style.overflowX;
+        const oy = style.overflowY;
+        const scrollX = (ox === 'scroll' || ox === 'auto') && node.scrollWidth > node.clientWidth + 1;
+        const scrollY = (oy === 'scroll' || oy === 'auto') && node.scrollHeight > node.clientHeight + 1;
+        return scrollX || scrollY;
+    }
+    function isOnScrollbar(x, y) {
+        let hit = null;
+        try {
+            hit = doc.elementFromPoint(x, y);
+        } catch (e) {
+            return false;
+        }
+        let n = hit;
+        while (n) {
+            if (n !== target && n !== el && isScrollable(n)) {
+                const r = n.getBoundingClientRect();
+                const clientRight = r.left + n.clientWidth;
+                const clientBottom = r.top + n.clientHeight;
+                if ((x >= clientRight && x <= r.right) || (y >= clientBottom && y <= r.bottom)) {
+                    return true;
+                }
+            }
+            n = composedParent(n);
+        }
+        return false;
+    }
     if (pos) {
         const ox = pos.x != null ? pos.x : pos.X;
         const oy = pos.y != null ? pos.y : pos.Y;
@@ -814,6 +854,7 @@ namespace PlaywrightNative.Helpers
             }
         }
     }
+    let fallback = null;
     for (let i = 0; i < rects.length; i++) {
         const r = rects[i];
         if (!r || (r.width <= 0 && r.height <= 0)) {
@@ -838,15 +879,18 @@ namespace PlaywrightNative.Helpers
         }
         for (let j = 0; j < candidates.length; j++) {
             const p = candidates[j];
+            if (isOnScrollbar(p[0], p[1])) {
+                continue;
+            }
+            if (!fallback) {
+                fallback = p;
+            }
             if (hitOk(p[0], p[1])) {
                 return p;
             }
         }
     }
-    // Never return a point that elementFromPoint rejects — that lands on a
-    // parent scrollbar (horizontal flex overflow) and loops until timeout
-    // (ShouldNotHitScrollBar on Darwin WebKit).
-    return null;
+    return fallback;
 }";
 
         /// <summary>

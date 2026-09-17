@@ -66,24 +66,13 @@ namespace PlaywrightNative.Helpers
         private const string IframeCaptureReadyFunction = @"(el) => {
   try {
     const loading = (el.getAttribute('loading') || '').toLowerCase();
-    const src = el.getAttribute('src') || '';
-    // Unloaded lazy iframes: never ask DOM.describeNode — Darwin WebKit
-    // never replies, and a stuck command blocks later CaptureYaml evaluates
+    // Unloaded lazy iframes: never touch contentDocument / describeNode —
+    // Darwin WebKit never replies, and a stuck command blocks later evaluates
     // on the same target until the session command timeout (NUnit 30s).
     if (loading === 'lazy') {
-      const doc = el.contentDocument;
-      if (!doc || !doc.documentElement) {
-        return false;
-      }
-      const url = doc.URL || '';
-      if (!src || src === 'about:blank' || !url || url === 'about:blank') {
-        return false;
-      }
-      if (doc.readyState === 'loading') {
-        return false;
-      }
-      return true;
+      return false;
     }
+    const src = el.getAttribute('src') || '';
     const doc = el.contentDocument;
     if (doc) {
       if (!doc.documentElement) {
@@ -103,10 +92,7 @@ namespace PlaywrightNative.Helpers
     // content frame so AI stitch can capture them.
     return !!el.contentWindow;
   } catch (e) {
-    // Lazy frames that throw on contentDocument access are still unsafe.
-    if ((el.getAttribute('loading') || '').toLowerCase() === 'lazy') {
-      return false;
-    }
+    // Cross-origin contentDocument access throws — still stitch via protocol.
     return true;
   }
 }";
@@ -128,44 +114,31 @@ namespace PlaywrightNative.Helpers
                 throw new ArgumentNullException(nameof(page));
             }
 
-            // Prefer a one-shot query over locator.waitFor: after SetContent the
-            // main-world context can be briefly unavailable and a wait would burn
-            // the full default timeout. Lazy iframes must not block via
-            // WaitForFunction(complete) either.
-            IElementHandle root = await page.QuerySelectorAsync("body").ConfigureAwait(false)
-                ?? await page.QuerySelectorAsync("frameset").ConfigureAwait(false);
-            if (root == null)
+            try
             {
+                // Cap readyState wait so SnapshotForAI(timeout: 3000) cannot burn
+                // the full NUnit budget when lazy iframes keep readyState busy.
+                // interactive/complete still auto-waits navigations (reload).
                 float waitMs = timeout ?? 3_000f;
-                if (waitMs > 2_000f)
+                if (waitMs > 1_500f)
                 {
-                    waitMs = 2_000f;
+                    waitMs = 1_500f;
                 }
 
-                try
-                {
-                    root = await page.Locator("body, frameset").First
-                        .ElementHandleAsync(waitMs)
-                        .WaitAsync(TimeSpan.FromMilliseconds(waitMs + 500))
-                        .ConfigureAwait(false);
-                }
-                catch (TimeoutException)
-                {
-                    root = null;
-                }
+                await page.WaitForFunctionAsync(
+                    "() => document.readyState === 'complete' || document.readyState === 'interactive'",
+                    timeout: waitMs).ConfigureAwait(false);
             }
-
-            if (root == null)
+            catch (TimeoutException)
             {
-                return string.Empty;
+            }
+            catch (PlaywrightException)
+            {
             }
 
+            IElementHandle root = await page.Locator("body, frameset").First.ElementHandleAsync(timeout).ConfigureAwait(false);
             Stopwatch deadlineClock = Stopwatch.StartNew();
             int budgetMs = TimeoutSettings.TimeoutMs(timeout);
-            if (budgetMs > 3_000)
-            {
-                budgetMs = 3_000;
-            }
 
             await EnsurePrefixesAsync(page, deadlineClock, budgetMs).ConfigureAwait(false);
             IFrame frame = page.MainFrame;
@@ -202,40 +175,28 @@ namespace PlaywrightNative.Helpers
                 throw new ArgumentNullException(nameof(page));
             }
 
-            IElementHandle root = await page.QuerySelectorAsync("body").ConfigureAwait(false)
-                ?? await page.QuerySelectorAsync("frameset").ConfigureAwait(false);
-            if (root == null)
+            try
             {
                 float waitMs = timeout ?? 3_000f;
-                if (waitMs > 2_000f)
+                if (waitMs > 1_500f)
                 {
-                    waitMs = 2_000f;
+                    waitMs = 1_500f;
                 }
 
-                try
-                {
-                    root = await page.Locator("body, frameset").First
-                        .ElementHandleAsync(waitMs)
-                        .WaitAsync(TimeSpan.FromMilliseconds(waitMs + 500))
-                        .ConfigureAwait(false);
-                }
-                catch (TimeoutException)
-                {
-                    root = null;
-                }
+                await page.WaitForFunctionAsync(
+                    "() => document.readyState === 'complete' || document.readyState === 'interactive'",
+                    timeout: waitMs).ConfigureAwait(false);
             }
-
-            if (root == null)
+            catch (TimeoutException)
             {
-                return "[]";
+            }
+            catch (PlaywrightException)
+            {
             }
 
+            IElementHandle root = await page.Locator("body, frameset").First.ElementHandleAsync(timeout).ConfigureAwait(false);
             Stopwatch deadlineClock = Stopwatch.StartNew();
             int budgetMs = TimeoutSettings.TimeoutMs(timeout);
-            if (budgetMs > 3_000)
-            {
-                budgetMs = 3_000;
-            }
 
             await EnsurePrefixesAsync(page, deadlineClock, budgetMs).ConfigureAwait(false);
             IFrame frame = page.MainFrame;
