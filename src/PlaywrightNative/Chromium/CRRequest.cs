@@ -317,7 +317,7 @@ namespace PlaywrightNative.Chromium
 
             if (IsNavigationRequest
                 && !string.IsNullOrEmpty(Url)
-                && string.Equals(Url, Frame.Url, StringComparison.Ordinal))
+                && FrameShowsUrl(Frame, Url))
             {
                 return false;
             }
@@ -329,6 +329,35 @@ namespace PlaywrightNative.Chromium
 
             return !string.IsNullOrEmpty(DocumentUrl)
                 && !string.Equals(DocumentUrl, Frame.Url, StringComparison.Ordinal);
+
+            static bool FrameShowsUrl(Frame frame, string url)
+            {
+                if (frame == null)
+                {
+                    return false;
+                }
+
+                if (string.Equals(url, frame.Url, StringComparison.Ordinal))
+                {
+                    return true;
+                }
+
+                IReadOnlyList<Frame> children = frame.ChildFrames;
+                if (children == null)
+                {
+                    return false;
+                }
+
+                for (int i = 0; i < children.Count; i++)
+                {
+                    if (FrameShowsUrl(children[i], url))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            }
         }
 
         /// <summary>

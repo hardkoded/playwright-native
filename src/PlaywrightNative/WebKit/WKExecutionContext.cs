@@ -83,9 +83,26 @@ namespace PlaywrightNative.WebKit
         /// <returns>The raw <c>result</c> <c>RemoteObject</c> element, or <see langword="null"/>.</returns>
         internal async Task<JsonElement?> EvaluateHandleAsync(string expression)
         {
-            JsonElement? response = await _session.SendAsync(
-                "Runtime.evaluate",
-                BuildEvaluateParams(expression, returnByValue: false)).ConfigureAwait(false);
+            if (_destroyed.Task.IsCompleted)
+            {
+                throw new PlaywrightException(
+                    "Execution context was destroyed, most likely because of a navigation.");
+            }
+
+            JsonElement? response;
+            try
+            {
+                response = await _session.SendAsync(
+                    "Runtime.evaluate",
+                    BuildEvaluateParams(expression, returnByValue: false)).ConfigureAwait(false);
+            }
+            catch (TargetClosedException)
+            {
+                // Navigation closes the target session before MarkDestroyed runs.
+                // isVisible must see a destroyed-context error, not TargetClosed.
+                throw new PlaywrightException(
+                    "Execution context was destroyed, most likely because of a navigation.");
+            }
 
             if (response == null)
             {

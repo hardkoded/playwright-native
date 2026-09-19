@@ -214,6 +214,14 @@ namespace PlaywrightNative.Chromium
                 throw new PlaywrightException(ResponseHeaders.NavigatedAway);
             }
 
+            // Eager prefetch used to cache a fault from a DocumentId mismatch
+            // during commit. The caller already confirmed the frame is still
+            // here; drop that fault and read the body again.
+            if (_bodyTask != null && (_bodyTask.IsFaulted || _bodyTask.IsCanceled))
+            {
+                _bodyTask = null;
+            }
+
             byte[] bytes = await GetBodyBytesAsync().ConfigureAwait(false);
             _bodyDeliveredToCaller = true;
             return bytes;

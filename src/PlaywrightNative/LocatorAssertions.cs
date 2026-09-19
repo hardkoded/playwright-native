@@ -630,6 +630,17 @@ namespace PlaywrightNative
                     if (all.Count == 1)
                     {
                         await ReadCheckedStateAsync(all[0]).ConfigureAwait(false);
+
+                        // The received-label read can succeed while the matcher
+                        // evaluate is aborted by a 1ms timeout. The label is the
+                        // same checked state upstream prints; treat agreement as
+                        // a match so timeout:1 still passes when already checked.
+                        if (!lastMatched
+                            && string.Equals(received, matcherExpected, StringComparison.Ordinal))
+                        {
+                            lastMatched = true;
+                        }
+
                         matched = lastMatched;
                     }
 
@@ -655,6 +666,11 @@ namespace PlaywrightNative
                                 if (lastChance.Count == 1)
                                 {
                                     await ReadCheckedStateAsync(lastChance[0]).ConfigureAwait(false);
+                                    if (!lastMatched
+                                        && string.Equals(received, matcherExpected, StringComparison.Ordinal))
+                                    {
+                                        lastMatched = true;
+                                    }
                                 }
                             }
                             catch (TimeoutException)
@@ -663,6 +679,12 @@ namespace PlaywrightNative
                             catch (PlaywrightException)
                             {
                             }
+                        }
+
+                        bool recovered = sawElement && (_negate ? !lastMatched : lastMatched);
+                        if (recovered)
+                        {
+                            return;
                         }
 
                         // Upstream toBeTruthy: when pass (failed not.*), Received
@@ -1997,25 +2019,47 @@ namespace PlaywrightNative
                 await LocatorHandlers.RunAsync(_locator.Page, timeoutMs, sw).ConfigureAwait(false);
                 probe ??= predicateAsync();
                 Task finished = await Task.WhenAny(probe, Task.Delay(50)).ConfigureAwait(false);
+                bool ok = false;
+                bool probeCompleted = false;
                 if (!ReferenceEquals(finished, probe))
                 {
                     if (timeoutMs != Timeout.Infinite && sw.ElapsedMilliseconds >= timeoutMs)
                     {
+                        // Do not drop the in-flight probe. toHaveJSProperty prints
+                        // lastPrinted only after the property read assigns it; a
+                        // 200ms poll that loses the WhenAny race otherwise reports
+                        // the "undefined" sentinel. A late match (timeout: 1 on an
+                        // already-true state) must still pass.
+                        Task<bool> inflight = probe;
                         probe = null;
-
-                        // Fall through to the expect-timeout failure below without
-                        // treating the abandoned probe as a successful negation.
+                        Task grace = Task.Delay(2_000);
+                        if (await Task.WhenAny(inflight, grace).ConfigureAwait(false) == inflight)
+                        {
+                            try
+                            {
+                                ok = await inflight.ConfigureAwait(false);
+                                probeCompleted = true;
+                            }
+                            catch (TimeoutException)
+                            {
+                                ok = false;
+                                probeCompleted = true;
+                            }
+                            catch (PlaywrightException)
+                            {
+                                ok = false;
+                                probeCompleted = true;
+                            }
+                        }
                     }
                     else
                     {
                         continue;
                     }
                 }
-
-                bool ok = false;
-                bool probeCompleted = probe != null;
-                if (probeCompleted)
+                else
                 {
+                    probeCompleted = true;
                     try
                     {
                         ok = await probe.ConfigureAwait(false);

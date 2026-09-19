@@ -223,9 +223,18 @@ namespace PlaywrightNative.Helpers
             // Chromium acks navigations promptly; a long empty poll doubles the
             // cost of every click (permission-overlay / locator-handler suites).
             int pollLimit = string.Equals(page?.GetType().Name, "Page", StringComparison.Ordinal) ? 16 : 40;
+            int timeoutMs = TimeoutSettings.TimeoutMs(timeout);
             for (int i = 0; i < pollLimit; i++)
             {
                 if (sawDocumentRequest != null && sawDocumentRequest())
+                {
+                    break;
+                }
+
+                // Darwin clicks spend most of a 2s timeout in hit-testing.
+                // A fixed 40×16ms poll after pressAsync then fails the click
+                // even when the pointer action already succeeded (force:true).
+                if (timeoutMs != Timeout.Infinite && sw.ElapsedMilliseconds + 16 >= timeoutMs)
                 {
                     break;
                 }

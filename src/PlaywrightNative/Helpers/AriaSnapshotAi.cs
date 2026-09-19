@@ -78,8 +78,15 @@ namespace PlaywrightNative.Helpers
     return null;
   };
   const el = visit(document.documentElement);
-  if (!el) return false;
-  return (el.getAttribute('loading') || '').toLowerCase() === 'lazy';
+  if (el) {
+    return (el.getAttribute('loading') || '').toLowerCase() === 'lazy';
+  }
+  const frames = document.querySelectorAll('iframe, frame');
+  if (!frames.length) return false;
+  for (let i = 0; i < frames.length; i++) {
+    if ((frames[i].getAttribute('loading') || '').toLowerCase() !== 'lazy') return false;
+  }
+  return true;
 }";
 
         /// <summary>
