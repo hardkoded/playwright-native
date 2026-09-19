@@ -225,7 +225,7 @@ namespace PlaywrightNative.Chromium
 
                 RaiseRequestFinished(request);
                 request.Frame?.OnInflightRequestFinished(request.RequestId);
-                _extraInfo.Finished(request.RequestId);
+                _extraInfo.Finished(ExtraInfoId(request));
             }
         }
 
@@ -1022,7 +1022,7 @@ namespace PlaywrightNative.Chromium
                     bool redirectExpectsExtraInfo = GetBool(p, "redirectHasExtraInfo")
                         && !existingRequest.ServedFromCache;
                     redirectResponseObj.SetExpectsExtraInfo(redirectExpectsExtraInfo);
-                    _extraInfo.ResponseCreated(requestId, redirectResponseObj);
+                    _extraInfo.ResponseCreated(rawId, redirectResponseObj);
                     RaiseResponseReceived(redirectResponseObj);
                     RaiseRequestFinished(existingRequest);
                     existingRequest.Frame?.OnInflightRequestFinished(requestId);
@@ -1067,7 +1067,10 @@ namespace PlaywrightNative.Chromium
             request.NetworkSession = session ?? _session;
             request.FetchProtocolBody = () => GetProtocolBodyAsync(request);
 
-            _extraInfo.RequestCreated(requestId, request);
+            // Worker main scripts start on the page session and finish on the
+            // worker session (PlzDedicatedWorker). Extra-info events use the
+            // raw CDP id on whichever session emits them.
+            _extraInfo.RequestCreated(rawId, request);
 
             string loaderId = GetString(p, "loaderId");
             request.DocumentId = !string.IsNullOrEmpty(loaderId) ? loaderId : frame?.DocumentId;
@@ -1221,7 +1224,7 @@ namespace PlaywrightNative.Chromium
             // Pair through the tracker only. Applying a pending extra here
             // stamps the latest hop with an earlier redirect's headers
             // (ShouldReportRawResponseHeadersInRedirects).
-            _extraInfo.ResponseCreated(requestId, response);
+            _extraInfo.ResponseCreated(rawId, response);
             MaybeUpdateRequestSession(session, request);
             RaiseResponseReceived(response);
         }
@@ -1240,8 +1243,7 @@ namespace PlaywrightNative.Chromium
                 return;
             }
 
-            string requestId = RequestKey(session, rawId);
-            _extraInfo.RequestExtraInfo(requestId, p);
+            _extraInfo.RequestExtraInfo(rawId, p);
         }
 
         private void OnResponseReceivedExtraInfo(JsonElement? parameters, CRSession session)
@@ -1258,12 +1260,10 @@ namespace PlaywrightNative.Chromium
                 return;
             }
 
-            string requestId = RequestKey(session, rawId);
-
-            // Pair by hop index. A direct apply onto _requestsById hits the
-            // latest request, which is the wrong hop once a redirect has
-            // reused the id, and misses entirely after loadingFinished.
-            _extraInfo.ResponseExtraInfo(requestId, p);
+            // Pair by the raw CDP id, not the session-prefixed key. A direct
+            // apply onto _requestsById hits the latest request, which is the
+            // wrong hop once a redirect has reused the id.
+            _extraInfo.ResponseExtraInfo(rawId, p);
         }
 
         private void OnLoadingFinished(JsonElement? parameters, CRSession session)
@@ -1293,7 +1293,7 @@ namespace PlaywrightNative.Chromium
 
                 RaiseRequestFinished(request);
                 request.Frame?.OnInflightRequestFinished(request.RequestId);
-                _extraInfo.Finished(request.RequestId);
+                _extraInfo.Finished(ExtraInfoId(request));
             }
         }
 
@@ -1370,7 +1370,7 @@ namespace PlaywrightNative.Chromium
                 }
 
                 request.Frame?.OnInflightRequestFinished(requestId);
-                _extraInfo.Finished(requestId);
+                _extraInfo.Finished(rawId);
             }
 
             if ((_webSockets.TryGetValue(rawId, out CRWebSocket socket)
@@ -1950,6 +1950,20 @@ namespace PlaywrightNative.Chromium
                     entry.Lifetime.End(invocation);
                 }
             };
+        }
+
+        private string ExtraInfoId(CRRequest request)
+        {
+            if (request == null)
+            {
+                return null;
+            }
+
+            // Network.*ExtraInfo is keyed by the CDP requestId, which is stable
+            // when the worker or OOPIF session takes over the same request.
+            return string.IsNullOrEmpty(request.ProtocolRequestId)
+                ? request.RequestId
+                : request.ProtocolRequestId;
         }
 
         private string RequestKey(CRSession session, string requestId)
