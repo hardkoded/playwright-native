@@ -1227,7 +1227,11 @@ namespace PlaywrightNative.Chromium
                 ResponseNetworkInfo.ParseFromServiceWorker(responsePayload),
                 ResponseNetworkInfo.ParseHttpVersion(responsePayload));
 
-            bool expectsExtraInfo = GetBool(responsePayload, "hasExtraInfo") && !request.ServedFromCache;
+            // hasExtraInfo is on Network.responseReceived, not on the nested
+            // response object. Reading the nested field always missed it, so
+            // provisional headers (no Set-Cookie, comma-joined duplicates)
+            // were sealed before extraInfo arrived.
+            bool expectsExtraInfo = GetBool(p, "hasExtraInfo") && !request.ServedFromCache;
             response.SetExpectsExtraInfo(expectsExtraInfo);
             if (_pendingExtraHeaders.TryRemove(requestId, out IReadOnlyList<NameValueEntry> extra))
             {

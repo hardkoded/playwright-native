@@ -250,8 +250,8 @@ namespace PlaywrightNative.Chromium
         /// <c>Network.responseReceivedExtraInfo</c>.
         /// </summary>
         /// <param name="expectsExtraInfo">
-        /// <see langword="true"/> when the response payload set <c>hasExtraInfo</c>
-        /// and the response was not served from cache.
+        /// <see langword="true"/> when <c>Network.responseReceived.hasExtraInfo</c>
+        /// is set and the response was not served from cache.
         /// </param>
         internal void SetExpectsExtraInfo(bool expectsExtraInfo)
         {
