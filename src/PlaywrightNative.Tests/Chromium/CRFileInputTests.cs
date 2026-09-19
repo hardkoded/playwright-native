@@ -16,6 +16,7 @@
  */
 using System.Text;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.Chromium;
 using PlaywrightNative.NUnit;
@@ -102,7 +103,7 @@ namespace PlaywrightNative.Tests.Chromium
             await Page.GoToAsync("data:text/html,<input id='t' type='text'>").ConfigureAwait(false);
 
             await using CRElementHandle handle = await Page.QuerySelectorAsync("#t").ConfigureAwait(false);
-            PlaywrightNativeException ex = Assert.ThrowsAsync<PlaywrightNativeException>(
+            PlaywrightException ex = Assert.ThrowsAsync<PlaywrightException>(
                 () => handle.SetInputFilesAsync(new FilePayload { Name = "x.txt", MimeType = "text/plain", Buffer = new byte[] { 1 } }));
             Assert.That(ex.Message, Does.Contain("file"));
         }

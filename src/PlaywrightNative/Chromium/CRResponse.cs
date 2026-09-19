@@ -19,6 +19,7 @@ using System.Collections.Generic;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using PlaywrightNative.Helpers;
 
 namespace PlaywrightNative.Chromium
@@ -40,6 +41,7 @@ namespace PlaywrightNative.Chromium
 
         private IReadOnlyList<NameValueEntry> _headerPairs;
         private Task<byte[]> _bodyTask;
+        private bool _bodyDeliveredToCaller;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="CRResponse"/> class.
@@ -129,6 +131,14 @@ namespace PlaywrightNative.Chromium
         internal string HttpVersion { get; }
 
         /// <summary>
+        /// Gets a value indicating whether Chrome will send
+        /// <c>Network.responseReceivedExtraInfo</c> for this response.
+        /// Provisional headers must not be sealed as raw headers until that
+        /// event arrives (<c>ShouldReportAllHeaders</c>).
+        /// </summary>
+        internal bool ExpectsExtraInfo { get; private set; }
+
+        /// <summary>
         /// Gets a value indicating whether the response status code is in the 200-299 range.
         /// </summary>
         internal bool Ok => ResponseHeaders.IsOkStatus(Status);
@@ -190,6 +200,42 @@ namespace PlaywrightNative.Chromium
             => PrefetchBodyAsync();
 
         /// <summary>
+        /// Public body read: reject after the owning frame navigated away even when
+        /// <see cref="PrefetchBodyAsync"/> already cached inspector bytes (matches
+        /// WebKit <c>GetBodyBytesForCallerAsync</c> / page-network-response race).
+        /// </summary>
+        /// <returns>The response body bytes.</returns>
+        internal async Task<byte[]> GetBodyBytesForCallerAsync()
+        {
+            if (_bodyDeliveredToCaller)
+            {
+                return await GetBodyBytesAsync().ConfigureAwait(false);
+            }
+
+            if (ResponseHeaders.IsRedirectStatus(Status))
+            {
+                throw new PlaywrightException(ResponseHeaders.RedirectBodyUnavailable);
+            }
+
+            if (Request.HasNavigatedAway())
+            {
+                throw new PlaywrightException(ResponseHeaders.NavigatedAway);
+            }
+
+            // Eager prefetch used to cache a fault from a DocumentId mismatch
+            // during commit. The caller already confirmed the frame is still
+            // here; drop that fault and read the body again.
+            if (_bodyTask != null && (_bodyTask.IsFaulted || _bodyTask.IsCanceled))
+            {
+                _bodyTask = null;
+            }
+
+            byte[] bytes = await GetBodyBytesAsync().ConfigureAwait(false);
+            _bodyDeliveredToCaller = true;
+            return bytes;
+        }
+
+        /// <summary>
         /// Stores extra-info response headers (or provisional headers when
         /// <paramref name="headers"/> is <see langword="null"/>).
         /// </summary>
@@ -197,6 +243,19 @@ namespace PlaywrightNative.Chromium
         internal void SetRawResponseHeaders(IReadOnlyList<NameValueEntry> headers)
         {
             _rawHeaders.TrySetResult(headers ?? HeaderMap.Array(Headers));
+        }
+
+        /// <summary>
+        /// Records whether raw headers must wait for
+        /// <c>Network.responseReceivedExtraInfo</c>.
+        /// </summary>
+        /// <param name="expectsExtraInfo">
+        /// <see langword="true"/> when <c>Network.responseReceived.hasExtraInfo</c>
+        /// is set and the response was not served from cache.
+        /// </param>
+        internal void SetExpectsExtraInfo(bool expectsExtraInfo)
+        {
+            ExpectsExtraInfo = expectsExtraInfo;
         }
 
         /// <summary>
@@ -223,7 +282,7 @@ namespace PlaywrightNative.Chromium
 
             if (ResponseHeaders.IsRedirectStatus(Status))
             {
-                throw new PlaywrightNativeException(ResponseHeaders.RedirectBodyUnavailable);
+                throw new PlaywrightException(ResponseHeaders.RedirectBodyUnavailable);
             }
 
             if (Request.FulfilledBody != null && RouteFulfill.ShouldOverrideBody(Status))
@@ -244,23 +303,36 @@ namespace PlaywrightNative.Chromium
                     return Request.FulfilledBody ?? Array.Empty<byte>();
                 }
 
+                // OOPIF document bodies often miss getResponseBody on the page
+                // session; refetch via loadNetworkResource before treating a
+                // DocumentId mismatch as "navigated away".
+                if (CanRefetchBody())
+                {
+                    try
+                    {
+                        byte[] refetched = await TryLoadNetworkResourceAsync().ConfigureAwait(false);
+                        if (refetched != null && refetched.Length > 0)
+                        {
+                            return refetched;
+                        }
+                    }
+                    catch (PlaywrightException)
+                    {
+                    }
+                }
+
                 if (Request.HasNavigatedAway())
                 {
-                    throw new PlaywrightNativeException(ResponseHeaders.NavigatedAway);
+                    throw new PlaywrightException(ResponseHeaders.NavigatedAway);
                 }
 
-                if (!CanRefetchBody())
-                {
-                    return fromProtocol;
-                }
-
-                return await TryLoadNetworkResourceAsync().ConfigureAwait(false);
+                return fromProtocol;
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 if (Request.HasNavigatedAway())
                 {
-                    throw new PlaywrightNativeException(ResponseHeaders.NavigatedAway);
+                    throw new PlaywrightException(ResponseHeaders.NavigatedAway);
                 }
 
                 throw;
@@ -281,7 +353,7 @@ namespace PlaywrightNative.Chromium
                 JsonElement? result = await session.SendAsync("Network.getResponseBody", new { requestId }).ConfigureAwait(false);
                 return ResponseContent.DecodeProtocolBody(result);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 return Array.Empty<byte>();
             }
@@ -289,6 +361,10 @@ namespace PlaywrightNative.Chromium
 
         private bool CanRefetchBody()
         {
+            // Official crNetworkManager createResponseBodyCallback: re-fetching may
+            // produce server side effects (e.g. Set-Cookie). Only GETs of static
+            // subresources and Sec-Purpose prefetch requests may call
+            // Network.loadNetworkResource. Document navigations must not.
             if (!string.Equals(Request.Method, "GET", StringComparison.OrdinalIgnoreCase))
             {
                 return false;
@@ -299,16 +375,51 @@ namespace PlaywrightNative.Chromium
                 return false;
             }
 
-            return Headers == null
-                || !Headers.TryGetValue("Content-Length", out string contentLength)
-                || !string.Equals(contentLength, "0", StringComparison.Ordinal);
+            if (Headers != null
+                && Headers.TryGetValue("Content-Length", out string contentLength)
+                && string.Equals(contentLength, "0", StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            string resourceType = Request.ResourceType;
+            bool safeType = !string.IsNullOrEmpty(resourceType)
+                && (resourceType.Equals("font", StringComparison.OrdinalIgnoreCase)
+                    || resourceType.Equals("image", StringComparison.OrdinalIgnoreCase)
+                    || resourceType.Equals("manifest", StringComparison.OrdinalIgnoreCase)
+                    || resourceType.Equals("media", StringComparison.OrdinalIgnoreCase)
+                    || resourceType.Equals("script", StringComparison.OrdinalIgnoreCase)
+                    || resourceType.Equals("stylesheet", StringComparison.OrdinalIgnoreCase)
+                    || resourceType.Equals("texttrack", StringComparison.OrdinalIgnoreCase));
+            if (safeType)
+            {
+                return true;
+            }
+
+            if (Request.Headers == null)
+            {
+                return false;
+            }
+
+            foreach (KeyValuePair<string, string> header in Request.Headers)
+            {
+                if (header.Key.Equals("sec-purpose", StringComparison.OrdinalIgnoreCase)
+                    && header.Value != null
+                    && header.Value.StartsWith("prefetch", StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private async Task<byte[]> TryLoadNetworkResourceAsync()
         {
             try
             {
-                JsonElement? result = await _session.SendAsync(
+                CRSession session = Request.NetworkSession ?? _session;
+                JsonElement? result = await session.SendAsync(
                     "Network.loadNetworkResource",
                     new
                     {
@@ -332,7 +443,7 @@ namespace PlaywrightNative.Chromium
                 List<byte> chunks = new();
                 while (true)
                 {
-                    JsonElement? chunk = await _session.SendAsync("IO.read", new { handle }).ConfigureAwait(false);
+                    JsonElement? chunk = await session.SendAsync("IO.read", new { handle }).ConfigureAwait(false);
                     if (!chunk.HasValue)
                     {
                         break;
@@ -354,9 +465,9 @@ namespace PlaywrightNative.Chromium
                     {
                         try
                         {
-                            await _session.SendAsync("IO.close", new { handle }).ConfigureAwait(false);
+                            await session.SendAsync("IO.close", new { handle }).ConfigureAwait(false);
                         }
-                        catch (PlaywrightNativeException)
+                        catch (PlaywrightException)
                         {
                         }
 
@@ -366,7 +477,7 @@ namespace PlaywrightNative.Chromium
 
                 return chunks.ToArray();
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 return Array.Empty<byte>();
             }

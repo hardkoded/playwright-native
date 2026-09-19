@@ -21,6 +21,7 @@ using System.Globalization;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.Helpers;
 using PlaywrightNative.NUnit;
@@ -292,7 +293,7 @@ namespace PlaywrightNative.Tests
             await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
             IPage page = await NewPageAsync(context).ConfigureAwait(false);
 
-            PlaywrightNativeException error = Assert.ThrowsAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.ThrowsAsync<PlaywrightException>(
                 () => page.WaitForFunctionAsync("() => true", new { }, "mutation"));
             Assert.That(error.Message, Does.Contain("Unknown polling option: mutation"));
         }
@@ -320,7 +321,7 @@ namespace PlaywrightNative.Tests
             await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
             IPage page = await NewPageAsync(context).ConfigureAwait(false);
 
-            PlaywrightNativeException error = Assert.ThrowsAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.ThrowsAsync<PlaywrightException>(
                 () => page.WaitForFunctionAsync("() => { throw new Error('oh my'); }"));
             Assert.That(error.Message, Does.Contain("oh my"));
         }
@@ -334,7 +335,7 @@ namespace PlaywrightNative.Tests
             await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
             IPage page = await NewPageAsync(context).ConfigureAwait(false);
 
-            PlaywrightNativeException error = Assert.ThrowsAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.ThrowsAsync<PlaywrightException>(
                 () => page.WaitForFunctionAsync(@"() => {
                     window.counter = (window.counter || 0) + 1;
                     if (window.counter === 3)
@@ -353,7 +354,7 @@ namespace PlaywrightNative.Tests
             await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
             IPage page = await NewPageAsync(context).ConfigureAwait(false);
 
-            PlaywrightNativeException error = Assert.ThrowsAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.ThrowsAsync<PlaywrightException>(
                 () => page.WaitForFunctionAsync("() => globalVar === 123"));
             Assert.That(error.Message, Does.Contain("globalVar"));
         }
@@ -402,7 +403,7 @@ namespace PlaywrightNative.Tests
             await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
             IPage page = await NewPageAsync(context).ConfigureAwait(false);
 
-            PlaywrightNativeException error = Assert.ThrowsAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.ThrowsAsync<PlaywrightException>(
                 () => page.WaitForFunctionAsync("() => !!document.body", new { }, "unknown"));
             Assert.That(error, Is.Not.Null);
             Assert.That(error.Message, Does.Contain("polling"));
@@ -417,7 +418,7 @@ namespace PlaywrightNative.Tests
             await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
             IPage page = await NewPageAsync(context).ConfigureAwait(false);
 
-            PlaywrightNativeException error = Assert.ThrowsAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.ThrowsAsync<PlaywrightException>(
                 () => page.WaitForFunctionAsync("() => !!document.body", null, -10));
             Assert.That(error, Is.Not.Null);
             Assert.That(error.Message, Does.Contain("Cannot poll with non-positive interval"));
@@ -651,13 +652,13 @@ namespace PlaywrightNative.Tests
                 }
             };
 
-            Assert.CatchAsync<PlaywrightNativeException>(
+            Assert.CatchAsync<PlaywrightException>(
                 () => page.WaitForFunctionAsync("() => { console.log('waitForFunction1'); throw new Error('waitForFunction1'); }"));
             await page.ReloadAsync().ConfigureAwait(false);
-            Assert.CatchAsync<PlaywrightNativeException>(
+            Assert.CatchAsync<PlaywrightException>(
                 () => page.WaitForFunctionAsync("() => { console.log('waitForFunction2'); throw new Error('waitForFunction2'); }"));
             await page.ReloadAsync().ConfigureAwait(false);
-            Assert.CatchAsync<PlaywrightNativeException>(
+            Assert.CatchAsync<PlaywrightException>(
                 () => page.WaitForFunctionAsync("() => { console.log('waitForFunction3'); throw new Error('waitForFunction3'); }"));
 
             Assert.That(string.Join("|", messages), Is.EqualTo("waitForFunction1|waitForFunction2|waitForFunction3"));

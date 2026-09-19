@@ -18,6 +18,7 @@ using System;
 using System.Collections.Generic;
 using System.Text.Json;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -144,9 +145,9 @@ namespace PlaywrightNative.Helpers
             {
                 return action();
             }
-            catch (PlaywrightNativeException ex)
+            catch (PlaywrightException ex)
             {
-                throw new PlaywrightNativeException("clock." + method + ": " + ex.Message, ex);
+                throw new PlaywrightException("clock." + method + ": " + ex.Message, ex);
             }
         }
 
@@ -168,14 +169,14 @@ namespace PlaywrightNative.Helpers
                     : "globalThis.__pwClock.controller." + method + "(" + argumentJs + ")";
                 await EvaluateOnPagesAsync(call).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException ex)
+            catch (PlaywrightException ex)
             {
                 if (ex.Message != null && ex.Message.StartsWith("clock.", StringComparison.Ordinal))
                 {
                     throw;
                 }
 
-                throw new PlaywrightNativeException("clock." + method + ": " + ex.Message, ex);
+                throw new PlaywrightException("clock." + method + ": " + ex.Message, ex);
             }
         }
 
@@ -207,7 +208,7 @@ namespace PlaywrightNative.Helpers
             {
                 return _context.Browser?.BrowserType?.Name;
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 return null;
             }

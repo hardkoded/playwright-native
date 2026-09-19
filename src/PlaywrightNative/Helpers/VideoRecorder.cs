@@ -20,6 +20,7 @@ using System.IO;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using PlaywrightNative.Chromium;
 using PlaywrightNative.WebKit;
 
@@ -250,7 +251,7 @@ namespace PlaywrightNative.Helpers
                 await _completed.Task.ConfigureAwait(false);
                 if (_browserClosed || _browser == null || !_browser.IsConnected)
                 {
-                    throw new PlaywrightNativeException("browser has been closed");
+                    throw new PlaywrightException("browser has been closed");
                 }
 
                 string directory = System.IO.Path.GetDirectoryName(path);
@@ -426,7 +427,7 @@ namespace PlaywrightNative.Helpers
                     catch (TimeoutException)
                     {
                     }
-                    catch (PlaywrightNativeException)
+                    catch (PlaywrightException)
                     {
                     }
                 }
@@ -446,7 +447,7 @@ namespace PlaywrightNative.Helpers
                     catch (TimeoutException)
                     {
                     }
-                    catch (PlaywrightNativeException)
+                    catch (PlaywrightException)
                     {
                     }
                 }

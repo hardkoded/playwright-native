@@ -23,6 +23,7 @@ using System.Net.Http;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
+using Microsoft.Playwright;
 using PlaywrightNative.Helpers;
 using PlaywrightNative.Transport;
 using PlaywrightNative.Transport.Protocol;
@@ -36,8 +37,11 @@ namespace PlaywrightNative.Chromium
     /// </summary>
     internal static class ChromiumBrowserType
     {
+        // Match official chromiumSwitches: without --disable-field-trial-config,
+        // field trials can re-enable features we disable below (notably HttpsUpgrades).
         private static readonly string[] DefaultArgs =
         [
+            "--disable-field-trial-config",
             "--disable-background-networking",
             "--enable-features=NetworkService,NetworkServiceInProcess",
             "--disable-background-timer-throttling",
@@ -66,10 +70,16 @@ namespace PlaywrightNative.Chromium
             "--export-tagged-pdf",
             "--enable-automation",
 
-            // Official Playwright Chromium does not enforce Local Network Access on
-            // localhost↔127.0.0.1 iframe navigations. Chrome 148+ does, so disable
-            // the checks to keep automation aligned with official bundled Chromium.
-            "--disable-features=ThirdPartyStoragePartitioning,LocalNetworkAccessChecks",
+            // Official Playwright Chromium disables HttpsUpgrades so plain HTTP
+            // navigations (e.g. http://non-existent.com via a test proxy) stay
+            // HTTP. Without it, Chromium upgrades to HTTPS CONNECT and proxy
+            // parity tests fail with net::ERR_BLOCKED_BY_CLIENT.
+            // LocalNetworkAccessChecks: Chrome 148+ otherwise blocks
+            // localhost↔127.0.0.1 iframe navigations that official allows.
+            // BlockOriginHeaderModificationOnRedirect: Chrome 149+ rejects
+            // re-applying Origin on intercepted redirects (issue 41690), which
+            // breaks route.Continue through cross-origin 307 form posts.
+            "--disable-features=ThirdPartyStoragePartitioning,LocalNetworkAccessChecks,HttpsUpgrades,BlockOriginHeaderModificationOnRedirect",
 
             // Locale handshake proxy must see localhost WebSocket upgrades.
             // Chromium otherwise bypasses loopback (Chrome < 151 ignores locale on WS).
@@ -122,7 +132,7 @@ namespace PlaywrightNative.Chromium
                     {
                         // Official _innerDefaultArgs: Playwright owns the
                         // debugging transport (pipe or websocket).
-                        throw new PlaywrightNativeException(
+                        throw new PlaywrightException(
                             "Playwright manages remote debugging connection itself.");
                     }
                 }
@@ -228,6 +238,22 @@ namespace PlaywrightNative.Chromium
             string proxyServer = ProxySettings.FormatServer(proxy, includeCredentials: false);
             if (!string.IsNullOrEmpty(proxyServer))
             {
+                // Official chromium.ts: SOCKS must not resolve DNS in-process —
+                // MAP * ~NOTFOUND and EXCLUDE the proxy host so Chromium sends
+                // hostnames to the SOCKS server (and Windows localhost→::1 RSTs
+                // against an IPv4-only mock do not bypass the proxy).
+                if (Uri.TryCreate(proxyServer, UriKind.Absolute, out Uri proxyUri)
+                    && (string.Equals(proxyUri.Scheme, "socks5", StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(proxyUri.Scheme, "socks4", StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(proxyUri.Scheme, "socks", StringComparison.OrdinalIgnoreCase)))
+                {
+                    string proxyHost = proxyUri.IdnHost;
+                    if (!string.IsNullOrEmpty(proxyHost))
+                    {
+                        launchArgs.Add("--host-resolver-rules=\"MAP * ~NOTFOUND , EXCLUDE " + proxyHost + "\"");
+                    }
+                }
+
                 launchArgs.Add("--proxy-server=" + proxyServer);
 
                 // Official always prefixes <-loopback> so localhost / link-local
@@ -302,7 +328,7 @@ namespace PlaywrightNative.Chromium
                 transport = await WebSocketTransport.ConnectAsync(endpoint, timeout: timeout).ConfigureAwait(false);
                 connection = new CRConnection(transport, loggerFactory);
 
-                CRBrowser browser = await CRBrowser.ConnectAsync(connection, transport, processManager, loggerFactory, persistent).ConfigureAwait(false);
+                CRBrowser browser = await CRBrowser.ConnectAsync(connection, transport, processManager, loggerFactory, persistent, headless: headless).ConfigureAwait(false);
 
                 // Ownership of processManager, connection, and transport has been
                 // transferred to the CRBrowser instance. Null out locals so the
@@ -424,14 +450,14 @@ namespace PlaywrightNative.Chromium
             }
             catch (HttpRequestException ex)
             {
-                throw new PlaywrightNativeException(ex.Message, ex);
+                throw new PlaywrightException(ex.Message, ex);
             }
 
             using (response)
             {
                 if (!response.IsSuccessStatusCode)
                 {
-                    throw new PlaywrightNativeException(
+                    throw new PlaywrightException(
                         "Unexpected status " + ((int)response.StatusCode).ToString(System.Globalization.CultureInfo.InvariantCulture)
                         + " when connecting to " + httpURL + ".\n"
                         + "This does not look like a DevTools server, try connecting via ws://.");
@@ -443,7 +469,7 @@ namespace PlaywrightNative.Chromium
                     || wsEl.ValueKind != JsonValueKind.String
                     || string.IsNullOrEmpty(wsEl.GetString()))
                 {
-                    throw new PlaywrightNativeException("Invalid URL");
+                    throw new PlaywrightException("Invalid URL");
                 }
 
                 return wsEl.GetString();
@@ -454,7 +480,7 @@ namespace PlaywrightNative.Chromium
         {
             if (!Uri.TryCreate(endpointURL, UriKind.Absolute, out Uri uri))
             {
-                throw new PlaywrightNativeException("Invalid URL");
+                throw new PlaywrightException("Invalid URL");
             }
 
             string path = uri.AbsolutePath;

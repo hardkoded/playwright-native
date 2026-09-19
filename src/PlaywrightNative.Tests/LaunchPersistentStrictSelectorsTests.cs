@@ -17,6 +17,7 @@
 using System;
 using System.IO;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 
@@ -75,7 +76,7 @@ namespace PlaywrightNative.Tests
                 IPage page = await context.NewPageAsync().ConfigureAwait(false);
                 await page.SetContentAsync("<div><button>one</button><button>two</button></div>").ConfigureAwait(false);
 
-                PlaywrightNativeException ex = Assert.CatchAsync<PlaywrightNativeException>(
+                PlaywrightException ex = Assert.CatchAsync<PlaywrightException>(
                     () => page.ClickAsync("button"));
 
                 Assert.That(context.StrictSelectors, Is.True);

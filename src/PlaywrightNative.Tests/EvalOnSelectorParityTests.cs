@@ -16,6 +16,7 @@
  */
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 
@@ -207,7 +208,7 @@ namespace PlaywrightNative.Tests
             await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
             await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
-            PlaywrightNativeException ex = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException ex = Assert.CatchAsync<PlaywrightException>(
                 () => page.EvalOnSelectorAsync<string>("section", "e => e.id"));
             Assert.That(ex, Is.Not.Null);
             Assert.That(ex.Message, Does.Contain("Failed to find element matching selector \"section\""));
@@ -288,7 +289,7 @@ namespace PlaywrightNative.Tests
             await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
             await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
-            PlaywrightNativeException ex = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException ex = Assert.CatchAsync<PlaywrightException>(
                 () => page.EvalOnSelectorAsync<string>("*css=div >> *css=span", "e => e.outerHTML"));
             Assert.That(ex, Is.Not.Null);
             Assert.That(ex.Message, Does.Contain("Only one of the selectors can capture using * modifier"));
@@ -302,7 +303,7 @@ namespace PlaywrightNative.Tests
             await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
             await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
-            PlaywrightNativeException ex = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException ex = Assert.CatchAsync<PlaywrightException>(
                 () => page.EvalOnSelectorAsync<string>("*=div", "e => e.outerHTML"));
             Assert.That(ex, Is.Not.Null);
             Assert.That(ex.Message, Does.Contain("Unknown engine \"\" while parsing selector *=div"));

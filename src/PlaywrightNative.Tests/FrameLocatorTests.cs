@@ -16,6 +16,7 @@
  */
 using System;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 
@@ -36,11 +37,11 @@ namespace PlaywrightNative.Tests
             await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
             IFrame child = await AttachBlankChildFrameAsync(page).ConfigureAwait(false);
-            await child.SetContentAsync("<button id=\"inner\">Go</button>").ConfigureAwait(false);
+            await child.SetContentAsync("<button id=\"inner\" onclick=\"window.lastClickedId = this.id\">Go</button>").ConfigureAwait(false);
 
             await page.FrameLocator("iframe").Locator("button").ClickAsync().ConfigureAwait(false);
 
-            string id = await child.EvaluateAsync<string>("document.activeElement && document.activeElement.id").ConfigureAwait(false);
+            string id = await child.EvaluateAsync<string>("window.lastClickedId").ConfigureAwait(false);
             Assert.That(id, Is.EqualTo("inner"));
             Assert.That(page.FrameLocator("iframe").Owner.Frame, Is.SameAs(page.MainFrame));
         }
@@ -77,7 +78,7 @@ namespace PlaywrightNative.Tests
                 "<iframe srcdoc=\"<button>A</button>\"></iframe>" +
                 "<iframe srcdoc=\"<button>B</button>\"></iframe>").ConfigureAwait(false);
 
-            PlaywrightNativeException ex = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException ex = Assert.CatchAsync<PlaywrightException>(
                 () => page.FrameLocator("iframe").Locator("button").ClickAsync());
 
             Assert.That(ex, Is.Not.Null);
@@ -94,11 +95,11 @@ namespace PlaywrightNative.Tests
             await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
             IFrame child = await AttachBlankChildFrameAsync(page).ConfigureAwait(false);
-            await child.SetContentAsync("<button id=\"inner\">Go</button>").ConfigureAwait(false);
+            await child.SetContentAsync("<button id=\"inner\" onclick=\"window.lastClickedId = this.id\">Go</button>").ConfigureAwait(false);
 
             await page.Locator("iframe").ContentFrame.Locator("button").ClickAsync().ConfigureAwait(false);
 
-            string id = await child.EvaluateAsync<string>("document.activeElement && document.activeElement.id").ConfigureAwait(false);
+            string id = await child.EvaluateAsync<string>("window.lastClickedId").ConfigureAwait(false);
             Assert.That(id, Is.EqualTo("inner"));
         }
 
@@ -180,7 +181,7 @@ namespace PlaywrightNative.Tests
                         return;
                     }
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                     // Execution context is not ready yet.
                 }

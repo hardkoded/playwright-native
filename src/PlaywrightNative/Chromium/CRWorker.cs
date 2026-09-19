@@ -30,6 +30,7 @@ namespace PlaywrightNative.Chromium
         private readonly object _contextLock = new();
         private TaskCompletionSource<CRExecutionContext> _contextTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private CRExecutionContext _context;
+        private bool _workerScriptLoaded;
 
         internal CRWorker(CRSession session, string sessionId, string url)
         {
@@ -84,6 +85,23 @@ namespace PlaywrightNative.Chromium
             _session.Dispose();
         }
 
+        /// <summary>
+        /// Chromium below major version 143 never sends
+        /// <c>Inspector.workerScriptLoaded</c>, so treat the worker's script as
+        /// loaded as soon as it attaches (matching official's pre-143 fallback).
+        /// </summary>
+        internal void MarkScriptLoadedImmediately()
+        {
+            lock (_contextLock)
+            {
+                _workerScriptLoaded = true;
+                if (_context != null)
+                {
+                    _contextTcs.TrySetResult(_context);
+                }
+            }
+        }
+
         private Task<CRExecutionContext> WaitForExecutionContextAsync()
         {
             lock (_contextLock)
@@ -97,6 +115,7 @@ namespace PlaywrightNative.Chromium
             lock (_contextLock)
             {
                 _context = null;
+                _workerScriptLoaded = false;
                 if (_contextTcs.Task.IsCompleted)
                 {
                     _contextTcs = new TaskCompletionSource<CRExecutionContext>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -138,6 +157,20 @@ namespace PlaywrightNative.Chromium
                 return;
             }
 
+            if (method == "Inspector.workerScriptLoaded")
+            {
+                lock (_contextLock)
+                {
+                    _workerScriptLoaded = true;
+                    if (_context != null)
+                    {
+                        _contextTcs.TrySetResult(_context);
+                    }
+                }
+
+                return;
+            }
+
             if (method != "Runtime.executionContextCreated" || !parameters.HasValue)
             {
                 return;
@@ -154,7 +187,17 @@ namespace PlaywrightNative.Chromium
             lock (_contextLock)
             {
                 _context = created;
-                _contextTcs.TrySetResult(created);
+
+                // Official Worker.createExecutionContext: only resolve once the
+                // worker's top-level script has actually finished running
+                // (Inspector.workerScriptLoaded). Resolving on context-creation
+                // alone lets evaluate() race the worker's own initialization --
+                // e.g. self.someFunction() throwing "not a function" because the
+                // script body that defines it hasn't executed yet.
+                if (_workerScriptLoaded)
+                {
+                    _contextTcs.TrySetResult(created);
+                }
             }
         }
 

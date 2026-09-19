@@ -92,7 +92,7 @@ namespace PlaywrightNative.Chromium
                     sessionId = _session.SessionId,
                 }).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 // Target already gone.
             }

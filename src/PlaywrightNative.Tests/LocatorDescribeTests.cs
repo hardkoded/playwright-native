@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 
@@ -36,11 +37,11 @@ namespace PlaywrightNative.Tests
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
             await page.SetContentAsync("<div class=\"x\"></div><div class=\"x\"></div>").ConfigureAwait(false);
 
-            PlaywrightNativeException ex = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException ex = Assert.CatchAsync<PlaywrightException>(
                 () => page.Locator(".x").Describe("cards").ClickAsync());
 
             Assert.That(ex, Is.Not.Null);
-            Assert.That(ex.Message, Does.Contain("strict mode violation: cards resolved to 2 elements."));
+            Assert.That(ex.Message, Does.Contain("strict mode violation: cards resolved to 2 elements:"));
         }
 
         [PlaywrightTest("locator-convenience.spec.ts", "Describe survives First")]
@@ -51,10 +52,12 @@ namespace PlaywrightNative.Tests
             await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
             await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
-            await page.SetContentAsync("<button id=\"a\">A</button><button id=\"b\">B</button>").ConfigureAwait(false);
+            await page.SetContentAsync(
+                "<button id=\"a\" onclick=\"window.lastClickedId = this.id\">A</button>" +
+                "<button id=\"b\" onclick=\"window.lastClickedId = this.id\">B</button>").ConfigureAwait(false);
 
             await page.Locator("button").Describe("primary").First.ClickAsync().ConfigureAwait(false);
-            string id = await page.EvaluateAsync<string>("document.activeElement && document.activeElement.id").ConfigureAwait(false);
+            string id = await page.EvaluateAsync<string>("window.lastClickedId").ConfigureAwait(false);
             Assert.That(id, Is.EqualTo("a"));
         }
 
@@ -68,11 +71,11 @@ namespace PlaywrightNative.Tests
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
             await page.SetContentAsync("<div class=\"x\"></div><div class=\"x\"></div>").ConfigureAwait(false);
 
-            PlaywrightNativeException ex = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException ex = Assert.CatchAsync<PlaywrightException>(
                 () => page.Locator(".x").ClickAsync());
 
             Assert.That(ex, Is.Not.Null);
-            Assert.That(ex.Message, Does.Contain("strict mode violation: locator resolved to 2 elements."));
+            Assert.That(ex.Message, Does.Contain("strict mode violation: locator('.x') resolved to 2 elements:"));
         }
 
         [PlaywrightTest("locator-convenience.spec.ts", "Description returns the describe label")]

@@ -17,6 +17,7 @@
 using System;
 using System.Globalization;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 using PlaywrightNative.TestServer;
@@ -268,7 +269,7 @@ namespace PlaywrightNative.Tests
             {
                 await Playwright.Selectors.RegisterAsync("dispatchEvent713", createDummySelector).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException ex) when (ex.Message.Contains("already registered", StringComparison.Ordinal))
+            catch (PlaywrightException ex) when (ex.Message.Contains("already registered", StringComparison.Ordinal))
             {
             }
             await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
@@ -457,7 +458,7 @@ namespace PlaywrightNative.Tests
             await page.FrameLocator("iframe").Locator("div").DispatchEventAsync("drop", new { dataTransfer = sameFrameTransfer }).ConfigureAwait(false);
 
             IJSHandle otherFrameTransfer = await page.EvaluateHandleAsync("() => new DataTransfer()").ConfigureAwait(false);
-            PlaywrightNativeException ex = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException ex = Assert.CatchAsync<PlaywrightException>(
                 () => page.FrameLocator("iframe").Locator("div").DispatchEventAsync("drop", new { dataTransfer = otherFrameTransfer }));
             Assert.That(ex, Is.Not.Null);
         }

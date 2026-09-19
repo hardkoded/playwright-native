@@ -16,6 +16,7 @@
  */
 using System;
 using System.Collections.Generic;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -106,7 +107,7 @@ namespace PlaywrightNative.Helpers
                         mapped.Add("wakeLockScreen");
                         break;
                     default:
-                        throw new PlaywrightNativeException("Unknown permission: " + permission);
+                        throw new PlaywrightException("Unknown permission: " + permission);
                 }
             }
 
@@ -150,7 +151,7 @@ namespace PlaywrightNative.Helpers
                         // Leftover keyboard tests grant it alongside clipboard-read.
                         break;
                     default:
-                        throw new PlaywrightNativeException("Unknown permission: " + permission);
+                        throw new PlaywrightException("Unknown permission: " + permission);
                 }
             }
 

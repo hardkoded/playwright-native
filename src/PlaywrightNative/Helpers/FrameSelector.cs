@@ -17,6 +17,7 @@
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -128,7 +129,7 @@ namespace PlaywrightNative.Helpers
                 index = 1;
                 if (index >= parts.Count)
                 {
-                    throw new PlaywrightNativeException("Selector cannot be empty after frameLocator()");
+                    throw new PlaywrightException("Selector cannot be empty after frameLocator()");
                 }
 
                 return await QueryAnyFrameAsync(frame, scope, parts, index, selector).ConfigureAwait(false);
@@ -139,7 +140,7 @@ namespace PlaywrightNative.Helpers
                 index = 1;
                 if (index >= parts.Count)
                 {
-                    throw new PlaywrightNativeException("Selector cannot end with entering frame");
+                    throw new PlaywrightException("Selector cannot end with entering frame");
                 }
 
                 return await QueryPierceAsync(frame, scope, parts, index, selector).ConfigureAwait(false);
@@ -304,23 +305,23 @@ namespace PlaywrightNative.Helpers
             {
                 if (IsAnyFrame(parts[index]))
                 {
-                    throw new PlaywrightNativeException("\"any-frame\" is only allowed as the first selector token");
+                    throw new PlaywrightException("\"any-frame\" is only allowed as the first selector token");
                 }
 
                 if (IsPierce(parts[index]))
                 {
-                    throw new PlaywrightNativeException("\"pierce-frames\" is only allowed as the first selector token");
+                    throw new PlaywrightException("\"pierce-frames\" is only allowed as the first selector token");
                 }
 
                 if (!IsEnter(parts[index]))
                 {
-                    throw new PlaywrightNativeException("Selector cannot start with entering frame, select the iframe first");
+                    throw new PlaywrightException("Selector cannot start with entering frame, select the iframe first");
                 }
 
                 index++;
                 if (index >= parts.Count)
                 {
-                    throw new PlaywrightNativeException("Selector cannot end with entering frame, while parsing selector " + selector);
+                    throw new PlaywrightException("Selector cannot end with entering frame, while parsing selector " + selector);
                 }
 
                 List<IFrame> entered = new List<IFrame>();
@@ -351,7 +352,7 @@ namespace PlaywrightNative.Helpers
         {
             if (ContainsControl(chunk))
             {
-                throw new PlaywrightNativeException("Selector cannot start with entering frame, select the iframe first");
+                throw new PlaywrightException("Selector cannot start with entering frame, select the iframe first");
             }
 
             try
@@ -365,7 +366,7 @@ namespace PlaywrightNative.Helpers
             }
             catch (Exception ex) when (
                 ex is TimeoutException
-                || PlaywrightNativeException.IsDestroyedContext(ex as PlaywrightNativeException)
+                || PlaywrightNative.Helpers.DestroyedContext.IsDestroyedContext(ex as PlaywrightException)
                 || (ex.Message != null && (
                     ex.Message.Contains("Missing injected script", StringComparison.OrdinalIgnoreCase)
                     || ex.Message.Contains("Execution context", StringComparison.OrdinalIgnoreCase))))
@@ -390,24 +391,24 @@ namespace PlaywrightNative.Helpers
             }
 
             string html = await host.EvaluateAsync<string>("el => el.outerHTML").ConfigureAwait(false);
-            throw new PlaywrightNativeException((html ?? string.Empty) + "\n<iframe> was expected");
+            throw new PlaywrightException((html ?? string.Empty) + "\n<iframe> was expected");
         }
 
         private static void Validate(IReadOnlyList<string> parts, string selector)
         {
             if (parts.Count == 0)
             {
-                throw new PlaywrightNativeException("Selector cannot be empty");
+                throw new PlaywrightException("Selector cannot be empty");
             }
 
             if (IsEnter(parts[0]))
             {
-                throw new PlaywrightNativeException("Selector cannot start with entering frame, select the iframe first");
+                throw new PlaywrightException("Selector cannot start with entering frame, select the iframe first");
             }
 
             if (IsEnter(parts[parts.Count - 1]))
             {
-                throw new PlaywrightNativeException("Selector cannot end with entering frame, while parsing selector " + selector);
+                throw new PlaywrightException("Selector cannot end with entering frame, while parsing selector " + selector);
             }
 
             int captureIndex = -1;
@@ -418,7 +419,7 @@ namespace PlaywrightNative.Helpers
                 {
                     if (i != 0)
                     {
-                        throw new PlaywrightNativeException("\"any-frame\" is only allowed as the first selector token");
+                        throw new PlaywrightException("\"any-frame\" is only allowed as the first selector token");
                     }
 
                     continue;
@@ -428,7 +429,7 @@ namespace PlaywrightNative.Helpers
                 {
                     if (i != 0)
                     {
-                        throw new PlaywrightNativeException("\"pierce-frames\" is only allowed as the first selector token");
+                        throw new PlaywrightException("\"pierce-frames\" is only allowed as the first selector token");
                     }
 
                     continue;
@@ -452,7 +453,7 @@ namespace PlaywrightNative.Helpers
 
             if (captureIndex >= 0 && firstEnter >= 0 && captureIndex < firstEnter)
             {
-                throw new PlaywrightNativeException("Can not capture the selector before diving into the frame. Only use * after the last frame has been selected");
+                throw new PlaywrightException("Can not capture the selector before diving into the frame. Only use * after the last frame has been selected");
             }
         }
 
@@ -467,7 +468,7 @@ namespace PlaywrightNative.Helpers
 
             if (chunk.Count == 0)
             {
-                throw new PlaywrightNativeException("Selector cannot start with entering frame, select the iframe first");
+                throw new PlaywrightException("Selector cannot start with entering frame, select the iframe first");
             }
 
             return string.Join(" >> ", chunk);

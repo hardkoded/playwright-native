@@ -23,6 +23,7 @@ using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using System.Text;
+using Microsoft.Playwright;
 using Microsoft.Win32.SafeHandles;
 
 namespace PlaywrightNative.Transport
@@ -285,7 +286,7 @@ namespace PlaywrightNative.Transport
 
             if (setProcessHandle == null || setProcessId == null)
             {
-                throw new PlaywrightNativeException(
+                throw new PlaywrightException(
                     "Unable to attach the Windows fd-3/4 process to System.Diagnostics.Process; .NET internals changed.");
             }
 
@@ -297,7 +298,7 @@ namespace PlaywrightNative.Transport
             {
                 if (standardErrorField == null)
                 {
-                    throw new PlaywrightNativeException(
+                    throw new PlaywrightException(
                         "Unable to attach redirected stderr for the Windows fd-3/4 process; .NET internals changed.");
                 }
 
@@ -308,7 +309,7 @@ namespace PlaywrightNative.Transport
             {
                 if (standardOutputField == null)
                 {
-                    throw new PlaywrightNativeException(
+                    throw new PlaywrightException(
                         "Unable to attach redirected stdout for the Windows fd-3/4 process; .NET internals changed.");
                 }
 
@@ -464,10 +465,10 @@ namespace PlaywrightNative.Transport
             }
         }
 
-        private static PlaywrightNativeException NewWin32Exception(string api)
+        private static PlaywrightException NewWin32Exception(string api)
         {
             int error = Marshal.GetLastWin32Error();
-            return new PlaywrightNativeException(
+            return new PlaywrightException(
                 $"Windows fd-3/4 launch failed at {api}: {new Win32Exception(error).Message} ({error}).",
                 new Win32Exception(error));
         }

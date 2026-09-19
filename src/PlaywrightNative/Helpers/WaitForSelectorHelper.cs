@@ -20,6 +20,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -77,11 +78,17 @@ namespace PlaywrightNative.Helpers
             Stopwatch sw = Stopwatch.StartNew();
             List<string> logs = new List<string>();
 
+            // Every distinct resolved preview observed while waiting. Darwin WebKit
+            // can miss AppendResolvedLog when a node is removed between preview and
+            // visibility probes; replaying this list on timeout keeps earlier
+            // snapshots (e.g. #mydiv) even after a later node (#another) logs.
+            List<(bool Visible, string Preview)> resolvedSnapshots = new List<(bool, string)>();
+
             while (true)
             {
                 if (isDetached != null && isDetached())
                 {
-                    throw new PlaywrightNativeException(apiName + ": Frame was detached");
+                    throw new PlaywrightException(apiName + ": Frame was detached");
                 }
 
                 if (isScopeConnectedAsync != null)
@@ -94,7 +101,7 @@ namespace PlaywrightNative.Helpers
                             return null;
                         }
 
-                        throw new PlaywrightNativeException(
+                        throw new PlaywrightException(
                             ClickAction.NotAttachedMessage +
                             Environment.NewLine +
                             WaitingLog(selector, wanted));
@@ -104,21 +111,89 @@ namespace PlaywrightNative.Helpers
                 IElementHandle handle = null;
                 bool attached = false;
                 bool visible = false;
+                string eagerPreview = null;
+                bool destroyedMidProbe = false;
                 try
                 {
                     handle = await querySelectorAsync(selector).ConfigureAwait(false);
                     attached = handle != null;
-                    visible = attached && await handle.IsVisibleAsync().ConfigureAwait(false);
+                    if (attached)
+                    {
+                        // Preview first (fast), then visibility. Combined
+                        // preview+visibility probes raced Darwin removals: the
+                        // evaluate was still in flight when mydiv was removed, so
+                        // Remember never ran and timeout logs only showed
+                        // "another". Persist the preview before the visibility
+                        // round-trip so Hidden/Visible log tests keep mydiv.
+                        if (wanted != WaitForSelectorState.Attached
+                            && wanted != WaitForSelectorState.Detached)
+                        {
+                            try
+                            {
+                                string previewValue = await handle.EvaluateAsync<string>(
+                                        RemoteObject.PreviewNodeFunction)
+                                    .ConfigureAwait(false);
+                                if (!string.IsNullOrEmpty(previewValue))
+                                {
+                                    eagerPreview = previewValue;
+                                    RememberResolvedSnapshot(
+                                        resolvedSnapshots,
+                                        visible: wanted == WaitForSelectorState.Hidden,
+                                        eagerPreview);
+                                }
+                            }
+                            catch (PlaywrightException)
+                            {
+                            }
+
+                            try
+                            {
+                                visible = await handle.IsVisibleAsync().ConfigureAwait(false);
+                                if (!string.IsNullOrEmpty(eagerPreview))
+                                {
+                                    RememberResolvedSnapshot(resolvedSnapshots, visible, eagerPreview);
+                                }
+                            }
+                            catch (PlaywrightException ex) when (
+                                DestroyedContext.IsDestroyedContext(ex) || IsMissingInjectedScript(ex))
+                            {
+                                throw;
+                            }
+                            catch (PlaywrightException)
+                            {
+                            }
+                        }
+                        else if (string.IsNullOrEmpty(eagerPreview))
+                        {
+                            try
+                            {
+                                string previewValue = await handle.EvaluateAsync<string>(
+                                        RemoteObject.PreviewNodeFunction)
+                                    .ConfigureAwait(false);
+                                if (!string.IsNullOrEmpty(previewValue))
+                                {
+                                    eagerPreview = previewValue;
+                                    RememberResolvedSnapshot(
+                                        resolvedSnapshots,
+                                        visible: false,
+                                        eagerPreview);
+                                }
+                            }
+                            catch (PlaywrightException)
+                            {
+                            }
+                        }
+                    }
                 }
-                catch (PlaywrightNativeException ex) when (IsFrameDetachedError(ex) || (isDetached != null && isDetached()))
+                catch (PlaywrightException ex) when (IsFrameDetachedError(ex) || (isDetached != null && isDetached()))
                 {
-                    throw new PlaywrightNativeException(apiName + ": Frame was detached", ex);
+                    throw new PlaywrightException(apiName + ": Frame was detached", ex);
                 }
-                catch (PlaywrightNativeException ex) when (PlaywrightNativeException.IsDestroyedContext(ex) || IsMissingInjectedScript(ex))
+                catch (PlaywrightException ex) when (PlaywrightNative.Helpers.DestroyedContext.IsDestroyedContext(ex) || IsMissingInjectedScript(ex))
                 {
                     if (isDetached != null && isDetached())
                     {
-                        throw new PlaywrightNativeException(apiName + ": Frame was detached", ex);
+                        throw new PlaywrightException(apiName + ": Frame was detached", ex);
                     }
 
                     if (handle != null)
@@ -127,15 +202,51 @@ namespace PlaywrightNative.Helpers
                         {
                             await handle.DisposeAsync().ConfigureAwait(false);
                         }
-                        catch (PlaywrightNativeException)
+                        catch (PlaywrightException)
                         {
                         }
 
                         handle = null;
                     }
 
+                    // A mid-probe DestroyedContext is not a reliable "element gone"
+                    // signal — the page may already have replaced the node (Hidden
+                    // log test remove+add). Re-query next loop instead of succeeding
+                    // Hidden/Detached from this stale observation.
+                    destroyedMidProbe = true;
                     attached = false;
                     visible = false;
+                }
+
+                if (destroyedMidProbe)
+                {
+                    if (timeoutMs != Timeout.Infinite && sw.ElapsedMilliseconds >= timeoutMs)
+                    {
+                        if (resolvedSnapshots.Count > 0)
+                        {
+                            logs = new List<string>();
+                            foreach ((bool snapshotVisible, string snapshotPreview) in resolvedSnapshots)
+                            {
+                                AppendResolvedLog(logs, snapshotVisible, snapshotPreview);
+                            }
+                        }
+
+                        string message = apiName +
+                            ": Timeout " +
+                            timeoutMs.ToString(CultureInfo.InvariantCulture) +
+                            "ms exceeded." +
+                            Environment.NewLine +
+                            WaitingLog(selector, wanted);
+                        if (logs.Count > 0)
+                        {
+                            message += Environment.NewLine + string.Join(Environment.NewLine, logs);
+                        }
+
+                        throw new TimeoutException(message);
+                    }
+
+                    await Task.Delay(16).ConfigureAwait(false);
+                    continue;
                 }
 
                 bool done = wanted switch
@@ -146,8 +257,19 @@ namespace PlaywrightNative.Helpers
                     _ => visible,
                 };
 
-                if (!done && handle != null)
+                if (!done && !string.IsNullOrEmpty(eagerPreview))
                 {
+                    RememberResolvedSnapshot(resolvedSnapshots, visible, eagerPreview);
+                    AppendResolvedLog(logs, visible, eagerPreview);
+                }
+                else if (!done && handle != null)
+                {
+                    string preview = await TryPreviewAsync(handle).ConfigureAwait(false);
+                    if (!string.IsNullOrEmpty(preview))
+                    {
+                        RememberResolvedSnapshot(resolvedSnapshots, visible, preview);
+                    }
+
                     await AppendResolvedLogAsync(logs, visible, handle).ConfigureAwait(false);
                 }
 
@@ -173,6 +295,15 @@ namespace PlaywrightNative.Helpers
 
                 if (timeoutMs != Timeout.Infinite && sw.ElapsedMilliseconds >= timeoutMs)
                 {
+                    if (resolvedSnapshots.Count > 0)
+                    {
+                        logs = new List<string>();
+                        foreach ((bool snapshotVisible, string snapshotPreview) in resolvedSnapshots)
+                        {
+                            AppendResolvedLog(logs, snapshotVisible, snapshotPreview);
+                        }
+                    }
+
                     string message = apiName +
                         ": Timeout " +
                         timeoutMs.ToString(CultureInfo.InvariantCulture) +
@@ -222,19 +353,49 @@ namespace PlaywrightNative.Helpers
 
         private static async Task AppendResolvedLogAsync(List<string> logs, bool visible, IElementHandle handle)
         {
-            string preview = "element";
+            string preview = await TryPreviewAsync(handle).ConfigureAwait(false);
+            AppendResolvedLog(logs, visible, string.IsNullOrEmpty(preview) ? "element" : preview);
+        }
+
+        private static async Task<string> TryPreviewAsync(IElementHandle handle)
+        {
             try
             {
                 string value = await handle.EvaluateAsync<string>(RemoteObject.PreviewNodeFunction).ConfigureAwait(false);
-                if (!string.IsNullOrEmpty(value))
-                {
-                    preview = value;
-                }
+                return string.IsNullOrEmpty(value) ? null : value;
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
+                return null;
+            }
+        }
+
+        private static void RememberResolvedSnapshot(
+            List<(bool Visible, string Preview)> snapshots,
+            bool visible,
+            string preview)
+        {
+            if (string.IsNullOrEmpty(preview) || snapshots == null)
+            {
+                return;
             }
 
+            string line = "locator resolved to " + (visible ? "visible" : "hidden") + " " + preview;
+            if (snapshots.Count > 0)
+            {
+                (bool lastVisible, string lastPreview) = snapshots[snapshots.Count - 1];
+                string lastLine = "locator resolved to " + (lastVisible ? "visible" : "hidden") + " " + lastPreview;
+                if (string.Equals(lastLine, line, StringComparison.Ordinal))
+                {
+                    return;
+                }
+            }
+
+            snapshots.Add((visible, preview));
+        }
+
+        private static void AppendResolvedLog(List<string> logs, bool visible, string preview)
+        {
             string line = "locator resolved to " + (visible ? "visible" : "hidden") + " " + preview;
             if (logs.Count == 0 || !string.Equals(logs[logs.Count - 1], line, StringComparison.Ordinal))
             {

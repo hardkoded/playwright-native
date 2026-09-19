@@ -26,6 +26,7 @@ using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Features;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.Helpers;
 using PlaywrightNative.NUnit;
@@ -344,7 +345,7 @@ namespace PlaywrightNative.Tests
             Assert.That(redirectedFrom, Is.Not.Null);
             IResponse redirected = await redirectedFrom.ResponseAsync().ConfigureAwait(false);
             Assert.That(redirected.Status, Is.EqualTo(302));
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(() => redirected.TextAsync());
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(() => redirected.TextAsync());
             Assert.That(error.Message, Does.Contain("Response body is unavailable for redirect responses"));
         }
 
@@ -996,7 +997,7 @@ namespace PlaywrightNative.Tests
             await page.GoToAsync(Prefix + "/title.html").ConfigureAwait(false);
             IResponse response = await responseTask.ConfigureAwait(false);
             await page.GoToAsync(Prefix + "/grid.html").ConfigureAwait(false);
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(() => response.BodyAsync());
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(() => response.BodyAsync());
             Assert.That(error, Is.Not.Null);
             Assert.That(error.Message, Does.Contain("navigated away"));
         }

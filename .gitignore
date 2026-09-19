@@ -227,6 +227,7 @@ ClientBin/
 *.dbproj.schemaview
 *.jfm
 *.pfx
+!src/PlaywrightNative.Tests/Assets/**/*.pfx
 *.publishsettings
 orleans.codegen.cs
 

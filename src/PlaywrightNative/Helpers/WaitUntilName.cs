@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 using System;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -30,6 +31,11 @@ namespace PlaywrightNative.Helpers
         /// <returns>The matching <see cref="WaitUntilState"/>.</returns>
         internal static WaitUntilState Parse(string waitUntil)
         {
+            if (string.IsNullOrEmpty(waitUntil))
+            {
+                return default;
+            }
+
             if (string.Equals(waitUntil, "load", StringComparison.OrdinalIgnoreCase))
             {
                 return WaitUntilState.Load;
@@ -50,7 +56,7 @@ namespace PlaywrightNative.Helpers
                 return WaitUntilState.Commit;
             }
 
-            throw new PlaywrightNativeException("waitUntil: expected one of (load|domcontentloaded|networkidle|commit)");
+            throw new PlaywrightException("waitUntil: expected one of (load|domcontentloaded|networkidle|commit)");
         }
     }
 }

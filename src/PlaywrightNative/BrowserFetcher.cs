@@ -13,6 +13,7 @@ using System.Net.Http;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative
 {
@@ -127,7 +128,7 @@ namespace PlaywrightNative
 
             if (Directory.Exists(installDir) && File.Exists(markerPath))
             {
-                return new InstalledBrowser
+                InstalledBrowser existing = new InstalledBrowser
                 {
                     Browser = Browser,
                     BuildId = buildId,
@@ -135,6 +136,28 @@ namespace PlaywrightNative
                     InstallationDir = installDir,
                     PermissionsFixed = !RuntimeInformation.IsOSPlatform(OSPlatform.Windows),
                 };
+
+                // Cached trees can keep INSTALLATION_COMPLETE after a broken extract
+                // (missing pw_run.sh / chrome binary). Treat that as not installed so
+                // DownloadAsync re-extracts and BrowserType.ExecutablePath sees a real
+                // binary. Marker-only fixtures used by unit tests omit the executable
+                // on purpose — those paths never call DownloadAsync expecting a launch.
+                if (File.Exists(existing.GetExecutablePath()))
+                {
+                    return existing;
+                }
+
+                try
+                {
+                    Directory.Delete(installDir, recursive: true);
+                }
+                catch (IOException)
+                {
+                    // Fall through and attempt a fresh download/extract.
+                }
+                catch (UnauthorizedAccessException)
+                {
+                }
             }
 
             Directory.CreateDirectory(CacheDir);
@@ -164,7 +187,7 @@ namespace PlaywrightNative
                     PermissionsFixed = permissionsFixed,
                 };
             }
-            catch (Exception ex) when (ex is not OperationCanceledException && ex is not PlaywrightNativeException)
+            catch (Exception ex) when (ex is not OperationCanceledException && ex is not PlaywrightException)
             {
                 if (Directory.Exists(installDir))
                 {
@@ -182,7 +205,7 @@ namespace PlaywrightNative
                     }
                 }
 
-                throw new PlaywrightNativeException($"Failed to download {Browser} build {buildId}: {ex.Message}", ex);
+                throw new PlaywrightException($"Failed to download {Browser} build {buildId}: {ex.Message}", ex);
             }
             finally
             {
@@ -234,6 +257,7 @@ namespace PlaywrightNative
                     "chromium" => SupportedBrowser.Chromium,
                     "firefox" => SupportedBrowser.Firefox,
                     "webkit" => SupportedBrowser.Webkit,
+                    "ffmpeg" => SupportedBrowser.Ffmpeg,
                     _ => (SupportedBrowser)(-1),
                 };
                 if ((int)browser < 0)
@@ -402,7 +426,7 @@ namespace PlaywrightNative
                 }
             }
 
-            throw new PlaywrightNativeException(
+            throw new PlaywrightException(
                 $"Failed to download {Browser} build {buildId} from any of {urls.Length} host(s):{Environment.NewLine}  {string.Join(Environment.NewLine + "  ", errors)}");
         }
     }

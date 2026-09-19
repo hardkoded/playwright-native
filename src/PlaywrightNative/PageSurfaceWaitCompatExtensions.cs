@@ -56,14 +56,15 @@ namespace PlaywrightNative
             object arg,
             string polling,
             PageWaitForFunctionOptions options = default)
-            => page.WaitForFunctionAsync(expression, arg, options?.Timeout, polling);
+            => page.WaitForFunctionAsync(expression, arg, polling, options?.Timeout);
 
         /// <summary>Legacy wait-for-websocket with URL string.</summary>
         [OverloadResolutionPriority(1)]
         public static Task<IWebSocket> WaitForWebSocketAsync(this IPage page, string url, PageWaitForWebSocketOptions options = default)
             => page.WaitForWebSocketAsync(new PageWaitForWebSocketOptions
             {
-                Predicate = webSocket => webSocket.Url.Contains(url, StringComparison.Ordinal),
+                // Official waitForWebSocket takes a URL glob, not a substring.
+                Predicate = webSocket => UrlMatcher.UrlMatches(null, webSocket.Url, url, webSocketUrl: true),
                 Timeout = options?.Timeout,
             });
 

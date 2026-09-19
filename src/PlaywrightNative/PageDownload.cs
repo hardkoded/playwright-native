@@ -17,6 +17,7 @@
 using System;
 using System.IO;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using PlaywrightNative.Helpers;
 
 namespace PlaywrightNative
@@ -110,7 +111,7 @@ namespace PlaywrightNative
                 {
                     await _cancelAsync().WithTimeout(() => Task.CompletedTask, 2_000).ConfigureAwait(false);
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                     // The download may have already finished or the browser closed.
                 }
@@ -126,7 +127,7 @@ namespace PlaywrightNative
             string error = await WaitForFinishAsync().ConfigureAwait(false);
             if (error != null)
             {
-                throw new PlaywrightNativeException("download.path: " + error);
+                throw new PlaywrightException("download.path: " + error);
             }
 
             DateTime deadline = DateTime.UtcNow.AddSeconds(2);
@@ -141,7 +142,7 @@ namespace PlaywrightNative
                 await Task.Delay(20).ConfigureAwait(false);
             }
 
-            throw new PlaywrightNativeException("Download finished but the file was not found.");
+            throw new PlaywrightException("Download finished but the file was not found.");
         }
 
         /// <inheritdoc/>
@@ -154,7 +155,7 @@ namespace PlaywrightNative
 
             if (_deleted)
             {
-                throw new PlaywrightNativeException(
+                throw new PlaywrightException(
                     "Target page, context or browser has been closed");
             }
 
@@ -163,17 +164,17 @@ namespace PlaywrightNative
             {
                 source = await PathAsync().ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException ex)
+            catch (PlaywrightException ex)
             {
                 string message = ex.Message ?? string.Empty;
                 if (message.StartsWith("download.path: ", StringComparison.Ordinal))
                 {
-                    throw new PlaywrightNativeException(
+                    throw new PlaywrightException(
                         "download.saveAs: " + message.AsSpan("download.path: ".Length).ToString(),
                         ex);
                 }
 
-                throw new PlaywrightNativeException("download.saveAs: " + message, ex);
+                throw new PlaywrightException("download.saveAs: " + message, ex);
             }
 
             string directory = Path.GetDirectoryName(path);

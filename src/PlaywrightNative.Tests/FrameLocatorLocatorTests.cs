@@ -16,6 +16,7 @@
  */
 using System;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 
@@ -96,7 +97,7 @@ namespace PlaywrightNative.Tests
             await page.SetContentAsync("<iframe srcdoc=\"<input>\"></iframe>").ConfigureAwait(false);
             await other.SetContentAsync("<input value=x>").ConfigureAwait(false);
 
-            PlaywrightNativeException ex = Assert.Throws<PlaywrightNativeException>(
+            PlaywrightException ex = Assert.Throws<PlaywrightException>(
                 () => page.FrameLocator("iframe").Locator(other.Locator("input")));
 
             Assert.That(ex.Message, Does.Contain("same frame"));

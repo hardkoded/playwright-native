@@ -18,6 +18,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
@@ -52,6 +53,7 @@ namespace PlaywrightNative.WebKit
         private readonly ConcurrentDictionary<string, WKPage> _pages = new();
         private readonly ConcurrentDictionary<string, WKPage> _downloads = new(StringComparer.Ordinal);
         private WKBrowserContext _defaultContext;
+        private WebKitMacProxyBypassShim _macProxyBypassShim;
         private bool _closed;
 
         private WKBrowser(
@@ -152,15 +154,7 @@ namespace PlaywrightNative.WebKit
         public async ValueTask DisposeAsync()
         {
             GC.SuppressFinalize(this);
-
-            _connection.Disconnected -= OnDisconnected;
-            _connection.Dispose();
-
-            if (_processManager != null)
-            {
-                await _processManager.KillAsync().ConfigureAwait(false);
-                _processManager.Dispose();
-            }
+            await CloseAsync().ConfigureAwait(false);
         }
 
         /// <inheritdoc/>
@@ -218,7 +212,7 @@ namespace PlaywrightNative.WebKit
         public async Task<IBrowserContext> NewContextAsync(
             bool? acceptDownloads = default,
             bool? bypassCSP = default,
-            ColorScheme colorScheme = default,
+            ColorScheme colorScheme = ColorScheme.Null,
             float? deviceScaleFactor = default,
             IEnumerable<KeyValuePair<string, string>> extraHTTPHeaders = default,
             Geolocation geolocation = default,
@@ -245,10 +239,10 @@ namespace PlaywrightNative.WebKit
             string baseURL = default,
             HarMode recordHarMode = default,
             ServiceWorkerPolicy serviceWorkers = default,
-            ReducedMotion reducedMotion = default,
-            ForcedColors forcedColors = default,
-            Contrast contrast = default,
-            HarContentPolicy recordHarContent = default,
+            ReducedMotion reducedMotion = ReducedMotion.Null,
+            ForcedColors forcedColors = ForcedColors.Null,
+            Contrast contrast = Contrast.Null,
+            HarContentPolicy recordHarContent = EnumCompat.UndefinedHarContentPolicy,
             Regex recordHarUrlRegex = default,
             bool? strictSelectors = default,
             IEnumerable<ClientCertificate> clientCertificates = default)
@@ -265,9 +259,48 @@ namespace PlaywrightNative.WebKit
                     ignoreHTTPSErrors == true,
                     proxy,
                     out Proxy browserProxy);
+
+                // Darwin CFNetwork excludes loopback from SOCKS5, so macOS WebKit
+                // needs the HTTP CONNECT face of the MITM listener. Linux libsoup
+                // will SOCKS-proxy 127.0.0.1; forcing HTTP CONNECT there disables
+                // HTTP/2 ALPN ("No supported application protocol" on h2-only
+                // client-certificate fixtures). Chromium always keeps socks5.
+                if (certsProxy != null && RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+                {
+                    browserProxy = certsProxy.HttpBrowserProxy;
+                }
+
+                // WebKit ignores Network.setExtraHTTPHeaders on WebSocket upgrades
+                // (stock 2276), and Network interception does not rewrite them either.
+                // Always attach LocaleHandshakeProxy so context *and* later page
+                // SetExtraHttpHeaders stamp WS handshakes. Skip when a client-
+                // certificate MITM already owns the browser proxy.
+                //
+                // Darwin: HTTP CONNECT + loopback bypass so localhost HTTP stays
+                // direct (multipart / Fallback amend). WebKitMacLocaleWebSocketShim
+                // rewrites loopback WS to local.playwright* so upgrades still reach
+                // the proxy for ExtraHTTPHeaders / Accept-Language. Linux: SOCKS5
+                // without bypass — HTTP CONNECT disables WebKit HTTP/2 ALPN on
+                // h2-only origins, while SOCKS keeps ALPN and still sees WS upgrades.
+                bool isDarwin = RuntimeInformation.IsOSPlatform(OSPlatform.OSX);
                 LocaleHandshakeProxy handshake = certsProxy == null
-                    ? LocaleHandshakeProxy.TryStart(locale, browserProxy, force: true, out browserProxy)
+                    ? LocaleHandshakeProxy.TryStart(
+                        locale,
+                        browserProxy,
+                        force: true,
+                        bypassLoopback: isDarwin,
+                        useSocks: !isDarwin,
+                        out browserProxy)
                     : null;
+
+                // macOS CFNetwork excludes localhost/link-local whenever any
+                // bypass list is set, and also fails localhost through a raw
+                // HTTP MITM (client certs / handshake). Always wrap HTTP(S)
+                // proxies - including Darwin client-certificate HttpBrowserProxy -
+                // so loopback-mapped hosts (local.playwright -> 127.0.0.1) stay
+                // proxied. SOCKS (Linux certs) is not wrapped.
+                WebKitMacProxyBypassShim bypassShim =
+                    WebKitMacProxyBypassShim.TryStart(browserProxy, out browserProxy);
                 WKBrowserContext context;
                 try
                 {
@@ -275,12 +308,14 @@ namespace PlaywrightNative.WebKit
                 }
                 catch
                 {
+                    bypassShim?.Dispose();
                     handshake?.Dispose();
                     certsProxy?.Dispose();
                     throw;
                 }
 
                 context.AttachLocaleHandshake(handshake);
+                context.AttachMacProxyBypassShim(bypassShim);
                 context.AttachClientCertificatesProxy(certsProxy, proxy);
                 context.AttachClientCertificates(clientCertificates);
                 context.BaseURL = baseURL;
@@ -307,8 +342,18 @@ namespace PlaywrightNative.WebKit
                     reducedMotion,
                     forcedColors,
                     contrast);
+
+                // Upstream WKBrowserContext._initialize applies geolocation before any page exists.
+                if (geolocation != null)
+                {
+                    await context.SetGeolocationAsync(geolocation).ConfigureAwait(false);
+                }
+
+                // Official initialize(): Playwright.setIgnoreCertificateErrors before pages.
+                await context.ApplyIgnoreCertificateErrorsAsync().ConfigureAwait(false);
                 await context.ApplyDownloadBehaviorAsync().ConfigureAwait(false);
                 await context.ApplyLanguagesAsync().ConfigureAwait(false);
+                await context.ApplyMacLocaleWebSocketShimAsync().ConfigureAwait(false);
                 await context.ApplyWebKitPageShimsAsync().ConfigureAwait(false);
                 await context.ApplyEphemeralStorageShimsAsync().ConfigureAwait(false);
                 await StorageStateHelper.ApplyAsync(context, storageState, storageStatePath).ConfigureAwait(false);
@@ -325,7 +370,7 @@ namespace PlaywrightNative.WebKit
         public async Task<IPage> NewPageAsync(
             bool? acceptDownloads = default,
             bool? bypassCSP = default,
-            ColorScheme colorScheme = default,
+            ColorScheme colorScheme = ColorScheme.Null,
             float? deviceScaleFactor = default,
             IEnumerable<KeyValuePair<string, string>> extraHTTPHeaders = default,
             Geolocation geolocation = default,
@@ -352,10 +397,10 @@ namespace PlaywrightNative.WebKit
             string baseURL = default,
             HarMode recordHarMode = default,
             ServiceWorkerPolicy serviceWorkers = default,
-            ReducedMotion reducedMotion = default,
-            ForcedColors forcedColors = default,
-            Contrast contrast = default,
-            HarContentPolicy recordHarContent = default,
+            ReducedMotion reducedMotion = ReducedMotion.Null,
+            ForcedColors forcedColors = ForcedColors.Null,
+            Contrast contrast = Contrast.Null,
+            HarContentPolicy recordHarContent = EnumCompat.UndefinedHarContentPolicy,
             Regex recordHarUrlRegex = default,
             bool? strictSelectors = default,
             IEnumerable<ClientCertificate> clientCertificates = default)
@@ -457,7 +502,7 @@ namespace PlaywrightNative.WebKit
 
             try
             {
-                // Sentinel id — the response will be discarded by WKConnection.
+                // Sentinel id - the response will be discarded by WKConnection.
                 await _connection.BrowserSession
                     .SendAsync("Playwright.close", parameters: null, messageId: WKConnection.BrowserCloseMessageId)
                     .ConfigureAwait(false);
@@ -472,20 +517,65 @@ namespace PlaywrightNative.WebKit
                 await _processManager.EnsureExitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
             }
 
+            // Dispose transport/pipes after the process exits so FDs are not leaked
+            // when callers use CloseAsync without DisposeAsync.
+            try
+            {
+                _connection.Disconnected -= OnDisconnected;
+            }
+#pragma warning disable RCS1075
+            catch (Exception)
+            {
+            }
+#pragma warning restore RCS1075
+
+            try
+            {
+                _connection.Dispose();
+            }
+#pragma warning disable RCS1075
+            catch (Exception)
+            {
+            }
+#pragma warning restore RCS1075
+
+            if (_processManager != null)
+            {
+                try
+                {
+                    _processManager.Dispose();
+                }
+#pragma warning disable RCS1075
+                catch (Exception)
+                {
+                }
+#pragma warning restore RCS1075
+            }
+
+            _macProxyBypassShim?.Dispose();
+            _macProxyBypassShim = null;
+
+            // CloseAsync unsubscribes Disconnected before disposing the connection,
+            // so OnDisconnected never runs on this path. Darwin often skips
+            // pageProxyDestroyed before process death — clear remaining pages so
+            // persistent-context Pages is empty after browser.CloseAsync
+            // (defaultbrowsercontext-2 ExposesBrowser).
+            CloseRemainingPages();
+
             RaiseDisconnected();
         }
 
         /// <inheritdoc/>
         public Task<ICDPSession> NewBrowserCDPSessionAsync()
-            => throw new PlaywrightNativeException("CDP sessions are only supported in Chromium.");
+            => throw new PlaywrightException("CDP sessions are only supported in Chromium.");
 
         /// <inheritdoc/>
         public Task StartTracingAsync(IPage page = default, string path = default, bool screenshots = default, IEnumerable<string> categories = default)
-            => throw new PlaywrightNativeException("startTracing is only supported in Chromium.");
+            => throw new PlaywrightException("startTracing is only supported in Chromium.");
 
         /// <inheritdoc/>
         public Task<byte[]> StopTracingAsync()
-            => throw new PlaywrightNativeException("stopTracing is only supported in Chromium.");
+            => throw new PlaywrightException("stopTracing is only supported in Chromium.");
 
         /// <summary>
         /// Connects to a running WebKit browser process: enables Playwright protocol events
@@ -516,6 +606,13 @@ namespace PlaywrightNative.WebKit
         }
 
         /// <summary>
+        /// Owns the launch-level macOS WebKit proxy-bypass shim.
+        /// </summary>
+        /// <param name="shim">Shim started for this browser, or <see langword="null"/>.</param>
+        internal void AttachMacProxyBypassShim(WebKitMacProxyBypassShim shim)
+            => _macProxyBypassShim = shim;
+
+        /// <summary>
         /// Persistent context created by <c>LaunchPersistentContextAsync</c>.
         /// </summary>
         /// <returns>The default context.</returns>
@@ -523,7 +620,7 @@ namespace PlaywrightNative.WebKit
         {
             if (_defaultContext == null)
             {
-                throw new PlaywrightNativeException("Browser was not launched as a persistent context.");
+                throw new PlaywrightException("Browser was not launched as a persistent context.");
             }
 
             _defaultContext.UseLaunchDownloadsPath(LaunchDownloadsPath);
@@ -532,7 +629,7 @@ namespace PlaywrightNative.WebKit
 
         /// <summary>
         /// Creates a new isolated browser context. This is the way to get
-        /// a usable context — there is no implicit default context.
+        /// a usable context - there is no implicit default context.
         /// </summary>
         /// <returns>The new <see cref="WKBrowserContext"/>.</returns>
         internal async Task<WKBrowserContext> NewWKContextAsync(Proxy proxy = null)
@@ -571,7 +668,7 @@ namespace PlaywrightNative.WebKit
 
             if (string.IsNullOrEmpty(browserContextId))
             {
-                throw new PlaywrightNativeException("Playwright.createContext did not return a browserContextId.");
+                throw new PlaywrightException("Playwright.createContext did not return a browserContextId.");
             }
 
             WKBrowserContext context = new(this, browserContextId);
@@ -756,7 +853,7 @@ namespace PlaywrightNative.WebKit
                 context = _defaultContext;
             }
 
-            // Per-page session — sessionId is unused on the wire; the routing key is pageProxyId,
+            // Per-page session - sessionId is unused on the wire; the routing key is pageProxyId,
             // which the session stamps on every outbound message.
             WKSession pageSession = new(_connection, sessionId: string.Empty, pageProxyId: pageProxyId);
 
@@ -779,7 +876,7 @@ namespace PlaywrightNative.WebKit
             else if (context == null || !context.CreatePageIsInFlight())
             {
                 // Official only sets opener from protocol openerId. Infer a
-                // sibling solely for noopener popups that omit it — never for
+                // sibling solely for noopener popups that omit it - never for
                 // Playwright.createPage (context.newPage), or the new page
                 // takes the popup-navigation path and can close on first goto.
                 WKPage inferred = PopupOpenedHelper.InferListenerOrSoleSibling(
@@ -815,10 +912,18 @@ namespace PlaywrightNative.WebKit
                 return;
             }
 
-            if (page.Opener == null)
+            // Opener popups already receive context expose/init scripts in
+            // ApplyEmulationToPageAsync before Target.resume (so bootstrap runs
+            // once). Re-applying here plus EvaluateOnCurrentAsync doubles
+            // init-script execution and exposeFunction deliveries.
+            // noopener / inferred siblings (Opener == null) skip that early
+            // path, so they still need the full install after init.
+            if (page.Opener != null)
             {
-                await context.ApplyInitScriptsAsync(page).ConfigureAwait(false);
+                return;
             }
+
+            await context.ApplyInitScriptsAsync(page).ConfigureAwait(false);
         }
 
         private void OnWindowOpen(JsonElement? parameters)
@@ -871,7 +976,12 @@ namespace PlaywrightNative.WebKit
         private void OnDisconnected(object sender, EventArgs e)
         {
             _closed = true;
+            CloseRemainingPages();
+            RaiseDisconnected();
+        }
 
+        private void CloseRemainingPages()
+        {
             foreach (WKPage page in _pages.Values)
             {
                 page.WKContext?.RemovePage(page);
@@ -879,7 +989,6 @@ namespace PlaywrightNative.WebKit
             }
 
             _pages.Clear();
-            RaiseDisconnected();
         }
 
         private void RaiseDisconnected()
@@ -892,7 +1001,7 @@ namespace PlaywrightNative.WebKit
 #pragma warning disable SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
         Task<BrowserBindResult> IBrowser.BindAsync(string title, BrowserBindOptions options) => Task.FromResult<BrowserBindResult>(default!);
 
-        Task IBrowser.CloseAsync(BrowserCloseOptions options) => CloseAsync();
+        Task IBrowser.CloseAsync(BrowserCloseOptions options) => CloseAsync(options?.Reason);
 
         Task<IBrowserContext> IBrowser.NewContextAsync(BrowserNewContextOptions options)
             => NewContextAsync(MicrosoftOptionsBridge.ToBrowserContextOptions(options));

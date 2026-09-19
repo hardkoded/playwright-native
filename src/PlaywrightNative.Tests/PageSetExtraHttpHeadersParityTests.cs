@@ -18,6 +18,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.Helpers;
 using PlaywrightNative.NUnit;
@@ -198,11 +199,11 @@ namespace PlaywrightNative.Tests
             // non-strings. Page and context SetExtraHttpHeadersAsync both go
             // through ExtraHttpHeaders; boxed values reproduce the upstream
             // @ts-expect-error cases (number on page, boolean on context).
-            PlaywrightNativeException error1 = Assert.Throws<PlaywrightNativeException>(
+            PlaywrightException error1 = Assert.Throws<PlaywrightException>(
                 () => ExtraHttpHeaders.ToMap(new[] { new KeyValuePair<string, object>("foo", 1) }));
             Assert.That(error1.Message, Does.Contain("Expected value of header \"foo\" to be String, but \"number\" is found."));
 
-            PlaywrightNativeException error2 = Assert.Throws<PlaywrightNativeException>(
+            PlaywrightException error2 = Assert.Throws<PlaywrightException>(
                 () => ExtraHttpHeaders.ToMap(new[] { new KeyValuePair<string, object>("foo", true) }));
             Assert.That(error2.Message, Does.Contain("Expected value of header \"foo\" to be String, but \"boolean\" is found."));
         }

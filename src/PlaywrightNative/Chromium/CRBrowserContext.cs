@@ -21,6 +21,7 @@ using System.Collections.Generic;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using PlaywrightNative.Helpers;
 
 namespace PlaywrightNative.Chromium
@@ -342,7 +343,7 @@ namespace PlaywrightNative.Chromium
 
             if (string.IsNullOrEmpty(targetId))
             {
-                throw new PlaywrightNativeException("Target.createTarget did not return a targetId.");
+                throw new PlaywrightException("Target.createTarget did not return a targetId.");
             }
 
             // Register TCS BEFORE checking earlyPages to avoid a race where AddPage
@@ -446,7 +447,7 @@ namespace PlaywrightNative.Chromium
                     Helpers.ContextPermissionMapper.ToChromium(permissions),
                     origin).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException) when (ContainsLocalNetworkAccess(permissions))
+            catch (PlaywrightException) when (ContainsLocalNetworkAccess(permissions))
             {
                 await SendGrantPermissionsAsync(
                     Helpers.ContextPermissionMapper.ToChromium(permissions, localNetworkFallback: true),

@@ -40,6 +40,39 @@ namespace PlaywrightNative.Helpers
             => pageDialog == null && !contextHasListeners;
 
         /// <summary>
+        /// Defers snapshot + raise + auto-dismiss by one async turn so the
+        /// Click-then-<c>WaitForDialog</c> pattern (browsercontext-events
+        /// inline-script popup) can subscribe before an in-process CDP prompt
+        /// is auto-dismissed.
+        /// </summary>
+        /// <param name="emitAndMaybeDismiss">
+        /// Captures listeners, raises <c>Dialog</c>, then auto-dismisses when
+        /// nobody was listening.
+        /// </param>
+        internal static void ScheduleOpen(Action emitAndMaybeDismiss)
+        {
+            if (emitAndMaybeDismiss == null)
+            {
+                return;
+            }
+
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await Task.Yield();
+                    emitAndMaybeDismiss();
+                }
+#pragma warning disable RCS1075
+                catch (Exception)
+#pragma warning restore RCS1075
+                {
+                    // Best-effort open; page/context may already be closed.
+                }
+            });
+        }
+
+        /// <summary>
         /// Dismisses <paramref name="dialog"/> when nobody was listening at
         /// open time. Callers must pass the pre-emit listener snapshot:
         /// official <c>dialogDidOpen</c> decides auto-handle before handlers

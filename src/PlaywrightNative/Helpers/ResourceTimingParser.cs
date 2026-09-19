@@ -72,13 +72,28 @@ namespace PlaywrightNative.Helpers
                 return 0;
             }
 
-            timing.DomainLookupStart = ReadMs(resourceTiming, "dnsStart", "domainLookupStart");
-            timing.DomainLookupEnd = ReadMs(resourceTiming, "dnsEnd", "domainLookupEnd");
+            timing.DomainLookupStart = ReadMs(resourceTiming, "domainLookupStart", "dnsStart");
+            timing.DomainLookupEnd = ReadMs(resourceTiming, "domainLookupEnd", "dnsEnd");
             timing.ConnectStart = ReadMs(resourceTiming, "connectStart");
             timing.ConnectEnd = ReadMs(resourceTiming, "connectEnd");
-            timing.SecureConnectionStart = ReadMs(resourceTiming, "sslStart", "secureConnectionStart");
-            timing.RequestStart = ReadMs(resourceTiming, "sendStart", "requestStart");
-            timing.ResponseStart = ReadMs(resourceTiming, "receiveHeadersEnd", "responseStart");
+            timing.SecureConnectionStart = ReadMs(resourceTiming, "secureConnectionStart", "sslStart");
+            timing.RequestStart = ReadMs(resourceTiming, "requestStart", "sendStart");
+            timing.ResponseStart = ReadMs(resourceTiming, "responseStart", "receiveHeadersEnd");
+
+            // WebKit occasionally reports out-of-order connection timing (ssl after
+            // connectEnd, dnsEnd before dnsStart, etc.). Upstream
+            // VerifyConnectionTimingConsistency requires each positive value to be
+            // >= the previous; clamp violators to -1 (unavailable).
+            timing.DomainLookupEnd = ClampMonotonic(timing.DomainLookupEnd, timing.DomainLookupStart);
+            timing.ConnectStart = ClampMonotonic(timing.ConnectStart, timing.DomainLookupEnd);
+            timing.SecureConnectionStart = ClampMonotonic(timing.SecureConnectionStart, timing.ConnectStart);
+            timing.ConnectEnd = ClampMonotonic(timing.ConnectEnd, timing.SecureConnectionStart);
+            if (timing.SecureConnectionStart > 0
+                && timing.ConnectEnd > 0
+                && timing.SecureConnectionStart > timing.ConnectEnd)
+            {
+                timing.SecureConnectionStart = -1;
+            }
 
             return ReadDouble(resourceTiming, "requestTime");
         }
@@ -184,6 +199,16 @@ namespace PlaywrightNative.Helpers
             return value.GetDouble();
         }
 
+        private static float ClampMonotonic(float value, float previous)
+        {
+            if (value > 0 && previous > 0 && value < previous)
+            {
+                return -1;
+            }
+
+            return value;
+        }
+
         private static float ReadMs(JsonElement element, params string[] names)
         {
             foreach (string name in names)
@@ -194,13 +219,17 @@ namespace PlaywrightNative.Helpers
                     double ms = value.GetDouble();
 
                     // Official WebKit wkMillisToRoundishMillis: -1000 and
-                    // non-positive values are unavailable.
+                    // non-positive values are unavailable. Sub-millisecond
+                    // values round to 0 via the truncating multiply below —
+                    // treat those as unavailable too so connection-timing
+                    // monotonicity checks (value > 0 || value == -1) hold.
                     if (ms <= 0)
                     {
                         return -1;
                     }
 
-                    return (float)((int)(ms * 1000.0) / 1000.0);
+                    float rounded = (float)((int)(ms * 1000.0) / 1000.0);
+                    return rounded <= 0 ? -1 : rounded;
                 }
             }
 

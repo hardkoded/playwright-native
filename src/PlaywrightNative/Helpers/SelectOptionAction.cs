@@ -20,6 +20,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -72,7 +73,7 @@ namespace PlaywrightNative.Helpers
                         ElementStateScript.SelectOptionFromJsonFunction,
                         payload).ConfigureAwait(false);
                 }
-                catch (PlaywrightNativeException ex)
+                catch (PlaywrightException ex)
                 {
                     if (!IsTransientEvaluateError(ex))
                     {
@@ -100,7 +101,7 @@ namespace PlaywrightNative.Helpers
                         string message = root.TryGetProperty("message", out JsonElement messageElement)
                             ? messageElement.GetString()
                             : "Element is not a <select> element";
-                        throw new PlaywrightNativeException(message ?? "Element is not a <select> element");
+                        throw new PlaywrightException(message ?? "Element is not a <select> element");
                     }
 
                     if (string.Equals(status, "wait", StringComparison.Ordinal))
@@ -143,7 +144,7 @@ namespace PlaywrightNative.Helpers
             return values;
         }
 
-        private static bool IsTransientEvaluateError(PlaywrightNativeException ex)
+        private static bool IsTransientEvaluateError(PlaywrightException ex)
         {
             string message = ex?.Message ?? string.Empty;
             return message.Contains("detached", StringComparison.OrdinalIgnoreCase)
@@ -153,7 +154,7 @@ namespace PlaywrightNative.Helpers
                 || message.Contains("session closed", StringComparison.OrdinalIgnoreCase);
         }
 
-        private static PlaywrightNativeException TimeoutError(int timeoutMs, string reason)
+        private static PlaywrightException TimeoutError(int timeoutMs, string reason)
         {
             string message = "Timeout " + timeoutMs + "ms exceeded.";
             if (string.Equals(reason, "notenabled", StringComparison.Ordinal))
@@ -161,7 +162,7 @@ namespace PlaywrightNative.Helpers
                 message += " option being selected is not enabled";
             }
 
-            return new PlaywrightNativeException(message);
+            return new PlaywrightException(message);
         }
     }
 }

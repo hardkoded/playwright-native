@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 
@@ -68,7 +69,7 @@ namespace PlaywrightNative.Tests
             {
                 await page.SetCheckedAsync("#btn", true, force: true, scroll: ActionScroll.None).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 // The click may miss when the checkbox stays outside the overflow box.
             }

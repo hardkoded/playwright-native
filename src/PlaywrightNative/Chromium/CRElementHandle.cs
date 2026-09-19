@@ -19,6 +19,7 @@ using System;
 using System.Collections.Generic;
 using System.Text.Json;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using PlaywrightNative.Helpers;
 using PlaywrightNative.Input;
 
@@ -96,7 +97,7 @@ namespace PlaywrightNative.Chromium
         /// center. When <paramref name="position"/> is set, clicks that offset from
         /// the top-left of the box. No retry, no scroll-into-view, no visibility
         /// waits — minimal port.
-        /// Throws <see cref="PlaywrightNativeException"/> if the element has no layout.
+        /// Throws <see cref="PlaywrightException"/> if the element has no layout.
         /// </summary>
         /// <param name="button">Which mouse button to use.</param>
         /// <param name="clickCount">Number of consecutive clicks (1 = click, 2 = dblclick).</param>
@@ -110,7 +111,7 @@ namespace PlaywrightNative.Chromium
             BoundingBox? box = await BoundingBoxAsync().ConfigureAwait(false);
             if (box == null)
             {
-                throw new PlaywrightNativeException("Element is not visible or has no layout.");
+                throw new PlaywrightException("Element is not visible or has no layout.");
             }
 
             BoundingBox b = box.Value;
@@ -276,7 +277,7 @@ namespace PlaywrightNative.Chromium
 
             if (!await IsCheckedAsync().ConfigureAwait(false))
             {
-                throw new PlaywrightNativeException("Clicking the element did not check it.");
+                throw new PlaywrightException("Clicking the element did not check it.");
             }
         }
 
@@ -292,7 +293,7 @@ namespace PlaywrightNative.Chromium
 
             if (await EvaluateFunctionAsync<bool>(ElementStateScript.IsNativeRadioFunction).ConfigureAwait(false))
             {
-                throw new PlaywrightNativeException("Cannot uncheck radio button");
+                throw new PlaywrightException("Cannot uncheck radio button");
             }
 
             if (!await IsCheckedAsync().ConfigureAwait(false))
@@ -304,7 +305,7 @@ namespace PlaywrightNative.Chromium
 
             if (await IsCheckedAsync().ConfigureAwait(false))
             {
-                throw new PlaywrightNativeException("Clicking the element did not uncheck it.");
+                throw new PlaywrightException("Clicking the element did not uncheck it.");
             }
         }
 
@@ -321,7 +322,7 @@ namespace PlaywrightNative.Chromium
             BoundingBox? box = await BoundingBoxAsync().ConfigureAwait(false);
             if (box == null)
             {
-                throw new PlaywrightNativeException("Element is not visible or has no layout.");
+                throw new PlaywrightException("Element is not visible or has no layout.");
             }
 
             BoundingBox b = box.Value;
@@ -352,13 +353,13 @@ namespace PlaywrightNative.Chromium
             BoundingBox? sourceBox = await BoundingBoxAsync().ConfigureAwait(false);
             if (sourceBox == null)
             {
-                throw new PlaywrightNativeException("Source element is not visible or has no layout.");
+                throw new PlaywrightException("Source element is not visible or has no layout.");
             }
 
             BoundingBox? targetBox = await target.BoundingBoxAsync().ConfigureAwait(false);
             if (targetBox == null)
             {
-                throw new PlaywrightNativeException("Target element is not visible or has no layout.");
+                throw new PlaywrightException("Target element is not visible or has no layout.");
             }
 
             BoundingBox s = sourceBox.Value;
@@ -454,7 +455,7 @@ namespace PlaywrightNative.Chromium
         /// <summary>
         /// Moves the mouse to the center of the element, or to
         /// <paramref name="position"/> relative to the top-left of the box.
-        /// Requires layout — throws <see cref="PlaywrightNativeException"/> if
+        /// Requires layout — throws <see cref="PlaywrightException"/> if
         /// the element has no bounding box.
         /// </summary>
         /// <param name="position">Optional offset from the element's top-left corner.</param>
@@ -465,7 +466,7 @@ namespace PlaywrightNative.Chromium
             BoundingBox? box = await BoundingBoxAsync().ConfigureAwait(false);
             if (box == null)
             {
-                throw new PlaywrightNativeException("Element is not visible or has no layout.");
+                throw new PlaywrightException("Element is not visible or has no layout.");
             }
 
             BoundingBox b = box.Value;
@@ -658,7 +659,7 @@ namespace PlaywrightNative.Chromium
             BoundingBox? box = await BoundingBoxAsync().ConfigureAwait(false);
             if (box == null || box.Value.Width <= 0 || box.Value.Height <= 0)
             {
-                throw new PlaywrightNativeException("Node is either not visible or not an HTMLElement");
+                throw new PlaywrightException("Node is either not visible or not an HTMLElement");
             }
 
             BoundingBox b = box.Value;
@@ -702,7 +703,7 @@ namespace PlaywrightNative.Chromium
             {
                 response = await _page.Session.SendAsync("DOM.getBoxModel", new { objectId = ObjectId }).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 return null;
             }
@@ -747,7 +748,7 @@ namespace PlaywrightNative.Chromium
                     SetPreview("JSHandle@" + nodePreview);
                 }
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 // Best-effort preview, matching upstream ElementHandle._initializePreview.
             }

@@ -17,6 +17,7 @@
 using System;
 using System.Text.Json;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using PlaywrightNative.Helpers;
 
 namespace PlaywrightNative.WebKit
@@ -82,9 +83,25 @@ namespace PlaywrightNative.WebKit
         /// <returns>The raw <c>result</c> <c>RemoteObject</c> element, or <see langword="null"/>.</returns>
         internal async Task<JsonElement?> EvaluateHandleAsync(string expression)
         {
-            JsonElement? response = await _session.SendAsync(
-                "Runtime.evaluate",
-                BuildEvaluateParams(expression, returnByValue: false)).ConfigureAwait(false);
+            if (_destroyed.Task.IsCompleted)
+            {
+                throw ClosedOrNavigationException();
+            }
+
+            JsonElement? response;
+            try
+            {
+                response = await _session.SendAsync(
+                    "Runtime.evaluate",
+                    BuildEvaluateParams(expression, returnByValue: false)).ConfigureAwait(false);
+            }
+            catch (TargetClosedException)
+            {
+                // Page/browser close sets IsClosing before the session dies.
+                // A navigation target swap disposes the session without that
+                // flag; isVisible must see a destroyed-context error then.
+                throw ClosedOrNavigationException();
+            }
 
             if (response == null)
             {
@@ -103,6 +120,104 @@ namespace PlaywrightNative.WebKit
         }
 
         /// <summary>
+        /// Evaluates <paramref name="expression"/> via <c>Runtime.callFunctionOn</c> with
+        /// <c>emulateUserGesture: true</c>, returning a handle (<c>returnByValue: false</c>).
+        /// Upstream <c>page.evaluate</c> applies user gestures through callFunctionOn (utility
+        /// script); <c>Runtime.evaluate</c>'s gesture flag is not enough for APIs such as
+        /// <c>document.requestStorageAccess()</c> in cross-process iframes on macOS.
+        /// </summary>
+        /// <param name="expression">The JavaScript expression to evaluate.</param>
+        /// <param name="pulseTrustedGestureAsync">
+        /// Optional callback invoked immediately before <c>callFunctionOn</c> so macOS
+        /// WebKit still has transient activation after the objectId anchor evaluate.
+        /// </param>
+        /// <returns>The raw <c>result</c> remote object, or <see langword="null"/>.</returns>
+        internal async Task<JsonElement?> EvaluateHandleWithUserGestureAsync(
+            string expression,
+            Func<Task> pulseTrustedGestureAsync = null)
+        {
+            // WebKit WIP only accepts objectId-bound Runtime.callFunctionOn (not
+            // executionContextId) — same as upstream wkExecutionContext. Match
+            // utilityScript evaluate: enter an async function under
+            // emulateUserGesture, then await inside so Darwin keeps transient
+            // activation across requestStorageAccess microtasks. A sync
+            // callFunctionOn that merely returns a Promise ends the gesture
+            // scope before RSA settles (returns false on macOS).
+            // Use a private binding name — page scripts often expose a global
+            // `result` (page-click frameset), and `let result = (result)` is TDZ.
+            string functionDeclaration =
+                "async function () {" +
+                "  let __pwRet = (" + expression + ");" +
+                "  if (typeof __pwRet === 'function') __pwRet = __pwRet();" +
+                "  return await __pwRet;" +
+                "}";
+
+            // Pulse first so Darwin has transient activation before the
+            // objectId-anchor evaluate. A post-only pulse raced the
+            // callFunctionOn window on CI (requestStorageAccess → false).
+            if (pulseTrustedGestureAsync != null)
+            {
+                await pulseTrustedGestureAsync().ConfigureAwait(false);
+            }
+
+            // Bind to document so callFunctionOn runs in the page world with
+            // a stable objectId (mirrors upstream utilityScript binding).
+            JsonElement? anchorResponse = await _session.SendAsync(
+                "Runtime.evaluate",
+                BuildEvaluateParams("document", returnByValue: false)).ConfigureAwait(false);
+            if (anchorResponse == null)
+            {
+                return null;
+            }
+
+            ThrowIfThrown(anchorResponse.Value);
+            if (!anchorResponse.Value.TryGetProperty("result", out JsonElement anchorResult))
+            {
+                return null;
+            }
+
+            string anchorId = RemoteObject.GetObjectId(anchorResult);
+            if (string.IsNullOrEmpty(anchorId))
+            {
+                return null;
+            }
+
+            try
+            {
+                // Re-pulse immediately before callFunctionOn — the anchor
+                // evaluate round-trip otherwise clears Darwin activation.
+                if (pulseTrustedGestureAsync != null)
+                {
+                    await pulseTrustedGestureAsync().ConfigureAwait(false);
+                }
+
+                JsonElement? response = await _session.SendAsync(
+                    "Runtime.callFunctionOn",
+                    new
+                    {
+                        objectId = anchorId,
+                        functionDeclaration,
+                        returnByValue = false,
+                        emulateUserGesture = true,
+                        awaitPromise = true,
+                    }).ConfigureAwait(false);
+                if (response == null)
+                {
+                    return null;
+                }
+
+                ThrowIfThrown(response.Value);
+                return response.Value.TryGetProperty("result", out JsonElement result)
+                    ? result
+                    : null;
+            }
+            finally
+            {
+                await ReleaseHandleAsync(anchorId).ConfigureAwait(false);
+            }
+        }
+
+        /// <summary>
         /// Evaluates a JavaScript function in this execution context with the given arguments
         /// via <c>Runtime.callFunctionOn</c>. JS handles from another world are rejected or
         /// adopted when they are DOM nodes.
@@ -113,24 +228,19 @@ namespace PlaywrightNative.WebKit
         /// <returns>The deserialized result of the function call.</returns>
         internal async Task<T> EvaluateFunctionAsync<T>(string functionDeclaration, params object[] args)
         {
-            if (args != null
-                && args.Length == 1
-                && args[0] is WKJSHandle onlyHandle
-                && onlyHandle.AsElement() != null
-                && onlyHandle.ExecutionContext != null
-                && onlyHandle.ExecutionContext.ContextId != ContextId)
-            {
-                bool sameOrigin = await onlyHandle.EvaluateFunctionAsync<bool>(
-                    "el => { try { return !!el.ownerDocument.defaultView.top.document; } catch (e) { return false; } }")
-                    .ConfigureAwait(false);
-                if (!sameOrigin)
-                {
-                    throw new PlaywrightNativeException(EvaluateWithArg.UnableToAdoptMessage);
-                }
+            JsonElement? remote = await EvaluateFunctionRemoteAsync(functionDeclaration, args).ConfigureAwait(false);
+            return remote == null ? default : DeserializeValue<T>(remote.Value);
+        }
 
-                return await onlyHandle.EvaluateFunctionAsync<T>(functionDeclaration).ConfigureAwait(false);
-            }
-
+        /// <summary>
+        /// Same as <see cref="EvaluateFunctionAsync{T}"/> but returns the raw WIP
+        /// <c>RemoteObject</c> (<c>returnByValue: true</c>) for structured-clone parsing.
+        /// </summary>
+        /// <param name="functionDeclaration">A JavaScript function declaration.</param>
+        /// <param name="args">Arguments to pass to the function.</param>
+        /// <returns>The remote result object, or <see langword="null"/>.</returns>
+        internal async Task<JsonElement?> EvaluateFunctionRemoteAsync(string functionDeclaration, params object[] args)
+        {
             object[] prepared = await PrepareCallArgumentsAsync(args).ConfigureAwait(false);
             object payload = _contextId.HasValue
                 ? (object)new
@@ -157,11 +267,14 @@ namespace PlaywrightNative.WebKit
                 response = await _session.SendAsync("Runtime.callFunctionOn", payload)
                     .ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException ex)
             {
-                if (HasForeignElementArgument(args))
+                if (HasForeignElementArgument(args)
+                    && (ex.Message.Contains("adopt", StringComparison.OrdinalIgnoreCase)
+                        || ex.Message.Contains("different document", StringComparison.OrdinalIgnoreCase)
+                        || ex.Message.Contains("Cannot find context", StringComparison.OrdinalIgnoreCase)))
                 {
-                    throw new PlaywrightNativeException(EvaluateWithArg.UnableToAdoptMessage);
+                    throw new PlaywrightException(EvaluateWithArg.UnableToAdoptMessage);
                 }
 
                 throw;
@@ -169,7 +282,7 @@ namespace PlaywrightNative.WebKit
 
             if (response == null)
             {
-                return default;
+                return null;
             }
 
             JsonElement responseElement = response.Value;
@@ -177,11 +290,14 @@ namespace PlaywrightNative.WebKit
             {
                 ThrowIfThrown(responseElement);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException ex)
             {
-                if (HasForeignElementArgument(args))
+                if (HasForeignElementArgument(args)
+                    && (ex.Message.Contains("adopt", StringComparison.OrdinalIgnoreCase)
+                        || ex.Message.Contains("different document", StringComparison.OrdinalIgnoreCase)
+                        || ex.Message.Contains("Cannot find context", StringComparison.OrdinalIgnoreCase)))
                 {
-                    throw new PlaywrightNativeException(EvaluateWithArg.UnableToAdoptMessage);
+                    throw new PlaywrightException(EvaluateWithArg.UnableToAdoptMessage);
                 }
 
                 throw;
@@ -189,10 +305,10 @@ namespace PlaywrightNative.WebKit
 
             if (!responseElement.TryGetProperty("result", out JsonElement result))
             {
-                return default;
+                return null;
             }
 
-            return DeserializeValue<T>(result);
+            return result;
         }
 
         /// <summary>
@@ -257,7 +373,10 @@ namespace PlaywrightNative.WebKit
         /// <returns>The deserialized result.</returns>
         internal async Task<T> EvaluateFunctionOnHandleAsync<T>(string objectId, string functionDeclaration, params object[] args)
         {
-            JsonElement? response = await _session.SendAsync("Runtime.callFunctionOn", new
+            // Race awaitPromise against context destruction — Promise evaluates
+            // (page-evaluate "nice error after navigation") hang on WebKit reload
+            // if callFunctionOn is not aborted when the old world goes away.
+            JsonElement? response = await RaceDestroyedAsync(_session.SendAsync("Runtime.callFunctionOn", new
             {
                 functionDeclaration,
                 objectId,
@@ -265,7 +384,7 @@ namespace PlaywrightNative.WebKit
                 returnByValue = true,
                 emulateUserGesture = true,
                 awaitPromise = true,
-            }).ConfigureAwait(false);
+            })).ConfigureAwait(false);
 
             if (response == null)
             {
@@ -293,7 +412,7 @@ namespace PlaywrightNative.WebKit
         /// <returns>The raw remote object, or <see langword="null"/>.</returns>
         internal async Task<JsonElement?> EvaluateHandleOnHandleAsync(string objectId, string functionDeclaration, params object[] args)
         {
-            JsonElement? response = await _session.SendAsync("Runtime.callFunctionOn", new
+            JsonElement? response = await RaceDestroyedAsync(_session.SendAsync("Runtime.callFunctionOn", new
             {
                 functionDeclaration,
                 objectId,
@@ -301,7 +420,7 @@ namespace PlaywrightNative.WebKit
                 returnByValue = false,
                 emulateUserGesture = true,
                 awaitPromise = true,
-            }).ConfigureAwait(false);
+            })).ConfigureAwait(false);
 
             if (response == null)
             {
@@ -373,7 +492,7 @@ namespace PlaywrightNative.WebKit
             {
                 await _session.SendAsync("Runtime.releaseObject", new { objectId }).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 // Best-effort disposal — session closed or object already released.
             }
@@ -431,30 +550,55 @@ namespace PlaywrightNative.WebKit
         }
 
         /// <summary>
-        /// Evaluates a structured-clone wrapped expression. Uses
-        /// <c>returnByValue: true</c> so a same-turn tagged payload survives
-        /// navigation-during-return. Promises are awaited and abort when this
-        /// context is destroyed.
+        /// Evaluates a structured-clone wrapped expression. Prefers
+        /// <c>returnByValue: true</c> so synchronous tagged results (including after a
+        /// same-turn navigation) avoid a second protocol call. Thenables that lose their
+        /// Promise shape under by-value are re-fetched as handles and awaited via
+        /// <c>Runtime.callFunctionOn</c>. Abort when this context is destroyed.
         /// </summary>
+        /// <remarks>
+        /// WebKit has no <c>awaitPromise</c> on <c>Runtime.evaluate</c>. Returning an
+        /// untagged empty by-value object for a Promise (common with exposeFunction)
+        /// must not be treated as success — that deserializes as <c>default(T)</c> (0).
+        /// A handle re-evaluate may re-run page side effects; <c>WKPage</c> coalesces
+        /// binding invocations by frame+name+args (ignoring seq) so host callbacks
+        /// still fire once.
+        /// </remarks>
         /// <param name="expression">An expression that returns a tagged payload or a promise of one.</param>
         /// <returns>The remote object (<c>result</c>) for <see cref="EvaluateSerialization.ParseRemote{T}"/>.</returns>
         internal async Task<JsonElement?> EvaluateSerializedRemoteAsync(string expression)
         {
-            JsonElement? byValue = await _session.SendAsync(
+            // Prefer returnByValue:true so synchronous tagged completion values (including
+            // after location.reload()) arrive in one round-trip without racing context
+            // destruction on callFunctionOn. Stash the first-run value so a Promise handle
+            // recover does not re-execute page side effects.
+            string stashKey = "__pw_eval_" + Guid.NewGuid().ToString("N");
+            string stashedExpression =
+                "(() => { const __pw_r = (" + expression + "); globalThis[" +
+                JsonSerializer.Serialize(stashKey) +
+                "] = __pw_r; return __pw_r; })()";
+            string recoverExpression =
+                "(() => { const __pw_k = " + JsonSerializer.Serialize(stashKey) +
+                "; const __pw_v = globalThis[__pw_k]; try { delete globalThis[__pw_k]; } catch (e) {} return __pw_v; })()";
+
+            JsonElement? byValueResponse = await _session.SendAsync(
                 "Runtime.evaluate",
-                BuildEvaluateParams(expression, returnByValue: true)).ConfigureAwait(false);
-            if (byValue == null)
+                BuildEvaluateParams(stashedExpression, returnByValue: true)).ConfigureAwait(false);
+            if (byValueResponse == null)
             {
                 return null;
             }
 
-            JsonElement response = byValue.Value;
+            JsonElement response = byValueResponse.Value;
             ThrowIfThrown(response);
             if (!response.TryGetProperty("result", out JsonElement result))
             {
                 return null;
             }
 
+            // Finished structured-clone payloads (and undefined) — including sync
+            // navigation returns. Do not treat empty/untagged objects as done: those
+            // are how WebKit often serializes Promises under returnByValue:true.
             if (IsTaggedRemote(result))
             {
                 return result;
@@ -463,11 +607,29 @@ namespace PlaywrightNative.WebKit
             string objectId = RemoteObject.GetObjectId(result);
             if (string.IsNullOrEmpty(objectId))
             {
-                JsonElement? handle = await EvaluateHandleAsync(expression).ConfigureAwait(false);
-                objectId = handle == null ? null : RemoteObject.GetObjectId(handle.Value);
+                JsonElement? asHandle = await _session.SendAsync(
+                    "Runtime.evaluate",
+                    BuildEvaluateParams(recoverExpression, returnByValue: false)).ConfigureAwait(false);
+                if (asHandle == null)
+                {
+                    return null;
+                }
+
+                ThrowIfThrown(asHandle.Value);
+                if (!asHandle.Value.TryGetProperty("result", out JsonElement handleResult))
+                {
+                    return null;
+                }
+
+                if (IsTaggedRemote(handleResult))
+                {
+                    return handleResult;
+                }
+
+                objectId = RemoteObject.GetObjectId(handleResult);
                 if (string.IsNullOrEmpty(objectId))
                 {
-                    return result;
+                    return handleResult;
                 }
             }
 
@@ -480,9 +642,113 @@ namespace PlaywrightNative.WebKit
             ThrowIfThrown(awaited.Value);
             return awaited.Value.TryGetProperty("result", out JsonElement awaitedResult)
                 ? awaitedResult
-                : awaited;
+                : awaited.Value;
         }
 
+        /// <summary>
+        /// Returns an object id usable in this context, adopting ElementHandles
+        /// from another same-origin world and rejecting foreign JSHandles.
+        /// </summary>
+        /// <param name="handle">A WebKit JS or element handle.</param>
+        /// <returns>An object id owned by this execution context.</returns>
+        internal async Task<string> ResolveHandleObjectIdAsync(WKJSHandle handle)
+        {
+            if (handle == null || string.IsNullOrEmpty(handle.ObjectId))
+            {
+                throw new PlaywrightException(EvaluateWithArg.UnableToAdoptMessage);
+            }
+
+            if (handle.ExecutionContext != null && handle.ExecutionContext.ContextId == ContextId)
+            {
+                return handle.ObjectId;
+            }
+
+            if (handle.AsElement() == null)
+            {
+                throw new PlaywrightException(DispatchEventScript.DifferentContextMessage);
+            }
+
+            return await AdoptElementObjectIdAsync(handle.ObjectId).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Adopts a DOM node object id into this execution context via
+        /// <c>DOM.resolveNode</c> (official <c>wkPage.adoptElementHandle</c>).
+        /// </summary>
+        /// <param name="objectId">Source element object id from another context.</param>
+        /// <returns>The adopted object id in this context.</returns>
+        internal async Task<string> AdoptElementObjectIdAsync(string objectId)
+        {
+            if (string.IsNullOrEmpty(objectId) || !_contextId.HasValue)
+            {
+                throw new PlaywrightException(EvaluateWithArg.UnableToAdoptMessage);
+            }
+
+            try
+            {
+                JsonElement? resolved = await _session.SendAsync("DOM.resolveNode", new
+                {
+                    objectId,
+                    executionContextId = _contextId.Value,
+                }).ConfigureAwait(false);
+
+                if (resolved == null
+                    || !resolved.Value.TryGetProperty("object", out JsonElement remote)
+                    || (remote.TryGetProperty("subtype", out JsonElement subtype)
+                        && subtype.ValueKind == JsonValueKind.String
+                        && string.Equals(subtype.GetString(), "null", StringComparison.Ordinal))
+                    || !remote.TryGetProperty("objectId", out JsonElement adoptedId)
+                    || adoptedId.ValueKind != JsonValueKind.String)
+                {
+                    throw new PlaywrightException(EvaluateWithArg.UnableToAdoptMessage);
+                }
+
+                string adopted = adoptedId.GetString();
+                if (string.IsNullOrEmpty(adopted))
+                {
+                    throw new PlaywrightException(EvaluateWithArg.UnableToAdoptMessage);
+                }
+
+                return adopted;
+            }
+            catch (PlaywrightException ex)
+            {
+                if (string.Equals(ex.Message, EvaluateWithArg.UnableToAdoptMessage, StringComparison.Ordinal))
+                {
+                    throw;
+                }
+
+                throw new PlaywrightException(EvaluateWithArg.UnableToAdoptMessage);
+            }
+        }
+
+        /// <summary>
+        /// Returns whether a WIP remote object is a Promise (upstream
+        /// <c>createHandle</c> checks <c>className === 'Promise'</c>).
+        /// </summary>
+        /// <param name="result">A <c>Runtime.RemoteObject</c>.</param>
+        /// <returns><see langword="true"/> when the object is a Promise.</returns>
+        private static bool IsPromiseRemote(JsonElement result)
+        {
+            if (result.TryGetProperty("className", out JsonElement className)
+                && className.ValueKind == JsonValueKind.String
+                && string.Equals(className.GetString(), "Promise", StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            return result.TryGetProperty("subtype", out JsonElement subtype)
+                && subtype.ValueKind == JsonValueKind.String
+                && string.Equals(subtype.GetString(), "promise", StringComparison.Ordinal);
+        }
+
+        /// <summary>
+        /// Returns whether a by-value remote object is a finished
+        /// <see cref="EvaluateSerialization"/> payload (or <c>undefined</c>),
+        /// as opposed to an empty object shell left when WebKit serializes a Promise.
+        /// </summary>
+        /// <param name="result">A <c>Runtime.RemoteObject</c>.</param>
+        /// <returns><see langword="true"/> when the value is a usable tagged payload.</returns>
         private static bool IsTaggedRemote(JsonElement result)
         {
             if (result.TryGetProperty("type", out JsonElement type)
@@ -601,7 +867,7 @@ namespace PlaywrightNative.WebKit
                 }
             }
 
-            throw new PlaywrightNativeException(EvaluateSerialization.RewriteError(message));
+            throw new PlaywrightException(EvaluateSerialization.RewriteError(message));
         }
 
         private object BuildEvaluateParams(string expression, bool returnByValue)
@@ -627,17 +893,23 @@ namespace PlaywrightNative.WebKit
 
         private async Task<JsonElement?> SendEvaluateAsync(string expression)
         {
-            // WebKit's Runtime.evaluate has no awaitPromise parameter (it is only honored by
-            // Runtime.callFunctionOn), so a promise-returning expression comes back as an
-            // unresolved Promise handle. Evaluate the program first as a handle — this
-            // preserves multi-statement programs and their completion value — then unwrap
-            // via callFunctionOn. Do not call function() { return this; } on the result:
-            // WebKit throws "TypeError: Type error" when `this` is a Promise and
-            // returnByValue is true (structured-clone of a Promise). Await the value as
-            // an argument on a dummy receiver instead.
+            // WebKit Runtime.evaluate has no awaitPromise. Prefer returnByValue:true for
+            // sync values (including after sync navigation). Untagged empty objects from
+            // Promise by-value serialization must still be awaited via a handle.
+            // Stash the first-run result so the handle recover does not re-execute page
+            // side effects (exposeFunction / evaluate callbacks).
+            string stashKey = "__pw_eval_" + Guid.NewGuid().ToString("N");
+            string stashedExpression =
+                "(() => { const __pw_r = (" + expression + "); globalThis[" +
+                JsonSerializer.Serialize(stashKey) +
+                "] = __pw_r; return __pw_r; })()";
+            string recoverExpression =
+                "(() => { const __pw_k = " + JsonSerializer.Serialize(stashKey) +
+                "; const __pw_v = globalThis[__pw_k]; try { delete globalThis[__pw_k]; } catch (e) {} return __pw_v; })()";
+
             JsonElement? evalResponse = await _session.SendAsync(
                 "Runtime.evaluate",
-                BuildEvaluateParams(expression, returnByValue: false)).ConfigureAwait(false);
+                BuildEvaluateParams(stashedExpression, returnByValue: true)).ConfigureAwait(false);
 
             if (evalResponse == null)
             {
@@ -648,27 +920,80 @@ namespace PlaywrightNative.WebKit
 
             bool threw = evalElement.TryGetProperty("wasThrown", out JsonElement wasThrown)
                 && wasThrown.ValueKind == JsonValueKind.True;
-            if (threw
-                || !evalElement.TryGetProperty("result", out JsonElement result)
-                || !result.TryGetProperty("objectId", out JsonElement objectId)
-                || objectId.ValueKind != JsonValueKind.String)
+            if (threw || !evalElement.TryGetProperty("result", out JsonElement result))
             {
                 return evalResponse;
             }
 
-            return await AwaitOrDestroyAsync(objectId.GetString()).ConfigureAwait(false);
+            if (IsTaggedRemote(result))
+            {
+                return evalResponse;
+            }
+
+            // Non-object primitives are final even when untagged.
+            if (result.TryGetProperty("type", out JsonElement typeEl)
+                && typeEl.ValueKind == JsonValueKind.String)
+            {
+                string typeName = typeEl.GetString();
+                if (string.Equals(typeName, "number", StringComparison.Ordinal)
+                    || string.Equals(typeName, "string", StringComparison.Ordinal)
+                    || string.Equals(typeName, "boolean", StringComparison.Ordinal)
+                    || string.Equals(typeName, "bigint", StringComparison.Ordinal)
+                    || string.Equals(typeName, "undefined", StringComparison.Ordinal)
+                    || string.Equals(typeName, "symbol", StringComparison.Ordinal))
+                {
+                    return evalResponse;
+                }
+            }
+
+            string objectId = RemoteObject.GetObjectId(result);
+            if (string.IsNullOrEmpty(objectId))
+            {
+                JsonElement? asHandle = await _session.SendAsync(
+                    "Runtime.evaluate",
+                    BuildEvaluateParams(recoverExpression, returnByValue: false)).ConfigureAwait(false);
+                if (asHandle == null)
+                {
+                    return null;
+                }
+
+                JsonElement handleElement = asHandle.Value;
+                if (handleElement.TryGetProperty("wasThrown", out JsonElement handleThrown)
+                    && handleThrown.ValueKind == JsonValueKind.True)
+                {
+                    return asHandle;
+                }
+
+                if (!handleElement.TryGetProperty("result", out JsonElement handleResult))
+                {
+                    return asHandle;
+                }
+
+                if (IsTaggedRemote(handleResult))
+                {
+                    return asHandle;
+                }
+
+                objectId = RemoteObject.GetObjectId(handleResult);
+                if (string.IsNullOrEmpty(objectId))
+                {
+                    return asHandle;
+                }
+            }
+
+            return await AwaitOrDestroyAsync(objectId).ConfigureAwait(false);
         }
 
         private async Task<JsonElement?> AwaitOrDestroyAsync(string resultId)
         {
             if (_destroyed.Task.IsCompleted)
             {
-                throw new PlaywrightNativeException(EvaluateSerialization.NavigationMessage);
+                throw ClosedOrNavigationException();
             }
 
-            JsonElement? dummyResponse = await _session.SendAsync(
+            JsonElement? dummyResponse = await RaceDestroyedAsync(_session.SendAsync(
                 "Runtime.evaluate",
-                BuildEvaluateParams("({})", returnByValue: false)).ConfigureAwait(false);
+                BuildEvaluateParams("({})", returnByValue: false))).ConfigureAwait(false);
             string dummyId = null;
             if (dummyResponse.HasValue
                 && dummyResponse.Value.TryGetProperty("result", out JsonElement dummyResult)
@@ -691,13 +1016,7 @@ namespace PlaywrightNative.WebKit
                         emulateUserGesture = true,
                         awaitPromise = true,
                     });
-                Task completed = await Task.WhenAny(awaitTask, _destroyed.Task).ConfigureAwait(false);
-                if (completed == _destroyed.Task)
-                {
-                    throw new PlaywrightNativeException(EvaluateSerialization.NavigationMessage);
-                }
-
-                return await awaitTask.ConfigureAwait(false);
+                return await RaceDestroyedAsync(awaitTask).ConfigureAwait(false);
             }
             finally
             {
@@ -718,6 +1037,64 @@ namespace PlaywrightNative.WebKit
                 emulateUserGesture = true,
                 awaitPromise = true,
             });
+
+        /// <summary>
+        /// Races a WIP evaluate against context destruction so navigations fail
+        /// pending <c>awaitPromise</c> calls with the official navigation message.
+        /// </summary>
+        /// <typeparam name="T">The protocol response type.</typeparam>
+        /// <param name="task">The in-flight protocol call.</param>
+        /// <returns>The protocol response when the context survives.</returns>
+        private async Task<T> RaceDestroyedAsync<T>(Task<T> task)
+        {
+            if (_destroyed.Task.IsCompleted)
+            {
+                throw DestroyedEvaluateException();
+            }
+
+            Task completed = await Task.WhenAny(task, _destroyed.Task).ConfigureAwait(false);
+            if (completed == _destroyed.Task)
+            {
+                throw DestroyedEvaluateException();
+            }
+
+            try
+            {
+                return await task.ConfigureAwait(false);
+            }
+            catch (TargetClosedException)
+            {
+                throw;
+            }
+            catch (PlaywrightException ex) when (
+                ex.Message != null
+                && (ex.Message.Contains("Cannot find context with specified id", StringComparison.Ordinal)
+                    || ex.Message.Contains("Cannot find object with given id", StringComparison.Ordinal)
+                    || ex.Message.Contains("Execution context was destroyed", StringComparison.Ordinal)
+                    || ex.Message.Contains("Inspected target navigated or closed", StringComparison.Ordinal)))
+            {
+                throw DestroyedEvaluateException();
+            }
+        }
+
+        private Exception DestroyedEvaluateException()
+            => ClosedOrNavigationException();
+
+        private Exception ClosedOrNavigationException()
+        {
+            // Browser/page close marks the session closing before (or instead of)
+            // surfacing TargetClosedException. A disposed session without that
+            // flag is a navigation target swap — isVisible must not treat it as
+            // "target closed".
+            if (_session.IsClosing || _session.IsConnectionClosed)
+            {
+                return ClosedTarget.Exception(
+                    DriverMessages.BrowserOrContextClosedExceptionMessage,
+                    _session.CloseReason);
+            }
+
+            return new PlaywrightException(EvaluateSerialization.NavigationMessage);
+        }
 
         private bool HasForeignElementArgument(object[] args)
         {
@@ -785,62 +1162,11 @@ namespace PlaywrightNative.WebKit
 
             if (handle.AsElement() == null)
             {
-                throw new PlaywrightNativeException(DispatchEventScript.DifferentContextMessage);
+                throw new PlaywrightException(DispatchEventScript.DifferentContextMessage);
             }
 
-            try
-            {
-                string token = "pw" + Guid.NewGuid().ToString("N");
-                await handle.EvaluateFunctionAsync<bool>(
-                    "(el, t) => { el.setAttribute('data-pw-adopt', t); return true; }",
-                    token).ConfigureAwait(false);
-
-                string findScript =
-                    @"(function(){
-                        const token = " + JsonSerializer.Serialize(token) + @";
-                        const match = (doc) => {
-                            try { return doc.querySelector('[data-pw-adopt="" + token + ""]'); }
-                            catch (e) { return null; }
-                        };
-                        let found = match(document);
-                        if (found) {
-                            found.removeAttribute('data-pw-adopt');
-                            return found;
-                        }
-                        const iframes = document.querySelectorAll('iframe');
-                        for (let i = 0; i < iframes.length; i++) {
-                            try {
-                                const doc = iframes[i].contentDocument;
-                                if (!doc) continue;
-                                found = match(doc);
-                                if (found) {
-                                    found.removeAttribute('data-pw-adopt');
-                                    return found;
-                                }
-                            } catch (e) {}
-                        }
-                        return null;
-                    })()";
-
-                JsonElement? found = await EvaluateHandleAsync(findScript).ConfigureAwait(false);
-                string adopted = found == null ? null : RemoteObject.GetObjectId(found.Value);
-                if (string.IsNullOrEmpty(adopted))
-                {
-                    throw new PlaywrightNativeException(EvaluateWithArg.UnableToAdoptMessage);
-                }
-
-                return new { objectId = adopted };
-            }
-            catch (PlaywrightNativeException ex)
-            {
-                if (string.Equals(ex.Message, DispatchEventScript.DifferentContextMessage, StringComparison.Ordinal)
-                    || string.Equals(ex.Message, EvaluateWithArg.UnableToAdoptMessage, StringComparison.Ordinal))
-                {
-                    throw;
-                }
-
-                throw new PlaywrightNativeException(EvaluateWithArg.UnableToAdoptMessage);
-            }
+            string adopted = await AdoptElementObjectIdAsync(handle.ObjectId).ConfigureAwait(false);
+            return new { objectId = adopted };
         }
     }
 }

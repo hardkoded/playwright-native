@@ -21,6 +21,7 @@ using System.Net;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Playwright;
 using PlaywrightNative.Helpers;
@@ -48,6 +49,7 @@ namespace PlaywrightNative.WebKit
         private readonly IFrame _frame;
         private byte[] _postDataBuffer;
         private WKRequest _redirectedTo;
+        private int _pageFinishedRaised;
         private WKResponse _wkResponse;
 
         /// <summary>
@@ -83,7 +85,12 @@ namespace PlaywrightNative.WebKit
             RequestId = requestId;
             Url = NavigationTimeout.WithoutHash(url);
             Method = method;
-            Headers = new Dictionary<string, string>(headers, StringComparer.OrdinalIgnoreCase);
+            IDictionary<string, string> applicationHeaders = HeaderMap.WithoutProxyHop(headers);
+            Headers = new Dictionary<string, string>(applicationHeaders, StringComparer.OrdinalIgnoreCase);
+
+            // Snapshot at interception so route.fallback → continue can tell a
+            // real header override from restating Headers after ApplyContinueOverrides.
+            InterceptedHeaders = new Dictionary<string, string>(Headers, StringComparer.OrdinalIgnoreCase);
             _postDataBuffer = postDataBuffer ?? RequestPostData.FromWebKitBase64(postData);
             PostData = RequestPostData.ToUtf8String(_postDataBuffer) ?? postData;
             _resourceType = resourceType;
@@ -128,13 +135,13 @@ namespace PlaywrightNative.WebKit
             {
                 if (FrameUnavailable)
                 {
-                    throw new PlaywrightNativeException(
+                    throw new PlaywrightException(
                         "Frame for this navigation request is not available, because the request\nwas issued before the frame is created. You can check whether the request\nis a navigation request by calling isNavigationRequest() method.");
                 }
 
                 if (_frame != null && _frame.Page == null)
                 {
-                    throw new PlaywrightNativeException(
+                    throw new PlaywrightException(
                         "Frame for this navigation request is not available, because the request\nwas issued before the frame is created. You can check whether the request\nis a navigation request by calling isNavigationRequest() method.");
                 }
 
@@ -161,10 +168,26 @@ namespace PlaywrightNative.WebKit
         public IResponse ExistingResponse => Response;
 
         /// <summary>
+        /// Headers captured when the request was first intercepted, before any
+        /// <c>route.continue</c> / <c>route.fallback</c> mutations.
+        /// </summary>
+        internal IDictionary<string, string> InterceptedHeaders { get; }
+
+        /// <summary>
         /// Cookie-stripped headers last passed to <c>route.continue</c>, replayed
         /// on WebKit redirects.
         /// </summary>
         internal IDictionary<string, string> ContinuedHeaders { get; private set; }
+
+        /// <summary>
+        /// True once <see cref="SetRawRequestHeaders"/> was called with headers
+        /// that will not change further (a paused/intercepted request). Lets
+        /// <see cref="AllHeadersAsync"/> skip waiting on the response for such
+        /// a request, since route handlers routinely read headers before
+        /// calling <c>route.continue()</c>, and neither a response nor
+        /// "finished" can happen until that runs.
+        /// </summary>
+        internal bool RawHeadersAreFinal { get; private set; }
 
         /// <summary>
         /// URL last passed to <c>route.continue</c> / <c>route.fallback</c>.
@@ -289,7 +312,7 @@ namespace PlaywrightNative.WebKit
             await WaitUntilFinishedAsync().ConfigureAwait(false);
             if (Response == null)
             {
-                throw new PlaywrightNativeException("Unable to fetch sizes for failed request");
+                throw new PlaywrightException("Unable to fetch sizes for failed request");
             }
 
             return RequestSizesCalculator.Compute(
@@ -319,7 +342,16 @@ namespace PlaywrightNative.WebKit
             }
 
             IReadOnlyList<NameValueEntry> raw = await WaitForRawHeadersAsync().ConfigureAwait(false);
-            await _responseReady.Task.ConfigureAwait(false);
+
+            // A paused/intercepted request's headers are already complete -
+            // waiting further would deadlock a route handler that reads them
+            // before calling route.continue(), since neither a response nor
+            // "finished" can happen until continue() runs.
+            if (!RawHeadersAreFinal)
+            {
+                await _responseReady.Task.ConfigureAwait(false);
+            }
+
             Dictionary<string, string> map = RawNetworkHeaders.AllJoined(raw);
             foreach (KeyValuePair<string, string> header in Headers)
             {
@@ -375,7 +407,7 @@ namespace PlaywrightNative.WebKit
                 raw = await WaitForRawHeadersAsync().ConfigureAwait(false);
             }
 
-            return raw.Select(e => new Header { Name = e.Name, Value = e.Value }).ToList();
+            return EquatableHeader.FromEntries(raw);
         }
 
         /// <summary>
@@ -402,6 +434,15 @@ namespace PlaywrightNative.WebKit
             _responseReady.TrySetResult(Response);
             _finished.TrySetResult(FailureText);
         }
+
+        /// <summary>
+        /// Marks the page-level <c>requestfinished</c> event as raised once.
+        /// COOP / process-swap can finish the same navigation via both
+        /// <c>Network.loadingFinished</c> and session dispose.
+        /// </summary>
+        /// <returns><see langword="true"/> on the first call.</returns>
+        internal bool TryMarkPageFinishedRaised()
+            => Interlocked.Exchange(ref _pageFinishedRaised, 1) == 0;
 
         /// <summary>
         /// Rejects waiters when the owning page closes.
@@ -431,9 +472,18 @@ namespace PlaywrightNative.WebKit
         /// headers when <paramref name="headers"/> is <see langword="null"/>).
         /// </summary>
         /// <param name="headers">Raw headers, or <see langword="null"/> for provisional.</param>
-        internal void SetRawRequestHeaders(IReadOnlyList<NameValueEntry> headers)
+        /// <param name="isFinal">
+        /// True when <paramref name="headers"/> reflect a paused/intercepted
+        /// request and will not change further.
+        /// </param>
+        internal void SetRawRequestHeaders(IReadOnlyList<NameValueEntry> headers, bool isFinal = false)
         {
-            _rawHeaders.TrySetResult(headers ?? HeaderMap.Array(Headers));
+            if (isFinal)
+            {
+                RawHeadersAreFinal = true;
+            }
+
+            _rawHeaders.TrySetResult(HeaderMap.WithoutProxyHop(headers ?? HeaderMap.Array(Headers)));
         }
 
         /// <summary>
@@ -586,9 +636,9 @@ namespace PlaywrightNative.WebKit
 
             public Task<string> FinishedAsync() => Task.FromResult<string>(null);
 
-            public Task<T> JsonAsync<T>() => throw new PlaywrightNativeException("Response has no body.");
+            public Task<T> JsonAsync<T>() => throw new PlaywrightException("Response has no body.");
 
-            public Task<JsonElement?> JsonAsync() => throw new PlaywrightNativeException("Response has no body.");
+            public Task<JsonElement?> JsonAsync() => throw new PlaywrightException("Response has no body.");
 
             public Task<string> TextAsync() => Task.FromResult(string.Empty);
 

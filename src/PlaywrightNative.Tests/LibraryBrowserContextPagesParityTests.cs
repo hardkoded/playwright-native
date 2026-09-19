@@ -19,6 +19,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Text.Json;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 using PlaywrightNative.TestServer;
@@ -318,7 +319,7 @@ namespace PlaywrightNative.Tests
             for (int i = 0; i < 10; i++)
             {
                 IPage page = await context.NewPageAsync().ConfigureAwait(false);
-                PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+                PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                     () => page.EvaluateAsync<object>(ReloadNeverSettles));
                 Assert.That(error, Is.Not.Null);
                 Assert.That(error.Message, Does.Contain("navigation"));

@@ -18,6 +18,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 using PlaywrightNative.TestServer;
@@ -138,7 +139,7 @@ namespace PlaywrightNative.Tests
             await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
 
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(() => page.AddInitScriptAsync());
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(() => page.AddInitScriptAsync());
             Assert.That(error, Is.Not.Null);
             Assert.That(error.Message, Does.Contain("Either path or content property must be present"));
         }
@@ -204,7 +205,16 @@ namespace PlaywrightNative.Tests
             int injected = await page.EvaluateAsync<int>("(() => window['injected'])()").ConfigureAwait(false);
             Assert.That(injected, Is.EqualTo(123));
 
-            Assert.CatchAsync<PlaywrightNativeException>(() => page.AddScriptTagAsync(new() { Content = "window.e = 10;" }));
+            // Make sure CSP works. Upstream / playwright-dotnet swallow addScriptTag errors
+            // and only assert the side effect was blocked.
+            try
+            {
+                await page.AddScriptTagAsync(new() { Content = "window.e = 10;" }).ConfigureAwait(false);
+            }
+            catch (PlaywrightException)
+            {
+            }
+
             object e = await page.EvaluateAsync<object>("(() => window['e'])()").ConfigureAwait(false);
             Assert.That(e, Is.Null);
         }

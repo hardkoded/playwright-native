@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 
@@ -36,7 +37,7 @@ namespace PlaywrightNative.Tests
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
             await page.SetContentAsync("<div><button>one</button><button>two</button></div>").ConfigureAwait(false);
 
-            PlaywrightNativeException ex = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException ex = Assert.CatchAsync<PlaywrightException>(
                 () => page.ClickAsync("button", new() { Strict = true }));
 
             Assert.That(ex, Is.Not.Null);
@@ -52,10 +53,10 @@ namespace PlaywrightNative.Tests
             await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
             await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
-            await page.SetContentAsync("<div><button id=\"only\">one</button><button>two</button></div>").ConfigureAwait(false);
+            await page.SetContentAsync("<div><button id=\"only\" onclick=\"window.lastClickedId = this.id\">one</button><button>two</button></div>").ConfigureAwait(false);
 
             await page.ClickAsync("#only", new() { Strict = true }).ConfigureAwait(false);
-            string id = await page.EvaluateAsync<string>("document.activeElement && document.activeElement.id").ConfigureAwait(false);
+            string id = await page.EvaluateAsync<string>("window.lastClickedId").ConfigureAwait(false);
             Assert.That(id, Is.EqualTo("only"));
         }
 
@@ -70,10 +71,10 @@ namespace PlaywrightNative.Tests
                 StrictSelectors = true,
             }).ConfigureAwait(false);
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
-            await page.SetContentAsync("<div><button id=\"first\">one</button><button>two</button></div>").ConfigureAwait(false);
+            await page.SetContentAsync("<div><button id=\"first\" onclick=\"window.lastClickedId = this.id\">one</button><button>two</button></div>").ConfigureAwait(false);
 
             await page.ClickAsync("button", new() { Strict = false }).ConfigureAwait(false);
-            string id = await page.EvaluateAsync<string>("document.activeElement && document.activeElement.id").ConfigureAwait(false);
+            string id = await page.EvaluateAsync<string>("window.lastClickedId").ConfigureAwait(false);
             Assert.That(id, Is.EqualTo("first"));
         }
 
@@ -96,7 +97,7 @@ namespace PlaywrightNative.Tests
             Assert.That(frame, Is.Not.Null);
             await frame.SetContentAsync("<div><button>one</button><button>two</button></div>").ConfigureAwait(false);
 
-            PlaywrightNativeException ex = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException ex = Assert.CatchAsync<PlaywrightException>(
                 () => frame.ClickAsync("button", new() { Strict = true }));
 
             Assert.That(ex, Is.Not.Null);

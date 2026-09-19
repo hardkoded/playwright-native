@@ -17,7 +17,10 @@
 using System;
 using System.Collections.Concurrent;
 using System.Text.Json;
+using System.Text.Json.Serialization;
+using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using PlaywrightNative.Helpers;
 using PlaywrightNative.Transport.Protocol;
 
@@ -37,11 +40,25 @@ namespace PlaywrightNative.WebKit
     /// </remarks>
     internal class WKTargetSession : IDisposable
     {
+        // Match WKSession: unbound inner commands (e.g. DOM.describeNode on a lazy
+        // iframe) used to hang Darwin AI aria snapshots until the NUnit 30s kill.
+        private const int CommandTimeoutMs = 20_000;
+
+        // WIP argument validators (e.g. Page.snapshotRect's integer "quality") reject
+        // an explicit JSON null for an optional field with "can't be processed" rather
+        // than treating it the same as an omitted field, so omit nulls anywhere in the
+        // params object, not just when the whole object is absent.
+        private static readonly JsonSerializerOptions InnerMessageSerializerOptions = new()
+        {
+            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        };
+
         private readonly WKSession _parentSession;
         private readonly WKConnection _connection;
         private readonly string _targetId;
         private readonly ConcurrentDictionary<int, TaskCompletionSource<JsonElement?>> _callbacks = new();
         private bool _disposed;
+        private bool _closing;
         private string _closeReason;
 
         /// <summary>
@@ -74,12 +91,28 @@ namespace PlaywrightNative.WebKit
         internal bool IsDisposed => _disposed;
 
         /// <summary>
+        /// Gets a value indicating whether the underlying browser connection is closed.
+        /// </summary>
+        internal bool IsConnectionClosed => _connection.IsClosed;
+
+        /// <summary>
+        /// Gets a value indicating whether the owning page/browser recorded a close.
+        /// </summary>
+        internal bool IsClosing => _closing;
+
+        /// <summary>
         /// Gets or sets the reason recorded when the owning page was closed.
+        /// Assigning (including <see langword="null"/>) marks the session as closing so
+        /// in-flight evaluates prefer TargetClosed messaging over navigation errors.
         /// </summary>
         internal string CloseReason
         {
             get => _closeReason;
-            set => _closeReason = value;
+            set
+            {
+                _closeReason = value;
+                _closing = true;
+            }
         }
 
         /// <inheritdoc/>
@@ -119,6 +152,25 @@ namespace PlaywrightNative.WebKit
             (int id, TaskCompletionSource<JsonElement?> tcs) = EnqueueCommand();
             string innerJson = SerializeInnerMessage(id, method, parameters);
 
+            // Bound the wait: a stuck inner command (lost response or browser hang)
+            // faults with a labelled timeout rather than blocking the target forever.
+            // DOM.describeNode on unloaded lazy iframes never replies on Darwin —
+            // keep that path very short so AI aria stitch abandons before CaptureYaml
+            // evaluates pile up behind the hung command (NUnit 30s kill).
+            int timeoutMs = string.Equals(method, "DOM.describeNode", StringComparison.Ordinal)
+                ? 500
+                : CommandTimeoutMs;
+            CancellationTokenSource timeoutCts = new(timeoutMs);
+            timeoutCts.Token.Register(() =>
+            {
+                if (_callbacks.TryRemove(id, out TaskCompletionSource<JsonElement?> timedOut))
+                {
+                    timedOut.TrySetException(new TimeoutException(
+                        $"WebKit command '{method}' (id {id}) on target '{_targetId}' did not respond within {timeoutMs}ms."));
+                }
+            });
+            _ = tcs.Task.ContinueWith(_ => timeoutCts.Dispose(), TaskScheduler.Default);
+
             // Fire-and-forget the outer wrap. We never await the parent's ack — if the wrap
             // fails (e.g. unknown targetId), the inner TCS will be drained by the connection
             // close handler. Mirrors upstream which uses send() without awaiting.
@@ -150,7 +202,7 @@ namespace PlaywrightNative.WebKit
                 {
                     if (message.Error != null)
                     {
-                        tcs.TrySetException(new PlaywrightNativeException(message.Error.Message ?? "Unknown WebKit protocol error"));
+                        tcs.TrySetException(new PlaywrightException(message.Error.Message ?? "Unknown WebKit protocol error"));
                     }
                     else
                     {
@@ -187,12 +239,14 @@ namespace PlaywrightNative.WebKit
             => SerializeInnerMessage(id, method, parameters);
 
         private static string SerializeInnerMessage(int id, string method, object parameters)
-            => JsonSerializer.Serialize(new InnerMessage
-            {
-                Id = id,
-                Method = method,
-                Params = parameters,
-            });
+            => JsonSerializer.Serialize(
+                new InnerMessage
+                {
+                    Id = id,
+                    Method = method,
+                    Params = parameters,
+                },
+                InnerMessageSerializerOptions);
 
         private TargetClosedException ClosedSessionException()
             => ClosedTarget.Exception(DriverMessages.BrowserOrContextClosedExceptionMessage, _closeReason);

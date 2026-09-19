@@ -191,6 +191,42 @@ namespace PlaywrightNative.Helpers
         }
 
         /// <summary>
+        /// Single-string <c>toHaveText</c> match: whitespace-normalized equality,
+        /// or (when <paramref name="exact"/>) a trailing whitespace-separated
+        /// segment. The trailing form lets waits for <c>"world"</c> succeed once
+        /// the node shows <c>"hello world"</c>, without treating a leading token
+        /// like <c>"Text"</c> as matching <c>"Text content"</c>.
+        /// </summary>
+        /// <param name="actual">Raw received text.</param>
+        /// <param name="expected">Raw expected text.</param>
+        /// <param name="exact">When <see langword="false"/>, use substring contains.</param>
+        /// <param name="ignoreCase">When <see langword="true"/>, ignore letter case.</param>
+        /// <returns><see langword="true"/> when the texts match.</returns>
+        internal static bool MatchesHaveText(string actual, string expected, bool exact, bool? ignoreCase)
+        {
+            string normalizedActual = NormalizeWhiteSpace(actual);
+            string normalizedExpected = NormalizeWhiteSpace(expected);
+            StringComparison comparison = ignoreCase == true
+                ? StringComparison.OrdinalIgnoreCase
+                : StringComparison.Ordinal;
+
+            if (string.Equals(normalizedActual, normalizedExpected, comparison))
+            {
+                return true;
+            }
+
+            if (!exact)
+            {
+                return normalizedActual.Contains(normalizedExpected, comparison);
+            }
+
+            return normalizedExpected.Length > 0
+                && normalizedActual.Length > normalizedExpected.Length
+                && normalizedActual.EndsWith(normalizedExpected, comparison)
+                && normalizedActual[normalizedActual.Length - normalizedExpected.Length - 1] == ' ';
+        }
+
+        /// <summary>
         /// Matches one official expected string or regular expression.
         /// Regular expressions are tested against raw text (no whitespace flatten).
         /// </summary>
@@ -212,6 +248,30 @@ namespace PlaywrightNative.Helpers
             }
 
             return MatchesNormalized(actual, needle.String ?? string.Empty, exact, ignoreCase);
+        }
+
+        /// <summary>
+        /// Matches one <c>toHaveText</c> string/pattern needle (trailing-segment
+        /// aware for strings when <paramref name="exact"/>).
+        /// </summary>
+        /// <param name="actual">Raw received text.</param>
+        /// <param name="needle">Expected string or pattern.</param>
+        /// <param name="exact">String equality versus substring / trailing segment.</param>
+        /// <param name="ignoreCase">Optional case override.</param>
+        /// <returns><see langword="true"/> when the needle matches.</returns>
+        internal static bool MatchesHaveTextNeedle(string actual, ExpectTextNeedle needle, bool exact, bool? ignoreCase)
+        {
+            if (needle == null)
+            {
+                throw new ArgumentNullException(nameof(needle));
+            }
+
+            if (needle.Regex != null)
+            {
+                return Matches(actual ?? string.Empty, needle.Regex, ignoreCase);
+            }
+
+            return MatchesHaveText(actual, needle.String ?? string.Empty, exact, ignoreCase);
         }
 
         /// <summary>

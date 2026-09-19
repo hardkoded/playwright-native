@@ -17,6 +17,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -64,7 +65,7 @@ namespace PlaywrightNative.Helpers
                         {
                             await matches[i].DisposeAsync().ConfigureAwait(false);
                         }
-                        catch (PlaywrightNativeException)
+                        catch (PlaywrightException)
                         {
                         }
                     }
@@ -88,7 +89,7 @@ namespace PlaywrightNative.Helpers
             IReadOnlyList<IElementHandle> all = await querySelectorAllAsync(selector).ConfigureAwait(false);
             if (all != null && all.Count > 1)
             {
-                throw new PlaywrightNativeException(
+                throw new PlaywrightException(
                     await StrictModeViolation.FormatAsync(
                         StrictModeViolation.QuoteLocator(selector),
                         all).ConfigureAwait(false));
@@ -114,7 +115,7 @@ namespace PlaywrightNative.Helpers
                 string preview = await handle.EvaluateAsync<string>(RemoteObject.PreviewNodeFunction).ConfigureAwait(false);
                 return string.IsNullOrEmpty(preview) ? "element" : preview;
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 return "element";
             }

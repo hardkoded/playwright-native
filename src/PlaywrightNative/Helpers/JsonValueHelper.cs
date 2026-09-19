@@ -70,6 +70,13 @@ namespace PlaywrightNative.Helpers
 
             object parsed = ParseToClr(serialized, new Dictionary<int, object>());
 
+            if (typeof(T) == typeof(JsonDocument))
+            {
+                // JsonDocument has no public constructor, so the serializer cannot
+                // build one. Round-trip through its parser instead.
+                return (T)(object)JsonDocument.Parse(SerializeClrToJsonElement(parsed).GetRawText());
+            }
+
             if (typeof(T) == typeof(JsonElement) || typeof(T) == typeof(JsonElement?))
             {
                 if (parsed == null)
@@ -512,6 +519,20 @@ namespace PlaywrightNative.Helpers
             if (underlying.IsInstanceOfType(parsed))
             {
                 return parsed;
+            }
+
+            // System.String has no public parameterless constructor; never fall
+            // through to Activator.CreateInstance(typeof(string)).
+            if (underlying == typeof(string))
+            {
+                return parsed switch
+                {
+                    string s => s,
+                    JsonElement je when je.ValueKind == JsonValueKind.String => je.GetString(),
+                    JsonElement je => je.ToString(),
+                    IConvertible convertible => Convert.ToString(convertible, CultureInfo.InvariantCulture),
+                    _ => parsed.ToString(),
+                };
             }
 
             if (parsed is Array parsedArray && t.IsArray)

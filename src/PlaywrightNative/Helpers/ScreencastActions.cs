@@ -19,6 +19,7 @@ using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -135,7 +136,7 @@ namespace PlaywrightNative.Helpers
             {
                 frame = await handle.OwnerFrameAsync().ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 return;
             }
@@ -151,7 +152,7 @@ namespace PlaywrightNative.Helpers
             {
                 box = await handle.BoundingBoxAsync().ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
 
@@ -213,7 +214,7 @@ namespace PlaywrightNative.Helpers
             {
                 await page.EvaluateAsync(PaintFunction + "(" + payload + ")").ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
         }
@@ -224,7 +225,7 @@ namespace PlaywrightNative.Helpers
             {
                 await page.EvaluateAsync(HideAnnotationsFunction).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
         }
@@ -236,7 +237,7 @@ namespace PlaywrightNative.Helpers
                 await page.EvaluateAsync(
                     "(function(){var el=document.getElementById('pw-screencast-actions');if(el)el.remove();})()").ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
         }

@@ -122,7 +122,15 @@ var ClockController = class {
     this._replayLogOnce();
     await this._innerPause();
     const toConsume = time - this._now.time;
-    await this._innerFastForwardTo(shiftTicks(this._now.ticks, toConsume));
+    // install() leaves real-time running (inject calls resume). By the time
+    // pauseAt(sameTime) runs, wall clock may have advanced past `time` so
+    // toConsume is negative — match _replayLogOnce's pauseAt path and snap
+    // the wall time instead of throwing "Cannot fast-forward to the past".
+    if (toConsume > 0) {
+      await this._innerFastForwardTo(shiftTicks(this._now.ticks, toConsume));
+    } else {
+      this._innerSetTime(asWallTime(time));
+    }
     return toConsume;
   }
   async _innerPause() {
@@ -583,9 +591,27 @@ function fakeAbortSignal(clock, abortSignal, browserName) {
 }
 function createClock(globalObject, config = {}) {
   const originals = platformOriginals(globalObject);
+  // Native performance.now can stop advancing once window.performance is
+  // replaced (seen on macOS WebKit during tight busy loops). Anchor a
+  // wall-clock fallback so _syncRealTime still progresses Date.now and
+  // performance.now while the event loop is blocked.
+  const wallStart = originals.raw.Date.now();
+  let perfStart = 0;
+  try {
+    perfStart = Math.ceil(originals.raw.performance.now());
+  } catch (e) {
+  }
   const embedder = {
     dateNow: () => originals.raw.Date.now(),
-    performanceNow: () => Math.ceil(originals.raw.performance.now()),
+    performanceNow: () => {
+      let perfNow = perfStart;
+      try {
+        perfNow = Math.ceil(originals.raw.performance.now());
+      } catch (e) {
+      }
+      const wallElapsed = originals.raw.Date.now() - wallStart;
+      return Math.max(perfNow, perfStart + wallElapsed);
+    },
     setTimeout: (task, timeout) => {
       const timerId = originals.bound.setTimeout(task, timeout);
       return () => originals.bound.clearTimeout(timerId);

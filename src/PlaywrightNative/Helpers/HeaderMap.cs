@@ -89,6 +89,80 @@ namespace PlaywrightNative.Helpers
         }
 
         /// <summary>
+        /// Whether <paramref name="name"/> is a proxy hop-by-hop header
+        /// (<c>Proxy-Connection</c>, <c>Proxy-Authorization</c>, …).
+        /// </summary>
+        /// <param name="name">Header name.</param>
+        /// <returns><see langword="true"/> when the name should not be exposed as an application header.</returns>
+        internal static bool IsProxyHop(string name)
+            => !string.IsNullOrEmpty(name)
+                && name.StartsWith("Proxy-", StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// Drops proxy hop-by-hop headers so public request headers match what the
+        /// origin server receives when Playwright's handshake proxy is in the path.
+        /// </summary>
+        /// <param name="headers">Request headers.</param>
+        /// <returns>A new map, or the original when nothing was stripped.</returns>
+        internal static IDictionary<string, string> WithoutProxyHop(IDictionary<string, string> headers)
+        {
+            if (headers == null)
+            {
+                return headers;
+            }
+
+            Dictionary<string, string> result = null;
+            foreach (KeyValuePair<string, string> header in headers)
+            {
+                if (IsProxyHop(header.Key))
+                {
+                    result ??= new Dictionary<string, string>(headers, StringComparer.OrdinalIgnoreCase);
+                    result.Remove(header.Key);
+                }
+            }
+
+            return result ?? headers;
+        }
+
+        /// <summary>
+        /// Drops proxy hop-by-hop entries from a raw header array.
+        /// </summary>
+        /// <param name="headers">Raw request headers.</param>
+        /// <returns>A filtered list, or the original when nothing was stripped.</returns>
+        internal static IReadOnlyList<NameValueEntry> WithoutProxyHop(IReadOnlyList<NameValueEntry> headers)
+        {
+            if (headers == null || headers.Count == 0)
+            {
+                return headers;
+            }
+
+            List<NameValueEntry> result = null;
+            for (int i = 0; i < headers.Count; i++)
+            {
+                if (IsProxyHop(headers[i].Name))
+                {
+                    result ??= new List<NameValueEntry>(headers.Count);
+                    for (int j = 0; j < i; j++)
+                    {
+                        result.Add(headers[j]);
+                    }
+
+                    for (int j = i + 1; j < headers.Count; j++)
+                    {
+                        if (!IsProxyHop(headers[j].Name))
+                        {
+                            result.Add(headers[j]);
+                        }
+                    }
+
+                    return result;
+                }
+            }
+
+            return headers;
+        }
+
+        /// <summary>
         /// Returns the joined header value matching <paramref name="name"/>, or <see langword="null"/>.
         /// <c>set-cookie</c> values are joined with newlines; other names use <c>", "</c>.
         /// </summary>

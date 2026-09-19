@@ -16,6 +16,7 @@
  */
 using System;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 
@@ -69,11 +70,11 @@ namespace PlaywrightNative.Tests
             await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
             IFrame child = await AttachBlankChildFrameAsync(page).ConfigureAwait(false);
-            await child.SetContentAsync("<button id=\"in\">In</button>").ConfigureAwait(false);
+            await child.SetContentAsync("<button id=\"in\" onclick=\"window.lastClickedId = this.id\">In</button>").ConfigureAwait(false);
 
             await child.ClickAsync("#in", new FrameClickOptions { Steps = 4 }).ConfigureAwait(false);
 
-            string id = await child.EvaluateAsync<string>("document.activeElement && document.activeElement.id").ConfigureAwait(false);
+            string id = await child.EvaluateAsync<string>("window.lastClickedId").ConfigureAwait(false);
             Assert.That(id, Is.EqualTo("in"));
 
             static async Task<IFrame> AttachBlankChildFrameAsync(IPage page)
@@ -113,7 +114,7 @@ namespace PlaywrightNative.Tests
                             return found;
                         }
                     }
-                    catch (PlaywrightNativeException)
+                    catch (PlaywrightException)
                     {
                     }
 

@@ -68,6 +68,7 @@ namespace PlaywrightNative
                 };
 
                 BrowserFetcher fetcher = new(browser);
+                string fallbackInstalled = null;
                 foreach (InstalledBrowser installed in fetcher.GetInstalledBrowsers())
                 {
                     if (installed.Browser != browser)
@@ -80,12 +81,26 @@ namespace PlaywrightNative
                     {
                         return installedPath;
                     }
+
+                    // Prefer a completed install's path even when File.Exists is false
+                    // (broken symlink / race during extract). Launch can still use it via
+                    // BrowserExecutable, and browsertype-basic expects a non-empty path.
+                    fallbackInstalled ??= installedPath;
                 }
 
                 string playwrightKey = BrowserData.PlaywrightPlatformKey(browser, fetcher.Platform);
                 string buildId = BrowserData.ResolveRevision(browser, playwrightKey, requestedRevision: null);
                 string computed = fetcher.GetExecutablePath(buildId);
                 if (File.Exists(computed))
+                {
+                    return computed;
+                }
+
+                // Install dir present (partial extract / marker race): still expose the
+                // rooted path so launched browsers report a non-empty ExecutablePath
+                // containing the browser name (webkit / chromium / firefox).
+                string installDir = Path.GetDirectoryName(computed);
+                if (!string.IsNullOrEmpty(installDir) && Directory.Exists(installDir))
                 {
                     return computed;
                 }
@@ -101,7 +116,15 @@ namespace PlaywrightNative
                     }
                 }
 
-                return computed;
+                if (!string.IsNullOrEmpty(fallbackInstalled))
+                {
+                    return fallbackInstalled;
+                }
+
+                // Official browserType.executablePath is empty until the browser is
+                // installed. Returning a missing path makes BrowserTypeExecutablePathShouldWork
+                // fail File.Exists and confuses launch-error messaging.
+                return string.Empty;
             }
         }
 
@@ -121,7 +144,7 @@ namespace PlaywrightNative
         {
             if (!string.Equals(_name, "chromium", StringComparison.Ordinal))
             {
-                throw new PlaywrightNativeException("Connecting over CDP is only supported in Chromium and WebKit.");
+                throw new PlaywrightException("Connecting over CDP is only supported in Chromium and WebKit.");
             }
 
             if (string.IsNullOrEmpty(endpointURL))
@@ -178,7 +201,16 @@ namespace PlaywrightNative
 #pragma warning disable SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
         Task<IBrowser> IBrowserType.ConnectAsync(string endpoint, BrowserTypeConnectOptions options) => Task.FromResult<IBrowser>(default!);
 
-        Task<IBrowser> IBrowserType.ConnectOverCDPAsync(string endpointURL, BrowserTypeConnectOverCDPOptions options) => Task.FromResult<IBrowser>(default!);
+        Task<IBrowser> IBrowserType.ConnectOverCDPAsync(string endpointURL, BrowserTypeConnectOverCDPOptions options)
+        {
+            options ??= new BrowserTypeConnectOverCDPOptions();
+            return ConnectOverCDPAsync(
+                endpointURL,
+                options.Timeout,
+                options.Headers,
+                options.ArtifactsDir,
+                options.NoDefaults);
+        }
 
         Task<IBrowser> IBrowserType.LaunchAsync(Microsoft.Playwright.BrowserTypeLaunchOptions options)
             => LaunchAsync(MicrosoftOptionsBridge.ToLaunchOptions(options));

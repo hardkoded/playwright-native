@@ -17,6 +17,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -70,7 +71,7 @@ namespace PlaywrightNative.Helpers
                 return ScreenshotType.Webp;
             }
 
-            throw new PlaywrightNativeException("path: unsupported mime type \"" + (mime ?? "null") + "\"");
+            throw new PlaywrightException("path: unsupported mime type \"" + (mime ?? "null") + "\"");
         }
 
         /// <summary>
@@ -89,12 +90,12 @@ namespace PlaywrightNative.Helpers
             string format = ScreenshotFormat.ToProtocol(type);
             if (!ScreenshotFormat.SupportsQuality(format))
             {
-                throw new PlaywrightNativeException("options.quality is unsupported for the " + format + " screenshots");
+                throw new PlaywrightException("options.quality is unsupported for the " + format + " screenshots");
             }
 
             if (quality.Value < 0 || quality.Value > 100)
             {
-                throw new PlaywrightNativeException(
+                throw new PlaywrightException(
                     "Expected options.quality to be between 0 and 100 (inclusive), got " + quality.Value);
             }
         }
@@ -141,12 +142,12 @@ namespace PlaywrightNative.Helpers
 
             if (clip.Width <= 0)
             {
-                throw new PlaywrightNativeException("Expected options.clip.width to be greater than 0");
+                throw new PlaywrightException("Expected options.clip.width to be greater than 0");
             }
 
             if (clip.Height <= 0)
             {
-                throw new PlaywrightNativeException("Expected options.clip.height to be greater than 0");
+                throw new PlaywrightException("Expected options.clip.height to be greater than 0");
             }
 
             if (fullPage || viewport == null || viewport.Width <= 0 || viewport.Height <= 0)
@@ -168,7 +169,7 @@ namespace PlaywrightNative.Helpers
             float y2 = Math.Max(0, Math.Min(clip.Y + clip.Height, viewport.Height));
             if (x2 - x1 <= 0 || y2 - y1 <= 0)
             {
-                throw new PlaywrightNativeException("Clipped area is either empty or outside the resulting image");
+                throw new PlaywrightException("Clipped area is either empty or outside the resulting image");
             }
         }
 

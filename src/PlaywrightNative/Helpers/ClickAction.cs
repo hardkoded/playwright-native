@@ -22,6 +22,7 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -719,8 +720,100 @@ namespace PlaywrightNative.Helpers
         if (!hit) {
             return false;
         }
+        if (hit === target || hit === el) {
+            return true;
+        }
         if (isComposedDescendant(hit, target) || isComposedDescendant(hit, el)) {
             return true;
+        }
+        // Closed shadow: elementFromPoint returns the host (shadowRoot is null).
+        // Accept when the clickable is a composed descendant of that host.
+        if (isComposedDescendant(target, hit) || isComposedDescendant(el, hit)) {
+            return true;
+        }
+        // Closed shadow: elementFromPoint returns the host; accept when the
+        // clickable lives under that host's shadow root.
+        try {
+            if (hit.shadowRoot && (hit.shadowRoot.contains(el) || hit.shadowRoot.contains(target))) {
+                return true;
+            }
+        } catch (e) {
+        }
+        try {
+            const stack = doc.elementsFromPoint ? doc.elementsFromPoint(x, y) : null;
+            if (stack) {
+                for (let i = 0; i < stack.length; i++) {
+                    const n = stack[i];
+                    if (n === target || n === el || isComposedDescendant(n, target) || isComposedDescendant(n, el)) {
+                        return true;
+                    }
+                    try {
+                        if (n.shadowRoot && (n.shadowRoot.contains(el) || n.shadowRoot.contains(target))) {
+                            return true;
+                        }
+                    } catch (e2) {
+                    }
+                }
+            }
+        } catch (e) {
+        }
+        return false;
+    }
+    function isScrollable(node) {
+        if (!node || node.nodeType !== 1) {
+            return false;
+        }
+        let style = null;
+        try {
+            style = ((node.ownerDocument && node.ownerDocument.defaultView) || window).getComputedStyle(node);
+        } catch (e) {
+            return false;
+        }
+        if (!style) {
+            return false;
+        }
+        const ox = style.overflowX;
+        const oy = style.overflowY;
+        const scrollX = (ox === 'scroll' || ox === 'auto') && node.scrollWidth > node.clientWidth + 1;
+        const scrollY = (oy === 'scroll' || oy === 'auto') && node.scrollHeight > node.clientHeight + 1;
+        return scrollX || scrollY;
+    }
+    function isOnScrollbar(x, y) {
+        let hit = null;
+        try {
+            hit = doc.elementFromPoint(x, y);
+        } catch (e) {
+            return false;
+        }
+        if (!hit) {
+            return false;
+        }
+        // Overlay scrollbars often keep clientWidth == offsetWidth. Reject only
+        // when the point sits in the typical overlay gutter of a scrollable
+        // ancestor — treating any scroller hit as a scrollbar blocked every
+        // candidate on Darwin WebKit (scroll=none / NotHitScrollBar timeouts).
+        let n = hit;
+        while (n) {
+            if (n !== target && n !== el && isScrollable(n)) {
+                const r = n.getBoundingClientRect();
+                const clientRight = r.left + n.clientWidth;
+                const clientBottom = r.top + n.clientHeight;
+                if ((x >= clientRight && x <= r.right) || (y >= clientBottom && y <= r.bottom)) {
+                    return true;
+                }
+                // Overlay gutter (~15px) when classic client/offset metrics match.
+                const gutter = 15;
+                const overlayX = n.scrollWidth > n.clientWidth + 1
+                    && Math.abs(n.offsetWidth - n.clientWidth) <= 1
+                    && x >= r.right - gutter && x <= r.right;
+                const overlayY = n.scrollHeight > n.clientHeight + 1
+                    && Math.abs(n.offsetHeight - n.clientHeight) <= 1
+                    && y >= r.bottom - gutter && y <= r.bottom;
+                if (overlayX || overlayY) {
+                    return true;
+                }
+            }
+            n = composedParent(n);
         }
         return false;
     }
@@ -838,15 +931,18 @@ namespace PlaywrightNative.Helpers
         }
         for (let j = 0; j < candidates.length; j++) {
             const p = candidates[j];
-            if (!fallback) {
-                fallback = p;
+            if (isOnScrollbar(p[0], p[1])) {
+                continue;
             }
             if (hitOk(p[0], p[1])) {
                 return p;
             }
         }
     }
-    return fallback;
+    // Never return a point that elementFromPoint rejects — that lands on a
+    // parent scrollbar (horizontal flex overflow) and loops until timeout
+    // (ShouldNotHitScrollBar on Darwin WebKit).
+    return null;
 }";
 
         /// <summary>
@@ -1013,7 +1109,7 @@ namespace PlaywrightNative.Helpers
                     {
                         await page.BringToFrontAsync().ConfigureAwait(false);
                     }
-                    catch (PlaywrightNativeException)
+                    catch (PlaywrightException)
                     {
                     }
                 }
@@ -1078,7 +1174,7 @@ namespace PlaywrightNative.Helpers
         {
             if (!await IsConnectedAsync(handle).ConfigureAwait(false))
             {
-                throw new PlaywrightNativeException(NotAttachedMessage);
+                throw new PlaywrightException(NotAttachedMessage);
             }
 
             if (scroll != ActionScroll.None)
@@ -1182,7 +1278,7 @@ namespace PlaywrightNative.Helpers
                     : await handle.EvaluateAsync<double[]>(pointScript, offset).ConfigureAwait(false);
                 if (localPoint == null || localPoint.Length < 2)
                 {
-                    throw new PlaywrightNativeException("Unable to compute a click point for the element.");
+                    throw new PlaywrightException("Unable to compute a click point for the element.");
                 }
 
                 double[] pagePoint = await MapToPageAsync(handle, localPoint).ConfigureAwait(false);
@@ -1194,7 +1290,7 @@ namespace PlaywrightNative.Helpers
                     {
                         if (hit == "detached")
                         {
-                            throw new PlaywrightNativeException(NotAttachedMessage);
+                            throw new PlaywrightException(NotAttachedMessage);
                         }
 
                         if (timeoutMs != Timeout.Infinite && sw.ElapsedMilliseconds >= timeoutMs)
@@ -1386,7 +1482,7 @@ namespace PlaywrightNative.Helpers
             }
 
             string message = ex.Message ?? string.Empty;
-            return PlaywrightNativeException.IsDestroyedContext(ex)
+            return PlaywrightNative.Helpers.DestroyedContext.IsDestroyedContext(ex)
                 || message.Contains(NotAttachedMessage, StringComparison.Ordinal)
                 || message.Contains(HitMissedMessage, StringComparison.Ordinal)
                 || message.Contains("not attached", StringComparison.OrdinalIgnoreCase)
@@ -1404,7 +1500,7 @@ namespace PlaywrightNative.Helpers
             {
                 return await handle.EvaluateAsync<bool>(IsTextNodeFunction).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 return false;
             }
@@ -1442,7 +1538,7 @@ namespace PlaywrightNative.Helpers
 
             if (point == null || point.Length < 2)
             {
-                throw new PlaywrightNativeException("Unable to compute a click point for the element.");
+                throw new PlaywrightException("Unable to compute a click point for the element.");
             }
 
             return await MapToPageAsync(handle, point).ConfigureAwait(false);
@@ -1544,7 +1640,7 @@ namespace PlaywrightNative.Helpers
 
                 if (!await IsConnectedAsync(handle).ConfigureAwait(false))
                 {
-                    throw new PlaywrightNativeException(NotAttachedMessage);
+                    throw new PlaywrightException(NotAttachedMessage);
                 }
 
                 bool visible = false;
@@ -1552,15 +1648,15 @@ namespace PlaywrightNative.Helpers
                 {
                     visible = await handle.EvaluateAsync<bool>(IsVisibleFunction).ConfigureAwait(false);
                 }
-                catch (PlaywrightNativeException ex) when (ClosedTarget.IsClosed(ex))
+                catch (PlaywrightException ex) when (ClosedTarget.IsClosed(ex))
                 {
                     throw;
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                     if (!await IsConnectedAsync(handle).ConfigureAwait(false))
                     {
-                        throw new PlaywrightNativeException(NotAttachedMessage);
+                        throw new PlaywrightException(NotAttachedMessage);
                     }
                 }
 
@@ -1569,21 +1665,21 @@ namespace PlaywrightNative.Helpers
                 {
                     disabledKind = await handle.EvaluateAsync<string>(IsDisabledFunction).ConfigureAwait(false);
                 }
-                catch (PlaywrightNativeException ex) when (ClosedTarget.IsClosed(ex))
+                catch (PlaywrightException ex) when (ClosedTarget.IsClosed(ex))
                 {
                     throw;
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                     if (!await IsConnectedAsync(handle).ConfigureAwait(false))
                     {
-                        throw new PlaywrightNativeException(NotAttachedMessage);
+                        throw new PlaywrightException(NotAttachedMessage);
                     }
                 }
 
                 if (disabledKind == "detached")
                 {
-                    throw new PlaywrightNativeException(NotAttachedMessage);
+                    throw new PlaywrightException(NotAttachedMessage);
                 }
 
                 bool disabled = disabledKind == "disabled";
@@ -1603,7 +1699,7 @@ namespace PlaywrightNative.Helpers
                 {
                     box = await handle.EvaluateAsync<double[]>(BoxFunction).ConfigureAwait(false);
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
 
@@ -1649,7 +1745,7 @@ namespace PlaywrightNative.Helpers
                     string hit = await HitAtPickAsync(handle, position).ConfigureAwait(false);
                     if (hit == "detached")
                     {
-                        throw new PlaywrightNativeException(NotAttachedMessage);
+                        throw new PlaywrightException(NotAttachedMessage);
                     }
 
                     if (hit == "ok")
@@ -1674,7 +1770,7 @@ namespace PlaywrightNative.Helpers
                         {
                             await handle.EvaluateAsync<bool>(ScrollAlignedFunction, align).ConfigureAwait(false);
                         }
-                        catch (PlaywrightNativeException)
+                        catch (PlaywrightException)
                         {
                         }
                     }
@@ -1727,7 +1823,7 @@ namespace PlaywrightNative.Helpers
             {
                 await handle.EvaluateAsync<bool>(ScrollIntoViewFunction).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
         }
@@ -1739,7 +1835,7 @@ namespace PlaywrightNative.Helpers
             {
                 owner = await handle.OwnerFrameAsync().ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 return;
             }
@@ -1750,9 +1846,12 @@ namespace PlaywrightNative.Helpers
                 try
                 {
                     frameElement = await owner.FrameElementAsync().ConfigureAwait(false);
-                    await frameElement.EvaluateAsync<bool>(ScrollFrameIfOffscreenFunction).ConfigureAwait(false);
+                    if (frameElement != null)
+                    {
+                        await frameElement.EvaluateAsync<bool>(ScrollFrameIfOffscreenFunction).ConfigureAwait(false);
+                    }
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
                 finally
@@ -1775,7 +1874,7 @@ namespace PlaywrightNative.Helpers
                     ScrollOffsetIntoViewFunction,
                     new ClickOffset { X = position.X, Y = position.Y }).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
         }
@@ -1787,10 +1886,10 @@ namespace PlaywrightNative.Helpers
             {
                 ClickOffset offset = position == null ? null : new ClickOffset { X = position.X, Y = position.Y };
                 localPoint = offset == null
-                    ? await handle.EvaluateAsync<double[]>(PointFunction).ConfigureAwait(false)
-                    : await handle.EvaluateAsync<double[]>(PointFunction, offset).ConfigureAwait(false);
+                    ? await handle.EvaluateAsync<double[]>(PickPointFunction).ConfigureAwait(false)
+                    : await handle.EvaluateAsync<double[]>(PickPointFunction, offset).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 return "blocked";
             }
@@ -1810,7 +1909,7 @@ namespace PlaywrightNative.Helpers
             {
                 localHit = await handle.EvaluateAsync<string>(HitTargetFunction, localPoint).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 return "blocked";
             }
@@ -1831,7 +1930,7 @@ namespace PlaywrightNative.Helpers
             {
                 owner = await handle.OwnerFrameAsync().ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 return "ok";
             }
@@ -1842,6 +1941,11 @@ namespace PlaywrightNative.Helpers
                 try
                 {
                     frameElement = await owner.FrameElementAsync().ConfigureAwait(false);
+                    if (frameElement == null)
+                    {
+                        return "ok";
+                    }
+
                     string style = await frameElement.EvaluateAsync<string>(DescribeIFrameStyleFunction).ConfigureAwait(false);
                     if (style == "error:notconnected")
                     {
@@ -1867,7 +1971,7 @@ namespace PlaywrightNative.Helpers
 
                     point = mapped;
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                     return "ok";
                 }
@@ -1893,7 +1997,7 @@ namespace PlaywrightNative.Helpers
             {
                 owner = await handle.OwnerFrameAsync().ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
 
@@ -1903,6 +2007,12 @@ namespace PlaywrightNative.Helpers
                 try
                 {
                     frameElement = await owner.FrameElementAsync().ConfigureAwait(false);
+                    if (frameElement == null)
+                    {
+                        (double offsetX, double offsetY) = await BoundingBoxHelper.OwnerFrameOffsetAsync(owner).ConfigureAwait(false);
+                        return new[] { point[0] + offsetX, point[1] + offsetY };
+                    }
+
                     double[] mapped = await frameElement.EvaluateAsync<double[]>(MapIFramePointFunction, point).ConfigureAwait(false);
                     if (mapped != null && mapped.Length >= 2)
                     {
@@ -1915,7 +2025,7 @@ namespace PlaywrightNative.Helpers
                         break;
                     }
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                     (double offsetX, double offsetY) = await BoundingBoxHelper.OwnerFrameOffsetAsync(owner).ConfigureAwait(false);
                     return new[] { point[0] + offsetX, point[1] + offsetY };
@@ -1940,11 +2050,11 @@ namespace PlaywrightNative.Helpers
             {
                 return await handle.EvaluateAsync<bool>(IsConnectedFunction).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException ex) when (ClosedTarget.IsClosed(ex))
+            catch (PlaywrightException ex) when (ClosedTarget.IsClosed(ex))
             {
                 throw;
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 return false;
             }
@@ -2004,7 +2114,7 @@ namespace PlaywrightNative.Helpers
                     await page.Mouse.MoveAsync((float)point[0], (float)point[1]).ConfigureAwait(false);
                 }
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
         }
@@ -2021,7 +2131,7 @@ namespace PlaywrightNative.Helpers
                 IFrame owner = await handle.OwnerFrameAsync().ConfigureAwait(false);
                 return owner?.Page;
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 return null;
             }
@@ -2087,7 +2197,7 @@ namespace PlaywrightNative.Helpers
                     " elements. Proceeding with the first one: " +
                     preview;
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 return null;
             }
@@ -2107,13 +2217,37 @@ namespace PlaywrightNative.Helpers
 
         private static async Task RafAsync(IElementHandle handle)
         {
-            // Do not wait on in-page requestAnimationFrame: after window.open
-            // Chromium may pause rAF (and timers) on the background opener,
-            // which would stall Runtime.evaluate forever and skip the action
-            // timeout. Host-side delay still spaces stability samples.
-            _ = handle;
-            await DelayOrAbortAsync(16).ConfigureAwait(false);
+            // Prefer in-page double-rAF so CSS transitions move between
+            // stability samples (ShouldTimeoutWaitingForStablePosition).
+            // Race a short host timeout so a modal alert / paused opener
+            // cannot stall Runtime.evaluate past the action timeout
+            // (Chromium dialog clicks). On WebKit, abandoning that evaluate
+            // wedges the target session — use a host-only delay there.
+            if (handle == null || IsWebKitHandle(handle))
+            {
+                await DelayOrAbortAsync(32).ConfigureAwait(false);
+                return;
+            }
+
+            try
+            {
+                Task pageRaf = handle.EvaluateAsync(
+                    "() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => r())))");
+                Task host = DelayOrAbortAsync(50);
+                await Task.WhenAny(pageRaf, host).ConfigureAwait(false);
+            }
+            catch (PlaywrightException)
+            {
+                await DelayOrAbortAsync(16).ConfigureAwait(false);
+            }
         }
+
+        private static bool IsWebKitHandle(IElementHandle handle)
+            => handle?.GetType().Name.IndexOf("WK", StringComparison.Ordinal) >= 0
+                || string.Equals(
+                    Environment.GetEnvironmentVariable("PRODUCT"),
+                    "WEBKIT",
+                    StringComparison.OrdinalIgnoreCase);
 
         private static void ThrowIfAborted(string apiName, StringBuilder log = null)
         {
@@ -2163,24 +2297,32 @@ namespace PlaywrightNative.Helpers
             {
                 result = await handle.EvaluateAsync<string>(ClassifyFunction).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
-                throw new PlaywrightNativeException(NotAttachedMessage);
+                throw new PlaywrightException(NotAttachedMessage);
             }
 
             if (result == "notconnected")
             {
-                throw new PlaywrightNativeException(NotAttachedMessage);
+                throw new PlaywrightException(NotAttachedMessage);
             }
 
             if (result == "notvisible")
             {
-                throw new PlaywrightNativeException(NotVisibleMessage);
+                // visibility:hidden still has a layout box; force clicks use it.
+                // Some engines report empty client rects for hidden controls.
+                ElementHandleBoundingBoxResult box = await handle.BoundingBoxAsync().ConfigureAwait(false);
+                if (box != null && box.Width > 0 && box.Height > 0)
+                {
+                    return;
+                }
+
+                throw new PlaywrightException(NotVisibleMessage);
             }
 
             if (result == "notinviewport")
             {
-                throw new PlaywrightNativeException(OutsideViewportMessage + "\nelement is outside of the viewport");
+                throw new PlaywrightException(OutsideViewportMessage + "\nelement is outside of the viewport");
             }
         }
 

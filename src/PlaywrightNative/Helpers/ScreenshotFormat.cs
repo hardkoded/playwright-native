@@ -14,6 +14,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+using Microsoft.Playwright;
+
 namespace PlaywrightNative.Helpers
 {
     /// <summary>
@@ -60,7 +62,7 @@ namespace PlaywrightNative.Helpers
         {
             if (type == ScreenshotType.Webp && browser == "Firefox")
             {
-                throw new PlaywrightNativeException(
+                throw new PlaywrightException(
                     "WebP screenshots are not supported on " + browser + ".");
             }
         }

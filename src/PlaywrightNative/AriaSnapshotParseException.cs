@@ -6,13 +6,14 @@
 // http://www.apache.org/licenses/LICENSE-2.0
 
 using System;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative
 {
     /// <summary>
     /// Thrown when an aria snapshot YAML template cannot be parsed.
     /// </summary>
-    public sealed class AriaSnapshotParseException : PlaywrightNativeException
+    public sealed class AriaSnapshotParseException : PlaywrightException
     {
         /// <summary>
         /// Initializes a new instance of the <see cref="AriaSnapshotParseException"/> class.

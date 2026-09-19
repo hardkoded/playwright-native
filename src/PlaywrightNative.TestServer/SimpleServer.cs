@@ -5,7 +5,9 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.WebSockets;
+using System.Security.Authentication;
 using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -13,8 +15,11 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Features;
+using Microsoft.AspNetCore.Server.Kestrel.Core;
+using Microsoft.AspNetCore.Server.Kestrel.Https;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.FileProviders;
+using Microsoft.Extensions.Primitives;
 
 namespace PlaywrightNative.TestServer
 {
@@ -265,11 +270,41 @@ namespace PlaywrightNative.TestServer
                             if (!string.IsNullOrEmpty(certificatePath))
                             {
                                 string certificatePassword = Environment.GetEnvironmentVariable("PLAYWRIGHT_TEST_CERT_PASSWORD");
-                                listenOptions.UseHttps(Path.GetFullPath(certificatePath), certificatePassword);
+                                X509Certificate2 certificate = LoadHttpsCertificate(certificatePath, certificatePassword);
+
+                                // Prefer TLS 1.3 (HAR/securityDetails assert it) but
+                                // also offer 1.2. Kestrel SslProtocols.Tls13 alone
+                                // fails the handshake on WebKit/mac ("An SSL error
+                                // has occurred"), which breaks every HTTPS cookie
+                                // third-party parity test. With both versions
+                                // offered, capable clients still negotiate 1.3;
+                                // WebKit/mac that cannot complete Kestrel's TLS 1.3
+                                // falls back to 1.2 (and empty securityConnection
+                                // protocol still defaults to TLS 1.3 for HAR).
+                                // Keep HTTP/1.1-only to avoid h2 ALPN quirks.
+                                listenOptions.Protocols = HttpProtocols.Http1;
+                                listenOptions.UseHttps(new HttpsConnectionAdapterOptions
+                                {
+                                    ServerCertificate = certificate,
+                                    SslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13,
+                                });
                             }
                             else
                             {
-                                listenOptions.UseHttps("testCert.cer");
+                                // Prefer the tracked PEM fixtures / sibling PFX over
+                                // Kestrel's UseHttps("testCert.cer"), which breaks on
+                                // CI when only a public DER from `dotnet dev-certs`
+                                // is present (no private key → TLS EOF).
+                                string defaultCer = Path.Combine(contentRoot, "testCert.cer");
+                                X509Certificate2 fallback = LoadHttpsCertificate(
+                                    File.Exists(defaultCer) ? defaultCer : contentRoot,
+                                    certificatePassword: "playwright");
+                                listenOptions.Protocols = HttpProtocols.Http1;
+                                listenOptions.UseHttps(new HttpsConnectionAdapterOptions
+                                {
+                                    ServerCertificate = fallback,
+                                    SslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13,
+                                });
                             }
                         });
                     }
@@ -285,6 +320,76 @@ namespace PlaywrightNative.TestServer
         public void SetAuth(string path, string username, string password) => _auths.Add(path, (username, password));
 
         public void SetCSP(string path, string csp) => _csp.Add(path, csp);
+
+        /// <summary>
+        /// Loads a TLS server certificate. CI exports <c>key.pfx</c> (password
+        /// <c>playwright</c>) via <c>dotnet dev-certs https -ep</c>. A public-only
+        /// DER <c>testCert.cer</c> cannot terminate TLS (browsers see
+        /// <c>ERR_CONNECTION_CLOSED</c>). Prefer PKCS12; rematerialize PEM into a
+        /// password-protected PKCS12 with <see cref="X509KeyStorageFlags.EphemeralKeySet"/>
+        /// on Windows so Kestrel/SslStream can use the key.
+        /// </summary>
+        /// <param name="certificatePath">Path from <c>PLAYWRIGHT_TEST_CERT_PATH</c>.</param>
+        /// <param name="certificatePassword">Optional PKCS12 password.</param>
+        /// <returns>A certificate with a private key suitable for Kestrel HTTPS.</returns>
+        private static X509Certificate2 LoadHttpsCertificate(string certificatePath, string certificatePassword)
+        {
+            string fullPath = Path.GetFullPath(certificatePath);
+            string extension = Path.GetExtension(fullPath);
+            string pfxPassword = string.IsNullOrEmpty(certificatePassword)
+                ? "playwright"
+                : certificatePassword;
+
+            // File-based PKCS12: Exportable is enough. EphemeralKeySet is reserved
+            // for in-memory PEM rematerialization on Windows (macOS/Linux reject it).
+            X509KeyStorageFlags fileFlags = X509KeyStorageFlags.Exportable;
+            if (extension.Equals(".pfx", StringComparison.OrdinalIgnoreCase)
+                || extension.Equals(".p12", StringComparison.OrdinalIgnoreCase))
+            {
+                return X509CertificateLoader.LoadPkcs12FromFile(
+                    fullPath,
+                    certificatePassword ?? pfxPassword,
+                    fileFlags);
+            }
+
+            string directory = Directory.Exists(fullPath)
+                ? fullPath
+                : (Path.GetDirectoryName(fullPath) ?? ".");
+            string siblingPfx = Path.Combine(directory, "key.pfx");
+            if (File.Exists(siblingPfx))
+            {
+                return X509CertificateLoader.LoadPkcs12FromFile(siblingPfx, pfxPassword, fileFlags);
+            }
+
+            string pemCert = Path.Combine(directory, "playwright-test.pem");
+            string pemKey = Path.Combine(directory, "playwright-test-key.pem");
+            if (File.Exists(pemCert) && File.Exists(pemKey))
+            {
+                X509KeyStorageFlags pemFlags = X509KeyStorageFlags.Exportable;
+                if (OperatingSystem.IsWindows())
+                {
+                    // Without EphemeralKeySet, Windows SslStream aborts the
+                    // handshake (unexpected EOF / ERR_CONNECTION_CLOSED).
+                    pemFlags |= X509KeyStorageFlags.EphemeralKeySet;
+                }
+
+                X509Certificate2 pem = X509Certificate2.CreateFromPemFile(pemCert, pemKey);
+                // Password-protected export is reliable across .NET/Windows;
+                // empty-password PKCS12 often yields an unusable private key.
+                byte[] pfxBytes = pem.Export(X509ContentType.Pkcs12, pfxPassword);
+                return X509CertificateLoader.LoadPkcs12(pfxBytes, pfxPassword, pemFlags);
+            }
+
+            X509Certificate2 publicOnly = X509CertificateLoader.LoadCertificateFromFile(fullPath);
+            if (!publicOnly.HasPrivateKey)
+            {
+                throw new InvalidOperationException(
+                    "HTTPS certificate at '" + fullPath + "' has no private key. " +
+                    "Provide key.pfx or playwright-test.pem + playwright-test-key.pem.");
+            }
+
+            return publicOnly;
+        }
 
         public Task StartAsync() => _webHost.StartAsync();
 
@@ -367,6 +472,7 @@ namespace PlaywrightNative.TestServer
             await _webSocketAcceptGate.WaitAsync().ConfigureAwait(false);
             WebSocket webSocket;
             Stream raw;
+            OfficialServerWebSocket official;
             Action<WebSocket> once;
             Func<WebSocket, Task> onceAsync;
             bool waiting;
@@ -376,12 +482,36 @@ namespace PlaywrightNative.TestServer
                 _webSocketRequestWait = null;
                 requestWaiter?.TrySetResult(context.Request);
                 waiting = _webSocketWait != null;
-                (webSocket, raw) = await UpgradeToWebSocketAsync(context).ConfigureAwait(false);
-                NotifyWebSocket(new OfficialServerWebSocket(webSocket, raw));
                 once = _onceWebSocket;
                 onceAsync = _onceWebSocketAsync;
                 _onceWebSocket = null;
                 _onceWebSocketAsync = null;
+                (webSocket, raw) = await UpgradeToWebSocketAsync(context).ConfigureAwait(false);
+
+                // Legacy OnceWebSocketConnection handlers need System.Net.WebSockets.WebSocket.
+                // Give them ManagedWebSocket exclusively — do not also run raw-frame receive
+                // on the same stream.
+                bool legacyHandler = once != null || onceAsync != null;
+                if (legacyHandler && webSocket == null && raw != null)
+                {
+                    string subProtocol = FirstRequestedProtocol(context);
+                    webSocket = WebSocket.CreateFromStream(
+                        raw,
+                        isServer: true,
+                        string.IsNullOrEmpty(subProtocol) ? null : subProtocol,
+                        Timeout.InfiniteTimeSpan);
+                    official = new OfficialServerWebSocket(webSocket);
+                }
+                else if (raw != null)
+                {
+                    official = new OfficialServerWebSocket(raw);
+                }
+                else
+                {
+                    official = new OfficialServerWebSocket(webSocket);
+                }
+
+                NotifyWebSocket(official);
                 if (once != null)
                 {
                     once(webSocket);
@@ -395,7 +525,7 @@ namespace PlaywrightNative.TestServer
             if (onceAsync != null)
             {
                 await onceAsync(webSocket).ConfigureAwait(false);
-                if (webSocket.State == WebSocketState.Open)
+                if (webSocket != null && webSocket.State == WebSocketState.Open)
                 {
                     await ReceiveLoopAsync(webSocket, sendCloseMessage: false, CancellationToken.None).ConfigureAwait(false);
                 }
@@ -405,29 +535,31 @@ namespace PlaywrightNative.TestServer
 
             if (once != null)
             {
-                await WaitUntilDisconnectedAsync(webSocket).ConfigureAwait(false);
+                if (webSocket != null)
+                {
+                    await WaitUntilDisconnectedAsync(webSocket).ConfigureAwait(false);
+                }
+                else
+                {
+                    await official.WaitUntilClosedAsync().ConfigureAwait(false);
+                }
+
                 return;
             }
 
             if (waiting)
             {
-                await WaitUntilDisconnectedAsync(webSocket).ConfigureAwait(false);
+                // OfficialServerWebSocket owns the connection via raw frames / listeners.
+                await official.WaitUntilClosedAsync().ConfigureAwait(false);
                 return;
             }
 
             if (!string.IsNullOrEmpty(_sendOnWebSocketConnection))
             {
-                await webSocket.SendAsync(
-                    new ArraySegment<byte>(Encoding.UTF8.GetBytes(_sendOnWebSocketConnection)),
-                    WebSocketMessageType.Text,
-                    true,
-                    CancellationToken.None).ConfigureAwait(false);
+                official.Send(_sendOnWebSocketConnection);
             }
 
-            await ReceiveLoopAsync(
-                webSocket,
-                context.Request.Headers["User-Agent"].ToString().Contains("Firefox"),
-                CancellationToken.None).ConfigureAwait(false);
+            await official.WaitUntilClosedAsync().ConfigureAwait(false);
         }
 
         internal async Task<(WebSocket Socket, Stream Stream)> UpgradeToWebSocketAsync(HttpContext context)
@@ -446,12 +578,13 @@ namespace PlaywrightNative.TestServer
                 }
 
                 Stream stream = await upgrade.UpgradeAsync().ConfigureAwait(false);
-                WebSocket socket = WebSocket.CreateFromStream(
-                    stream,
-                    isServer: true,
-                    string.IsNullOrEmpty(subProtocol) ? null : subProtocol,
-                    TimeSpan.FromSeconds(30));
-                return (socket, stream);
+
+                // Return the raw upgraded stream without wrapping ManagedWebSocket.
+                // Sharing the stream with CreateFromStream lets ManagedWebSocket abort
+                // the connection during client-initiated application close codes
+                // (macOS WebKit then reports error + close 1006 instead of a clean
+                // echo). OfficialServerWebSocket owns the raw frames instead.
+                return (null, stream);
             }
 
             WebSocket accepted = string.IsNullOrEmpty(subProtocol)
@@ -499,7 +632,18 @@ namespace PlaywrightNative.TestServer
             var taskCompletion = new TaskCompletionSource<T>();
             _requestWaits[path] = context =>
             {
-                taskCompletion.SetResult(selector(context.Request));
+                T result = selector(context.Request);
+
+                // Kestrel pools and resets the header dictionary once the
+                // connection serves its next request, so a live reference
+                // captured here would read back empty/wrong values by the
+                // time the caller awaits this task. Snapshot it now.
+                if (result is IHeaderDictionary headers)
+                {
+                    result = (T)(object)new HeaderDictionary(new Dictionary<string, StringValues>(headers));
+                }
+
+                taskCompletion.SetResult(result);
             };
 
             var request = await taskCompletion.Task;
@@ -640,6 +784,7 @@ namespace PlaywrightNative.TestServer
             private readonly TaskCompletionSource<bool> _done =
                 new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
             private OfficialServerWebSocket _socket;
+            private bool _httpResponseWritten;
 
             internal UpgradeConnection(HttpContext context, SimpleServer server)
             {
@@ -671,7 +816,12 @@ namespace PlaywrightNative.TestServer
                 {
                     (WebSocket webSocket, Stream stream) = await _server.UpgradeToWebSocketAsync(_context)
                         .ConfigureAwait(false);
-                    _socket = new OfficialServerWebSocket(webSocket, stream);
+
+                    // Prefer raw-stream ownership so client close codes (e.g. 3002) are
+                    // echoed without ManagedWebSocket aborting the handshake on macOS WebKit.
+                    _socket = stream != null
+                        ? new OfficialServerWebSocket(stream)
+                        : new OfficialServerWebSocket(webSocket);
                     _server.NotifyWebSocket(_socket);
                     return;
                 }
@@ -682,6 +832,7 @@ namespace PlaywrightNative.TestServer
 
             /// <summary>
             /// Writes an HTTP response status line and headers, then finishes the response.
+            /// Official <c>socket.write</c> of a raw HTTP rejection (e.g. 403).
             /// </summary>
             /// <param name="raw">A raw HTTP/1.1 response, including the status line.</param>
             /// <returns>A task that completes when the response has been written.</returns>
@@ -695,11 +846,22 @@ namespace PlaywrightNative.TestServer
                     {
                         _context.Response.StatusCode = status;
                     }
+
+                    if (parts.Length >= 3 && !string.IsNullOrEmpty(parts[2]))
+                    {
+                        // Preserve reason phrase when Kestrel exposes it via the response feature.
+                        IHttpResponseFeature responseFeature = _context.Features.Get<IHttpResponseFeature>();
+                        if (responseFeature != null)
+                        {
+                            responseFeature.ReasonPhrase = parts[2].Trim();
+                        }
+                    }
                 }
 
                 _context.Response.Headers.ContentLength = 0;
                 _context.Response.Headers["Connection"] = "close";
                 await _context.Response.CompleteAsync().ConfigureAwait(false);
+                _httpResponseWritten = true;
             }
 
             /// <summary>
@@ -733,7 +895,14 @@ namespace PlaywrightNative.TestServer
                 try
                 {
                     _socket?.Destroy();
-                    _context.Abort();
+
+                    // After a normal HTTP rejection (WriteAsync), do not Abort the
+                    // connection — that races WebKit into status 0 / "Connection
+                    // reset by peer" instead of the written 403 Forbidden.
+                    if (!_httpResponseWritten && !_context.Response.HasStarted)
+                    {
+                        _context.Abort();
+                    }
                 }
                 catch (ObjectDisposedException)
                 {

@@ -98,16 +98,22 @@ namespace PlaywrightNative.Chromium
         }
 
         /// <summary>
-        /// Sends a raw CDP message through the transport and returns the message ID.
+        /// Allocates the next CDP message ID. Callers must register a response
+        /// callback for this ID before <see cref="RawSend"/> so a fast reply
+        /// cannot be dropped.
         /// </summary>
+        /// <returns>The unique message ID.</returns>
+        internal int NextMessageId() => Interlocked.Increment(ref _lastId);
+
+        /// <summary>
+        /// Sends a raw CDP message through the transport using a pre-allocated ID.
+        /// </summary>
+        /// <param name="id">Message ID from <see cref="NextMessageId"/>.</param>
         /// <param name="sessionId">The target session ID (empty string for the root session).</param>
         /// <param name="method">The CDP method name.</param>
         /// <param name="parameters">Optional method parameters.</param>
-        /// <returns>The unique message ID assigned to this request.</returns>
-        internal int RawSend(string sessionId, string method, JsonElement? parameters)
+        internal void RawSend(int id, string sessionId, string method, JsonElement? parameters)
         {
-            int id = Interlocked.Increment(ref _lastId);
-
             var request = new ProtocolRequest
             {
                 Id = id,
@@ -121,8 +127,6 @@ namespace PlaywrightNative.Chromium
             // Fire-and-forget: the transport send is not awaited because callers
             // track completion through the callback dictionary on CRSession.
             _ = _transport.SendAsync(request);
-
-            return id;
         }
 
         private void OnMessage(ProtocolResponse message)

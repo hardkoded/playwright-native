@@ -20,6 +20,7 @@ using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 using PlaywrightNative.TestServer;
@@ -184,7 +185,7 @@ namespace PlaywrightNative.Tests
             {
                 navigationFailed = true;
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 navigationFailed = true;
             }

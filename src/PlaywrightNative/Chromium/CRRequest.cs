@@ -195,6 +195,15 @@ namespace PlaywrightNative.Chromium
         internal bool FrameUnavailable { get; set; }
 
         /// <summary>
+        /// True once raw request headers came from a source that will not be
+        /// refined further (a paused/intercepted Fetch request, whose headers
+        /// are already complete). <see cref="Chromium.ChromiumRequest.AllHeadersAsync"/>
+        /// uses this to avoid waiting on a response that a route handler's own
+        /// pending <c>route.continue()</c> is what would produce.
+        /// </summary>
+        internal bool RawHeadersAreFinal { get; private set; }
+
+        /// <summary>
         /// Gets the resource type (e.g. Document, Script, Stylesheet).
         /// </summary>
         internal string ResourceType { get; }
@@ -308,7 +317,7 @@ namespace PlaywrightNative.Chromium
 
             if (IsNavigationRequest
                 && !string.IsNullOrEmpty(Url)
-                && string.Equals(Url, Frame.Url, StringComparison.Ordinal))
+                && FrameShowsUrl(Frame, Url))
             {
                 return false;
             }
@@ -320,6 +329,35 @@ namespace PlaywrightNative.Chromium
 
             return !string.IsNullOrEmpty(DocumentUrl)
                 && !string.Equals(DocumentUrl, Frame.Url, StringComparison.Ordinal);
+
+            static bool FrameShowsUrl(Frame frame, string url)
+            {
+                if (frame == null)
+                {
+                    return false;
+                }
+
+                if (string.Equals(url, frame.Url, StringComparison.Ordinal))
+                {
+                    return true;
+                }
+
+                IReadOnlyList<Frame> children = frame.ChildFrames;
+                if (children == null)
+                {
+                    return false;
+                }
+
+                for (int i = 0; i < children.Count; i++)
+                {
+                    if (FrameShowsUrl(children[i], url))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            }
         }
 
         /// <summary>
@@ -358,7 +396,11 @@ namespace PlaywrightNative.Chromium
         /// When <see langword="false"/>, skip completing the waiter if the list
         /// has no <c>Cookie</c> so extra-info can still supply the jar value.
         /// </param>
-        internal void SetRawRequestHeaders(IReadOnlyList<NameValueEntry> headers, bool completeWithoutCookie = true)
+        /// <param name="isFinal">
+        /// True when <paramref name="headers"/> came from a paused/intercepted
+        /// Fetch request and will not be refined by a later event.
+        /// </param>
+        internal void SetRawRequestHeaders(IReadOnlyList<NameValueEntry> headers, bool completeWithoutCookie = true, bool isFinal = false)
         {
             IReadOnlyList<NameValueEntry> resolved = MergeCookieIntoRaw(headers ?? HeaderMap.Array(Headers));
             if (!completeWithoutCookie && !HasCookie(resolved) && !_rawHeaders.Task.IsCompleted)
@@ -370,6 +412,11 @@ namespace PlaywrightNative.Chromium
             if (!string.IsNullOrEmpty(cookie))
             {
                 HeaderMap.Set(Headers, "cookie", cookie);
+            }
+
+            if (isFinal)
+            {
+                RawHeadersAreFinal = true;
             }
 
             _rawHeaders.TrySetResult(resolved);

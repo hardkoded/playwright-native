@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.Chromium;
 using PlaywrightNative.NUnit;
@@ -142,7 +143,7 @@ namespace PlaywrightNative.Tests.Chromium
             await Page.GoToAsync("data:text/html,<div id='d'>not fillable</div>").ConfigureAwait(false);
             await using CRElementHandle handle = await Page.QuerySelectorAsync("#d").ConfigureAwait(false);
 
-            PlaywrightNativeException ex = Assert.ThrowsAsync<PlaywrightNativeException>(
+            PlaywrightException ex = Assert.ThrowsAsync<PlaywrightException>(
                 () => handle.FillAsync("anything"));
             Assert.That(ex.Message, Does.Contain("input").Or.Contain("textarea"));
         }

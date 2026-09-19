@@ -16,6 +16,7 @@
  */
 using System;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 
@@ -53,7 +54,7 @@ namespace PlaywrightNative.Tests
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
             await page.CloseAsync().ConfigureAwait(false);
 
-            PlaywrightNativeException ex = Assert.CatchAsync<PlaywrightNativeException>(() => page.PauseAsync());
+            PlaywrightException ex = Assert.CatchAsync<PlaywrightException>(() => page.PauseAsync());
             Assert.That(ex, Is.Not.Null);
             Assert.That(ex.Message, Does.Contain("page.pause"));
             Assert.That(ex.Message, Does.Contain("closed"));

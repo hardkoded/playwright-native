@@ -7,12 +7,15 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -51,6 +54,84 @@ namespace PlaywrightNative.Helpers
 
         internal const string WritePrefixFunction = @"(p) => { window.__pwAriaFramePrefix = String(p); return true; }";
 
+        /// <summary>
+        /// Parent-document check for <c>loading=lazy</c> without callFunctionOn
+        /// on the iframe objectId (Darwin wedges that path for unloaded lazy frames).
+        /// </summary>
+        private const string IsLazyIframeRefFunction = @"(ref) => {
+  const want = String(ref || '');
+  const visit = (el) => {
+    if (!el || el.nodeType !== 1) return null;
+    if (el._ariaRef && el._ariaRef.ref === want) return el;
+    const kids = el.children || [];
+    for (let i = 0; i < kids.length; i++) {
+      const hit = visit(kids[i]);
+      if (hit) return hit;
+    }
+    if (el.shadowRoot) {
+      const sk = el.shadowRoot.children || [];
+      for (let i = 0; i < sk.length; i++) {
+        const hit = visit(sk[i]);
+        if (hit) return hit;
+      }
+    }
+    return null;
+  };
+  const el = visit(document.documentElement);
+  if (el) {
+    return (el.getAttribute('loading') || '').toLowerCase() === 'lazy';
+  }
+  const frames = document.querySelectorAll('iframe, frame');
+  if (!frames.length) return false;
+  for (let i = 0; i < frames.length; i++) {
+    if ((frames[i].getAttribute('loading') || '').toLowerCase() !== 'lazy') return false;
+  }
+  return true;
+}";
+
+        /// <summary>
+        /// True when the iframe is safe to resolve via protocol ContentFrame.
+        /// Same-origin documents must be past <c>loading</c>. Opaque frames
+        /// such as <c>data:</c> expose <c>contentWindow</c> with a null
+        /// <c>contentDocument</c> and must still return true. Cross-origin
+        /// frames throw on <c>contentDocument</c> and return true. Lazy-
+        /// unloaded frames without a window return false so Darwin WebKit
+        /// can skip hanging <c>DOM.describeNode</c>.
+        /// </summary>
+        private const string IframeCaptureReadyFunction = @"(el) => {
+  try {
+    const loading = (el.getAttribute('loading') || '').toLowerCase();
+    // Unloaded lazy iframes: never touch contentDocument / describeNode —
+    // Darwin WebKit never replies, and a stuck command blocks later evaluates
+    // on the same target until the session command timeout (NUnit 30s).
+    if (loading === 'lazy') {
+      return false;
+    }
+    const src = el.getAttribute('src') || '';
+    const doc = el.contentDocument;
+    if (doc) {
+      if (!doc.documentElement) {
+        return false;
+      }
+      const url = doc.URL || '';
+      if (src && src !== 'about:blank' && (!url || url === 'about:blank')) {
+        return false;
+      }
+      if (doc.readyState === 'loading') {
+        return false;
+      }
+      return true;
+    }
+    // Opaque / cross-origin frames (e.g. data:) expose contentWindow but
+    // null contentDocument without throwing. Still ask the protocol for the
+    // content frame so AI stitch can capture them.
+    return !!el.contentWindow;
+  } catch (e) {
+    // Cross-origin contentDocument access throws — still stitch via protocol.
+    return true;
+  }
+}";
+
         private static readonly ConditionalWeakTable<IPage, State> PageState = new ConditionalWeakTable<IPage, State>();
 
         /// <summary>
@@ -70,23 +151,52 @@ namespace PlaywrightNative.Helpers
 
             try
             {
+                // Cap readyState wait so SnapshotForAI(timeout: 3000) cannot burn
+                // the full NUnit budget when lazy iframes keep readyState busy.
+                // interactive/complete still auto-waits navigations (reload).
+                float waitMs = timeout ?? 3_000f;
+                if (waitMs > 1_500f)
+                {
+                    waitMs = 1_500f;
+                }
+
                 await page.WaitForFunctionAsync(
-                    "() => document.readyState === 'complete'",
-                    timeout: timeout).ConfigureAwait(false);
+                    "() => document.readyState === 'complete' || document.readyState === 'interactive'",
+                    timeout: waitMs).ConfigureAwait(false);
             }
             catch (TimeoutException)
             {
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
 
             IElementHandle root = await page.Locator("body, frameset").First.ElementHandleAsync(timeout).ConfigureAwait(false);
-            await EnsurePrefixesAsync(page).ConfigureAwait(false);
+            Stopwatch deadlineClock = Stopwatch.StartNew();
+            int budgetMs = TimeoutSettings.TimeoutMs(timeout);
+            if (budgetMs > 3_000)
+            {
+                budgetMs = 3_000;
+            }
+
+            await EnsurePrefixesAsync(page, deadlineClock, budgetMs).ConfigureAwait(false);
             IFrame frame = page.MainFrame;
-            string prefix = await PrefixForAsync(page, frame).ConfigureAwait(false);
-            string yaml = await AriaSnapshotOfficialAi.CaptureYamlAsync(root, depth, boxes, prefix).ConfigureAwait(false);
-            return await StitchAsync(page, frame, yaml, depth, boxes, timeout).ConfigureAwait(false);
+            string prefix = await RaceOrDefaultAsync(
+                () => PrefixForAsync(page, frame),
+                deadlineClock,
+                budgetMs,
+                fallback: string.Empty).ConfigureAwait(false);
+            string yaml = await RaceOrDefaultAsync(
+                () => AriaSnapshotOfficialAi.CaptureYamlAsync(root, depth, boxes, prefix),
+                deadlineClock,
+                budgetMs,
+                fallback: string.Empty).ConfigureAwait(false);
+            if (string.IsNullOrEmpty(yaml))
+            {
+                return string.Empty;
+            }
+
+            return await StitchAsync(page, frame, yaml, depth, boxes, deadlineClock, budgetMs).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -106,23 +216,44 @@ namespace PlaywrightNative.Helpers
 
             try
             {
+                float waitMs = timeout ?? 3_000f;
+                if (waitMs > 1_500f)
+                {
+                    waitMs = 1_500f;
+                }
+
                 await page.WaitForFunctionAsync(
-                    "() => document.readyState === 'complete'",
-                    timeout: timeout).ConfigureAwait(false);
+                    "() => document.readyState === 'complete' || document.readyState === 'interactive'",
+                    timeout: waitMs).ConfigureAwait(false);
             }
             catch (TimeoutException)
             {
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
 
             IElementHandle root = await page.Locator("body, frameset").First.ElementHandleAsync(timeout).ConfigureAwait(false);
-            await EnsurePrefixesAsync(page).ConfigureAwait(false);
+            Stopwatch deadlineClock = Stopwatch.StartNew();
+            int budgetMs = TimeoutSettings.TimeoutMs(timeout);
+            if (budgetMs > 3_000)
+            {
+                budgetMs = 3_000;
+            }
+
+            await EnsurePrefixesAsync(page, deadlineClock, budgetMs).ConfigureAwait(false);
             IFrame frame = page.MainFrame;
-            string prefix = await PrefixForAsync(page, frame).ConfigureAwait(false);
-            string json = await AriaSnapshotOfficialAi.CaptureJsonAsync(root, depth, boxes, prefix).ConfigureAwait(false);
-            return await StitchJsonAsync(page, frame, json, depth, boxes, timeout).ConfigureAwait(false);
+            string prefix = await RaceOrDefaultAsync(
+                () => PrefixForAsync(page, frame),
+                deadlineClock,
+                budgetMs,
+                fallback: string.Empty).ConfigureAwait(false);
+            string json = await RaceOrDefaultAsync(
+                () => AriaSnapshotOfficialAi.CaptureJsonAsync(root, depth, boxes, prefix),
+                deadlineClock,
+                budgetMs,
+                fallback: "[]").ConfigureAwait(false);
+            return await StitchJsonAsync(page, frame, json, depth, boxes, deadlineClock, budgetMs).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -143,13 +274,13 @@ namespace PlaywrightNative.Helpers
             IPage page = owner?.Page;
             if (page == null)
             {
-                throw new PlaywrightNativeException("Cannot take an aria snapshot of a detached element.");
+                throw new PlaywrightException("Cannot take an aria snapshot of a detached element.");
             }
 
-            await EnsurePrefixesAsync(page).ConfigureAwait(false);
+            await EnsurePrefixesAsync(page, Stopwatch.StartNew(), 2000).ConfigureAwait(false);
             string prefix = await PrefixForAsync(page, owner).ConfigureAwait(false);
             string yaml = await AriaSnapshotOfficialAi.CaptureYamlAsync(root, depth, boxes, prefix).ConfigureAwait(false);
-            return await StitchAsync(page, owner, yaml, depth, boxes, 2000).ConfigureAwait(false);
+            return await StitchAsync(page, owner, yaml, depth, boxes, Stopwatch.StartNew(), 2000).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -170,13 +301,13 @@ namespace PlaywrightNative.Helpers
             IPage page = owner?.Page;
             if (page == null)
             {
-                throw new PlaywrightNativeException("Cannot take an aria snapshot of a detached element.");
+                throw new PlaywrightException("Cannot take an aria snapshot of a detached element.");
             }
 
-            await EnsurePrefixesAsync(page).ConfigureAwait(false);
+            await EnsurePrefixesAsync(page, Stopwatch.StartNew(), 2000).ConfigureAwait(false);
             string prefix = await PrefixForAsync(page, owner).ConfigureAwait(false);
             string json = await AriaSnapshotOfficialAi.CaptureJsonAsync(root, depth, boxes, prefix).ConfigureAwait(false);
-            return await StitchJsonAsync(page, owner, json, depth, boxes, 2000).ConfigureAwait(false);
+            return await StitchJsonAsync(page, owner, json, depth, boxes, Stopwatch.StartNew(), 2000).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -256,7 +387,8 @@ namespace PlaywrightNative.Helpers
             string yaml,
             int? depth,
             bool boxes,
-            float? timeout,
+            Stopwatch deadlineClock,
+            int budgetMs,
             int depthOffset = 0)
         {
             if (string.IsNullOrEmpty(yaml))
@@ -289,54 +421,18 @@ namespace PlaywrightNative.Helpers
                     continue;
                 }
 
+                if (RemainingMs(deadlineClock, budgetMs) <= 0)
+                {
+                    result.Append(line);
+                    continue;
+                }
+
                 string ariaRef = match.Groups[2].Value;
-                IElementHandle iframeEl = await FindInFrameAsync(frame, ariaRef).ConfigureAwait(false);
-                IFrame child = null;
-                if (iframeEl != null)
-                {
-                    try
-                    {
-                        child = await iframeEl.ContentFrameAsync().ConfigureAwait(false);
-                    }
-                    catch (PlaywrightNativeException)
-                    {
-                        child = null;
-                    }
-                }
-
-                if (child == null || child.IsDetached)
-                {
-                    result.Append(line);
-                    continue;
-                }
-
-                int startDepth = lineDepth + 1;
-                string childYaml;
-                try
-                {
-                    IElementHandle childRoot = await child.QuerySelectorAsync("body, frameset").ConfigureAwait(false);
-                    if (childRoot == null)
-                    {
-                        result.Append(line);
-                        continue;
-                    }
-
-                    string prefix = await PrefixForAsync(page, child).ConfigureAwait(false);
-                    childYaml = await AriaSnapshotOfficialAi
-                        .CaptureYamlAsync(childRoot, depth, boxes, prefix, startDepth)
-                        .ConfigureAwait(false);
-                    childYaml = await StitchAsync(page, child, childYaml, depth, boxes, timeout, startDepth).ConfigureAwait(false);
-                }
-                catch (PlaywrightNativeException)
-                {
-                    result.Append(line);
-                    continue;
-                }
-                catch (TimeoutException)
-                {
-                    result.Append(line);
-                    continue;
-                }
+                string childYaml = await RaceOrDefaultAsync(
+                    () => CaptureChildYamlAsync(page, frame, ariaRef, depth, boxes, deadlineClock, budgetMs, lineDepth + 1),
+                    deadlineClock,
+                    budgetMs,
+                    fallback: null).ConfigureAwait(false);
 
                 if (string.IsNullOrEmpty(childYaml))
                 {
@@ -364,13 +460,50 @@ namespace PlaywrightNative.Helpers
             return result.ToString();
         }
 
+        private static async Task<string> CaptureChildYamlAsync(
+            IPage page,
+            IFrame frame,
+            string ariaRef,
+            int? depth,
+            bool boxes,
+            Stopwatch deadlineClock,
+            int budgetMs,
+            int startDepth)
+        {
+            if (await IsLazyIframeRefAsync(frame, ariaRef).ConfigureAwait(false))
+            {
+                return null;
+            }
+
+            IElementHandle iframeEl = await FindInFrameAsync(frame, ariaRef).ConfigureAwait(false);
+            IFrame child = await ContentFrameOrNullAsync(iframeEl).ConfigureAwait(false);
+            if (child == null || child.IsDetached)
+            {
+                return null;
+            }
+
+            IElementHandle childRoot = await child.QuerySelectorAsync("body, frameset").ConfigureAwait(false);
+            if (childRoot == null)
+            {
+                return null;
+            }
+
+            string prefix = await PrefixForAsync(page, child).ConfigureAwait(false);
+            string childYaml = await AriaSnapshotOfficialAi
+                .CaptureYamlAsync(childRoot, depth, boxes, prefix, startDepth)
+                .ConfigureAwait(false);
+            return await StitchAsync(page, child, childYaml, depth, boxes, deadlineClock, budgetMs, startDepth)
+                .ConfigureAwait(false);
+        }
+
         private static async Task<string> StitchJsonAsync(
             IPage page,
             IFrame frame,
             string json,
             int? depth,
             bool boxes,
-            float? timeout,
+            Stopwatch deadlineClock,
+            int budgetMs,
             int startDepth = 0)
         {
             if (string.IsNullOrEmpty(json))
@@ -393,7 +526,7 @@ namespace PlaywrightNative.Helpers
                 return "[]";
             }
 
-            await WalkJsonAsync(page, frame, root, depth, boxes, timeout, startDepth).ConfigureAwait(false);
+            await WalkJsonAsync(page, frame, root, depth, boxes, deadlineClock, budgetMs, startDepth).ConfigureAwait(false);
             return root.ToJsonString();
         }
 
@@ -403,14 +536,15 @@ namespace PlaywrightNative.Helpers
             JsonNode node,
             int? depth,
             bool boxes,
-            float? timeout,
+            Stopwatch deadlineClock,
+            int budgetMs,
             int nodeDepth)
         {
             if (node is JsonArray array)
             {
                 for (int i = 0; i < array.Count; i++)
                 {
-                    await WalkJsonAsync(page, frame, array[i], depth, boxes, timeout, nodeDepth).ConfigureAwait(false);
+                    await WalkJsonAsync(page, frame, array[i], depth, boxes, deadlineClock, budgetMs, nodeDepth).ConfigureAwait(false);
                 }
 
                 return;
@@ -426,19 +560,24 @@ namespace PlaywrightNative.Helpers
             if (string.Equals(role, "iframe", StringComparison.Ordinal) && !string.IsNullOrEmpty(ariaRef)
                 && (depth == null || nodeDepth < depth.Value))
             {
-                (IFrame childFrame, JsonArray childNodes) = await CaptureFrameJsonAsync(
-                    page, frame, ariaRef, depth, boxes, nodeDepth + 1).ConfigureAwait(false);
+                (IFrame childFrame, JsonArray childNodes) = await RaceOrDefaultAsync(
+                    () => CaptureFrameJsonAsync(page, frame, ariaRef, depth, boxes, nodeDepth + 1),
+                    deadlineClock,
+                    budgetMs,
+                    fallback: (null, null)).ConfigureAwait(false);
                 if (childNodes != null && childFrame != null)
                 {
                     obj["children"] = childNodes;
-                    await WalkJsonAsync(page, childFrame, childNodes, depth, boxes, timeout, nodeDepth + 1).ConfigureAwait(false);
+                    await WalkJsonAsync(page, childFrame, childNodes, depth, boxes, deadlineClock, budgetMs, nodeDepth + 1)
+                        .ConfigureAwait(false);
                     return;
                 }
             }
 
             if (obj["children"] is JsonArray children)
             {
-                await WalkJsonAsync(page, frame, children, depth, boxes, timeout, nodeDepth + 1).ConfigureAwait(false);
+                await WalkJsonAsync(page, frame, children, depth, boxes, deadlineClock, budgetMs, nodeDepth + 1)
+                    .ConfigureAwait(false);
             }
         }
 
@@ -450,20 +589,13 @@ namespace PlaywrightNative.Helpers
             bool boxes,
             int startDepth)
         {
-            IElementHandle iframeEl = await FindInFrameAsync(frame, ariaRef).ConfigureAwait(false);
-            IFrame child = null;
-            if (iframeEl != null)
+            if (await IsLazyIframeRefAsync(frame, ariaRef).ConfigureAwait(false))
             {
-                try
-                {
-                    child = await iframeEl.ContentFrameAsync().ConfigureAwait(false);
-                }
-                catch (PlaywrightNativeException)
-                {
-                    child = null;
-                }
+                return (null, null);
             }
 
+            IElementHandle iframeEl = await FindInFrameAsync(frame, ariaRef).ConfigureAwait(false);
+            IFrame child = await ContentFrameOrNullAsync(iframeEl).ConfigureAwait(false);
             if (child == null || child.IsDetached)
             {
                 return (null, null);
@@ -484,7 +616,7 @@ namespace PlaywrightNative.Helpers
                 JsonNode parsed = JsonNode.Parse(childJson ?? "[]");
                 return (child, parsed as JsonArray);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 return (null, null);
             }
@@ -498,7 +630,7 @@ namespace PlaywrightNative.Helpers
             }
         }
 
-        private static async Task EnsurePrefixesAsync(IPage page)
+        private static async Task EnsurePrefixesAsync(IPage page, Stopwatch deadlineClock, int budgetMs)
         {
             Queue<IFrame> queue = new Queue<IFrame>();
             IFrame main = page.MainFrame;
@@ -511,6 +643,11 @@ namespace PlaywrightNative.Helpers
             HashSet<IFrame> seen = new HashSet<IFrame>();
             while (queue.Count > 0)
             {
+                if (RemainingMs(deadlineClock, budgetMs) <= 0)
+                {
+                    return;
+                }
+
                 IFrame frame = queue.Dequeue();
                 if (frame == null || frame.IsDetached || !seen.Add(frame))
                 {
@@ -519,9 +656,13 @@ namespace PlaywrightNative.Helpers
 
                 try
                 {
-                    await PrefixForAsync(page, frame).ConfigureAwait(false);
+                    await RaceOrDefaultAsync(
+                        () => PrefixForAsync(page, frame),
+                        deadlineClock,
+                        budgetMs,
+                        fallback: string.Empty).ConfigureAwait(false);
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                     continue;
                 }
@@ -533,9 +674,13 @@ namespace PlaywrightNative.Helpers
                 IReadOnlyList<IElementHandle> hosts;
                 try
                 {
-                    hosts = await frame.QuerySelectorAllAsync("iframe, frame").ConfigureAwait(false);
+                    hosts = await RaceOrDefaultAsync(
+                        () => frame.QuerySelectorAllAsync("iframe:not([loading=lazy]), frame"),
+                        deadlineClock,
+                        budgetMs,
+                        fallback: (IReadOnlyList<IElementHandle>)Array.Empty<IElementHandle>()).ConfigureAwait(false);
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                     continue;
                 }
@@ -544,23 +689,127 @@ namespace PlaywrightNative.Helpers
                     continue;
                 }
 
+                if (hosts == null)
+                {
+                    continue;
+                }
+
                 for (int i = 0; i < hosts.Count; i++)
                 {
-                    IFrame child;
-                    try
+                    if (RemainingMs(deadlineClock, budgetMs) <= 0)
                     {
-                        child = await hosts[i].ContentFrameAsync().ConfigureAwait(false);
+                        return;
                     }
-                    catch (PlaywrightNativeException)
-                    {
-                        continue;
-                    }
+
+                    IFrame child = await RaceOrDefaultAsync(
+                        () => ContentFrameOrNullAsync(hosts[i]),
+                        deadlineClock,
+                        budgetMs,
+                        fallback: null).ConfigureAwait(false);
 
                     if (child != null && !child.IsDetached)
                     {
                         queue.Enqueue(child);
                     }
                 }
+            }
+        }
+
+        private static async Task<IFrame> ContentFrameOrNullAsync(IElementHandle iframeEl)
+        {
+            if (iframeEl == null)
+            {
+                return null;
+            }
+
+            try
+            {
+                // Prefer parent-document lazy checks (IsLazyIframeRefAsync /
+                // iframe:not([loading=lazy])) before this path. Ready script
+                // returns false for lazy without touching contentDocument.
+                bool ready = await iframeEl.EvaluateAsync<bool>(IframeCaptureReadyFunction)
+                    .ConfigureAwait(false);
+                if (!ready)
+                {
+                    return null;
+                }
+
+                return await iframeEl.ContentFrameAsync().ConfigureAwait(false);
+            }
+            catch (PlaywrightException)
+            {
+                return null;
+            }
+            catch (TimeoutException)
+            {
+                return null;
+            }
+        }
+
+        private static async Task<bool> IsLazyIframeRefAsync(IFrame frame, string ariaRef)
+        {
+            if (frame == null || frame.IsDetached || string.IsNullOrEmpty(ariaRef))
+            {
+                return false;
+            }
+
+            try
+            {
+                return await frame.EvaluateAsync<bool>(IsLazyIframeRefFunction, ariaRef)
+                    .ConfigureAwait(false);
+            }
+            catch (PlaywrightException)
+            {
+                return false;
+            }
+            catch (TimeoutException)
+            {
+                return false;
+            }
+        }
+
+        private static int RemainingMs(Stopwatch clock, int budgetMs)
+        {
+            if (budgetMs == Timeout.Infinite)
+            {
+                return int.MaxValue;
+            }
+
+            long left = budgetMs - clock.ElapsedMilliseconds;
+            return left <= 0 ? 0 : (int)Math.Min(int.MaxValue, left);
+        }
+
+        private static async Task<T> RaceOrDefaultAsync<T>(
+            Func<Task<T>> operation,
+            Stopwatch deadlineClock,
+            int budgetMs,
+            T fallback)
+        {
+            int left = RemainingMs(deadlineClock, budgetMs);
+            if (left <= 0)
+            {
+                return fallback;
+            }
+
+            Task<T> work = operation();
+            Task finished = await Task.WhenAny(work, Task.Delay(left)).ConfigureAwait(false);
+            if (finished != work)
+            {
+                // Leave the in-flight protocol call; callers treat timeout as empty iframe.
+                return fallback;
+            }
+
+            try
+            {
+                return await work.ConfigureAwait(false);
+            }
+            catch (PlaywrightException)
+            {
+                return fallback;
+            }
+            catch (TimeoutException)
+            {
+                return fallback;
             }
         }
 
@@ -575,7 +824,7 @@ namespace PlaywrightNative.Helpers
                     return existing;
                 }
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
             catch (TimeoutException)
@@ -602,7 +851,7 @@ namespace PlaywrightNative.Helpers
             {
                 await frame.EvaluateAsync<object>(WritePrefixFunction, prefix).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
 
@@ -621,7 +870,7 @@ namespace PlaywrightNative.Helpers
                 IJSHandle handle = await frame.EvaluateHandleAsync(FindRefFunction, ariaRef).ConfigureAwait(false);
                 return handle?.AsElement();
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 return null;
             }

@@ -53,18 +53,6 @@ namespace PlaywrightNative
 
         /// <inheritdoc/>
         public override string ToString()
-        {
-            if (!string.IsNullOrEmpty(Stack))
-            {
-                return Stack;
-            }
-
-            if (string.IsNullOrEmpty(Name))
-            {
-                return Message ?? string.Empty;
-            }
-
-            return Name + ": " + (Message ?? string.Empty);
-        }
+            => Helpers.PageErrorText.Format(this);
     }
 }

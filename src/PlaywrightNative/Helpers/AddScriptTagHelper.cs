@@ -16,6 +16,7 @@
  */
 using System;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -82,7 +83,7 @@ namespace PlaywrightNative.Helpers
         {
             if (string.IsNullOrEmpty(url) && string.IsNullOrEmpty(path) && string.IsNullOrEmpty(content))
             {
-                throw new PlaywrightNativeException(MissingOptionsMessage);
+                throw new PlaywrightException(MissingOptionsMessage);
             }
 
             if (!string.IsNullOrEmpty(path))
@@ -118,9 +119,30 @@ namespace PlaywrightNative.Helpers
                 return false;
             }
 
-            string text = message.Text ?? string.Empty;
+            return IsCspErrorText(message.Text);
+        }
+
+        /// <summary>
+        /// Whether console/page text is a CSP refusal (WebKit/Chromium/Firefox wording).
+        /// </summary>
+        /// <param name="text">Message text.</param>
+        /// <returns><see langword="true"/> when the text names CSP.</returns>
+        internal static bool IsCspErrorText(string text)
+        {
+            if (string.IsNullOrEmpty(text))
+            {
+                return false;
+            }
+
+            // Official frames.ts checks these two phrases; engines also emit
+            // "Refused to execute/apply … Content Security Policy" and CSP header names.
             return text.Contains("Content-Security-Policy", StringComparison.Ordinal)
-                || text.Contains("Content Security Policy", StringComparison.Ordinal);
+                || text.Contains("Content Security Policy", StringComparison.Ordinal)
+                || text.Contains("content security policy", StringComparison.OrdinalIgnoreCase)
+                || (text.Contains("Refused to execute a script", StringComparison.Ordinal)
+                    && text.Contains("directive", StringComparison.OrdinalIgnoreCase))
+                || (text.Contains("Refused to apply inline style", StringComparison.Ordinal)
+                    && text.Contains("directive", StringComparison.OrdinalIgnoreCase));
         }
 
         /// <summary>
@@ -170,7 +192,19 @@ namespace PlaywrightNative.Helpers
 
                 if (csp.Task.IsCompletedSuccessfully)
                 {
-                    throw new PlaywrightNativeException(await csp.Task.ConfigureAwait(false));
+                    throw new PlaywrightException(await csp.Task.ConfigureAwait(false));
+                }
+
+                // WebKit (esp. macOS under load) logs CSP console errors asynchronously
+                // after evaluateHandle returns, even after an extra round-trip. Keep the
+                // listener briefly so a late Console.messageAdded still wins.
+                if (actionTask.IsCompleted)
+                {
+                    _ = await Task.WhenAny(csp.Task, Task.Delay(100)).ConfigureAwait(false);
+                    if (csp.Task.IsCompletedSuccessfully)
+                    {
+                        throw new PlaywrightException(await csp.Task.ConfigureAwait(false));
+                    }
                 }
 
                 return await actionTask.ConfigureAwait(false);

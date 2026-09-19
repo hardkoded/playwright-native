@@ -19,6 +19,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Text.Json;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 using PlaywrightNative.TestServer;
@@ -176,7 +177,7 @@ namespace PlaywrightNative.Tests
             Assert.That(result, Is.EqualTo(36));
             await binding.DisposeAsync().ConfigureAwait(false);
 
-            PlaywrightNativeException exception = Assert.ThrowsAsync<PlaywrightNativeException>(
+            PlaywrightException exception = Assert.ThrowsAsync<PlaywrightException>(
                 async () => await page.EvaluateAsync<int>(
                     "(async function() { return await window['compute'](9, 4); })()").ConfigureAwait(false));
             Assert.That(exception.Message, Does.Contain("is not a function"));
@@ -192,15 +193,15 @@ namespace PlaywrightNative.Tests
             IBrowserContext context = await _browser.NewContextAsync().ConfigureAwait(false);
             await context.ExposeFunctionAsync("foo", () => { }).ConfigureAwait(false);
             await context.ExposeFunctionAsync("bar", () => { }).ConfigureAwait(false);
-            PlaywrightNativeException error = Assert.ThrowsAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.ThrowsAsync<PlaywrightException>(
                 async () => await context.ExposeFunctionAsync("foo", () => { }).ConfigureAwait(false));
             Assert.That(error.Message, Does.Contain("Function \"foo\" has been already registered"));
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
-            error = Assert.ThrowsAsync<PlaywrightNativeException>(
+            error = Assert.ThrowsAsync<PlaywrightException>(
                 async () => await page.ExposeFunctionAsync("foo", () => { }).ConfigureAwait(false));
             Assert.That(error.Message, Does.Contain("Function \"foo\" has been already registered in the browser context"));
             await page.ExposeFunctionAsync("baz", () => { }).ConfigureAwait(false);
-            error = Assert.ThrowsAsync<PlaywrightNativeException>(
+            error = Assert.ThrowsAsync<PlaywrightException>(
                 async () => await context.ExposeFunctionAsync("baz", () => { }).ConfigureAwait(false));
             Assert.That(error.Message, Does.Contain("Function \"baz\" has been already registered in one of the pages"));
             await context.CloseAsync().ConfigureAwait(false);

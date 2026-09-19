@@ -19,6 +19,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Text;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using PlaywrightNative.Helpers;
 
 namespace PlaywrightNative.WebKit
@@ -122,6 +123,26 @@ namespace PlaywrightNative.WebKit
         {
             RouteContinue.EnsureSameProtocol(Request.Url, url);
             byte[] body = postDataBytes ?? (postData == null ? null : Encoding.UTF8.GetBytes(postData));
+
+            // Restating the intercepted headers (page-request-fulfill "should not
+            // modify the headers sent to the server") must use interceptContinue.
+            // interceptWithRequest with a full header object makes macOS WebKit
+            // invent an extra wire header (commonly Content-Length: 0 on GET)
+            // that a natural continue never sends.
+            // Compare against InterceptedHeaders — FallbackAsync applies overrides
+            // to Request.Headers before ContinueAsync, so comparing to Headers
+            // would treat a real custom header as a no-op and drop it on the wire
+            // (RedirectedRequestsShouldReportOverriddenHeaders).
+            bool headersAreNoOp = false;
+            if (headers != null && url == null && method == null && body == null)
+            {
+                IDictionary<string, string> baseline = Request.InterceptedHeaders ?? Request.Headers;
+                Dictionary<string, string> merged = RouteContinue.ApplyHeadersOverrides(baseline, headers);
+                headersAreNoOp = RouteContinue.HeaderMapsEqual(
+                    WithoutTransferSizing(RouteContinue.RemoveCookie(merged)),
+                    WithoutTransferSizing(RouteContinue.RemoveCookie(baseline)));
+            }
+
             Request.ApplyContinueOverrides(url, method, headers, body);
             _page.NoteContinuedNavigation(Request);
 
@@ -130,10 +151,34 @@ namespace PlaywrightNative.WebKit
             string sendUrl = url ?? Request.ContinuedUrl;
             string sendMethod = method ?? Request.ContinuedMethod;
             byte[] sendBody = body ?? Request.ContinuedPostData;
-            IDictionary<string, string> protocolHeaders = Request.ContinuedHeaders;
+            IDictionary<string, string> protocolHeaders = headersAreNoOp ? null : Request.ContinuedHeaders;
             if (sendBody != null)
             {
+                // WebKit's Network.interceptWithRequest replaces the full header
+                // set when |headers| is present. If only postData was overridden,
+                // ContinuedHeaders is null — start from the original request so
+                // Content-Type and friends survive, then set Content-Length to the
+                // new body size (base64 postData is already byte-accurate).
+                if (protocolHeaders == null)
+                {
+                    protocolHeaders = RouteContinue.RemoveCookie(Request.Headers);
+                }
+
                 protocolHeaders = WithContentLength(protocolHeaders, sendBody.Length);
+            }
+
+            // RouteContinue strips proxy-* as forbidden, but WebKit proxy auth is
+            // carried as Proxy-Authorization in context ExtraHTTPHeaders. Reinject
+            // it onto the protocol continue payload so auto-continue (locale /
+            // extras interception) does not drop credentials.
+            protocolHeaders = WithProxyAuthorization(protocolHeaders);
+
+            // Header-only interceptWithRequest on macOS WebKit invents
+            // Content-Length: 0 for GET/HEAD. Strip transfer sizing headers unless
+            // we are also overriding the body (WithContentLength above).
+            if (protocolHeaders != null && sendBody == null)
+            {
+                protocolHeaders = WithoutTransferSizing(protocolHeaders);
             }
 
             if (sendUrl == null && sendMethod == null && protocolHeaders == null && sendBody == null)
@@ -146,7 +191,7 @@ namespace PlaywrightNative.WebKit
                         stage = "request",
                     }).ConfigureAwait(false);
                 }
-                catch (PlaywrightNativeException ex) when (IsCancelledInterception(ex))
+                catch (PlaywrightException ex) when (IsCancelledInterception(ex))
                 {
                 }
 
@@ -168,7 +213,25 @@ namespace PlaywrightNative.WebKit
                 parameters["method"] = sendMethod;
             }
 
-            if (protocolHeaders != null)
+            // Changing method to POST/PUT/… without a body still needs an empty
+            // postData on Linux WebKit or the continued navigation never fires
+            // (ShouldOverrideMethodAlongWithUrl).
+            if (sendBody == null
+                && sendMethod != null
+                && !string.Equals(sendMethod, "GET", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(sendMethod, "HEAD", StringComparison.OrdinalIgnoreCase))
+            {
+                sendBody = Array.Empty<byte>();
+                protocolHeaders = WithContentLength(
+                    protocolHeaders ?? RouteContinue.RemoveCookie(Request.Headers),
+                    0);
+                if (protocolHeaders != null)
+                {
+                    parameters["headers"] = protocolHeaders;
+                }
+            }
+
+            if (protocolHeaders != null && !parameters.ContainsKey("headers"))
             {
                 parameters["headers"] = protocolHeaders;
             }
@@ -182,7 +245,7 @@ namespace PlaywrightNative.WebKit
             {
                 await _session.SendAsync("Network.interceptWithRequest", parameters).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException ex) when (IsCancelledInterception(ex))
+            catch (PlaywrightException ex) when (IsCancelledInterception(ex))
             {
             }
         }
@@ -207,7 +270,7 @@ namespace PlaywrightNative.WebKit
 
             if (statusCode >= 300 && statusCode < 400)
             {
-                throw new PlaywrightNativeException("Cannot fulfill with redirect status");
+                throw new PlaywrightException("Cannot fulfill with redirect status");
             }
 
             Dictionary<string, string> responseHeaders = new(StringComparer.OrdinalIgnoreCase);
@@ -234,7 +297,16 @@ namespace PlaywrightNative.WebKit
             byte[] rawBody = bodyBytes ?? (body == null ? Array.Empty<byte>() : Encoding.UTF8.GetBytes(body));
             responseHeaders.Remove("content-encoding");
             responseHeaders.Remove("transfer-encoding");
-            responseHeaders["content-length"] = rawBody.Length.ToString(CultureInfo.InvariantCulture);
+
+            // Upstream wkInterceptableRequest.fulfill does not invent Content-Length
+            // for empty default fulfills (page-request-intercept expects only
+            // content-type). Non-empty bodies still need content-length so
+            // response.allHeaders() matches route.fulfill({ body }) on macOS/Linux.
+            if (rawBody.Length > 0
+                && !responseHeaders.ContainsKey("content-length"))
+            {
+                responseHeaders["content-length"] = rawBody.Length.ToString(CultureInfo.InvariantCulture);
+            }
 
             string mimeType = MimeTypeFor(contentType, responseHeaders);
             string statusText = HttpStatusText.For(statusCode);
@@ -253,7 +325,7 @@ namespace PlaywrightNative.WebKit
                     headers = responseHeaders,
                 }).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException ex) when (
+            catch (PlaywrightException ex) when (
                 IsCancelledInterception(ex)
                 || ex.Message.Contains("already been processed", StringComparison.OrdinalIgnoreCase))
             {
@@ -279,7 +351,7 @@ namespace PlaywrightNative.WebKit
         {
             if (_handled)
             {
-                throw new PlaywrightNativeException("Route is already handled!");
+                throw new PlaywrightException("Route is already handled!");
             }
 
             byte[] body = postDataBytes ?? (postData == null ? null : Encoding.UTF8.GetBytes(postData));
@@ -334,7 +406,7 @@ namespace PlaywrightNative.WebKit
                     errorType,
                 }).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException ex) when (
+            catch (PlaywrightException ex) when (
                 IsCancelledInterception(ex)
                 || ex.Message.Contains("already been processed", StringComparison.OrdinalIgnoreCase))
             {
@@ -351,12 +423,29 @@ namespace PlaywrightNative.WebKit
             Dictionary<string, string> result = headers == null
                 ? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
                 : new Dictionary<string, string>(headers, StringComparer.OrdinalIgnoreCase);
-            if (!result.ContainsKey("content-length"))
+            result["content-length"] = length.ToString(CultureInfo.InvariantCulture);
+            return result;
+        }
+
+        private static IDictionary<string, string> WithoutTransferSizing(IDictionary<string, string> headers)
+        {
+            if (headers == null)
             {
-                result["content-length"] = length.ToString(CultureInfo.InvariantCulture);
+                return null;
             }
 
-            return result;
+            Dictionary<string, string> result = null;
+            foreach (KeyValuePair<string, string> header in headers)
+            {
+                if (string.Equals(header.Key, "content-length", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(header.Key, "transfer-encoding", StringComparison.OrdinalIgnoreCase))
+                {
+                    result ??= new Dictionary<string, string>(headers, StringComparer.OrdinalIgnoreCase);
+                    result.Remove(header.Key);
+                }
+            }
+
+            return result ?? headers;
         }
 
         private static bool IsCancelledInterception(Exception ex)
@@ -404,11 +493,41 @@ namespace PlaywrightNative.WebKit
             return "General";
         }
 
+        private IDictionary<string, string> WithProxyAuthorization(IDictionary<string, string> headers)
+        {
+            Dictionary<string, string> extra = ExtraHttpHeaders.Merged(_page.Context, _page.PageExtraHttpHeaders);
+            if (extra == null || extra.Count == 0)
+            {
+                return headers;
+            }
+
+            string proxyAuthorization = null;
+            foreach (KeyValuePair<string, string> pair in extra)
+            {
+                if (string.Equals(pair.Key, "Proxy-Authorization", StringComparison.OrdinalIgnoreCase))
+                {
+                    proxyAuthorization = pair.Value;
+                    break;
+                }
+            }
+
+            if (proxyAuthorization == null)
+            {
+                return headers;
+            }
+
+            Dictionary<string, string> result = headers == null
+                ? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                : new Dictionary<string, string>(headers, StringComparer.OrdinalIgnoreCase);
+            result["Proxy-Authorization"] = proxyAuthorization;
+            return result;
+        }
+
         private void EnsureNotHandled()
         {
             if (_handled)
             {
-                throw new PlaywrightNativeException("Route is already handled!");
+                throw new PlaywrightException("Route is already handled!");
             }
 
             _handled = true;

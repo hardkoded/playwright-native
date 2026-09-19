@@ -16,6 +16,7 @@
  */
 using System;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -68,7 +69,7 @@ namespace PlaywrightNative.Helpers
                 string readyState = await page.EvaluateAsync<string>("(() => document.readyState)()").ConfigureAwait(false);
                 Apply(record, readyState);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 // Execution context is not available yet.
             }

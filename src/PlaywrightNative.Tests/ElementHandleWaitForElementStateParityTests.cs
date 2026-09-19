@@ -17,6 +17,7 @@
 using System;
 using System.Globalization;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 using PlaywrightNative.TestServer;
@@ -148,7 +149,7 @@ namespace PlaywrightNative.Tests
             IElementHandle div = await page.QuerySelectorAsync("div").ConfigureAwait(false);
             Task waitTask = div.WaitForElementStateAsync(ElementState.Visible);
             await div.EvaluateAsync("div => div.remove()").ConfigureAwait(false);
-            PlaywrightNativeException error = Assert.ThrowsAsync<PlaywrightNativeException>(() => waitTask);
+            PlaywrightException error = Assert.ThrowsAsync<PlaywrightException>(() => waitTask);
             Assert.That(error.Message, Does.Contain("Element is not attached to the DOM"));
         }
 
@@ -225,7 +226,7 @@ namespace PlaywrightNative.Tests
             IElementHandle button = await page.QuerySelectorAsync("button").ConfigureAwait(false);
             Task waitTask = button.WaitForElementStateAsync(ElementState.Enabled);
             await button.EvaluateAsync("button => button.remove()").ConfigureAwait(false);
-            PlaywrightNativeException error = Assert.ThrowsAsync<PlaywrightNativeException>(() => waitTask);
+            PlaywrightException error = Assert.ThrowsAsync<PlaywrightException>(() => waitTask);
             Assert.That(error.Message, Does.Contain("Element is not attached to the DOM"));
         }
 

@@ -18,6 +18,7 @@ using System;
 using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -59,7 +60,7 @@ namespace PlaywrightNative.Helpers
                             return;
                         }
 
-                        throw new PlaywrightNativeException(ClickAction.NotAttachedMessage);
+                        throw new PlaywrightException(ClickAction.NotAttachedMessage);
                     }
 
                     done = wanted switch
@@ -72,7 +73,7 @@ namespace PlaywrightNative.Helpers
                         _ => await handle.IsVisibleAsync().ConfigureAwait(false),
                     };
                 }
-                catch (PlaywrightNativeException ex) when (!IsNotAttached(ex))
+                catch (PlaywrightException ex) when (!IsNotAttached(ex))
                 {
                     if (wanted == ElementState.Hidden)
                     {
@@ -112,7 +113,7 @@ namespace PlaywrightNative.Helpers
             return WaitAsync(handle, ElementState.Visible, timeout);
         }
 
-        private static bool IsNotAttached(PlaywrightNativeException ex)
+        private static bool IsNotAttached(PlaywrightException ex)
             => ex != null && !string.IsNullOrEmpty(ex.Message)
                 && ex.Message.Contains(ClickAction.NotAttachedMessage, StringComparison.Ordinal);
 
@@ -122,7 +123,7 @@ namespace PlaywrightNative.Helpers
             {
                 return await handle.EvaluateAsync<bool>("el => !!(el && el.isConnected)").ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 return false;
             }

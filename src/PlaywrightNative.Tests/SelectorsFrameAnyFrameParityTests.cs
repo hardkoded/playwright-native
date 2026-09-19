@@ -16,6 +16,7 @@
  */
 using System;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 
@@ -202,7 +203,7 @@ namespace PlaywrightNative.Tests
                 }
             }
 
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => Page.Locator("internal:control=any-frame >> div").InnerHTMLAsync());
             Assert.That(error.Message, Does.Contain("frameLocator() matched elements in multiple frames"));
         }
@@ -214,7 +215,7 @@ namespace PlaywrightNative.Tests
         {
             await RouteIframeAsync(Page).ConfigureAwait(false);
             await Page.GoToAsync(EmptyPage).ConfigureAwait(false);
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => Page.Locator("iframe >> internal:control=any-frame >> div").WaitForAsync());
             Assert.That(error.Message, Does.Contain("\"any-frame\" is only allowed as the first selector token"));
         }
@@ -236,7 +237,7 @@ namespace PlaywrightNative.Tests
         [Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldNotAllowAnyFrameAfterEnteringAFrame()
         {
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => Page.Locator("iframe >> internal:control=enter-frame >> internal:control=any-frame >> button").CountAsync());
             Assert.That(error.Message, Does.Contain("\"any-frame\" is only allowed as the first selector token"));
         }
@@ -246,7 +247,7 @@ namespace PlaywrightNative.Tests
         [Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldNotAllowDanglingEnterFrameAfterAnyFrame()
         {
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => Page.Locator("internal:control=any-frame >> iframe >> internal:control=enter-frame").CountAsync());
             Assert.That(error.Message, Does.Contain("Selector cannot end with entering frame"));
         }

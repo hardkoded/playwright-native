@@ -149,6 +149,43 @@ namespace PlaywrightNative.Helpers
 }";
 
         /// <summary>
+        /// Computed ARIA role for <c>expect().toHaveRole</c>: explicit
+        /// <c>role</c> attribute, else the implicit HTML role (e.g. link for
+        /// <c>&lt;a href&gt;</c>). Avoids WebKit
+        /// <c>DOM.getAccessibilityPropertiesForNode</c> walks that can hang
+        /// the expect poll on Darwin.
+        /// </summary>
+        internal const string GetAriaRoleFunction = @"el => {
+    function implicitRole(node) {
+        const tag = node && node.nodeName;
+        if (tag === 'BUTTON') return 'button';
+        if (tag === 'H1' || tag === 'H2' || tag === 'H3' || tag === 'H4' || tag === 'H5' || tag === 'H6') return 'heading';
+        if (tag === 'A' && node.hasAttribute('href')) return 'link';
+        if (tag === 'SELECT') return node.hasAttribute('multiple') || Number(node.size) > 1 ? 'listbox' : 'combobox';
+        if (tag === 'TEXTAREA') return 'textbox';
+        if (tag === 'IMG') return 'img';
+        if (tag === 'INPUT') {
+            const t = String(node.type || '').toLowerCase();
+            if (t === 'checkbox') return 'checkbox';
+            if (t === 'radio') return 'radio';
+            if (t === 'button' || t === 'submit' || t === 'reset' || t === 'image' || t === 'file') return 'button';
+            if (t === 'hidden') return '';
+            return 'textbox';
+        }
+        return '';
+    }
+    if (!el) {
+        return '';
+    }
+    const roles = String(el.getAttribute('role') || '').split(' ');
+    for (let i = 0; i < roles.length; i++) {
+        const r = roles[i].trim();
+        if (r) return r;
+    }
+    return implicitRole(el);
+}";
+
+        /// <summary>
         /// Official <c>_activelyFocused</c>: the node is the active element of
         /// its root (document or shadow) and the document has focus.
         /// </summary>
@@ -506,13 +543,55 @@ namespace PlaywrightNative.Helpers
 
         /// <summary>
         /// JavaScript function <c>el => boolean</c> that checks a checkbox/radio if needed.
+        /// Honors checkable ARIA roles via <c>aria-checked</c> (native <c>el.checked</c>
+        /// is falsy on <c>role=checkbox</c> divs, which previously skipped the click and
+        /// fell through to a full actionability click that hung on Darwin WebKit).
         /// </summary>
-        internal const string CheckFunction = @"el => { if (el && el.nodeName === 'LABEL' && el.control) el = el.control; if (!el.checked) el.click(); return true; }";
+        internal const string CheckFunction = @"el => {
+    let node = el;
+    if (node && node.nodeName === 'LABEL' && node.control) {
+        node = node.control;
+    }
+    if (!node) {
+        return true;
+    }
+    const type = String(node.type || '').toLowerCase();
+    const isInput = node.nodeName === 'INPUT' && (type === 'checkbox' || type === 'radio');
+    const role = String(node.getAttribute('role') || '').toLowerCase();
+    const checkable = { checkbox: 1, menuitemcheckbox: 1, option: 1, radio: 1, switch: 1, menuitemradio: 1, treeitem: 1 };
+    const checked = isInput
+        ? !!node.checked
+        : (checkable[role] ? String(node.getAttribute('aria-checked') || '').toLowerCase() === 'true' : !!node.checked);
+    if (!checked) {
+        node.click();
+    }
+    return true;
+}";
 
         /// <summary>
         /// JavaScript function <c>el => boolean</c> that unchecks a checkbox if needed.
+        /// Same ARIA <c>aria-checked</c> handling as <see cref="CheckFunction"/>.
         /// </summary>
-        internal const string UncheckFunction = @"el => { if (el && el.nodeName === 'LABEL' && el.control) el = el.control; if (el.checked) el.click(); return true; }";
+        internal const string UncheckFunction = @"el => {
+    let node = el;
+    if (node && node.nodeName === 'LABEL' && node.control) {
+        node = node.control;
+    }
+    if (!node) {
+        return true;
+    }
+    const type = String(node.type || '').toLowerCase();
+    const isInput = node.nodeName === 'INPUT' && (type === 'checkbox' || type === 'radio');
+    const role = String(node.getAttribute('role') || '').toLowerCase();
+    const checkable = { checkbox: 1, menuitemcheckbox: 1, option: 1, radio: 1, switch: 1, menuitemradio: 1, treeitem: 1 };
+    const checked = isInput
+        ? !!node.checked
+        : (checkable[role] ? String(node.getAttribute('aria-checked') || '').toLowerCase() === 'true' : !!node.checked);
+    if (checked) {
+        node.click();
+    }
+    return true;
+}";
 
         /// <summary>
         /// JavaScript function <c>el => boolean</c> that dispatches a dblclick.
@@ -847,9 +926,10 @@ namespace PlaywrightNative.Helpers
 }";
 
         /// <summary>
-        /// JavaScript function <c>(el, json) => boolean</c> that draws official
+        /// JavaScript function <c>(el, json) => boolean</c> that marks the element
+        /// (<c>data-pw-highlight</c> + outline) and draws official
         /// <c>x-pw-highlight</c> / <c>x-pw-tooltip</c> overlays. <c>json</c> is
-        /// <c>{ tooltip, style }</c>.
+        /// <c>{ tooltip, style, id }</c>.
         /// </summary>
         internal const string HighlightFunction = @"(el, json) => {
     if (!el || !el.isConnected) {
@@ -869,6 +949,13 @@ namespace PlaywrightNative.Helpers
         if (existing[i].getAttribute('data-pw-hl') === id) {
             existing[i].remove();
         }
+    }
+    el.setAttribute('data-pw-highlight', 'true');
+    el.setAttribute('data-pw-hl', id);
+    if (style) {
+        el.style.cssText += ';' + style;
+    } else {
+        el.style.outline = '2px solid rgb(255, 0, 0)';
     }
     const box = el.getBoundingClientRect();
     const highlight = document.createElement('x-pw-highlight');
@@ -901,14 +988,22 @@ namespace PlaywrightNative.Helpers
 
         /// <summary>
         /// JavaScript function <c>id => undefined</c> that removes one locator
-        /// highlight by overlay id.
+        /// highlight by overlay / element id.
         /// </summary>
         internal const string HideHighlightByIdFunction = @"id => {
     const key = String(id || '');
-    const nodes = document.querySelectorAll('x-pw-highlight, x-pw-tooltip');
+    const nodes = document.querySelectorAll('x-pw-highlight, x-pw-tooltip, [data-pw-hl]');
     for (let i = 0; i < nodes.length; i++) {
-        if (nodes[i].getAttribute('data-pw-hl') === key) {
+        if (nodes[i].getAttribute('data-pw-hl') !== key) {
+            continue;
+        }
+        const tag = String(nodes[i].tagName || '').toUpperCase();
+        if (tag === 'X-PW-HIGHLIGHT' || tag === 'X-PW-TOOLTIP') {
             nodes[i].remove();
+        } else {
+            nodes[i].removeAttribute('data-pw-highlight');
+            nodes[i].removeAttribute('data-pw-hl');
+            nodes[i].style.outline = '';
         }
     }
 }";
@@ -921,6 +1016,7 @@ namespace PlaywrightNative.Helpers
     for (let i = 0; i < nodes.length; i++) {
         if (nodes[i].hasAttribute && nodes[i].hasAttribute('data-pw-highlight')) {
             nodes[i].removeAttribute('data-pw-highlight');
+            nodes[i].removeAttribute('data-pw-hl');
             nodes[i].style.outline = '';
         } else {
             nodes[i].remove();
@@ -930,19 +1026,20 @@ namespace PlaywrightNative.Helpers
 }";
 
         /// <summary>
-        /// JavaScript IIFE that clears every locator highlight on the page.
+        /// JavaScript function that clears every locator highlight on the page.
         /// </summary>
-        internal const string HideAllHighlightsFunction = @"(() => {
+        internal const string HideAllHighlightsFunction = @"() => {
     const nodes = document.querySelectorAll('x-pw-highlight, x-pw-tooltip, [data-pw-highlight]');
     for (let i = 0; i < nodes.length; i++) {
         if (nodes[i].hasAttribute && nodes[i].hasAttribute('data-pw-highlight')) {
             nodes[i].removeAttribute('data-pw-highlight');
+            nodes[i].removeAttribute('data-pw-hl');
             nodes[i].style.outline = '';
         } else {
             nodes[i].remove();
         }
     }
-})()";
+}";
 
         /// <summary>
         /// JavaScript function <c>(el, testIdAttr) => string[]</c> used by
@@ -1040,6 +1137,18 @@ namespace PlaywrightNative.Helpers
     }
     return el.innerText;
 }";
+
+        /// <summary>
+        /// Expression using an in-scope <c>el</c> for atomic selector reads.
+        /// Throws when the node is not an <c>HTMLElement</c>.
+        /// </summary>
+        internal const string InnerTextValueExpression = @"(() => {
+    const view = el && el.ownerDocument && el.ownerDocument.defaultView;
+    if (!view || !(el instanceof view.HTMLElement)) {
+        throw new Error('Node is not an HTMLElement');
+    }
+    return el.innerText;
+})()";
 
         /// <summary>
         /// JavaScript function <c>(el, spec) => boolean</c> that compares

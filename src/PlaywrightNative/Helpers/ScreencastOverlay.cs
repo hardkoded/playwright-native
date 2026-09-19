@@ -21,6 +21,7 @@ using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -208,7 +209,7 @@ namespace PlaywrightNative.Helpers
                 {
                     await previous.DisposeAsync().ConfigureAwait(false);
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
             }
@@ -237,7 +238,7 @@ namespace PlaywrightNative.Helpers
                     await installed.DisposeAsync().ConfigureAwait(false);
                 }
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
         }
@@ -248,7 +249,7 @@ namespace PlaywrightNative.Helpers
             {
                 await page.EvaluateAsync(BuildInstallScript(overlays, visible, replace)).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
         }
@@ -285,7 +286,7 @@ namespace PlaywrightNative.Helpers
             {
                 await page.EvaluateAsync(script).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
         }

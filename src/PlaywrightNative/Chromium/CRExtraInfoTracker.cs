@@ -147,7 +147,17 @@ namespace PlaywrightNative.Chromium
                     hop.FlushRequest();
                     hop.FlushResponse();
                     hop.Request?.EnsureRawRequestHeaders();
-                    hop.Response?.EnsureRawResponseHeaders();
+
+                    // Official _checkFinished keeps waiting when hasExtraInfo is
+                    // set and the extra event has not been paired yet. Sealing
+                    // provisional headers here comma-joins duplicates
+                    // (ShouldReportAllHeaders).
+                    if (hop.Response == null
+                        || !hop.Response.ExpectsExtraInfo
+                        || hop.HasResponseExtra)
+                    {
+                        hop.Response?.EnsureRawResponseHeaders();
+                    }
                 }
             }
         }
@@ -260,14 +270,25 @@ namespace PlaywrightNative.Chromium
                     return;
                 }
 
-                IReadOnlyList<NameValueEntry> fromText = _responseExtra.TryGetProperty("headersText", out JsonElement textElement)
-                    ? ResponseHeaders.ParseHeadersText(textElement.GetString())
+                // Official responseExtraInfoTracker._patchHeaders uses
+                // headersObjectToArray(responseExtraInfo.headers, '\n') — not
+                // headersText. Chrome joins duplicate non-cookie values with
+                // '\n' in the headers object; headersText may collapse them to
+                // a single comma-joined line (ShouldReportAllHeaders).
+                IReadOnlyList<NameValueEntry> headers = _responseExtra.TryGetProperty("headers", out JsonElement headersEl)
+                    ? RawNetworkHeaders.FromObject(headersEl)
                     : Array.Empty<NameValueEntry>();
-                IReadOnlyList<NameValueEntry> headers = fromText.Count > 0
-                    ? fromText
-                    : _responseExtra.TryGetProperty("headers", out JsonElement headersEl)
-                        ? RawNetworkHeaders.FromObject(headersEl)
-                        : HeaderMap.Array(Response.Headers);
+                if (headers.Count == 0
+                    && _responseExtra.TryGetProperty("headersText", out JsonElement textElement))
+                {
+                    headers = ResponseHeaders.ParseHeadersText(textElement.GetString());
+                }
+
+                if (headers.Count == 0)
+                {
+                    headers = HeaderMap.Array(Response.Headers);
+                }
+
                 Response.ApplyExtraHeaders(headers);
             }
         }

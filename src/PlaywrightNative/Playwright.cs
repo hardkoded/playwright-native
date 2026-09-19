@@ -10,6 +10,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using PlaywrightNative.Helpers;
 
 namespace PlaywrightNative
@@ -202,11 +203,12 @@ namespace PlaywrightNative
             BrowserTypeLaunchGuard.ThrowIfPersistentForbidden(options);
             ThrowIfPageArgument(options.Args);
             ClientCertificatesProxy certsProxy = null;
+            string resolvedDir = null;
             try
             {
                 string executablePath = await ResolveExecutablePathAsync(SupportedBrowser.Chromium, options).ConfigureAwait(false);
                 bool ownsUserDataDir = string.IsNullOrEmpty(userDataDir);
-                string resolvedDir = ResolveUserDataDir(userDataDir);
+                resolvedDir = ResolveUserDataDir(userDataDir);
                 Proxy launchProxy = StartPersistentClientCertificates(options, out certsProxy);
 
                 PlaywrightNative.Chromium.CRBrowser crBrowser = await PlaywrightNative.Chromium.ChromiumBrowserType
@@ -249,6 +251,16 @@ namespace PlaywrightNative
             catch (Exception ex)
             {
                 certsProxy?.Dispose();
+                string annotated = BrowserTypeLaunchGuard.AppendProfileLockHint(
+                    ex.Message ?? string.Empty,
+                    resolvedDir);
+                if (!string.Equals(annotated, ex.Message, StringComparison.Ordinal))
+                {
+                    throw BrowserTypeLaunchGuard.WrapLaunch(
+                        "browserType.launchPersistentContext",
+                        new PlaywrightException(annotated, ex));
+                }
+
                 throw BrowserTypeLaunchGuard.WrapLaunch("browserType.launchPersistentContext", ex);
             }
         }
@@ -338,6 +350,39 @@ namespace PlaywrightNative
                     webkitCertsProxy = null;
                 }
 
+                // Apply locale / userAgent before the initial about:blank finishes
+                // init. setLanguages must precede document creation (locale stays
+                // en-US otherwise), and userAgent must be known before
+                // EnsureDefaultUserAgentHasSafariTokenAsync runs on macOS.
+                if (options is BrowserTypeLaunchPersistentContextOptions persistentEarly
+                    && context is WebKit.WKBrowserContext webkitEarly
+                    && (!string.IsNullOrEmpty(persistentEarly.Locale)
+                        || !string.IsNullOrEmpty(persistentEarly.UserAgent)))
+                {
+                    webkitEarly.ConfigureEmulation(
+                        viewport: null,
+                        userAgent: persistentEarly.UserAgent,
+                        extraHeaders: null,
+                        locale: persistentEarly.Locale);
+                    if (!string.IsNullOrEmpty(persistentEarly.Locale))
+                    {
+                        await webkitEarly.ApplyLanguagesAsync().ConfigureAwait(false);
+                    }
+                }
+
+                // Unlike Chromium's Target.setAutoAttach round-trip, WebKit's page-proxy-created
+                // event for the browser's own initial page can still be in flight when the
+                // launch call above resolves, so context.Pages can observe zero pages here.
+                // Official waits for the initial Page event (loadDefaultContext); mirror that.
+                await WaitForInitialPageAsync(context).ConfigureAwait(false);
+                if (options is BrowserTypeLaunchPersistentContextOptions persistentPatch
+                    && !string.IsNullOrEmpty(persistentPatch.Locale)
+                    && context is WebKit.WKBrowserContext webkitPatch)
+                {
+                    await PatchWebKitNavigatorLanguageAsync(webkitPatch, persistentPatch.Locale)
+                        .ConfigureAwait(false);
+                }
+
                 await ApplyPersistentEmulationAsync(context, options).ConfigureAwait(false);
                 return context;
             }
@@ -366,6 +411,65 @@ namespace PlaywrightNative
             return proxy.BrowserProxy;
         }
 
+        private static async Task PatchWebKitNavigatorLanguageAsync(WebKit.WKBrowserContext webkit, string locale)
+        {
+            if (webkit == null || string.IsNullOrEmpty(locale))
+            {
+                return;
+            }
+
+            // Persistent about:blank may already exist before setLanguages; define
+            // navigator.language on open pages so locale is visible without navigation.
+            const string script =
+                @"(lang) => {
+  try {
+    Object.defineProperty(navigator, 'language', { configurable: true, get() { return lang; } });
+    Object.defineProperty(navigator, 'languages', { configurable: true, get() { return Object.freeze([lang]); } });
+  } catch (e) {}
+}";
+            foreach (IPage page in webkit.Pages)
+            {
+                try
+                {
+                    await page.EvaluateAsync(script, locale).ConfigureAwait(false);
+                }
+                catch (PlaywrightException)
+                {
+                }
+            }
+        }
+
+        private static async Task WaitForInitialPageAsync(IBrowserContext context)
+        {
+            if (context.Pages.Count > 0)
+            {
+                return;
+            }
+
+            TaskCompletionSource<bool> firstPageTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            void OnFirstPage(object sender, IPage page) => firstPageTcs.TrySetResult(true);
+            context.Page += OnFirstPage;
+            try
+            {
+                if (context.Pages.Count > 0)
+                {
+                    return;
+                }
+
+                // This is closing a race measured in milliseconds (WKPage.OnPageProxyCreated
+                // hasn't run yet when LaunchAsync returns), not a real wait for the browser to
+                // start. A long fallback here would eat a caller's own action/test timeout
+                // before ever reaching their "no initial page" fallback (e.g. NewPageAsync()) —
+                // seen firsthand on CI's WebKit/Linux leg, where 30s here meant 30s stacked on
+                // top of every persistent-context test's own 30s timeout.
+                await Task.WhenAny(firstPageTcs.Task, Task.Delay(TimeSpan.FromSeconds(2))).ConfigureAwait(false);
+            }
+            finally
+            {
+                context.Page -= OnFirstPage;
+            }
+        }
+
         private static async Task ApplyPersistentEmulationAsync(IBrowserContext context, BrowserTypeLaunchOptions options)
         {
             if (options is not BrowserTypeLaunchPersistentContextOptions persistent)
@@ -388,6 +492,62 @@ namespace PlaywrightNative
             }
 
             await ServiceWorkerPolicyHelper.ApplyAsync(context, persistent.ServiceWorkers).ConfigureAwait(false);
+
+            // Chromium extension SWs stay paused until Network.enable. Adopt as
+            // soon as emulation fields are known so waitForDebugger does not
+            // time out the target during HAR/storage/page shims (UA test).
+            if (context is PlaywrightNative.Chromium.ChromiumBrowserContext chromiumEarly)
+            {
+                if (persistent.ViewportSize != null
+                    || !string.IsNullOrEmpty(persistent.Locale)
+                    || !string.IsNullOrEmpty(persistent.TimezoneId)
+                    || !string.IsNullOrEmpty(persistent.UserAgent)
+                    || persistent.Offline == true
+                    || persistent.ColorScheme != ColorScheme.Null
+                    || persistent.ReducedMotion != ReducedMotion.Null
+                    || persistent.ForcedColors != ForcedColors.Null
+                    || persistent.HasTouch == true
+                    || (persistent.ExtraHTTPHeaders != null && persistent.ExtraHTTPHeaders.Count > 0)
+                    || persistent.Geolocation != null
+                    || (persistent.Permissions != null && persistent.Permissions.Length > 0)
+                    || persistent.BypassCSP == true
+                    || persistent.IgnoreHTTPSErrors == true
+                    || persistent.JavaScriptEnabled == false
+                    || persistent.DeviceScaleFactor.HasValue
+                    || persistent.IsMobile == true
+                    || persistent.ScreenSize != null
+                    || persistent.AcceptDownloads == true
+                    || persistent.HttpCredentials != null
+                    || persistent.Contrast != Contrast.Null
+                    || ClientCertificateHelper.HasAny(persistent.ClientCertificates))
+                {
+                    chromiumEarly.ConfigureEmulation(
+                        persistent.ViewportSize,
+                        userAgent: persistent.UserAgent,
+                        extraHeaders: persistent.ExtraHTTPHeaders,
+                        locale: persistent.Locale,
+                        timezoneId: persistent.TimezoneId,
+                        offline: persistent.Offline,
+                        colorScheme: persistent.ColorScheme,
+                        reducedMotion: persistent.ReducedMotion,
+                        forcedColors: persistent.ForcedColors,
+                        hasTouch: persistent.HasTouch,
+                        geolocation: persistent.Geolocation,
+                        permissions: persistent.Permissions,
+                        bypassCSP: persistent.BypassCSP,
+                        ignoreHTTPSErrors: persistent.IgnoreHTTPSErrors,
+                        javaScriptEnabled: persistent.JavaScriptEnabled,
+                        deviceScaleFactor: persistent.DeviceScaleFactor,
+                        isMobile: persistent.IsMobile,
+                        screenSize: persistent.ScreenSize,
+                        acceptDownloads: persistent.AcceptDownloads,
+                        httpCredentials: persistent.HttpCredentials,
+                        contrast: persistent.Contrast);
+                }
+
+                await chromiumEarly.AdoptExistingServiceWorkersAsync().ConfigureAwait(false);
+            }
+
             HarRecorder.Start(
                 context,
                 persistent.RecordHarPath,
@@ -428,42 +588,15 @@ namespace PlaywrightNative
                 && !ClientCertificateHelper.HasAny(persistent.ClientCertificates))
             {
                 await ApplyPersistentDownloadBehaviorAsync(context).ConfigureAwait(false);
-                if (context is PlaywrightNative.Chromium.ChromiumBrowserContext chromiumWorkers)
-                {
-                    await chromiumWorkers.AdoptExistingServiceWorkersAsync().ConfigureAwait(false);
-                }
-
                 VideoRecorder.Start(context, persistent.RecordVideoDir, persistent.RecordVideoSize, persistent.ViewportSize);
                 return;
             }
 
             if (context is PlaywrightNative.Chromium.ChromiumBrowserContext chromium)
             {
-                chromium.ConfigureEmulation(
-                    persistent.ViewportSize,
-                    userAgent: persistent.UserAgent,
-                    extraHeaders: persistent.ExtraHTTPHeaders,
-                    locale: persistent.Locale,
-                    timezoneId: persistent.TimezoneId,
-                    offline: persistent.Offline,
-                    colorScheme: persistent.ColorScheme,
-                    reducedMotion: persistent.ReducedMotion,
-                    forcedColors: persistent.ForcedColors,
-                    hasTouch: persistent.HasTouch,
-                    geolocation: persistent.Geolocation,
-                    permissions: persistent.Permissions,
-                    bypassCSP: persistent.BypassCSP,
-                    ignoreHTTPSErrors: persistent.IgnoreHTTPSErrors,
-                    javaScriptEnabled: persistent.JavaScriptEnabled,
-                    deviceScaleFactor: persistent.DeviceScaleFactor,
-                    isMobile: persistent.IsMobile,
-                    screenSize: persistent.ScreenSize,
-                    acceptDownloads: persistent.AcceptDownloads,
-                    httpCredentials: persistent.HttpCredentials,
-                    contrast: persistent.Contrast);
+                // ConfigureEmulation + AdoptExisting already ran above.
                 await chromium.ApplyDownloadBehaviorAsync().ConfigureAwait(false);
                 await ApplyPersistentChromeToExistingPagesAsync(chromium).ConfigureAwait(false);
-                await chromium.AdoptExistingServiceWorkersAsync().ConfigureAwait(false);
                 VideoRecorder.Start(context, persistent.RecordVideoDir, persistent.RecordVideoSize, persistent.ViewportSize);
                 return;
             }
@@ -492,8 +625,10 @@ namespace PlaywrightNative
                     acceptDownloads: persistent.AcceptDownloads,
                     httpCredentials: persistent.HttpCredentials,
                     contrast: persistent.Contrast);
+                await webkit.ApplyIgnoreCertificateErrorsAsync().ConfigureAwait(false);
                 await webkit.ApplyDownloadBehaviorAsync().ConfigureAwait(false);
                 await webkit.ApplyLanguagesAsync().ConfigureAwait(false);
+                await PatchWebKitNavigatorLanguageAsync(webkit, persistent.Locale).ConfigureAwait(false);
                 await ApplyPersistentChromeToExistingPagesAsync(webkit).ConfigureAwait(false);
             }
 
@@ -561,7 +696,7 @@ namespace PlaywrightNative
             {
                 if (!string.IsNullOrEmpty(arg) && !arg.StartsWith('-'))
                 {
-                    throw new PlaywrightNativeException("Arguments can not specify page to be opened");
+                    throw new PlaywrightException("Arguments can not specify page to be opened");
                 }
             }
         }
@@ -644,6 +779,16 @@ namespace PlaywrightNative
         {
             if (!string.IsNullOrEmpty(options.ExecutablePath))
             {
+                // Official resolveExecutablePath throws immediately when the path is
+                // missing. Without this check we spawn a dead process and hang on the
+                // first protocol handshake ("Failed to launch" never appears).
+                if (!File.Exists(options.ExecutablePath))
+                {
+                    throw new PlaywrightException(
+                        "Failed to launch " + browser + " because executable doesn't exist at "
+                        + options.ExecutablePath);
+                }
+
                 return options.ExecutablePath;
             }
 
@@ -651,7 +796,7 @@ namespace PlaywrightNative
             {
                 if (browser != SupportedBrowser.Chromium)
                 {
-                    throw new PlaywrightNativeException("Browser channel is only supported when launching Chromium.");
+                    throw new PlaywrightException("Browser channel is only supported when launching Chromium.");
                 }
 
                 return BrowserChannelResolver.Resolve(options.Channel);

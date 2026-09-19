@@ -88,22 +88,22 @@ namespace PlaywrightNative.Helpers
             switch (name)
             {
                 case "Console":
+                    // Subscribe before ActionTrace yields. evaluate() also yields before
+                    // its body; if waitForEvent delayed subscribe until after that yield,
+                    // console.log from a racing evaluate could fire with no listener
+                    // (tracing "should not emit after w/o before" hangs 30s).
+                    Task<T> consoleWait = WaitTypedAsync<T, IConsoleMessage>(
+                        page,
+                        h => page.Console += h,
+                        h => page.Console -= h,
+                        matches,
+                        timeout);
                     return ActionTrace.RunAsync(
                         page.Context,
                         "Wait for event \"console\"",
                         "Page",
                         "waitForEvent",
-                        () => WaitTypedAsync<T, IConsoleMessage>(
-                            page,
-                            h => page.Console += h,
-                            h => page.Console -= h,
-                            matches,
-                            timeout,
-                            existingAfterSubscribe: async () =>
-                            {
-                                IReadOnlyList<IConsoleMessage> items = await page.ConsoleMessagesAsync().ConfigureAwait(false);
-                                return (IReadOnlyList<T>)items;
-                            }));
+                        () => consoleWait);
                 case "Dialog":
                     return WaitTypedAsync<T, IDialog>(
                         page,
@@ -203,13 +203,29 @@ namespace PlaywrightNative.Helpers
                         matches,
                         timeout);
                 case "PageError":
-                    return WaitTypedAsync<T, string>(
-                        page,
-                        h => page.PageError += h,
-                        h => page.PageError -= h,
-                        matches,
-                        timeout);
+                    // IPage.PageError is EventHandler<string> (Microsoft API), while
+                    // PageEvent.PageError is typed as PageErrorEventArgs for callers.
+                    if (typeof(T) == typeof(string))
+                    {
+                        return WaitTypedAsync<T, string>(
+                            page,
+                            h => page.PageError += h,
+                            h => page.PageError -= h,
+                            matches,
+                            timeout);
+                    }
+
+                    if (typeof(T) != typeof(PageErrorEventArgs))
+                    {
+                        throw new ArgumentException(
+                            $"Page event payload type is String, not {typeof(T).Name}.");
+                    }
+
+                    return WaitPageErrorAsArgsAsync(page, matches, timeout);
                 case "Load":
+                    // WKPage raises Load off the transport thread; default deferred
+                    // predicate evaluation is safe. Autowait order uses LifecycleWaiter's
+                    // Delay(1) drain when load is already recorded.
                     return WaitTypedAsync<T, IPage>(
                         page,
                         h => page.Load += h,
@@ -250,6 +266,27 @@ namespace PlaywrightNative.Helpers
             }
         }
 
+        private static async Task<T> WaitPageErrorAsArgsAsync<T>(
+            IPage page,
+            Func<T, bool> matches,
+            float? timeout)
+        {
+            string message = await WaitForEventHelper.WaitAsync<string>(
+                h => page.PageError += h,
+                h => page.PageError -= h,
+                raw =>
+                {
+                    PageErrorEventArgs args = PageErrorText.Parse(raw);
+                    return matches == null || matches((T)(object)args);
+                },
+                timeout,
+                "page.waitForEvent",
+                waitForEventName: "PageError",
+                abortOnPageClose: page,
+                abortOnPageCrash: true).ConfigureAwait(false);
+            return (T)(object)PageErrorText.Parse(message);
+        }
+
         private static async Task<T> WaitTypedAsync<T, TEvent>(
             IPage page,
             Action<EventHandler<TEvent>> addHandler,
@@ -259,7 +296,8 @@ namespace PlaywrightNative.Helpers
             string waitForEventName = null,
             bool abortOnClose = true,
             bool abortOnPageCrash = true,
-            Func<Task<IReadOnlyList<T>>> existingAfterSubscribe = null)
+            Func<Task<IReadOnlyList<T>>> existingAfterSubscribe = null,
+            bool deferPredicateEvaluation = true)
         {
             if (typeof(T) != typeof(TEvent))
             {
@@ -285,7 +323,8 @@ namespace PlaywrightNative.Helpers
                 waitForEventName: waitForEventName,
                 abortOnPageClose: abortOnClose ? page : null,
                 abortOnPageCrash: abortOnPageCrash,
-                existingAfterSubscribe: existing).ConfigureAwait(false);
+                existingAfterSubscribe: existing,
+                deferPredicateEvaluation: deferPredicateEvaluation).ConfigureAwait(false);
             return (T)(object)result;
         }
 

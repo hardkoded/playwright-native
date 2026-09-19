@@ -17,6 +17,7 @@
 using System;
 using System.IO;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 
@@ -60,7 +61,7 @@ namespace PlaywrightNative.Tests
             Assert.That(await page.EvalOnSelectorAsync<string>("tag2=SPAN", "e => e.nodeName").ConfigureAwait(false), Is.EqualTo("SPAN"));
             Assert.That(await page.EvalOnSelectorAllAsync<int>("tag2=DIV", "es => es.length").ConfigureAwait(false), Is.EqualTo(2));
 
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(() => page.QuerySelectorAsync("tAG=DIV"));
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(() => page.QuerySelectorAsync("tAG=DIV"));
             Assert.That(error.Message, Does.Contain("Unknown engine \"tAG\" while parsing selector tAG=DIV"));
         }
 
@@ -151,7 +152,7 @@ namespace PlaywrightNative.Tests
         {
             await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
             IPage page = await browser.NewPageAsync().ConfigureAwait(false);
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(() => page.QuerySelectorAsync("neverregister=ignored"));
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(() => page.QuerySelectorAsync("neverregister=ignored"));
             Assert.That(error.Message, Does.Contain("Unknown engine \"neverregister\" while parsing selector neverregister=ignored"));
 
             const string createDummySelector = @"() => ({
@@ -163,16 +164,16 @@ namespace PlaywrightNative.Tests
     }
   })";
 
-            error = Assert.CatchAsync<PlaywrightNativeException>(() => Playwright.Selectors.RegisterAsync("$", createDummySelector));
+            error = Assert.CatchAsync<PlaywrightException>(() => Playwright.Selectors.RegisterAsync("$", createDummySelector));
             Assert.That(error.Message, Is.EqualTo("selectors.register: Selector engine name may only contain [a-zA-Z0-9_] characters"));
 
             await Playwright.Selectors.RegisterAsync("dummy", createDummySelector).ConfigureAwait(false);
             await Playwright.Selectors.RegisterAsync("duMMy", createDummySelector).ConfigureAwait(false);
 
-            error = Assert.CatchAsync<PlaywrightNativeException>(() => Playwright.Selectors.RegisterAsync("dummy", createDummySelector));
+            error = Assert.CatchAsync<PlaywrightException>(() => Playwright.Selectors.RegisterAsync("dummy", createDummySelector));
             Assert.That(error.Message, Is.EqualTo("selectors.register: \"dummy\" selector engine has been already registered"));
 
-            error = Assert.CatchAsync<PlaywrightNativeException>(() => Playwright.Selectors.RegisterAsync("css", createDummySelector));
+            error = Assert.CatchAsync<PlaywrightException>(() => Playwright.Selectors.RegisterAsync("css", createDummySelector));
             Assert.That(error.Message, Is.EqualTo("selectors.register: \"css\" is a predefined selector engine"));
             await page.CloseAsync().ConfigureAwait(false);
         }
@@ -183,7 +184,7 @@ namespace PlaywrightNative.Tests
         public async Task ShouldThrowAlreadyRegisteredErrorWhenRegistering()
         {
             await Playwright.Selectors.RegisterAsync("alreadyRegistered", CreateTagSelector).ConfigureAwait(false);
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => Playwright.Selectors.RegisterAsync("alreadyRegistered", CreateTagSelector));
             Assert.That(error.Message, Is.EqualTo("selectors.register: \"alreadyRegistered\" selector engine has been already registered"));
         }
@@ -225,7 +226,7 @@ namespace PlaywrightNative.Tests
             await Playwright.Selectors.RegisterAsync("__fake", createFakeEngine).ConfigureAwait(false);
             await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
             IPage page = await browser.NewPageAsync().ConfigureAwait(false);
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(() => page.QuerySelectorAsync("__fake=value2"));
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(() => page.QuerySelectorAsync("__fake=value2"));
             Assert.That(error.Message, Does.Contain("Expected a Node but got [object Array]"));
             await page.CloseAsync().ConfigureAwait(false);
         }

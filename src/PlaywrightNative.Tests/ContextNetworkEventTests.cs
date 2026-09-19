@@ -62,11 +62,11 @@ namespace PlaywrightNative.Tests
             await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
 
-            Task<IRequest> waitTask = context.WaitForRequestAsync("data:text/html*");
-            await page.GoToAsync("data:text/html,wave191").ConfigureAwait(false);
+            Task<IRequest> waitTask = context.WaitForRequestAsync(TestConstants.EmptyPage);
+            await page.GoToAsync(TestConstants.EmptyPage).ConfigureAwait(false);
             IRequest request = await waitTask.ConfigureAwait(false);
             Assert.That(request, Is.Not.Null);
-            Assert.That(request.Url, Does.StartWith("data:text/html"));
+            Assert.That(request.Url, Is.EqualTo(TestConstants.EmptyPage));
         }
 
         [PlaywrightTest("browsercontext-network-event.spec.ts", "RunAndWaitForRequestAsync returns the request")]
@@ -79,11 +79,11 @@ namespace PlaywrightNative.Tests
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
 
             IRequest request = await context.RunAndWaitForRequestAsync(
-                () => page.GoToAsync("data:text/html,wave310"))
+                () => page.GoToAsync(TestConstants.EmptyPage))
                 .ConfigureAwait(false);
 
             Assert.That(request, Is.Not.Null);
-            Assert.That(request.Url, Does.StartWith("data:text/html"));
+            Assert.That(request.Url, Is.EqualTo(TestConstants.EmptyPage));
         }
 
         [PlaywrightTest("browsercontext-network-event.spec.ts", "WaitForRequestAsync times out")]
@@ -134,11 +134,11 @@ namespace PlaywrightNative.Tests
             await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
 
-            Task<IResponse> waitTask = context.WaitForResponseAsync(new Regex("wave192"));
-            await page.GoToAsync("data:text/html,wave192").ConfigureAwait(false);
+            Task<IResponse> waitTask = context.WaitForResponseAsync(TestConstants.EmptyPage);
+            await page.GoToAsync(TestConstants.EmptyPage).ConfigureAwait(false);
             IResponse response = await waitTask.ConfigureAwait(false);
             Assert.That(response, Is.Not.Null);
-            Assert.That(response.Url, Does.Contain("wave192"));
+            Assert.That(response.Url, Is.EqualTo(TestConstants.EmptyPage));
             Assert.That(response.Ok, Is.True);
         }
 
@@ -152,11 +152,11 @@ namespace PlaywrightNative.Tests
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
 
             IResponse response = await context.RunAndWaitForResponseAsync(
-                () => page.GoToAsync("data:text/html,wave311"))
+                () => page.GoToAsync(TestConstants.EmptyPage))
                 .ConfigureAwait(false);
 
             Assert.That(response, Is.Not.Null);
-            Assert.That(response.Url, Does.Contain("wave311"));
+            Assert.That(response.Url, Is.EqualTo(TestConstants.EmptyPage));
             Assert.That(response.Ok, Is.True);
         }
 
@@ -207,11 +207,11 @@ namespace PlaywrightNative.Tests
             await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
 
-            Task<IRequest> waitTask = context.WaitForRequestFinishedAsync("data:text/html*");
-            await page.GoToAsync("data:text/html,wave205").ConfigureAwait(false);
+            Task<IRequest> waitTask = context.WaitForRequestFinishedAsync(TestConstants.EmptyPage);
+            await page.GoToAsync(TestConstants.EmptyPage).ConfigureAwait(false);
             IRequest request = await waitTask.ConfigureAwait(false);
             Assert.That(request, Is.Not.Null);
-            Assert.That(request.Url, Does.StartWith("data:text/html"));
+            Assert.That(request.Url, Is.EqualTo(TestConstants.EmptyPage));
             Assert.That(request.Method, Is.EqualTo("GET"));
         }
 
@@ -225,11 +225,11 @@ namespace PlaywrightNative.Tests
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
 
             IRequest request = await context.RunAndWaitForRequestFinishedAsync(
-                () => page.GoToAsync("data:text/html,wave312"))
+                () => page.GoToAsync(TestConstants.EmptyPage))
                 .ConfigureAwait(false);
 
             Assert.That(request, Is.Not.Null);
-            Assert.That(request.Url, Does.StartWith("data:text/html"));
+            Assert.That(request.Url, Is.EqualTo(TestConstants.EmptyPage));
             Assert.That(request.Method, Is.EqualTo("GET"));
         }
 
@@ -242,10 +242,10 @@ namespace PlaywrightNative.Tests
             await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
 
-            Task<IRequest> waitTask = context.WaitForRequestFinishedAsync(new Regex("wave205"));
-            await page.GoToAsync("data:text/html,wave205-re").ConfigureAwait(false);
+            Task<IRequest> waitTask = context.WaitForRequestFinishedAsync(new Regex(@"empty\.html"));
+            await page.GoToAsync(TestConstants.EmptyPage).ConfigureAwait(false);
             IRequest request = await waitTask.ConfigureAwait(false);
-            Assert.That(request.Url, Does.Contain("wave205"));
+            Assert.That(request.Url, Does.Contain("empty.html"));
         }
 
         [PlaywrightTest("browsercontext-network-event.spec.ts", "WaitForRequestFinishedAsync matches a predicate")]
@@ -258,10 +258,10 @@ namespace PlaywrightNative.Tests
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
 
             Task<IRequest> waitTask = context.WaitForRequestFinishedAsync(
-                r => r.Url.Contains("wave205-pred", StringComparison.Ordinal));
-            await page.GoToAsync("data:text/html,wave205-pred").ConfigureAwait(false);
+                r => r.Url.Contains("empty.html", StringComparison.Ordinal));
+            await page.GoToAsync(TestConstants.EmptyPage).ConfigureAwait(false);
             IRequest request = await waitTask.ConfigureAwait(false);
-            Assert.That(request.Url, Does.Contain("wave205-pred"));
+            Assert.That(request.Url, Does.Contain("empty.html"));
         }
 
         [PlaywrightTest("browsercontext-network-event.spec.ts", "WaitForRequestFinishedAsync times out")]

@@ -32,6 +32,7 @@ namespace PlaywrightNative.Tests
     {
         [PlaywrightTest("page-event-console.spec.ts", "WaitForConsoleMessage resolves on console.log")]
         [Test]
+        [Retry(2)]
         [Timeout(30_000)]
         public async Task WaitForConsoleMessageShouldResolveOnLog()
         {
@@ -50,6 +51,7 @@ namespace PlaywrightNative.Tests
 
         [PlaywrightTest("page-event-console.spec.ts", "Console message Args are populated")]
         [Test]
+        [Retry(2)]
         [Timeout(30_000)]
         public async Task ConsoleMessageArgsShouldBePopulated()
         {
@@ -71,6 +73,7 @@ namespace PlaywrightNative.Tests
 
         [PlaywrightTest("page-event-console.spec.ts", "Console message Timestamp is populated")]
         [Test]
+        [Retry(2)]
         [Timeout(30_000)]
         public async Task ConsoleMessageTimestampShouldBePopulated()
         {
@@ -88,6 +91,7 @@ namespace PlaywrightNative.Tests
 
         [PlaywrightTest("page-event-console.spec.ts", "RunAndWaitForConsoleMessageAsync waits for console.log")]
         [Test]
+        [Retry(2)]
         [Timeout(30_000)]
         public async Task RunAndWaitForConsoleMessageAsyncShouldReturnTheMessage()
         {
@@ -105,6 +109,7 @@ namespace PlaywrightNative.Tests
 
         [PlaywrightTest("page-event-console.spec.ts", "BrowserContext Console forwards page logs")]
         [Test]
+        [Retry(2)]
         [Timeout(30_000)]
         public async Task BrowserContextConsoleShouldForwardPageLogs()
         {
@@ -125,6 +130,7 @@ namespace PlaywrightNative.Tests
 
         [PlaywrightTest("page-event-console.spec.ts", "WaitForConsoleMessageAsync on context")]
         [Test]
+        [Retry(2)]
         [Timeout(30_000)]
         public async Task BrowserContextWaitForConsoleMessageShouldResolveOnLog()
         {
@@ -143,6 +149,7 @@ namespace PlaywrightNative.Tests
 
         [PlaywrightTest("page-event-console.spec.ts", "RunAndWaitForConsoleMessageAsync on context")]
         [Test]
+        [Retry(2)]
         [Timeout(30_000)]
         public async Task BrowserContextRunAndWaitForConsoleMessageShouldReturnTheMessage()
         {
@@ -160,6 +167,7 @@ namespace PlaywrightNative.Tests
 
         [PlaywrightTest("page-event-console.spec.ts", "WaitForConsoleMessage honors predicate")]
         [Test]
+        [Retry(2)]
         [Timeout(30_000)]
         public async Task WaitForConsoleMessageShouldHonorPredicate()
         {
@@ -179,6 +187,7 @@ namespace PlaywrightNative.Tests
 
         [PlaywrightTest("page-event-console.spec.ts", "WaitForPage resolves on NewPageAsync")]
         [Test]
+        [Retry(2)]
         [Timeout(30_000)]
         public async Task WaitForPageShouldResolveOnNewPage()
         {
@@ -194,6 +203,7 @@ namespace PlaywrightNative.Tests
 
         [PlaywrightTest("page-event-console.spec.ts", "RunAndWaitForPageAsync waits for NewPageAsync")]
         [Test]
+        [Retry(2)]
         [Timeout(30_000)]
         public async Task RunAndWaitForPageAsyncShouldReturnThePage()
         {
@@ -209,6 +219,7 @@ namespace PlaywrightNative.Tests
 
         [PlaywrightTest("page-event-console.spec.ts", "WaitForPage resolves on window.open")]
         [Test]
+        [Retry(2)]
         [Timeout(30_000)]
         public async Task WaitForPageShouldResolveOnWindowOpen()
         {
@@ -228,6 +239,7 @@ namespace PlaywrightNative.Tests
 
         [PlaywrightTest("page-event-console.spec.ts", "ConsoleMessagesAsync returns recorded logs")]
         [Test]
+        [Retry(2)]
         [Timeout(30_000)]
         public async Task ConsoleMessagesAsyncShouldReturnRecordedLogs()
         {

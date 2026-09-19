@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using PlaywrightNative.Chromium;
 
 namespace PlaywrightNative.Helpers
@@ -48,7 +49,7 @@ namespace PlaywrightNative.Helpers
             {
                 await session.SendAsync("Runtime.runIfWaitingForDebugger").ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 // Session already closed, crashed, or already running.
             }

@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 using System;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -39,7 +40,7 @@ namespace PlaywrightNative.Helpers
                 : (int)Math.Ceiling(side * deviceScale);
             if (pixels > MaxDimension)
             {
-                throw new PlaywrightNativeException(
+                throw new PlaywrightException(
                     "Cannot take screenshot larger than 32767 pixels on any dimension");
             }
         }

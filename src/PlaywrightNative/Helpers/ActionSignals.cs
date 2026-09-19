@@ -19,6 +19,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -91,7 +92,7 @@ namespace PlaywrightNative.Helpers
                 {
                     frame = request.Frame;
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                     return;
                 }
@@ -106,7 +107,7 @@ namespace PlaywrightNative.Helpers
                 {
                     requestPage = frame?.Page;
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                     return;
                 }
@@ -138,7 +139,7 @@ namespace PlaywrightNative.Helpers
                 {
                     failedFrame = request.Frame;
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                     return;
                 }
@@ -211,14 +212,38 @@ namespace PlaywrightNative.Helpers
                 {
                     await epilogueAsync().ConfigureAwait(false);
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
             }
 
             // WebKit form navigations often request after the input command
-            // returns. Hold the constructor retain until that signal lands.
-            await Task.Delay(16).ConfigureAwait(false);
+            // returns. Hold the constructor retain until that signal lands —
+            // Ubuntu WebKit form GETs routinely need well over 640ms after click
+            // (ShouldWorkWithGotoFollowingClick). Chromium acks navigations
+            // promptly; a long empty poll doubles the cost of every click.
+            // Darwin force-clicks still break out when the remaining budget
+            // cannot cover another poll slice.
+            int pollLimit = string.Equals(page?.GetType().Name, "Page", StringComparison.Ordinal) ? 16 : 100;
+            int timeoutMs = TimeoutSettings.TimeoutMs(timeout);
+            for (int i = 0; i < pollLimit; i++)
+            {
+                if (sawDocumentRequest != null && sawDocumentRequest())
+                {
+                    break;
+                }
+
+                // Darwin clicks spend most of a 2s timeout in hit-testing.
+                // A fixed 40×16ms poll after pressAsync then fails the click
+                // even when the pointer action already succeeded (force:true).
+                if (timeoutMs != Timeout.Infinite && sw.ElapsedMilliseconds + 16 >= timeoutMs)
+                {
+                    break;
+                }
+
+                await Task.Delay(16).ConfigureAwait(false);
+            }
+
             await TryCommitMissedSameDocumentAsync(
                 page,
                 commitSameDocumentUrl,
@@ -267,7 +292,7 @@ namespace PlaywrightNative.Helpers
             {
                 await page.EvaluateAsync<object>("window." + SameDocumentToken + " = true").ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
         }
@@ -297,7 +322,7 @@ namespace PlaywrightNative.Helpers
                     "() => window." + SameDocumentToken + " === true ? document.location.href : ''");
                 live = await WaitForEvaluateAsync(liveTask, timeout, sw).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 return;
             }

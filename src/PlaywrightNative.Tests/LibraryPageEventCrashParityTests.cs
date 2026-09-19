@@ -18,6 +18,7 @@ using System;
 using System.Globalization;
 using System.IO;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 using PlaywrightNative.TestServer;
@@ -155,7 +156,7 @@ namespace PlaywrightNative.Tests
             await _page.SetContentAsync("<div>This page should crash</div>").ConfigureAwait(false);
             Task<IResponse> wait = _page.WaitForEventAsync(PageEvent.Response);
             Crash();
-            PlaywrightNativeException error = Assert.ThrowsAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.ThrowsAsync<PlaywrightException>(
                 async () => await wait.ConfigureAwait(false));
             Assert.That(error.Message, Does.Contain("Page crashed"));
         }
@@ -215,7 +216,7 @@ namespace PlaywrightNative.Tests
             IWorker worker = await workerTask.ConfigureAwait(false);
             Task<object> evalTask = worker.EvaluateAsync<object>("() => new Promise(() => {})");
             Crash();
-            PlaywrightNativeException error = Assert.ThrowsAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.ThrowsAsync<PlaywrightException>(
                 async () => await evalTask.ConfigureAwait(false));
             Assert.That(error.Message, Does.Contain("crash"));
         }
@@ -236,7 +237,7 @@ namespace PlaywrightNative.Tests
 
         private async Task ExpectCrashErrorAsync(Func<Task> action)
         {
-            PlaywrightNativeException error = Assert.ThrowsAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.ThrowsAsync<PlaywrightException>(
                 async () => await action().ConfigureAwait(false));
             Assert.That(error, Is.Not.Null, "action should reject after crash");
             if (TestConstants.IsFirefox)

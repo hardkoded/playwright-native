@@ -160,7 +160,12 @@ namespace PlaywrightNative
                 }).ConfigureAwait(false);
             if (handle == null)
             {
-                throw new PlaywrightNativeException($"Failed to find element matching selector \"{selector}\"");
+                throw new PlaywrightException($"Failed to find element matching selector \"{selector}\"");
+            }
+
+            if (scroll != ActionScroll.None)
+            {
+                await handle.EvaluateAsync<bool>(ElementStateScript.ScrollIntoViewIfNeededFunction).ConfigureAwait(false);
             }
 
             await handle.SelectTextAsync(timeout, force, scroll).ConfigureAwait(false);
@@ -170,13 +175,20 @@ namespace PlaywrightNative
         public static async Task<string> AriaSnapshotJsonAsync(
             this IPage page,
             float? timeout = default,
-            AriaSnapshotMode mode = default,
+            AriaSnapshotMode mode = AriaSnapshotMode.Default,
             int? depth = default,
             bool? boxes = default)
         {
+            if (mode == AriaSnapshotMode.Ai)
+            {
+                // AI mode numbers refs from the snapshot root. Rooting at <html>
+                // burns a ref on it, shifting every ref by one.
+                return await AriaSnapshotAi.CapturePageJsonAsync(page, timeout, depth, boxes ?? false).ConfigureAwait(false);
+            }
+
             _ = timeout;
             IElementHandle root = await page.QuerySelectorAsync("html").ConfigureAwait(false)
-                ?? throw new PlaywrightNativeException("page.ariaSnapshotJSON: no documentElement.");
+                ?? throw new PlaywrightException("page.ariaSnapshotJSON: no documentElement.");
             return await root.AriaSnapshotJsonAsync(mode, depth, boxes).ConfigureAwait(false);
         }
 
@@ -184,7 +196,7 @@ namespace PlaywrightNative
         public static Task<string> AriaSnapshotJsonAsync(
             this ILocator locator,
             float? timeout = default,
-            AriaSnapshotMode mode = default,
+            AriaSnapshotMode mode = AriaSnapshotMode.Default,
             int? depth = default,
             bool? boxes = default)
         {
@@ -263,7 +275,7 @@ namespace PlaywrightNative
         public static Task<IAsyncDisposable> StartHarAsync(
             this ITracing tracing,
             string path,
-            HarContentPolicy content = default,
+            HarContentPolicy content = EnumCompat.UndefinedHarContentPolicy,
             HarMode mode = default,
             string url = default,
             Regex urlRegex = default,
@@ -284,7 +296,7 @@ namespace PlaywrightNative
 
         /// <summary>Clock install with fractional numeric types.</summary>
         public static Task InstallAsync(this IClock clock, double time)
-            => clock.InstallAsync(time.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            => clock.InstallAsync((long)time);
 
         /// <summary>Clock install with fractional numeric types.</summary>
         public static Task InstallAsync(this IClock clock, float time)
@@ -292,7 +304,12 @@ namespace PlaywrightNative
 
         /// <summary>Clock install with integral numeric types.</summary>
         public static Task InstallAsync(this IClock clock, long time)
-            => clock.InstallAsync(time.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            => clock is Clock concreteLong
+                ? concreteLong.InstallAsync(time)
+                : clock.InstallAsync(new ClockInstallOptions
+                {
+                    TimeDate = DateTimeOffset.FromUnixTimeMilliseconds(time).UtcDateTime,
+                });
 
         /// <summary>Clock install with <see cref="DateTime"/>.</summary>
         public static Task InstallAsync(this IClock clock, DateTime time)
@@ -339,9 +356,9 @@ namespace PlaywrightNative
         public static Task<IAsyncDisposable> ShowActionsAsync(
             this IScreencast screencast,
             float? duration = default,
-            AnnotatePosition position = default,
+            AnnotatePosition position = EnumCompat.UndefinedAnnotatePosition,
             int fontSize = default,
-            ScreencastCursor cursor = default)
+            ScreencastCursor cursor = EnumCompat.UndefinedScreencastCursor)
         {
             if (screencast is CRScreencast chromium)
             {

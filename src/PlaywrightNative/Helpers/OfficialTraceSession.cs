@@ -22,6 +22,7 @@ using System.IO.Compression;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -38,6 +39,7 @@ namespace PlaywrightNative.Helpers
         private readonly Dictionary<string, byte[]> _resources = new();
         private readonly Dictionary<string, byte[]> _networkResources = new();
         private readonly HashSet<string> _chunkCallIds = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, string> _callMethods = new(StringComparer.Ordinal);
         private readonly Stack<string> _openGroups = new();
         private readonly List<string> _consoleLines = new();
         private readonly List<string> _wsLines = new();
@@ -142,12 +144,12 @@ namespace PlaywrightNative.Helpers
             {
                 if (!chunk && _recording)
                 {
-                    throw new PlaywrightNativeException("Tracing has been already started");
+                    throw new PlaywrightException("Tracing has been already started");
                 }
 
                 if (chunk && !_recording)
                 {
-                    throw new PlaywrightNativeException("Must start tracing before starting a new chunk");
+                    throw new PlaywrightException("Must start tracing before starting a new chunk");
                 }
 
                 TracingStartOptions next = options ?? new TracingStartOptions();
@@ -169,6 +171,7 @@ namespace PlaywrightNative.Helpers
                 _traceLines.Clear();
                 _resources.Clear();
                 _chunkCallIds.Clear();
+                _callMethods.Clear();
                 _consoleLines.Clear();
                 _wsLines.Clear();
                 _stacks.Clear();
@@ -238,17 +241,34 @@ namespace PlaywrightNative.Helpers
                 throw new ArgumentNullException(nameof(body));
             }
 
-            if (!IsRecording)
+            string callId = TryBeginAction(title, className, method, parameters);
+            if (callId == null)
             {
                 return await body().ConfigureAwait(false);
             }
 
-            string callId;
+            return await ContinueActionAsync(callId, body, result).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Synchronously writes the trace <c>before</c> event. Used by
+        /// <see cref="ActionTrace"/> so fire-and-forget actions that race
+        /// <c>Tracing.StopAsync</c> still appear as interrupted.
+        /// </summary>
+        /// <returns>The call id, or <see langword="null"/> when not recording.</returns>
+        internal string TryBeginAction(string title, string className, string method, object parameters = null)
+        {
             lock (_gate)
             {
+                if (!_recording)
+                {
+                    return null;
+                }
+
                 _callId++;
-                callId = "call@" + _callId.ToString(CultureInfo.InvariantCulture);
+                string callId = "call@" + _callId.ToString(CultureInfo.InvariantCulture);
                 _chunkCallIds.Add(callId);
+                _callMethods[callId] = method ?? "unknown";
                 var before = new Dictionary<string, object>
                 {
                     ["type"] = "before",
@@ -266,6 +286,48 @@ namespace PlaywrightNative.Helpers
 
                 _traceLines.Add(Serialize(before));
                 WriteStack(callId);
+                return callId;
+            }
+        }
+
+        /// <summary>
+        /// Completes an action started with <see cref="TryBeginAction"/>.
+        /// </summary>
+        internal async Task ContinueActionAsync(string callId, Func<Task> body, object result = null)
+        {
+            await ContinueActionAsync<object>(
+                callId,
+                async () =>
+                {
+                    await body().ConfigureAwait(false);
+                    return null;
+                },
+                result).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Completes an action started with <see cref="TryBeginAction"/>.
+        /// </summary>
+        internal async Task<T> ContinueActionAsync<T>(string callId, Func<Task<T>> body, object result = null)
+        {
+            if (body == null)
+            {
+                throw new ArgumentNullException(nameof(body));
+            }
+
+            if (string.IsNullOrEmpty(callId))
+            {
+                return await body().ConfigureAwait(false);
+            }
+
+            // Prefer the method stamped in TryBeginAction for snapshot phases.
+            string method = "unknown";
+            lock (_gate)
+            {
+                if (_callMethods.TryGetValue(callId, out string stored))
+                {
+                    method = stored;
+                }
             }
 
             await CapturePhaseAsync(callId, "before", method).ConfigureAwait(false);
@@ -274,6 +336,11 @@ namespace PlaywrightNative.Helpers
             try
             {
                 await CapturePhaseAsync(callId, "action", method).ConfigureAwait(false);
+
+                // Yield so callers can subscribe to waitForEvent (e.g. console)
+                // before a sync-completing CapturePhase lets the action body run
+                // and emit the event in the same turn.
+                await Task.Yield();
                 value = await body().ConfigureAwait(false);
             }
             finally
@@ -670,7 +737,7 @@ namespace PlaywrightNative.Helpers
                         AddScreencastFrame(jpeg);
                     }
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
                 catch (TimeoutException)
@@ -697,7 +764,7 @@ namespace PlaywrightNative.Helpers
                 {
                     if (!string.IsNullOrEmpty(path))
                     {
-                        throw new PlaywrightNativeException("Must start tracing before stopping");
+                        throw new PlaywrightException("Must start tracing before stopping");
                     }
 
                     return;
@@ -749,6 +816,7 @@ namespace PlaywrightNative.Helpers
                 _traceLines.Clear();
                 _resources.Clear();
                 _chunkCallIds.Clear();
+                _callMethods.Clear();
                 _wsLines.Clear();
                 _stacks.Clear();
                 if (!keepRecording)
@@ -886,7 +954,7 @@ namespace PlaywrightNative.Helpers
             }
             catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
             {
-                throw new PlaywrightNativeException(FileSystemError(path, ex), ex);
+                throw new PlaywrightException(FileSystemError(path, ex), ex);
             }
         }
 
@@ -1052,7 +1120,7 @@ namespace PlaywrightNative.Helpers
             {
                 await Task.WhenAll(pending).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
             catch (InvalidOperationException)
@@ -1147,7 +1215,7 @@ namespace PlaywrightNative.Helpers
 
                     return;
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
                 catch (TimeoutException)
@@ -1216,7 +1284,7 @@ namespace PlaywrightNative.Helpers
                         ["children"] = children,
                     };
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
                 catch (InvalidOperationException)
@@ -1396,7 +1464,7 @@ namespace PlaywrightNative.Helpers
                     body = await bodyTask.ConfigureAwait(false);
                 }
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
             catch (InvalidOperationException)
