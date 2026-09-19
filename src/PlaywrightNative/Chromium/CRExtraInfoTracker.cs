@@ -73,6 +73,7 @@ namespace PlaywrightNative.Chromium
 
                 hop.FlushRequest();
                 hop.FlushResponse();
+                TryStopTracking(requestId, list);
             }
         }
 
@@ -86,10 +87,13 @@ namespace PlaywrightNative.Chromium
                 {
                     hop.StoreRequestExtra(extra);
                     hop.FlushRequest();
-                    return;
+                }
+                else
+                {
+                    list.PendingRequestExtra.Enqueue(extra);
                 }
 
-                list.PendingRequestExtra.Enqueue(extra);
+                TryStopTracking(requestId, list);
             }
         }
 
@@ -103,43 +107,31 @@ namespace PlaywrightNative.Chromium
                 {
                     hop.StoreResponseExtra(extra);
                     hop.FlushResponse();
-                    return;
+                }
+                else
+                {
+                    list.PendingResponseExtra.Enqueue(extra);
                 }
 
-                list.PendingResponseExtra.Enqueue(extra);
+                TryStopTracking(requestId, list);
             }
         }
 
         internal void Finished(string requestId)
         {
-            if (!_hops.TryRemove(requestId, out HopList list))
+            // Extra-info and loadingFinished travel on different CDP channels
+            // and can arrive in either order. Official _checkFinished keeps the
+            // entry until every hasExtraInfo response is paired; dropping the
+            // hop here left WaitForRawHeadersAsync hanging (HAR zip 30s).
+            if (!_hops.TryGetValue(requestId, out HopList list))
             {
                 return;
             }
 
             lock (list.Gate)
             {
-                while (list.PendingRequestExtra.Count > 0)
-                {
-                    Hop hop = FirstWithoutRequestExtra(list);
-                    if (hop == null)
-                    {
-                        break;
-                    }
-
-                    hop.StoreRequestExtra(list.PendingRequestExtra.Dequeue());
-                }
-
-                while (list.PendingResponseExtra.Count > 0)
-                {
-                    Hop hop = FirstWithoutResponseExtra(list);
-                    if (hop == null)
-                    {
-                        break;
-                    }
-
-                    hop.StoreResponseExtra(list.PendingResponseExtra.Dequeue());
-                }
+                list.LoadingDone = true;
+                AssignPendingExtras(list);
 
                 for (int i = 0; i < list.Hops.Count; i++)
                 {
@@ -147,19 +139,79 @@ namespace PlaywrightNative.Chromium
                     hop.FlushRequest();
                     hop.FlushResponse();
                     hop.Request?.EnsureRawRequestHeaders();
-
-                    // Official _checkFinished keeps waiting when hasExtraInfo is
-                    // set and the extra event has not been paired yet. Sealing
-                    // provisional headers here comma-joins duplicates
-                    // (ShouldReportAllHeaders).
-                    if (hop.Response == null
-                        || !hop.Response.ExpectsExtraInfo
-                        || hop.HasResponseExtra)
+                    if (ResponseHeadersSettled(hop))
                     {
                         hop.Response?.EnsureRawResponseHeaders();
                     }
                 }
+
+                TryStopTracking(requestId, list);
             }
+        }
+
+        private void AssignPendingExtras(HopList list)
+        {
+            while (list.PendingRequestExtra.Count > 0)
+            {
+                Hop hop = FirstWithoutRequestExtra(list);
+                if (hop == null)
+                {
+                    break;
+                }
+
+                hop.StoreRequestExtra(list.PendingRequestExtra.Dequeue());
+            }
+
+            while (list.PendingResponseExtra.Count > 0)
+            {
+                Hop hop = FirstWithoutResponseExtra(list);
+                if (hop == null)
+                {
+                    break;
+                }
+
+                hop.StoreResponseExtra(list.PendingResponseExtra.Dequeue());
+            }
+        }
+
+        private void TryStopTracking(string requestId, HopList list)
+        {
+            if (!list.LoadingDone)
+            {
+                return;
+            }
+
+            for (int i = 0; i < list.Hops.Count; i++)
+            {
+                if (!ResponseHeadersSettled(list.Hops[i]))
+                {
+                    return;
+                }
+            }
+
+            for (int i = 0; i < list.Hops.Count; i++)
+            {
+                Hop hop = list.Hops[i];
+                hop.FlushRequest();
+                hop.FlushResponse();
+                hop.Request?.EnsureRawRequestHeaders();
+                hop.Response?.EnsureRawResponseHeaders();
+            }
+
+            _hops.TryRemove(requestId, out _);
+        }
+
+        private bool ResponseHeadersSettled(Hop hop)
+        {
+            if (hop.Response == null)
+            {
+                // Keep a stored extra until the response object exists so
+                // ResponseCreated can apply it. No response and no extra
+                // (loadingFailed) is settled.
+                return !hop.HasResponseExtra;
+            }
+
+            return !hop.Response.ExpectsExtraInfo || hop.HasResponseExtra;
         }
 
         private Hop FindHop(HopList list, CRRequest request)
@@ -223,6 +275,8 @@ namespace PlaywrightNative.Chromium
             internal Queue<JsonElement> PendingRequestExtra { get; } = new();
 
             internal Queue<JsonElement> PendingResponseExtra { get; } = new();
+
+            internal bool LoadingDone { get; set; }
         }
 
         private sealed class Hop

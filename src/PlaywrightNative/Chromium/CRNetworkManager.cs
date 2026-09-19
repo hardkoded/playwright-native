@@ -42,7 +42,6 @@ namespace PlaywrightNative.Chromium
         private readonly ConcurrentDictionary<string, BufferedWillBeSent> _pendingRequestWillBeSent = new();
         private readonly ConcurrentDictionary<string, CRRequest> _requestsByRawId = new();
         private readonly ConcurrentDictionary<string, byte> _handledFetchIds = new(StringComparer.Ordinal);
-        private readonly ConcurrentDictionary<string, IReadOnlyList<NameValueEntry>> _pendingExtraHeaders = new();
         private readonly ConcurrentDictionary<string, byte> _attemptedAuthentications = new();
         private readonly ConcurrentDictionary<string, byte> _servedFromCache = new(StringComparer.Ordinal);
         private readonly ConcurrentDictionary<string, WorkerSessionState> _workerSessions = new(StringComparer.Ordinal);
@@ -624,33 +623,6 @@ namespace PlaywrightNative.Chromium
             return result;
         }
 
-        private static IReadOnlyList<NameValueEntry> ParseExtraHeaders(JsonElement payload)
-        {
-            // Match official: headersObjectToArray(extraInfo.headers, '\n').
-            // Prefer the headers object over headersText so duplicate values
-            // stay as separate entries (ShouldReportAllHeaders).
-            if (payload.TryGetProperty("headers", out JsonElement headersEl)
-                && headersEl.ValueKind == JsonValueKind.Object)
-            {
-                IReadOnlyList<NameValueEntry> fromObject = RawNetworkHeaders.FromObject(headersEl);
-                if (fromObject.Count > 0)
-                {
-                    return fromObject;
-                }
-            }
-
-            if (payload.TryGetProperty("headersText", out JsonElement textElement))
-            {
-                IReadOnlyList<NameValueEntry> fromText = ResponseHeaders.ParseHeadersText(textElement.GetString());
-                if (fromText.Count > 0)
-                {
-                    return fromText;
-                }
-            }
-
-            return ResponseHeaders.FromMap(ParseResponseHeaders(payload));
-        }
-
         private static string GetString(JsonElement element, string propertyName)
         {
             return element.TryGetProperty(propertyName, out JsonElement prop)
@@ -1044,6 +1016,12 @@ namespace PlaywrightNative.Chromium
                         ResponseNetworkInfo.ParseFromServiceWorker(redirectResponse),
                         ResponseNetworkInfo.ParseHttpVersion(redirectResponse));
 
+                    // redirectHasExtraInfo is on requestWillBeSent, same as
+                    // official _handleRequestRedirect. Provisional headers must
+                    // not be sealed onto a later hop.
+                    bool redirectExpectsExtraInfo = GetBool(p, "redirectHasExtraInfo")
+                        && !existingRequest.ServedFromCache;
+                    redirectResponseObj.SetExpectsExtraInfo(redirectExpectsExtraInfo);
                     _extraInfo.ResponseCreated(requestId, redirectResponseObj);
                     RaiseResponseReceived(redirectResponseObj);
                     RaiseRequestFinished(existingRequest);
@@ -1233,17 +1211,16 @@ namespace PlaywrightNative.Chromium
             // were sealed before extraInfo arrived.
             bool expectsExtraInfo = GetBool(p, "hasExtraInfo") && !request.ServedFromCache;
             response.SetExpectsExtraInfo(expectsExtraInfo);
-            if (_pendingExtraHeaders.TryRemove(requestId, out IReadOnlyList<NameValueEntry> extra))
-            {
-                response.ApplyExtraHeaders(extra);
-            }
-            else if (!expectsExtraInfo)
+            if (!expectsExtraInfo)
             {
                 // No extraInfo event will arrive. Seal provisional headers so
                 // HeadersArrayAsync does not wait forever.
                 response.EnsureRawResponseHeaders();
             }
 
+            // Pair through the tracker only. Applying a pending extra here
+            // stamps the latest hop with an earlier redirect's headers
+            // (ShouldReportRawResponseHeadersInRedirects).
             _extraInfo.ResponseCreated(requestId, response);
             MaybeUpdateRequestSession(session, request);
             RaiseResponseReceived(response);
@@ -1282,16 +1259,10 @@ namespace PlaywrightNative.Chromium
             }
 
             string requestId = RequestKey(session, rawId);
-            IReadOnlyList<NameValueEntry> pairs = ParseExtraHeaders(p);
-            if (_requestsById.TryGetValue(requestId, out CRRequest request) && request.Response != null)
-            {
-                request.Response.ApplyExtraHeaders(pairs);
-            }
-            else if (pairs.Count > 0)
-            {
-                _pendingExtraHeaders[requestId] = pairs;
-            }
 
+            // Pair by hop index. A direct apply onto _requestsById hits the
+            // latest request, which is the wrong hop once a redirect has
+            // reused the id, and misses entirely after loadingFinished.
             _extraInfo.ResponseExtraInfo(requestId, p);
         }
 
