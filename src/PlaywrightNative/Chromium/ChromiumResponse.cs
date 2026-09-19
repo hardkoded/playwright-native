@@ -84,29 +84,29 @@ namespace PlaywrightNative.Chromium
         /// <inheritdoc/>
         public async Task<Dictionary<string, string>> AllHeadersAsync()
         {
-            await _crResponse.WaitForExtraHeadersAsync().ConfigureAwait(false);
-            return HeaderMap.All(_crResponse.HeaderPairs);
+            IReadOnlyList<NameValueEntry> raw = await _crResponse.WaitForRawHeadersAsync().ConfigureAwait(false);
+            return HeaderMap.All(ResponseHeaders.ToPairs(raw));
         }
 
         /// <inheritdoc/>
         public async Task<string> HeaderValueAsync(string name)
         {
-            await _crResponse.WaitForExtraHeadersAsync().ConfigureAwait(false);
-            return HeaderMap.Value(_crResponse.HeaderPairs, name);
+            IReadOnlyList<NameValueEntry> raw = await _crResponse.WaitForRawHeadersAsync().ConfigureAwait(false);
+            return HeaderMap.Value(ResponseHeaders.ToPairs(raw), name);
         }
 
         /// <inheritdoc/>
         public async Task<IReadOnlyList<string>> HeaderValuesAsync(string name)
         {
-            await _crResponse.WaitForExtraHeadersAsync().ConfigureAwait(false);
-            return HeaderMap.Values(_crResponse.HeaderPairs, name);
+            IReadOnlyList<NameValueEntry> raw = await _crResponse.WaitForRawHeadersAsync().ConfigureAwait(false);
+            return HeaderMap.Values(ResponseHeaders.ToPairs(raw), name);
         }
 
         /// <inheritdoc/>
         public async Task<IReadOnlyList<Header>> HeadersArrayAsync()
         {
-            await _crResponse.WaitForExtraHeadersAsync().ConfigureAwait(false);
-            return EquatableHeader.FromEntries(HeaderMap.Array(_crResponse.HeaderPairs));
+            IReadOnlyList<NameValueEntry> raw = await _crResponse.WaitForRawHeadersAsync().ConfigureAwait(false);
+            return EquatableHeader.FromEntries(raw ?? Array.Empty<NameValueEntry>());
         }
 
         /// <inheritdoc/>

@@ -147,7 +147,17 @@ namespace PlaywrightNative.Chromium
                     hop.FlushRequest();
                     hop.FlushResponse();
                     hop.Request?.EnsureRawRequestHeaders();
-                    hop.Response?.EnsureRawResponseHeaders();
+
+                    // Official _checkFinished keeps waiting when hasExtraInfo is
+                    // set and the extra event has not been paired yet. Sealing
+                    // provisional headers here comma-joins duplicates
+                    // (ShouldReportAllHeaders).
+                    if (hop.Response == null
+                        || !hop.Response.ExpectsExtraInfo
+                        || hop.HasResponseExtra)
+                    {
+                        hop.Response?.EnsureRawResponseHeaders();
+                    }
                 }
             }
         }

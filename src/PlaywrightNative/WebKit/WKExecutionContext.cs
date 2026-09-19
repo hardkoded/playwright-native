@@ -85,8 +85,7 @@ namespace PlaywrightNative.WebKit
         {
             if (_destroyed.Task.IsCompleted)
             {
-                throw new PlaywrightException(
-                    "Execution context was destroyed, most likely because of a navigation.");
+                throw ClosedOrNavigationException();
             }
 
             JsonElement? response;
@@ -98,10 +97,10 @@ namespace PlaywrightNative.WebKit
             }
             catch (TargetClosedException)
             {
-                // Navigation closes the target session before MarkDestroyed runs.
-                // isVisible must see a destroyed-context error, not TargetClosed.
-                throw new PlaywrightException(
-                    "Execution context was destroyed, most likely because of a navigation.");
+                // Page/browser close sets IsClosing before the session dies.
+                // A navigation target swap disposes the session without that
+                // flag; isVisible must see a destroyed-context error then.
+                throw ClosedOrNavigationException();
             }
 
             if (response == null)
@@ -989,7 +988,7 @@ namespace PlaywrightNative.WebKit
         {
             if (_destroyed.Task.IsCompleted)
             {
-                throw new PlaywrightException(EvaluateSerialization.NavigationMessage);
+                throw ClosedOrNavigationException();
             }
 
             JsonElement? dummyResponse = await RaceDestroyedAsync(_session.SendAsync(
@@ -1079,14 +1078,15 @@ namespace PlaywrightNative.WebKit
         }
 
         private Exception DestroyedEvaluateException()
+            => ClosedOrNavigationException();
+
+        private Exception ClosedOrNavigationException()
         {
-            // Browser/page close marks contexts destroyed before (or instead of)
-            // surfacing TargetClosedException on the in-flight awaitPromise. Prefer
-            // the official "… has been closed" wording so browsertype-launch.spec
-            // can match " closed".
-            if (_session.IsDisposed
-                || _session.IsConnectionClosed
-                || _session.IsClosing)
+            // Browser/page close marks the session closing before (or instead of)
+            // surfacing TargetClosedException. A disposed session without that
+            // flag is a navigation target swap — isVisible must not treat it as
+            // "target closed".
+            if (_session.IsClosing || _session.IsConnectionClosed)
             {
                 return ClosedTarget.Exception(
                     DriverMessages.BrowserOrContextClosedExceptionMessage,

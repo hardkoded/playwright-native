@@ -411,6 +411,7 @@ namespace PlaywrightNative.Chromium
                 fromServiceWorker: false,
                 httpVersion: "http/1.1");
             request.Response = response;
+            response.EnsureRawResponseHeaders();
             Response?.Invoke(this, response);
             request.Finished = true;
             request.MarkFinished();
@@ -465,6 +466,9 @@ namespace PlaywrightNative.Chromium
                 ResponseNetworkInfo.ParseHttpVersion(responsePayload));
 
             request.Response = response;
+
+            // Service-worker sessions do not emit responseReceivedExtraInfo.
+            response.EnsureRawResponseHeaders();
             if (IsReportableUrl(request.Url))
             {
                 Response?.Invoke(this, response);

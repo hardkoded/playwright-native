@@ -131,6 +131,14 @@ namespace PlaywrightNative.Chromium
         internal string HttpVersion { get; }
 
         /// <summary>
+        /// Gets a value indicating whether Chrome will send
+        /// <c>Network.responseReceivedExtraInfo</c> for this response.
+        /// Provisional headers must not be sealed as raw headers until that
+        /// event arrives (<c>ShouldReportAllHeaders</c>).
+        /// </summary>
+        internal bool ExpectsExtraInfo { get; private set; }
+
+        /// <summary>
         /// Gets a value indicating whether the response status code is in the 200-299 range.
         /// </summary>
         internal bool Ok => ResponseHeaders.IsOkStatus(Status);
@@ -235,6 +243,19 @@ namespace PlaywrightNative.Chromium
         internal void SetRawResponseHeaders(IReadOnlyList<NameValueEntry> headers)
         {
             _rawHeaders.TrySetResult(headers ?? HeaderMap.Array(Headers));
+        }
+
+        /// <summary>
+        /// Records whether raw headers must wait for
+        /// <c>Network.responseReceivedExtraInfo</c>.
+        /// </summary>
+        /// <param name="expectsExtraInfo">
+        /// <see langword="true"/> when the response payload set <c>hasExtraInfo</c>
+        /// and the response was not served from cache.
+        /// </param>
+        internal void SetExpectsExtraInfo(bool expectsExtraInfo)
+        {
+            ExpectsExtraInfo = expectsExtraInfo;
         }
 
         /// <summary>

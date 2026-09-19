@@ -2652,6 +2652,46 @@ namespace PlaywrightNative
 
                 if (timeoutMs != Timeout.Infinite && sw.ElapsedMilliseconds >= timeoutMs)
                 {
+                    // A 1ms timeout can expire before the first probe reads the
+                    // node (ToHaveTextWithTextFailWithImpossibleTimeout).
+                    if (!sawElement || lastReceived.Length == 0)
+                    {
+                        try
+                        {
+                            IReadOnlyList<IElementHandle> final =
+                                await ElementHandlesOrEmptyAsync(250).ConfigureAwait(false);
+                            if (final.Count > 0)
+                            {
+                                string[] recovered = new string[final.Count];
+                                bool okRead = true;
+                                for (int i = 0; i < final.Count; i++)
+                                {
+                                    try
+                                    {
+                                        recovered[i] = await ReadTextAsync(final[i], useInnerText).ConfigureAwait(false);
+                                    }
+                                    catch (PlaywrightException)
+                                    {
+                                        okRead = false;
+                                        break;
+                                    }
+                                }
+
+                                if (okRead)
+                                {
+                                    lastReceived = recovered;
+                                    sawElement = true;
+                                }
+                            }
+                        }
+                        catch (TimeoutException)
+                        {
+                        }
+                        catch (PlaywrightException)
+                        {
+                        }
+                    }
+
                     throw CreateTextExpectException(
                         FormatTextExpectFailure(
                             header,

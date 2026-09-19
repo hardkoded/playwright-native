@@ -1227,9 +1227,17 @@ namespace PlaywrightNative.Chromium
                 ResponseNetworkInfo.ParseFromServiceWorker(responsePayload),
                 ResponseNetworkInfo.ParseHttpVersion(responsePayload));
 
+            bool expectsExtraInfo = GetBool(responsePayload, "hasExtraInfo") && !request.ServedFromCache;
+            response.SetExpectsExtraInfo(expectsExtraInfo);
             if (_pendingExtraHeaders.TryRemove(requestId, out IReadOnlyList<NameValueEntry> extra))
             {
                 response.ApplyExtraHeaders(extra);
+            }
+            else if (!expectsExtraInfo)
+            {
+                // No extraInfo event will arrive. Seal provisional headers so
+                // HeadersArrayAsync does not wait forever.
+                response.EnsureRawResponseHeaders();
             }
 
             _extraInfo.ResponseCreated(requestId, response);

@@ -219,10 +219,12 @@ namespace PlaywrightNative.Helpers
 
             // WebKit form navigations often request after the input command
             // returns. Hold the constructor retain until that signal lands —
-            // Ubuntu WebKit form GETs routinely need well over 256ms after click.
-            // Chromium acks navigations promptly; a long empty poll doubles the
-            // cost of every click (permission-overlay / locator-handler suites).
-            int pollLimit = string.Equals(page?.GetType().Name, "Page", StringComparison.Ordinal) ? 16 : 40;
+            // Ubuntu WebKit form GETs routinely need well over 640ms after click
+            // (ShouldWorkWithGotoFollowingClick). Chromium acks navigations
+            // promptly; a long empty poll doubles the cost of every click.
+            // Darwin force-clicks still break out when the remaining budget
+            // cannot cover another poll slice.
+            int pollLimit = string.Equals(page?.GetType().Name, "Page", StringComparison.Ordinal) ? 16 : 100;
             int timeoutMs = TimeoutSettings.TimeoutMs(timeout);
             for (int i = 0; i < pollLimit; i++)
             {
