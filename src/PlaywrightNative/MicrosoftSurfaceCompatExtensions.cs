@@ -691,12 +691,19 @@ namespace PlaywrightNative
 
         /// <summary>Worker console wait helper.</summary>
         public static Task<IConsoleMessage> WaitForConsoleMessageAsync(this IWorker worker, float? timeout = default)
-            => WaitForEventHelper.WaitAsync<IConsoleMessage>(
+        {
+            if (worker is ChromiumWorker chromium)
+            {
+                return chromium.WaitForConsoleMessageAsync(timeout);
+            }
+
+            return WaitForEventHelper.WaitAsync<IConsoleMessage>(
                 h => worker.Console += h,
                 h => worker.Console -= h,
                 _ => true,
                 timeout,
                 "worker.waitForEvent");
+        }
 
         /// <summary>Worker close wait helper.</summary>
         public static Task<IWorker> WaitForCloseAsync(this IWorker worker, float? timeout = default)
