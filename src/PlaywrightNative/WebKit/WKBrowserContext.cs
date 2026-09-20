@@ -788,6 +788,10 @@ namespace PlaywrightNative.WebKit
             }
 
             _closeReason = reason;
+
+            // Abort in-flight APIRequest before HAR/video flush. Keep _closed false
+            // until after page close reasons are stamped so HAR body fallbacks still
+            // work under load (see FlushHarQuietlyAsync below).
             APIRequestContext.AbortFor(this);
 
             // Flush HAR before stamping close reasons onto pages/sessions so

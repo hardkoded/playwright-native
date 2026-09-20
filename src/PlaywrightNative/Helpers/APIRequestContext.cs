@@ -51,7 +51,16 @@ namespace PlaywrightNative.Helpers
 
         private readonly object _clientGate = new object();
         private readonly List<HttpClient> _activeClients = new List<HttpClient>();
-        private bool _disposed;
+
+        // Upstream fetch.ts registers a Dispose listener per in-flight request that
+        // rejects that request's promise. Close can land between awaits (UA resolve,
+        // cookie read, SendAsync, body/cookie ingest); a single SendAsync WhenAny is
+        // not enough when a cancelled hang-route still yields an HTTP success.
+        private readonly object _inFlightGate = new object();
+        private readonly List<TaskCompletionSource<object>> _inFlightAborts =
+            new List<TaskCompletionSource<object>>();
+
+        private volatile bool _disposed;
         private string _closeReason;
         private string _cachedUserAgent;
 
@@ -89,272 +98,297 @@ namespace PlaywrightNative.Helpers
             byte[] dataBytes = null)
         {
             EnsureNotDisposed();
-
-            if (string.IsNullOrEmpty(url))
-            {
-                throw new ArgumentException("URL must be non-empty.", nameof(url));
-            }
-
-            url = ApplyQueryParams(url, queryParams);
-            url = ResolveUrl(url);
-
-            if (!Uri.TryCreate(url, UriKind.Absolute, out Uri uri))
-            {
-                throw new ArgumentException("URL must be absolute.", nameof(url));
-            }
-
-            // macOS client-certificate fixtures advertise https://local.playwright while
-            // binding on localhost; browser SOCKS MITM rewrites the host, but APIRequest
-            // uses HttpClient and must do the same DNS-safe rewrite.
-            string rewrittenHost = ClientCertificatesProxy.RewriteToLocalhostIfNeeded(uri.Host);
-            if (!string.Equals(rewrittenHost, uri.Host, StringComparison.OrdinalIgnoreCase))
-            {
-                UriBuilder builder = new UriBuilder(uri) { Host = rewrittenHost };
-                uri = builder.Uri;
-                url = uri.ToString();
-            }
-
-            if (!string.Equals(uri.Scheme, "http", StringComparison.OrdinalIgnoreCase)
-                && !string.Equals(uri.Scheme, "https", StringComparison.OrdinalIgnoreCase))
-            {
-                throw new PlaywrightException("Protocol \"" + uri.Scheme + ":\" not supported");
-            }
-
-            int bodyKinds = 0;
-            if (data != null)
-            {
-                bodyKinds++;
-            }
-
-            if (json != null)
-            {
-                bodyKinds++;
-            }
-
-            if (form != null)
-            {
-                bodyKinds++;
-            }
-
-            if (multipart != null)
-            {
-                bodyKinds++;
-            }
-
-            if (dataBytes != null)
-            {
-                bodyKinds++;
-            }
-
-            if (bodyKinds > 1)
-            {
-                throw new ArgumentException("Pass only one of data, dataBytes, json, form, or multipart.");
-            }
-
-            if (json is Delegate)
-            {
-                throw new PlaywrightException("Unexpected 'data' type given: " + json.GetType().Name);
-            }
-
-            string payload = data;
-            string contentType = "text/plain";
-            if (json != null)
-            {
-                payload = JsonSerializer.Serialize(json, json.GetType(), JsonExtensions.DefaultJsonSerializerOptions);
-                contentType = "application/json";
-            }
-            else if (form != null && !RequireFormData(form).ContainsFiles())
-            {
-                payload = EncodeForm(form);
-                contentType = "application/x-www-form-urlencoded";
-            }
-            else if (dataBytes != null)
-            {
-                contentType = "application/octet-stream";
-            }
-
-            string verb = string.IsNullOrEmpty(method) ? "GET" : method;
-
-            IReadOnlyDictionary<string, string> contextHeaders = _standalone?.ExtraHttpHeaders;
-            if (contextHeaders == null && _context is IHasExtraHttpHeaders extra)
-            {
-                contextHeaders = extra.ExtraHttpHeaders;
-            }
-
-            contextHeaders = WithDefaultApiHeaders(contextHeaders);
-            contextHeaders = WithUserAgent(contextHeaders, await ResolveUserAgentAsync().ConfigureAwait(false));
-            contextHeaders = WithHttpCredentials(contextHeaders, _standalone?.HttpCredentials, url);
-            if (_context is IHasHttpCredentials contextCredentials)
-            {
-                contextHeaders = WithHttpCredentials(contextHeaders, contextCredentials.HttpCredentialsList, url);
-            }
-
-            int timeoutMs = timeout.HasValue
-                ? (int)timeout.Value
-                : _standalone?.TimeoutMs ?? (_context != null ? (int)_context.DefaultTimeout() : 30_000);
-            if (timeoutMs < 0)
-            {
-                throw new ArgumentOutOfRangeException(nameof(timeout), "Timeout must be zero or positive.");
-            }
-
-            int redirectLimit = maxRedirects ?? _standalone?.MaxRedirects ?? 20;
-            if (redirectLimit < 0)
-            {
-                throw new PlaywrightException("'maxRedirects' must be greater than or equal to '0'");
-            }
-
-            if (maxRetries < 0)
-            {
-                throw new ArgumentOutOfRangeException(nameof(maxRetries), "maxRetries must be zero or positive.");
-            }
-
-            bool ignoreTls = ignoreHTTPSErrors
-                || (_standalone != null && _standalone.IgnoreHttpsErrors)
-                || (_context is IHasIgnoreHttpsErrors https && https.IgnoreHttpsErrors);
-
-            IReadOnlyList<ClientCertificate> clientCertificates = ResolveClientCertificates();
-            X509Certificate2 initialClientCertificate = ClientCertificateHelper.LoadMatching(clientCertificates, url);
+            TaskCompletionSource<object> fetchAbort = RegisterInFlightAbort();
             try
             {
-                TlsCapture tlsCapture = new TlsCapture();
-                FetchTiming timing = new FetchTiming(string.Equals(uri.Scheme, "https", StringComparison.OrdinalIgnoreCase));
-                Proxy proxy = _standalone?.Proxy;
-                if (proxy == null && _context is IHasProxy hasProxy)
+                return await FetchImplAsync().ConfigureAwait(false);
+            }
+            catch (Exception) when (IsAborted() || fetchAbort.Task.IsCompleted)
+            {
+                // Prefer dispose over any transport/timeout classification once Close
+                // has rejected this in-flight fetch (Windows hang-route race).
+                throw DisposedException(inFlight: true);
+            }
+            finally
+            {
+                UnregisterInFlightAbort(fetchAbort);
+            }
+
+            async Task<IAPIResponse> FetchImplAsync()
+            {
+                ThrowIfAborted(fetchAbort);
+
+                if (string.IsNullOrEmpty(url))
                 {
-                    proxy = hasProxy.Proxy;
+                    throw new ArgumentException("URL must be non-empty.", nameof(url));
                 }
 
-                if (proxy == null && _context?.Browser is IHasLaunchProxy hasLaunch)
+                url = ApplyQueryParams(url, queryParams);
+                url = ResolveUrl(url);
+
+                if (!Uri.TryCreate(url, UriKind.Absolute, out Uri uri))
                 {
-                    proxy = hasLaunch.LaunchProxy;
+                    throw new ArgumentException("URL must be absolute.", nameof(url));
                 }
 
-                // Always capture wire headers. Skipping HTTP broke HeadersArray casing/order
-                // and mid-body "aborted" classification. Pair with keep-alive (do not force
-                // ConnectionClose): Close+HeaderCaptureStream hung SendAsync. Separate
-                // WebKit hang-ups came from LocaleHandshakeProxy via IHasProxy (also fixed).
-                using HttpClient client = CreateClient(
-                    ignoreTls,
-                    proxy,
-                    clientCertificates,
-                    initialClientCertificate,
-                    uri.Host,
-                    tlsCapture,
-                    captureRawHeaders: true);
-                RegisterClient(client);
+                // macOS client-certificate fixtures advertise https://local.playwright while
+                // binding on localhost; browser SOCKS MITM rewrites the host, but APIRequest
+                // uses HttpClient and must do the same DNS-safe rewrite.
+                string rewrittenHost = ClientCertificatesProxy.RewriteToLocalhostIfNeeded(uri.Host);
+                if (!string.Equals(rewrittenHost, uri.Host, StringComparison.OrdinalIgnoreCase))
+                {
+                    UriBuilder builder = new UriBuilder(uri) { Host = rewrittenHost };
+                    uri = builder.Uri;
+                    url = uri.ToString();
+                }
+
+                if (!string.Equals(uri.Scheme, "http", StringComparison.OrdinalIgnoreCase)
+                    && !string.Equals(uri.Scheme, "https", StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new PlaywrightException("Protocol \"" + uri.Scheme + ":\" not supported");
+                }
+
+                int bodyKinds = 0;
+                if (data != null)
+                {
+                    bodyKinds++;
+                }
+
+                if (json != null)
+                {
+                    bodyKinds++;
+                }
+
+                if (form != null)
+                {
+                    bodyKinds++;
+                }
+
+                if (multipart != null)
+                {
+                    bodyKinds++;
+                }
+
+                if (dataBytes != null)
+                {
+                    bodyKinds++;
+                }
+
+                if (bodyKinds > 1)
+                {
+                    throw new ArgumentException("Pass only one of data, dataBytes, json, form, or multipart.");
+                }
+
+                if (json is Delegate)
+                {
+                    throw new PlaywrightException("Unexpected 'data' type given: " + json.GetType().Name);
+                }
+
+                string payload = data;
+                string contentType = "text/plain";
+                if (json != null)
+                {
+                    payload = JsonSerializer.Serialize(json, json.GetType(), JsonExtensions.DefaultJsonSerializerOptions);
+                    contentType = "application/json";
+                }
+                else if (form != null && !RequireFormData(form).ContainsFiles())
+                {
+                    payload = EncodeForm(form);
+                    contentType = "application/x-www-form-urlencoded";
+                }
+                else if (dataBytes != null)
+                {
+                    contentType = "application/octet-stream";
+                }
+
+                string verb = string.IsNullOrEmpty(method) ? "GET" : method;
+
+                IReadOnlyDictionary<string, string> contextHeaders = _standalone?.ExtraHttpHeaders;
+                if (contextHeaders == null && _context is IHasExtraHttpHeaders extra)
+                {
+                    contextHeaders = extra.ExtraHttpHeaders;
+                }
+
+                contextHeaders = WithDefaultApiHeaders(contextHeaders);
+                contextHeaders = WithUserAgent(
+                    contextHeaders,
+                    await WithAbortAsync(ResolveUserAgentAsync(), fetchAbort).ConfigureAwait(false));
+                contextHeaders = WithHttpCredentials(contextHeaders, _standalone?.HttpCredentials, url);
+                if (_context is IHasHttpCredentials contextCredentials)
+                {
+                    contextHeaders = WithHttpCredentials(contextHeaders, contextCredentials.HttpCredentialsList, url);
+                }
+
+                int timeoutMs = timeout.HasValue
+                    ? (int)timeout.Value
+                    : _standalone?.TimeoutMs ?? (_context != null ? (int)_context.DefaultTimeout() : 30_000);
+                if (timeoutMs < 0)
+                {
+                    throw new ArgumentOutOfRangeException(nameof(timeout), "Timeout must be zero or positive.");
+                }
+
+                int redirectLimit = maxRedirects ?? _standalone?.MaxRedirects ?? 20;
+                if (redirectLimit < 0)
+                {
+                    throw new PlaywrightException("'maxRedirects' must be greater than or equal to '0'");
+                }
+
+                if (maxRetries < 0)
+                {
+                    throw new ArgumentOutOfRangeException(nameof(maxRetries), "maxRetries must be zero or positive.");
+                }
+
+                bool ignoreTls = ignoreHTTPSErrors
+                    || (_standalone != null && _standalone.IgnoreHttpsErrors)
+                    || (_context is IHasIgnoreHttpsErrors https && https.IgnoreHttpsErrors);
+
+                IReadOnlyList<ClientCertificate> clientCertificates = ResolveClientCertificates();
+                X509Certificate2 initialClientCertificate = ClientCertificateHelper.LoadMatching(clientCertificates, url);
                 try
                 {
-                    if (IsAborted())
+                    TlsCapture tlsCapture = new TlsCapture();
+                    FetchTiming timing = new FetchTiming(string.Equals(uri.Scheme, "https", StringComparison.OrdinalIgnoreCase));
+                    Proxy proxy = _standalone?.Proxy;
+                    if (proxy == null && _context is IHasProxy hasProxy)
                     {
-                        throw DisposedException(inFlight: true);
+                        proxy = hasProxy.Proxy;
                     }
 
-                    (HttpResponseMessage response, string finalUrl, byte[] body) = await SendWithRetriesAsync(
-                        client,
-                        uri,
-                        url,
-                        verb,
-                        payload,
-                        dataBytes,
-                        contentType,
-                        form,
-                        multipart,
-                        contextHeaders,
-                        headers,
-                        redirectLimit,
-                        maxRetries,
-                        timeoutMs,
-                        timing,
-                        tlsCapture).ConfigureAwait(false);
-
-                    using (response)
+                    if (proxy == null && _context?.Browser is IHasLaunchProxy hasLaunch)
                     {
-                        if (IsAborted())
-                        {
-                            throw DisposedException(inFlight: true);
-                        }
+                        proxy = hasLaunch.LaunchProxy;
+                    }
 
-                        timing.MarkResponseEnd();
-                        IReadOnlyList<NameValueEntry> rawHeaders = tlsCapture.RawHeaders.Count > 0
-                            ? tlsCapture.RawHeaders
-                            : ReadRawHeaders(response);
-                        IReadOnlyDictionary<string, string> responseHeaders = ToHeaderMap(rawHeaders);
-                        if (_context != null)
-                        {
-                            await IngestSetCookiesAsync(_context, finalUrl ?? url, response).ConfigureAwait(false);
-                        }
-                        else
-                        {
-                            IngestStandaloneSetCookies(finalUrl ?? url, response);
-                        }
+                    // Always capture wire headers. Skipping HTTP broke HeadersArray casing/order
+                    // and mid-body "aborted" classification. Pair with keep-alive (do not force
+                    // ConnectionClose): Close+HeaderCaptureStream hung SendAsync. Separate
+                    // WebKit hang-ups came from LocaleHandshakeProxy via IHasProxy (also fixed).
+                    using HttpClient client = CreateClient(
+                        ignoreTls,
+                        proxy,
+                        clientCertificates,
+                        initialClientCertificate,
+                        uri.Host,
+                        tlsCapture,
+                        captureRawHeaders: true);
+                    RegisterClient(client);
+                    try
+                    {
+                        ThrowIfAborted(fetchAbort);
 
-                        try
-                        {
-                            body = RouteFulfill.DecodeEncodedBody(body, responseHeaders);
-                        }
-                        catch (Exception ex) when (ex is not PlaywrightException)
-                        {
-                            throw new PlaywrightException(
-                                "failed to decompress '" + (HeaderMap.Value(responseHeaders, "content-encoding") ?? string.Empty).Trim() + "' encoding",
-                                ex);
-                        }
+                        (HttpResponseMessage response, string finalUrl, byte[] body) = await WithAbortAsync(
+                            SendWithRetriesAsync(
+                                client,
+                                uri,
+                                url,
+                                verb,
+                                payload,
+                                dataBytes,
+                                contentType,
+                                form,
+                                multipart,
+                                contextHeaders,
+                                headers,
+                                redirectLimit,
+                                maxRetries,
+                                timeoutMs,
+                                timing,
+                                tlsCapture),
+                            fetchAbort).ConfigureAwait(false);
 
-                        // Ownership of the response transfers to the caller.
-                        APIResponse result = new APIResponse(
-                            (int)response.StatusCode,
-                            response.ReasonPhrase ?? string.Empty,
-                            finalUrl ?? response.RequestMessage?.RequestUri?.AbsoluteUri ?? url,
-                            responseHeaders,
-                            body,
-                            tlsCapture.Details,
-                            timing.Result,
-                            rawHeaders);
-
-                        bool fail = failOnStatusCode ?? _standalone?.FailOnStatusCode ?? false;
-                        if (fail && !result.Ok)
+                        using (response)
                         {
-                            string bodyText = Encoding.UTF8.GetString(body ?? Array.Empty<byte>());
-                            await result.DisposeAsync().ConfigureAwait(false);
-                            throw new PlaywrightException(
-                                result.Status + " " + result.StatusText + "\nResponse text:\n" + bodyText);
-                        }
+                            ThrowIfAborted(fetchAbort);
 
-                        lock (_responses)
-                        {
-                            _responses.Add(result);
-                        }
+                            timing.MarkResponseEnd();
+                            IReadOnlyList<NameValueEntry> rawHeaders = tlsCapture.RawHeaders.Count > 0
+                                ? tlsCapture.RawHeaders
+                                : ReadRawHeaders(response);
+                            IReadOnlyDictionary<string, string> responseHeaders = ToHeaderMap(rawHeaders);
+                            if (_context != null)
+                            {
+                                await WithAbortAsync(
+                                    IngestSetCookiesAsync(_context, finalUrl ?? url, response),
+                                    fetchAbort).ConfigureAwait(false);
+                            }
+                            else
+                            {
+                                IngestStandaloneSetCookies(finalUrl ?? url, response);
+                            }
 
-                        OfficialTraceSession apiTrace = (_tracing as EmptyTracing)?.OwnOfficialSession();
-                        if (apiTrace != null && apiTrace.IsRecording)
-                        {
-                            string pathAndQuery = uri.PathAndQuery;
-                            apiTrace.RecordAction(
-                                verb.ToUpperInvariant() + " " + pathAndQuery,
-                                "APIRequestContext",
-                                "fetch");
-                            byte[] postBytes = dataBytes ?? (payload != null ? Encoding.UTF8.GetBytes(payload) : null);
-                            apiTrace.AddApiResource(
-                                verb.ToUpperInvariant(),
-                                finalUrl ?? url,
-                                result.Status,
-                                result.StatusText,
-                                result.Headers,
-                                postBytes,
-                                body);
-                        }
+                            ThrowIfAborted(fetchAbort);
 
-                        return result;
+                            try
+                            {
+                                body = RouteFulfill.DecodeEncodedBody(body, responseHeaders);
+                            }
+                            catch (Exception ex) when (ex is not PlaywrightException)
+                            {
+                                throw new PlaywrightException(
+                                    "failed to decompress '" + (HeaderMap.Value(responseHeaders, "content-encoding") ?? string.Empty).Trim() + "' encoding",
+                                    ex);
+                            }
+
+                            // Ownership of the response transfers to the caller.
+                            APIResponse result = new APIResponse(
+                                (int)response.StatusCode,
+                                response.ReasonPhrase ?? string.Empty,
+                                finalUrl ?? response.RequestMessage?.RequestUri?.AbsoluteUri ?? url,
+                                responseHeaders,
+                                body,
+                                tlsCapture.Details,
+                                timing.Result,
+                                rawHeaders);
+
+                            bool fail = failOnStatusCode ?? _standalone?.FailOnStatusCode ?? false;
+                            if (fail && !result.Ok)
+                            {
+                                string bodyText = Encoding.UTF8.GetString(body ?? Array.Empty<byte>());
+                                await result.DisposeAsync().ConfigureAwait(false);
+                                throw new PlaywrightException(
+                                    result.Status + " " + result.StatusText + "\nResponse text:\n" + bodyText);
+                            }
+
+                            lock (_responses)
+                            {
+                                _responses.Add(result);
+                            }
+
+                            OfficialTraceSession apiTrace = (_tracing as EmptyTracing)?.OwnOfficialSession();
+                            if (apiTrace != null && apiTrace.IsRecording)
+                            {
+                                string pathAndQuery = uri.PathAndQuery;
+                                apiTrace.RecordAction(
+                                    verb.ToUpperInvariant() + " " + pathAndQuery,
+                                    "APIRequestContext",
+                                    "fetch");
+                                byte[] postBytes = dataBytes ?? (payload != null ? Encoding.UTF8.GetBytes(payload) : null);
+                                apiTrace.AddApiResource(
+                                    verb.ToUpperInvariant(),
+                                    finalUrl ?? url,
+                                    result.Status,
+                                    result.StatusText,
+                                    result.Headers,
+                                    postBytes,
+                                    body);
+                            }
+
+                            // Final dispose check: Close can land after the last await above
+                            // while we assemble the APIResponse (Windows hang-route race).
+                            ThrowIfAborted(fetchAbort);
+                            return result;
+                        }
+                    }
+                    finally
+                    {
+                        UnregisterClient(client);
                     }
                 }
                 finally
                 {
-                    UnregisterClient(client);
+                    initialClientCertificate?.Dispose();
                 }
-            }
-            finally
-            {
-                initialClientCertificate?.Dispose();
-            }
+            } // FetchImplAsync
         }
 
         /// <inheritdoc/>
@@ -397,6 +431,7 @@ namespace PlaywrightNative.Helpers
 
             _disposed = true;
             _abortGate.TrySetResult(null);
+            RejectInFlightAborts();
             if (!_lifetime.IsCancellationRequested)
             {
                 await _lifetime.CancelAsync().ConfigureAwait(false);
@@ -2266,6 +2301,12 @@ namespace PlaywrightNative.Helpers
                         owned = null;
                         timing.MarkResponseStart();
                         byte[] body = await ReadBodyAsync(response, token).ConfigureAwait(false);
+                        if (IsAborted())
+                        {
+                            response.Dispose();
+                            throw DisposedException(inFlight: true);
+                        }
+
                         timing.MarkResponseEnd();
                         RecordApiHop(
                             requestMethod,
@@ -2577,6 +2618,7 @@ namespace PlaywrightNative.Helpers
 
             _disposed = true;
             _abortGate.TrySetResult(null);
+            RejectInFlightAborts();
             try
             {
                 if (!_lifetime.IsCancellationRequested)
@@ -2593,6 +2635,104 @@ namespace PlaywrightNative.Helpers
             // Upstream agent.destroy(): tear down active sockets so hanging
             // SendAsync fails promptly instead of racing CancellationToken.
             AbortActiveClients();
+        }
+
+        private TaskCompletionSource<object> RegisterInFlightAbort()
+        {
+            TaskCompletionSource<object> fetchAbort =
+                new TaskCompletionSource<object>(TaskCreationOptions.RunContinuationsAsynchronously);
+            lock (_inFlightGate)
+            {
+                if (_disposed)
+                {
+                    fetchAbort.TrySetResult(null);
+                    return fetchAbort;
+                }
+
+                _inFlightAborts.Add(fetchAbort);
+            }
+
+            return fetchAbort;
+        }
+
+        private void UnregisterInFlightAbort(TaskCompletionSource<object> fetchAbort)
+        {
+            if (fetchAbort == null)
+            {
+                return;
+            }
+
+            lock (_inFlightGate)
+            {
+                _inFlightAborts.Remove(fetchAbort);
+            }
+        }
+
+        private void RejectInFlightAborts()
+        {
+            TaskCompletionSource<object>[] copy;
+            lock (_inFlightGate)
+            {
+                copy = _inFlightAborts.ToArray();
+                _inFlightAborts.Clear();
+            }
+
+            foreach (TaskCompletionSource<object> fetchAbort in copy)
+            {
+                fetchAbort.TrySetResult(null);
+            }
+        }
+
+        private void ThrowIfAborted(TaskCompletionSource<object> fetchAbort = null)
+        {
+            if (IsAborted()
+                || _abortGate.Task.IsCompleted
+                || (fetchAbort != null && fetchAbort.Task.IsCompleted))
+            {
+                throw DisposedException(inFlight: true);
+            }
+        }
+
+        private async Task<T> WithAbortAsync<T>(Task<T> task, TaskCompletionSource<object> fetchAbort = null)
+        {
+            if (task == null)
+            {
+                throw new ArgumentNullException(nameof(task));
+            }
+
+            Task finished = fetchAbort == null
+                ? await Task.WhenAny(task, _abortGate.Task).ConfigureAwait(false)
+                : await Task.WhenAny(task, _abortGate.Task, fetchAbort.Task).ConfigureAwait(false);
+            if (finished != task
+                || IsAborted()
+                || _abortGate.Task.IsCompleted
+                || (fetchAbort != null && fetchAbort.Task.IsCompleted))
+            {
+                throw DisposedException(inFlight: true);
+            }
+
+            return await task.ConfigureAwait(false);
+        }
+
+        private async Task WithAbortAsync(Task task, TaskCompletionSource<object> fetchAbort = null)
+        {
+            if (task == null)
+            {
+                throw new ArgumentNullException(nameof(task));
+            }
+
+            Task finished = fetchAbort == null
+                ? await Task.WhenAny(task, _abortGate.Task).ConfigureAwait(false)
+                : await Task.WhenAny(task, _abortGate.Task, fetchAbort.Task).ConfigureAwait(false);
+            if (finished != task
+                || IsAborted()
+                || _abortGate.Task.IsCompleted
+                || (fetchAbort != null && fetchAbort.Task.IsCompleted))
+            {
+                throw DisposedException(inFlight: true);
+            }
+
+            await task.ConfigureAwait(false);
         }
 
         private void DisposeResponses()
