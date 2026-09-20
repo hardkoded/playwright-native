@@ -334,6 +334,7 @@ namespace PlaywrightNative.WebKit
             string visibility = default)
         {
             WaitForSelectorName.Validate(waitFor, visibility);
+            bool strictSelectors = strict ?? (_page.Context is IHasStrictSelectors s && s.StrictSelectors);
             return WaitForSelectorHelper.WaitAsync(
                 sel => QueryActionAsync(sel, strict),
                 selector,
@@ -341,7 +342,22 @@ namespace PlaywrightNative.WebKit
                 timeout,
                 "frame.waitForSelector",
                 () => IsDetached,
-                readObservedPreviewsAsync: () => ReadSelectorPreviewLogAsync(selector));
+                readObservedPreviewsAsync: () => ReadSelectorPreviewLogAsync(selector),
+                readVisibilityBySelectorAsync: async sel =>
+                {
+                    try
+                    {
+                        return await AtomicSelectorRead.IsVisibleAsync(
+                                expression => EvaluateAsync<JsonElement?>(expression),
+                                sel,
+                                strictSelectors)
+                            .ConfigureAwait(false);
+                    }
+                    catch (PlaywrightException)
+                    {
+                        return null;
+                    }
+                });
         }
 
         /// <inheritdoc/>

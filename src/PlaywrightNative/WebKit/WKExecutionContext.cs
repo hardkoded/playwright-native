@@ -155,18 +155,14 @@ namespace PlaywrightNative.WebKit
                 "  return await __pwRet;" +
                 "}";
 
-            // Pulse first so Darwin has transient activation before the
-            // objectId-anchor evaluate. A post-only pulse raced the
-            // callFunctionOn window on CI (requestStorageAccess → false).
-            if (pulseTrustedGestureAsync != null)
-            {
-                await pulseTrustedGestureAsync().ConfigureAwait(false);
-            }
-
             // Bind to window so callFunctionOn runs in the page world with
             // a stable objectId. Prefer window over document — Darwin RSA
             // under document-bound callFunctionOn still returned false on CI
-            // after OOPIF load even with emulateUserGesture.
+            // after OOPIF load even with emulateUserGesture. Anchor without
+            // emulateUserGesture — that flag would consume the activation the
+            // following callFunctionOn needs. Do not pulse before the anchor:
+            // a parent iframe hit-test is slow enough that activation expires
+            // before callFunctionOn when pulsed twice.
             object anchorParams = _contextId.HasValue
                 ? new { expression = "window", contextId = _contextId.Value, returnByValue = false, emulateUserGesture = false }
                 : (object)new { expression = "window", returnByValue = false, emulateUserGesture = false };
@@ -192,8 +188,9 @@ namespace PlaywrightNative.WebKit
 
             try
             {
-                // Re-pulse immediately before callFunctionOn — the anchor
-                // evaluate round-trip otherwise clears Darwin activation.
+                // Pulse immediately before callFunctionOn — parent iframe click
+                // then OOPIF frame-session pulse — so Darwin still has transient
+                // activation when requestStorageAccess runs under awaitPromise.
                 if (pulseTrustedGestureAsync != null)
                 {
                     await pulseTrustedGestureAsync().ConfigureAwait(false);

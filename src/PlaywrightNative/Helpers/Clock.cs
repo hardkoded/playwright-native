@@ -16,6 +16,7 @@
  */
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Microsoft.Playwright;
@@ -227,15 +228,85 @@ namespace PlaywrightNative.Helpers
                 IReadOnlyCollection<IFrame> frames = page.Frames;
                 if (frames == null || frames.Count == 0)
                 {
-                    await page.EvaluateAsync(script).ConfigureAwait(false);
+                    await EvaluateClockScriptAsync(
+                            expression => page.EvaluateAsync(expression),
+                            expression => page.EvaluateAsync<string>(expression),
+                            script)
+                        .ConfigureAwait(false);
                     continue;
                 }
 
                 foreach (IFrame frame in frames)
                 {
-                    await frame.EvaluateAsync(script).ConfigureAwait(false);
+                    await EvaluateClockScriptAsync(
+                            expression => frame.EvaluateAsync(expression),
+                            expression => frame.EvaluateAsync<string>(expression),
+                            script)
+                        .ConfigureAwait(false);
                 }
             }
+        }
+
+        /// <summary>
+        /// Runs a clock controller expression without holding WIP
+        /// <c>awaitPromise</c> across embedder timers.
+        /// </summary>
+        /// <remarks>
+        /// <c>pauseAt</c> / <c>runFor</c> / <c>_runTo</c> / <c>_callFirstTimer</c>
+        /// await <c>embedder.setTimeout(0)</c>. On Darwin WebKit, native timers
+        /// do not fire while a protocol evaluate is blocked on
+        /// <c>awaitPromise</c>, so a direct <c>EvaluateAsync(controller.pauseAt(...))</c>
+        /// deadlocks until the NUnit timeout. Kick the work off a microtask,
+        /// return synchronously, then poll a completion marker so timers can run.
+        /// </remarks>
+        private async Task EvaluateClockScriptAsync(
+            Func<string, Task<JsonElement?>> evaluateAsync,
+            Func<string, Task<string>> evaluateStringAsync,
+            string script)
+        {
+            string marker = "__pwClockDone_" + Guid.NewGuid().ToString("N");
+            string markerJson = JsonSerializer.Serialize(marker);
+
+            // Fire-and-forget: schedule the (possibly async) controller call,
+            // then return undefined synchronously so WebKit does not hold
+            // awaitPromise across embedder.setTimeout yields.
+            string kickoff =
+                "(() => {" +
+                "  const __pwK = " + markerJson + ";" +
+                "  try { delete globalThis[__pwK]; } catch (e) {}" +
+                "  Promise.resolve().then(async () => {" +
+                "    try {" +
+                "      const __pwR = (" + script + ");" +
+                "      if (__pwR && typeof __pwR.then === 'function') await __pwR;" +
+                "      globalThis[__pwK] = 'ok';" +
+                "    } catch (e) {" +
+                "      globalThis[__pwK] = 'err:' + String(e && (e.stack || e));" +
+                "    }" +
+                "  });" +
+                "  return undefined;" +
+                "})()";
+
+            await evaluateAsync(kickoff).ConfigureAwait(false);
+
+            string poll = "globalThis[" + markerJson + "]";
+            Stopwatch sw = Stopwatch.StartNew();
+            while (sw.ElapsedMilliseconds < 60_000)
+            {
+                string status = await evaluateStringAsync(poll).ConfigureAwait(false);
+                if (!string.IsNullOrEmpty(status))
+                {
+                    if (status.StartsWith("err:", StringComparison.Ordinal))
+                    {
+                        throw new PlaywrightException(status.Substring(4));
+                    }
+
+                    return;
+                }
+
+                await Task.Delay(5).ConfigureAwait(false);
+            }
+
+            throw new PlaywrightException("clock: timed out waiting for controller command");
         }
     }
 }

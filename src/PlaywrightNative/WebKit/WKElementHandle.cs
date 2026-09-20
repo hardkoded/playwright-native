@@ -336,7 +336,9 @@ namespace PlaywrightNative.WebKit
         {
             EnsureNotDisposed();
 
-            // Mirrors the Chromium computed-style + getBoundingClientRect visibility heuristic.
+            // Prefer callers that never bind this objectId (WaitForSelector uses
+            // AtomicSelectorRead on WebKit). callFunctionOn a loading=lazy iframe
+            // objectId wedges Darwin before DomVisibility JS runs.
             return EvaluateFunctionAsync<bool>(DomVisibility.IsVisibleFunction);
         }
 
@@ -805,21 +807,13 @@ namespace PlaywrightNative.WebKit
             await EvaluateFunctionAsync<bool>(ElementStateScript.SetInputFilesFromJsonFunction, json).ConfigureAwait(false);
         }
 
-        private async Task InitializePreviewAsync()
+        private Task InitializePreviewAsync()
         {
-            try
-            {
-                string nodePreview = await EvaluateFunctionAsync<string>(RemoteObject.PreviewNodeFunction)
-                    .ConfigureAwait(false);
-                if (!string.IsNullOrEmpty(nodePreview))
-                {
-                    SetPreview("JSHandle@" + nodePreview);
-                }
-            }
-            catch (PlaywrightException)
-            {
-                // Best-effort preview, matching upstream ElementHandle._initializePreview.
-            }
+            // Do not callFunctionOn this objectId for preview. Unloaded
+            // loading=lazy iframes wedge Darwin WebKit for the full command
+            // timeout (WaitForSelector → InitializePreview on construct).
+            // Official preview is best-effort; keep the default JSHandle@node.
+            return Task.CompletedTask;
         }
 
 #pragma warning disable SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648

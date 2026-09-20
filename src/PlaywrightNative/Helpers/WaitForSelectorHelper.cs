@@ -53,6 +53,13 @@ namespace PlaywrightNative.Helpers
         /// <c>#mydiv</c> wait logs). The callback installs a mutation observer
         /// and returns <c>hidden|preview</c> / <c>visible|preview</c> lines.
         /// </param>
+        /// <param name="readVisibilityBySelectorAsync">
+        /// Optional document-scoped visibility probe that never binds
+        /// <c>Runtime.callFunctionOn</c> to a matched element's objectId.
+        /// Required on WebKit so unloaded <c>loading=lazy</c> iframes do not
+        /// wedge the target (DomVisibility JS never runs if the objectId path
+        /// hangs first).
+        /// </param>
         /// <returns>
         /// The matching handle for attached/visible (and hidden-but-attached).
         /// <see langword="null"/> when waiting for detached, or hidden and the node is gone.
@@ -65,7 +72,8 @@ namespace PlaywrightNative.Helpers
             string apiName = "page.waitForSelector",
             Func<bool> isDetached = null,
             Func<Task<bool>> isScopeConnectedAsync = null,
-            Func<Task<IReadOnlyList<string>>> readObservedPreviewsAsync = null)
+            Func<Task<IReadOnlyList<string>>> readObservedPreviewsAsync = null,
+            Func<string, Task<bool?>> readVisibilityBySelectorAsync = null)
         {
             if (querySelectorAsync == null)
             {
@@ -137,76 +145,112 @@ namespace PlaywrightNative.Helpers
                 bool destroyedMidProbe = false;
                 try
                 {
-                    handle = await querySelectorAsync(selector).ConfigureAwait(false);
-                    attached = handle != null;
-                    if (attached)
+                    // Document-scoped visibility first (WebKit): never create an
+                    // element handle / callFunctionOn a loading=lazy iframe
+                    // objectId — that wedges Darwin before DomVisibility runs.
+                    if (readVisibilityBySelectorAsync != null
+                        && wanted != WaitForSelectorState.Attached
+                        && wanted != WaitForSelectorState.Detached)
                     {
-                        // Preview first, then visibility. For Visible waits, persist
-                        // the preview as hidden immediately so Darwin removals under
-                        // GiveItTimeToLog still leave #mydiv in the timeout log.
-                        // Hidden waits must not treat a failed/unknown probe as hidden.
-                        if (wanted != WaitForSelectorState.Attached
-                            && wanted != WaitForSelectorState.Detached)
+                        knownVisible = await readVisibilityBySelectorAsync(selector).ConfigureAwait(false);
+                        if (wanted == WaitForSelectorState.Visible && knownVisible == true)
                         {
-                            try
+                            handle = await querySelectorAsync(selector).ConfigureAwait(false);
+                            attached = handle != null;
+                            if (!attached)
                             {
-                                string previewValue = await handle.EvaluateAsync<string>(
-                                        RemoteObject.PreviewNodeFunction)
-                                    .ConfigureAwait(false);
-                                if (!string.IsNullOrEmpty(previewValue))
+                                knownVisible = false;
+                            }
+                        }
+                        else if (wanted == WaitForSelectorState.Hidden)
+                        {
+                            handle = await querySelectorAsync(selector).ConfigureAwait(false);
+                            attached = handle != null;
+                            if (!attached)
+                            {
+                                knownVisible = false;
+                            }
+                        }
+                        else
+                        {
+                            // Not yet visible / unknown: do not construct a handle
+                            // (InitializePreview callFunctionOn wedges lazy iframes).
+                            attached = false;
+                        }
+                    }
+                    else
+                    {
+                        handle = await querySelectorAsync(selector).ConfigureAwait(false);
+                        attached = handle != null;
+                        if (attached)
+                        {
+                            // Preview first, then visibility. For Visible waits, persist
+                            // the preview as hidden immediately so Darwin removals under
+                            // GiveItTimeToLog still leave #mydiv in the timeout log.
+                            // Hidden waits must not treat a failed/unknown probe as hidden.
+                            if (wanted != WaitForSelectorState.Attached
+                                && wanted != WaitForSelectorState.Detached)
+                            {
+                                try
                                 {
-                                    eagerPreview = previewValue;
-                                    if (wanted == WaitForSelectorState.Visible)
+                                    string previewValue = await handle.EvaluateAsync<string>(
+                                            RemoteObject.PreviewNodeFunction)
+                                        .ConfigureAwait(false);
+                                    if (!string.IsNullOrEmpty(previewValue))
                                     {
+                                        eagerPreview = previewValue;
+                                        if (wanted == WaitForSelectorState.Visible)
+                                        {
+                                            RememberResolvedSnapshot(
+                                                resolvedSnapshots,
+                                                visible: false,
+                                                eagerPreview);
+                                            AppendResolvedLog(logs, visible: false, eagerPreview);
+                                        }
+                                    }
+                                }
+                                catch (PlaywrightException)
+                                {
+                                }
+
+                                try
+                                {
+                                    bool isVisible = await handle.IsVisibleAsync().ConfigureAwait(false);
+                                    knownVisible = isVisible;
+                                    if (!string.IsNullOrEmpty(eagerPreview))
+                                    {
+                                        RememberResolvedSnapshot(resolvedSnapshots, isVisible, eagerPreview);
+                                        AppendResolvedLog(logs, isVisible, eagerPreview);
+                                    }
+                                }
+                                catch (PlaywrightException ex) when (
+                                    DestroyedContext.IsDestroyedContext(ex) || IsMissingInjectedScript(ex))
+                                {
+                                    throw;
+                                }
+                                catch (PlaywrightException)
+                                {
+                                }
+                            }
+                            else if (string.IsNullOrEmpty(eagerPreview))
+                            {
+                                try
+                                {
+                                    string previewValue = await handle.EvaluateAsync<string>(
+                                            RemoteObject.PreviewNodeFunction)
+                                        .ConfigureAwait(false);
+                                    if (!string.IsNullOrEmpty(previewValue))
+                                    {
+                                        eagerPreview = previewValue;
                                         RememberResolvedSnapshot(
                                             resolvedSnapshots,
                                             visible: false,
                                             eagerPreview);
-                                        AppendResolvedLog(logs, visible: false, eagerPreview);
                                     }
                                 }
-                            }
-                            catch (PlaywrightException)
-                            {
-                            }
-
-                            try
-                            {
-                                bool isVisible = await handle.IsVisibleAsync().ConfigureAwait(false);
-                                knownVisible = isVisible;
-                                if (!string.IsNullOrEmpty(eagerPreview))
+                                catch (PlaywrightException)
                                 {
-                                    RememberResolvedSnapshot(resolvedSnapshots, isVisible, eagerPreview);
-                                    AppendResolvedLog(logs, isVisible, eagerPreview);
                                 }
-                            }
-                            catch (PlaywrightException ex) when (
-                                DestroyedContext.IsDestroyedContext(ex) || IsMissingInjectedScript(ex))
-                            {
-                                throw;
-                            }
-                            catch (PlaywrightException)
-                            {
-                            }
-                        }
-                        else if (string.IsNullOrEmpty(eagerPreview))
-                        {
-                            try
-                            {
-                                string previewValue = await handle.EvaluateAsync<string>(
-                                        RemoteObject.PreviewNodeFunction)
-                                    .ConfigureAwait(false);
-                                if (!string.IsNullOrEmpty(previewValue))
-                                {
-                                    eagerPreview = previewValue;
-                                    RememberResolvedSnapshot(
-                                        resolvedSnapshots,
-                                        visible: false,
-                                        eagerPreview);
-                                }
-                            }
-                            catch (PlaywrightException)
-                            {
                             }
                         }
                     }
