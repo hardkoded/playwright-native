@@ -168,7 +168,14 @@ namespace PlaywrightNative.Helpers
                 string call = argumentJs == null
                     ? "globalThis.__pwClock.controller." + method + "()"
                     : "globalThis.__pwClock.controller." + method + "(" + argumentJs + ")";
-                await EvaluateOnPagesAsync(call).ConfigureAwait(false);
+
+                // pauseAt/runFor/fastForward await embedder.setTimeout inside _runTo.
+                // On Darwin WebKit that never fires while awaitPromise holds the
+                // protocol evaluate — defer those calls off a microtask.
+                bool deferAwaitPromise = string.Equals(method, "pauseAt", StringComparison.Ordinal)
+                    || string.Equals(method, "runFor", StringComparison.Ordinal)
+                    || string.Equals(method, "fastForward", StringComparison.Ordinal);
+                await EvaluateOnPagesAsync(call, deferAwaitPromise).ConfigureAwait(false);
             }
             catch (PlaywrightException ex)
             {
@@ -200,7 +207,7 @@ namespace PlaywrightNative.Helpers
 
             string injector = ClockScript.BuildInjector(BrowserName());
             await _context.AddInitScriptAsync(injector).ConfigureAwait(false);
-            await EvaluateOnPagesAsync(injector).ConfigureAwait(false);
+            await EvaluateOnPagesAsync(injector, deferAwaitPromise: false).ConfigureAwait(false);
         }
 
         private string BrowserName()
@@ -215,7 +222,7 @@ namespace PlaywrightNative.Helpers
             }
         }
 
-        private async Task EvaluateOnPagesAsync(string script)
+        private async Task EvaluateOnPagesAsync(string script, bool deferAwaitPromise)
         {
             IReadOnlyCollection<IPage> pages = _context.Pages;
             if (pages == null)
@@ -228,21 +235,36 @@ namespace PlaywrightNative.Helpers
                 IReadOnlyCollection<IFrame> frames = page.Frames;
                 if (frames == null || frames.Count == 0)
                 {
-                    await EvaluateClockScriptAsync(
-                            expression => page.EvaluateAsync(expression),
-                            expression => page.EvaluateAsync<string>(expression),
-                            script)
-                        .ConfigureAwait(false);
+                    if (deferAwaitPromise)
+                    {
+                        await EvaluateClockScriptAsync(
+                                expression => page.EvaluateAsync(expression),
+                                expression => page.EvaluateAsync<string>(expression),
+                                script)
+                            .ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        await page.EvaluateAsync(script).ConfigureAwait(false);
+                    }
+
                     continue;
                 }
 
                 foreach (IFrame frame in frames)
                 {
-                    await EvaluateClockScriptAsync(
-                            expression => frame.EvaluateAsync(expression),
-                            expression => frame.EvaluateAsync<string>(expression),
-                            script)
-                        .ConfigureAwait(false);
+                    if (deferAwaitPromise)
+                    {
+                        await EvaluateClockScriptAsync(
+                                expression => frame.EvaluateAsync(expression),
+                                expression => frame.EvaluateAsync<string>(expression),
+                                script)
+                            .ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        await frame.EvaluateAsync(script).ConfigureAwait(false);
+                    }
                 }
             }
         }

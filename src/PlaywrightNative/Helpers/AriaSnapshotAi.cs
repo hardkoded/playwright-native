@@ -478,13 +478,13 @@ namespace PlaywrightNative.Helpers
                 Math.Min(300, RemainingMs(deadlineClock, budgetMs)),
                 fallback: null).ConfigureAwait(false);
 
-            // Prefer ChildFrames index over ContentFrame/describeNode — Windows
-            // Chromium describeNode for <frame> often exceeds the short race and
-            // leaves stitch empty (ShouldStitchIframesInsideAFramesetFrame).
-            IFrame child = await ChildFrameForAriaRefAsync(frame, ariaRef).ConfigureAwait(false);
+            // ContentFrame first: ChildFrames order is creation order, not DOM
+            // order, so index matching swaps stitches after remove/re-add
+            // (ShouldPersistIframeReferences → button1/button2 swapped).
+            IFrame child = await ContentFrameOrNullAsync(iframeEl).ConfigureAwait(false);
             if (child == null || child.IsDetached)
             {
-                child = await ContentFrameOrNullAsync(iframeEl).ConfigureAwait(false);
+                child = await ChildFrameForAriaRefAsync(frame, ariaRef).ConfigureAwait(false);
             }
 
             if (child == null || child.IsDetached)
@@ -743,18 +743,31 @@ namespace PlaywrightNative.Helpers
                 return null;
             }
 
-            int index;
+            // Match by name/src first — ChildFrames is creation order, not DOM
+            // querySelectorAll order (srcdoc re-add swaps indices).
+            string[] info;
             try
             {
-                index = await frame.EvaluateAsync<int>(
+                info = await frame.EvaluateAsync<string[]>(
                     @"(ref) => {
   const want = String(ref || '');
   const frames = document.querySelectorAll('iframe, frame');
   for (let i = 0; i < frames.length; i++) {
     const aria = frames[i]._ariaRef;
-    if (aria && aria.ref === want) return i;
+    if (aria && aria.ref === want) {
+      const el = frames[i];
+      let src = '';
+      try { src = el.getAttribute('src') || el.src || ''; } catch (e) {}
+      return [String(el.name || ''), String(src), String(i)];
+    }
   }
-  return frames.length === 1 ? 0 : -1;
+  if (frames.length === 1) {
+    const el = frames[0];
+    let src = '';
+    try { src = el.getAttribute('src') || el.src || ''; } catch (e) {}
+    return [String(el.name || ''), String(src), '0'];
+  }
+  return null;
 }",
                     ariaRef).ConfigureAwait(false);
             }
@@ -767,20 +780,69 @@ namespace PlaywrightNative.Helpers
                 return null;
             }
 
-            if (index < 0)
+            if (info == null || info.Length < 3)
             {
                 return null;
             }
 
-            int seen = 0;
-            foreach (IFrame child in frame.ChildFrames)
+            string wantName = info[0] ?? string.Empty;
+            string wantSrc = info[1] ?? string.Empty;
+            if (!string.IsNullOrEmpty(wantName))
             {
-                if (seen == index)
+                foreach (IFrame child in frame.ChildFrames)
                 {
-                    return child;
+                    if (child != null
+                        && !child.IsDetached
+                        && string.Equals(child.Name, wantName, StringComparison.Ordinal))
+                    {
+                        return child;
+                    }
                 }
+            }
 
-                seen++;
+            if (!string.IsNullOrEmpty(wantSrc)
+                && !wantSrc.StartsWith("about:", StringComparison.OrdinalIgnoreCase)
+                && !wantSrc.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+            {
+                foreach (IFrame child in frame.ChildFrames)
+                {
+                    if (child == null || child.IsDetached)
+                    {
+                        continue;
+                    }
+
+                    string childUrl = child.Url ?? string.Empty;
+                    if (childUrl.Contains(wantSrc, StringComparison.Ordinal)
+                        || wantSrc.Contains(childUrl, StringComparison.Ordinal)
+                        || string.Equals(childUrl, wantSrc, StringComparison.Ordinal))
+                    {
+                        return child;
+                    }
+                }
+            }
+
+            if (!int.TryParse(info[2], NumberStyles.Integer, CultureInfo.InvariantCulture, out int index)
+                || index < 0)
+            {
+                return null;
+            }
+
+            // Index fallback only when a single child remains (safe) or names/srcs
+            // were empty — still prefer exact count match.
+            IReadOnlyList<IFrame> children = frame.ChildFrames;
+            if (children == null || children.Count == 0)
+            {
+                return null;
+            }
+
+            if (children.Count == 1)
+            {
+                return children[0].IsDetached ? null : children[0];
+            }
+
+            if (index < children.Count && children[index] != null && !children[index].IsDetached)
+            {
+                return children[index];
             }
 
             return null;
