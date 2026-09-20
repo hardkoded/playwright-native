@@ -182,8 +182,12 @@ jobs:
         # handshake abort (ERR_CONNECTION_CLOSED / TLS EOF).
         dotnet dev-certs https -ep src/PlaywrightNative.TestServer/key.pfx -p playwright
         dotnet dev-certs https -ep src/PlaywrightNative.TestServer/testCert.cer
-        sudo openssl x509 -inform der -in src/PlaywrightNative.TestServer/testCert.cer -out /usr/local/share/ca-certificates/testCert.crt -outform pem
-        sudo update-ca-certificates
+        # Do NOT install testCert into the system CA store. WebKit/libsoup
+        # trusts OS CAs, so a system-trusted "bad SSL" cert makes page.goto
+        # succeed and breaks ShouldFailWhenNavigatingToBadSsl /
+        # ignoreHTTPSErrors isolation (caughtException null). Chromium keeps
+        # its own root store and was unaffected. Tests that need HTTPS to
+        # succeed must use IgnoreHTTPSErrors (upstream parity).
     - name: Create HTTPS certificate (Windows)
       if: matrix.os == 'windows-latest'
       shell: pwsh
