@@ -286,6 +286,17 @@ namespace PlaywrightNative.Helpers
                     {
                     }
 
+                    // Separate the last flushed write from TCP FIN so CFNetwork
+                    // can process a WebSocket close frame before half-close
+                    // (ShouldWorkWithClientSideClose → 3002 vs 1006).
+                    try
+                    {
+                        await Task.Delay(80, CancellationToken.None).ConfigureAwait(false);
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                    }
+
                     destination.Socket?.Shutdown(SocketShutdown.Send);
                 }
                 catch (SocketException)

@@ -358,10 +358,13 @@ namespace PlaywrightNative.TestServer
                         WriteFrame(opcode: 8, payload);
                     }
 
-                    // Half-close after the echo so dual Darwin proxies
-                    // (Mac bypass shim → LocaleHandshakeProxy) observe EOF on
-                    // the reverse copy and finish delivering the close frame
-                    // before the origin socket is disposed.
+                    // Let dual Darwin proxies (Mac bypass shim → LocaleHandshakeProxy)
+                    // copy the close echo to CFNetwork BEFORE TCP FIN. Shutdown(Send)
+                    // immediately after WriteFrame coalesced echo+FIN through both
+                    // hops; WebKit then reported error + close 1006 instead of clean
+                    // application close 3002 (ShouldWorkWithClientSideClose).
+                    await Task.Delay(1600).ConfigureAwait(false);
+
                     try
                     {
                         if (_stream is NetworkStream network)
@@ -385,12 +388,33 @@ namespace PlaywrightNative.TestServer
                     {
                     }
 
-                    // Do NOT drain until peer EOF: the browser waits for this
-                    // close echo before half-closing, so a long drain deadlocks
-                    // under Darwin dual proxies and Kestrel dispose becomes RST
-                    // (error+1006 instead of application close 3002). Dual-proxy
-                    // linger is ~400ms each hop; settle past both hops + buffer.
-                    await Task.Delay(1600).ConfigureAwait(false);
+                    // Brief drain so proxy hops observe EOF after the delayed FIN.
+                    // Cap the wait — a long drain deadlocks when the peer still
+                    // expects a clean close that never arrives.
+                    try
+                    {
+                        byte[] sink = new byte[256];
+                        using CancellationTokenSource drainCts =
+                            new CancellationTokenSource(TimeSpan.FromMilliseconds(800));
+                        while (true)
+                        {
+                            int n = await _stream.ReadAsync(sink.AsMemory(0, sink.Length), drainCts.Token)
+                                .ConfigureAwait(false);
+                            if (n == 0)
+                            {
+                                break;
+                            }
+                        }
+                    }
+                    catch (IOException)
+                    {
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                    }
+                    catch (OperationCanceledException)
+                    {
+                    }
 
                     NotifyClose(code, reason);
                     // Keep the upgrade handler alive briefly so Kestrel does not

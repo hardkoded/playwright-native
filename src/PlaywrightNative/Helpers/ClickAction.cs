@@ -1102,18 +1102,11 @@ namespace PlaywrightNative.Helpers
             InPointer.Value = true;
             try
             {
-                IPage page = pageGate as IPage;
-                if (page != null)
-                {
-                    try
-                    {
-                        await page.BringToFrontAsync().ConfigureAwait(false);
-                    }
-                    catch (PlaywrightException)
-                    {
-                    }
-                }
-
+                // Do not BringToFront here. Parallel clicks across pages/contexts
+                // (ShouldBeAbleToClickAcrossBrowserContexts, permission-overlay
+                // suites) would thrash Target.activate and serialize ~1s polls
+                // past the 30s test budget. Input.dispatch* targets the page
+                // session directly; RSA / focused APIs use their own activate.
                 await action().ConfigureAwait(false);
             }
             finally
@@ -2218,12 +2211,15 @@ namespace PlaywrightNative.Helpers
         private static async Task RafAsync(IElementHandle handle)
         {
             // Prefer in-page double-rAF so CSS transitions move between
-            // stability samples (ShouldTimeoutWaitingForStablePosition).
-            // Race a short host timeout so a modal alert / paused opener
-            // cannot stall Runtime.evaluate past the action timeout
-            // (Chromium dialog clicks). On WebKit, abandoning that evaluate
-            // wedges the target session — use a host-only delay there.
-            if (handle == null || IsWebKitHandle(handle))
+            // stability samples (ShouldTimeoutWaitingForStablePosition /
+            // ShouldWaitForStablePosition). Race a short host timeout so a
+            // modal alert / paused opener cannot stall Runtime.evaluate past
+            // the action timeout (Chromium dialog clicks).
+            //
+            // WebKit used to skip page rAF entirely (host Delay only) because
+            // abandoning a raced evaluate wedged the target session. Await the
+            // page rAF to completion instead of cancelling it mid-flight.
+            if (handle == null)
             {
                 await DelayOrAbortAsync(32).ConfigureAwait(false);
                 return;
@@ -2233,6 +2229,12 @@ namespace PlaywrightNative.Helpers
             {
                 Task pageRaf = handle.EvaluateAsync(
                     "() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => r())))");
+                if (IsWebKitHandle(handle))
+                {
+                    await pageRaf.ConfigureAwait(false);
+                    return;
+                }
+
                 Task host = DelayOrAbortAsync(50);
                 await Task.WhenAny(pageRaf, host).ConfigureAwait(false);
             }

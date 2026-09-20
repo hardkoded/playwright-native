@@ -789,6 +789,17 @@ namespace PlaywrightNative.Helpers
                     {
                     }
 
+                    // Separate the last flushed write from TCP FIN so the next
+                    // Darwin proxy hop (or CFNetwork) can deliver a WebSocket
+                    // close frame before seeing half-close (else 1006).
+                    try
+                    {
+                        await Task.Delay(80, CancellationToken.None).ConfigureAwait(false);
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                    }
+
                     destination.Socket?.Shutdown(SocketShutdown.Send);
                 }
                 catch (SocketException)

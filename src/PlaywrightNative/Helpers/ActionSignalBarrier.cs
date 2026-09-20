@@ -41,6 +41,13 @@ namespace PlaywrightNative.Helpers
         }
 
         /// <summary>
+        /// Gets a value indicating whether a main-frame navigation retain is open.
+        /// Used to end the post-action poll as soon as policy-check / request
+        /// signals arrive instead of burning the full WebKit empty-poll budget.
+        /// </summary>
+        internal bool HasPendingNavigations => Volatile.Read(ref _pendingNavigations) > 0;
+
+        /// <summary>
         /// Records that a main-frame navigation was requested and waits for
         /// the matching commit.
         /// </summary>

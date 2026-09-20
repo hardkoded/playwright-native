@@ -498,6 +498,11 @@ namespace PlaywrightNative.Chromium
         /// <inheritdoc/>
         public async Task<GotoResult> NavigateFrameAsync(Frame frame, string url, string referrer)
         {
+            if (IsChromiumCrashUrl(url))
+            {
+                ArmChromeCrashFallback();
+            }
+
             object parameters = string.IsNullOrEmpty(referrer)
                 ? (object)new { url, frameId = frame.FrameId, referrerPolicy = "unsafeUrl" }
                 : new { url, referrer, frameId = frame.FrameId, referrerPolicy = "unsafeUrl" };
@@ -1061,9 +1066,15 @@ namespace PlaywrightNative.Chromium
             while (true)
             {
                 CRExecutionContext context = frame.ExecutionContext;
-                if (context != null)
+                if (context != null && !context.Destroyed.IsCompleted)
                 {
                     return context;
+                }
+
+                if (context != null && context.Destroyed.IsCompleted
+                    && ReferenceEquals(frame.ExecutionContext, context))
+                {
+                    frame.ExecutionContext = null;
                 }
 
                 if (DateTime.UtcNow >= deadline)
@@ -3934,6 +3945,70 @@ namespace PlaywrightNative.Chromium
             _crashed = true;
             _client.MarkCrashed();
             Crashed?.Invoke(this, EventArgs.Empty);
+        }
+
+        /// <summary>
+        /// Official Chromium crash probe is <c>chrome://crash</c>. On some Windows
+        /// headful hosts <c>Inspector.targetCrashed</c> is delayed or omitted; arm a
+        /// <c>Page.crash</c> fallback (same idea as WebKit's EnsureCrashReported).
+        /// </summary>
+        private void ArmChromeCrashFallback()
+        {
+            _ = EnsureChromeCrashReportedAsync();
+        }
+
+        private async Task EnsureChromeCrashReportedAsync()
+        {
+            try
+            {
+                await Task.Delay(750).ConfigureAwait(false);
+            }
+            catch (ObjectDisposedException)
+            {
+                return;
+            }
+
+            if (_crashed || _client.IsClosed)
+            {
+                return;
+            }
+
+            try
+            {
+                // Do not await: Page.crash kills the renderer before an ack arrives.
+                _ = _client.SendAsync("Page.crash");
+            }
+            catch (PlaywrightException)
+            {
+            }
+
+            try
+            {
+                await Task.Delay(1_000).ConfigureAwait(false);
+            }
+            catch (ObjectDisposedException)
+            {
+                return;
+            }
+
+            // After an explicit Page.crash, silence means the protocol dropped
+            // Inspector.targetCrashed (Windows headful). Same fallback as WebKit.
+            if (!_crashed)
+            {
+                OnInspectorTargetCrashed();
+            }
+        }
+
+        private bool IsChromiumCrashUrl(string url)
+        {
+            if (string.IsNullOrEmpty(url))
+            {
+                return false;
+            }
+
+            return url.StartsWith("chrome://crash", StringComparison.OrdinalIgnoreCase)
+                || url.StartsWith("chrome://kill", StringComparison.OrdinalIgnoreCase)
+                || url.StartsWith("chrome://hang", StringComparison.OrdinalIgnoreCase);
         }
 
         private void OnAttachedToTarget(JsonElement? parameters)

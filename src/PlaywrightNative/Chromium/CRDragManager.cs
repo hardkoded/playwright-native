@@ -227,11 +227,14 @@ namespace PlaywrightNative.Chromium
 
         private async Task EvaluateInAllFramesAsync(string expression)
         {
+            // Official crDragDrop uses the utility world so setup/cleanup does not
+            // run in the page main world during an in-flight mouse gesture (headful
+            // Chromium otherwise drops textarea text selection).
             foreach (Frame frame in _page.FrameManager.Frames)
             {
                 try
                 {
-                    CRExecutionContext context = frame.ExecutionContext;
+                    CRExecutionContext context = await UtilityContextAsync(frame).ConfigureAwait(false);
                     if (context == null)
                     {
                         continue;
@@ -260,7 +263,7 @@ namespace PlaywrightNative.Chromium
             {
                 try
                 {
-                    CRExecutionContext context = frame.ExecutionContext;
+                    CRExecutionContext context = await UtilityContextAsync(frame).ConfigureAwait(false);
                     if (context == null)
                     {
                         continue;
@@ -286,6 +289,22 @@ namespace PlaywrightNative.Chromium
             }
 
             return any;
+        }
+
+        private async Task<CRExecutionContext> UtilityContextAsync(Frame frame)
+        {
+            try
+            {
+                return await _page.GetUtilityWorldAsync(frame).ConfigureAwait(false);
+            }
+            catch (PlaywrightException)
+            {
+                return frame.ExecutionContext;
+            }
+            catch (TimeoutException)
+            {
+                return frame.ExecutionContext;
+            }
         }
     }
 }

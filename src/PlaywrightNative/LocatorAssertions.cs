@@ -1728,6 +1728,24 @@ namespace PlaywrightNative
                 || message.Contains("Unclosed quote", StringComparison.Ordinal);
         }
 
+        private static bool IsBlankReceived(string[] received)
+        {
+            if (received == null || received.Length == 0)
+            {
+                return true;
+            }
+
+            for (int i = 0; i < received.Length; i++)
+            {
+                if (!string.IsNullOrEmpty(received[i]))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
         private static string FormatExpectedJsValue(object expected)
         {
             if (expected == null)
@@ -2653,8 +2671,10 @@ namespace PlaywrightNative
                 if (timeoutMs != Timeout.Infinite && sw.ElapsedMilliseconds >= timeoutMs)
                 {
                     // A 1ms timeout can expire before the first probe reads the
-                    // node (ToHaveTextWithTextFailWithImpossibleTimeout).
-                    if (!sawElement || lastReceived.Length == 0)
+                    // node (ToHaveTextWithTextFailWithImpossibleTimeout). An empty
+                    // first read also needs a last-chance probe so MatcherResult.Actual
+                    // is "Text content" instead of "".
+                    if (!sawElement || lastReceived.Length == 0 || IsBlankReceived(lastReceived))
                     {
                         try
                         {
@@ -2677,7 +2697,7 @@ namespace PlaywrightNative
                                     }
                                 }
 
-                                if (okRead)
+                                if (okRead && !IsBlankReceived(recovered))
                                 {
                                     lastReceived = recovered;
                                     sawElement = true;

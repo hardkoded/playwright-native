@@ -29,6 +29,47 @@ namespace PlaywrightNative.Helpers
     internal static class WaitForElementStateHelper
     {
         /// <summary>
+        /// In-page stability check (same shape as
+        /// <see cref="ScrollIntoViewIfNeededAction"/>), with a configurable
+        /// consecutive-frame count.
+        /// </summary>
+        private const string IsStableFunction = @"async (el, rafCount) => {
+    if (!el || !el.isConnected) {
+        return 'notconnected';
+    }
+    const view = (el.ownerDocument && el.ownerDocument.defaultView) || window;
+    function boxOf() {
+        const r = el.getBoundingClientRect();
+        return [r.top, r.left, r.width, r.height];
+    }
+    function raf() {
+        return new Promise(resolve => view.requestAnimationFrame(resolve));
+    }
+    const need = Math.max(1, rafCount | 0);
+    let last = null;
+    let hits = 0;
+    for (let i = 0; i < need + 8; i++) {
+        await raf();
+        const box = boxOf();
+        if (box[2] <= 0 && box[3] <= 0) {
+            return 'notstable';
+        }
+        if (last
+            && last[0] === box[0] && last[1] === box[1]
+            && last[2] === box[2] && last[3] === box[3]) {
+            hits++;
+            if (hits >= need) {
+                return 'ok';
+            }
+        } else {
+            hits = 0;
+        }
+        last = box;
+    }
+    return 'notstable';
+}";
+
+        /// <summary>
         /// Waits until <paramref name="handle"/> satisfies <paramref name="state"/>.
         /// </summary>
         /// <param name="handle">The element to observe.</param>
@@ -45,7 +86,6 @@ namespace PlaywrightNative.Helpers
             ElementState wanted = state == EnumCompat.UndefinedElementState ? ElementState.Visible : state;
             int timeoutMs = TimeoutSettings.TimeoutMs(timeout);
             Stopwatch sw = Stopwatch.StartNew();
-            StableProbe probe = new StableProbe();
 
             while (true)
             {
@@ -69,7 +109,7 @@ namespace PlaywrightNative.Helpers
                         ElementState.Enabled => await IsAriaEnabledAsync(handle).ConfigureAwait(false),
                         ElementState.Disabled => !await IsAriaEnabledAsync(handle).ConfigureAwait(false),
                         ElementState.Editable => await handle.IsEditableAsync().ConfigureAwait(false),
-                        ElementState.Stable => await IsStableAsync(handle, probe).ConfigureAwait(false),
+                        ElementState.Stable => await IsStableAsync(handle).ConfigureAwait(false),
                         _ => await handle.IsVisibleAsync().ConfigureAwait(false),
                     };
                 }
@@ -147,38 +187,45 @@ namespace PlaywrightNative.Helpers
                     return isEnabled(el);
                 }");
 
-        private static async Task<bool> IsStableAsync(IElementHandle handle, StableProbe probe)
+        private static async Task<bool> IsStableAsync(IElementHandle handle)
         {
-            if (!await handle.IsVisibleAsync().ConfigureAwait(false))
+            // Official injectedScript._checkElementIsStable: sample boxes on
+            // consecutive animation frames. Host Task.Delay does not advance
+            // WebKit CSS transitions, so two BoundingBox reads can match while
+            // the element is still moving (ShouldWaitForStablePosition).
+            string result;
+            try
             {
-                probe.LastBox = null;
+                result = await handle.EvaluateAsync<string>(IsStableFunction, StableRafCount()).ConfigureAwait(false);
+            }
+            catch (PlaywrightException)
+            {
                 return false;
             }
 
-            ElementHandleBoundingBoxResult box = await handle.BoundingBoxAsync().ConfigureAwait(false);
-            if (box == null)
+            if (result == "notconnected")
             {
-                probe.LastBox = null;
-                return false;
+                throw new PlaywrightException(ClickAction.NotAttachedMessage);
             }
 
-            if (probe.LastBox == null)
-            {
-                probe.LastBox = box;
-                return false;
-            }
-
-            bool same = probe.LastBox.X == box.X
-                && probe.LastBox.Y == box.Y
-                && probe.LastBox.Width == box.Width
-                && probe.LastBox.Height == box.Height;
-            probe.LastBox = box;
-            return same;
+            return result == "ok";
         }
 
-        private sealed class StableProbe
+        /// <summary>
+        /// Official <c>rafCountForStablePosition</c>: WebKit on Windows needs 5;
+        /// elsewhere 1 consecutive matching animation-frame pair is enough.
+        /// </summary>
+        private static int StableRafCount()
         {
-            internal ElementHandleBoundingBoxResult LastBox { get; set; }
+            if (!string.Equals(
+                    Environment.GetEnvironmentVariable("PRODUCT"),
+                    "WEBKIT",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return 1;
+            }
+
+            return OperatingSystem.IsWindows() ? 5 : 1;
         }
     }
 }

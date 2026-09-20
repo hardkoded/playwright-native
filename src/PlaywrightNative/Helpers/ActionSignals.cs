@@ -218,17 +218,31 @@ namespace PlaywrightNative.Helpers
             }
 
             // WebKit form navigations often request after the input command
-            // returns. Hold the constructor retain until that signal lands —
-            // Ubuntu WebKit form GETs routinely need well over 640ms after click
-            // (ShouldWorkWithGotoFollowingClick). Chromium acks navigations
-            // promptly; a long empty poll doubles the cost of every click.
+            // returns. Hold the constructor retain until that signal lands.
+            // A fixed 100×16ms empty poll (~1.6s) on every WebKit click makes
+            // 20-click / 30-click suites exceed 30s
+            // (ShouldBeAbleToClickAcrossBrowserContexts,
+            // ShouldClickAButtonThatIsOverlaidByAPermissionPopup).
+            // Break as soon as policy-check / document request retains a
+            // navigation; keep a modest empty ceiling for late form GETs
+            // (ShouldWorkWithGotoFollowingClick). Chromium acks promptly.
             // Darwin force-clicks still break out when the remaining budget
             // cannot cover another poll slice.
-            int pollLimit = string.Equals(page?.GetType().Name, "Page", StringComparison.Ordinal) ? 16 : 100;
+            bool chromiumPage = string.Equals(page?.GetType().Name, "Page", StringComparison.Ordinal);
+
+            // 24×16ms ≈ 384ms empty ceiling: with Page.enable epilogue, form
+            // willCheck usually retains before the poll; late Network-only
+            // GETs still fit. 40× was safe but left every non-nav click at ~0.75s.
+            int pollLimit = chromiumPage ? 16 : 24;
             int timeoutMs = TimeoutSettings.TimeoutMs(timeout);
             for (int i = 0; i < pollLimit; i++)
             {
                 if (sawDocumentRequest != null && sawDocumentRequest())
+                {
+                    break;
+                }
+
+                if (barrier != null && barrier.HasPendingNavigations)
                 {
                     break;
                 }

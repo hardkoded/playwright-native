@@ -5187,7 +5187,15 @@ namespace PlaywrightNative.WebKit
         internal Task RunWithSignalsAsync(bool waitAfter, float? timeout, Func<Task> action)
             => ActionSignals.RunAsync(
                 _frameManager.Signals,
-                () => Task.CompletedTask,
+                () =>
+                {
+                    // Official Chromium uses Page.enable as input epilogue so
+                    // frameRequestedNavigation from the last input is flushed
+                    // before auto-wait. WebKit needs the same for
+                    // willCheckNavigationPolicy (ShouldWorkWithGotoFollowingClick).
+                    WKTargetSession target = _targetSession;
+                    return target == null ? Task.CompletedTask : target.SendAsync("Page.enable");
+                },
                 waitAfter,
                 timeout,
                 action,

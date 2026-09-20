@@ -470,7 +470,11 @@ namespace PlaywrightNative.Helpers
             int budgetMs,
             int startDepth)
         {
-            if (await IsLazyIframeRefAsync(frame, ariaRef).ConfigureAwait(false))
+            // Never resolve ContentFrame / evaluate on lazy iframe objectIds —
+            // Darwin WebKit wedges the target for the full command timeout
+            // (ReturnEmptySnapshotWhenIframeIsNotLoaded → NUnit 30s).
+            if (await IsLazyIframeRefAsync(frame, ariaRef).ConfigureAwait(false)
+                || await FrameHasOnlyLazyIframesAsync(frame).ConfigureAwait(false))
             {
                 return null;
             }
@@ -589,7 +593,8 @@ namespace PlaywrightNative.Helpers
             bool boxes,
             int startDepth)
         {
-            if (await IsLazyIframeRefAsync(frame, ariaRef).ConfigureAwait(false))
+            if (await IsLazyIframeRefAsync(frame, ariaRef).ConfigureAwait(false)
+                || await FrameHasOnlyLazyIframesAsync(frame).ConfigureAwait(false))
             {
                 return (null, null);
             }
@@ -725,8 +730,9 @@ namespace PlaywrightNative.Helpers
             try
             {
                 // Prefer parent-document lazy checks (IsLazyIframeRefAsync /
-                // iframe:not([loading=lazy])) before this path. Ready script
-                // returns false for lazy without touching contentDocument.
+                // FrameHasOnlyLazyIframesAsync / iframe:not([loading=lazy]))
+                // before this path. Do not callFunctionOn a lazy iframe
+                // objectId — Darwin never replies (NUnit 30s wedge).
                 bool ready = await iframeEl.EvaluateAsync<bool>(IframeCaptureReadyFunction)
                     .ConfigureAwait(false);
                 if (!ready)
@@ -743,6 +749,39 @@ namespace PlaywrightNative.Helpers
             catch (TimeoutException)
             {
                 return null;
+            }
+        }
+
+        /// <summary>
+        /// Parent-document check: every <c>iframe</c>/<c>frame</c> is
+        /// <c>loading=lazy</c> (safe — no iframe objectId evaluate).
+        /// </summary>
+        private static async Task<bool> FrameHasOnlyLazyIframesAsync(IFrame frame)
+        {
+            if (frame == null || frame.IsDetached)
+            {
+                return false;
+            }
+
+            try
+            {
+                return await frame.EvaluateAsync<bool>(
+                    @"() => {
+  const frames = document.querySelectorAll('iframe, frame');
+  if (!frames.length) return false;
+  for (let i = 0; i < frames.length; i++) {
+    if ((frames[i].getAttribute('loading') || '').toLowerCase() !== 'lazy') return false;
+  }
+  return true;
+}").ConfigureAwait(false);
+            }
+            catch (PlaywrightException)
+            {
+                return false;
+            }
+            catch (TimeoutException)
+            {
+                return false;
             }
         }
 
