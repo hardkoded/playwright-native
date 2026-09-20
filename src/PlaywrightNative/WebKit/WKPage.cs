@@ -2772,9 +2772,6 @@ namespace PlaywrightNative.WebKit
             ScreenSize screenSize = null,
             bool rememberIndependentScreen = true)
         {
-            WKTargetSession target = _targetSession
-                ?? throw new PlaywrightException("Cannot set the viewport size: the page has no active target session.");
-
             _emulatedDeviceScaleFactor = deviceScaleFactor;
             _emulatedIsMobile = isMobile;
             if (rememberIndependentScreen)
@@ -2782,6 +2779,13 @@ namespace PlaywrightNative.WebKit
                 _independentScreen = screenSize;
             }
 
+            _viewportSize = new PageViewportSizeResult { Width = width, Height = height };
+
+            // Page-proxy device metrics do not need the inner target. Screen size
+            // does (Page.setScreenSizeOverride). Darwin can recycle the initial
+            // target between InitializedTask and ApplyContextChrome — wait briefly
+            // for a session, then fall back to proxy-only metrics rather than
+            // failing NewPageAsync (ShouldDisableJavascript).
             Task deviceMetricsTask = _session.SendAsync("Emulation.setDeviceMetricsOverride", new
             {
                 width,
@@ -2790,13 +2794,25 @@ namespace PlaywrightNative.WebKit
                 deviceScaleFactor,
             });
 
+            WKTargetSession target = _targetSession;
+            if (target == null)
+            {
+                for (int i = 0; i < 50 && target == null; i++)
+                {
+                    await Task.Delay(10).ConfigureAwait(false);
+                    target = _targetSession;
+                }
+            }
+
             int screenWidth = screenSize?.Width ?? width;
             int screenHeight = screenSize?.Height ?? height;
-            Task screenSizeTask = target.SendAsync("Page.setScreenSizeOverride", new
-            {
-                width = screenWidth,
-                height = screenHeight,
-            });
+            Task screenSizeTask = target == null
+                ? Task.CompletedTask
+                : target.SendAsync("Page.setScreenSizeOverride", new
+                {
+                    width = screenWidth,
+                    height = screenHeight,
+                });
 
             if (isMobile)
             {
@@ -2810,8 +2826,6 @@ namespace PlaywrightNative.WebKit
             {
                 await Task.WhenAll(deviceMetricsTask, screenSizeTask).ConfigureAwait(false);
             }
-
-            _viewportSize = new PageViewportSizeResult { Width = width, Height = height };
         }
 
         /// <summary>
@@ -3725,6 +3739,13 @@ namespace PlaywrightNative.WebKit
                         expression,
                         () => PulseTrustedGestureOnFrameAsync(frame)).ConfigureAwait(false)
                     : await context.EvaluateHandleAsync(expression).ConfigureAwait(false);
+                if (needsUserGesture)
+                {
+                    // RSA path uses returnByValue:true — parse the primitive directly
+                    // instead of MaterializeAsync (no objectId for boolean results).
+                    return EvaluateSerialization.ParseRemote<T>(remote);
+                }
+
                 return await EvaluateSerialization.MaterializeAsync<T>(
                     remote,
                     id => context.EvaluateFunctionOnHandleAsync<JsonElement>(id, EvaluateSerialization.SerializeAwaitedJs),
@@ -6811,6 +6832,35 @@ namespace PlaywrightNative.WebKit
                 : string.Empty;
             WKTargetSession pageSession = _targetSession ?? _provisionalSession;
             if (pageSession == null)
+            {
+                // Target recycle can clear the session for a beat while a blob
+                // worker is born (ShouldEmitCreatedAndDestroyedEvents). Retry
+                // briefly so we do not drop Worker.workerCreated.
+                _ = AdoptWorkerWhenSessionReadyAsync(workerId, url);
+                return;
+            }
+
+            AdoptWorker(workerId, url, pageSession);
+        }
+
+        private async Task AdoptWorkerWhenSessionReadyAsync(string workerId, string url)
+        {
+            for (int i = 0; i < 50; i++)
+            {
+                WKTargetSession pageSession = _targetSession ?? _provisionalSession;
+                if (pageSession != null)
+                {
+                    AdoptWorker(workerId, url, pageSession);
+                    return;
+                }
+
+                await Task.Delay(10).ConfigureAwait(false);
+            }
+        }
+
+        private void AdoptWorker(string workerId, string url, WKTargetSession pageSession)
+        {
+            if (string.IsNullOrEmpty(workerId) || pageSession == null)
             {
                 return;
             }

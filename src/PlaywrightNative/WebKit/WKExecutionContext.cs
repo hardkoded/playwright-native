@@ -160,11 +160,13 @@ namespace PlaywrightNative.WebKit
                 await pulseTrustedGestureAsync().ConfigureAwait(false);
             }
 
-            // Bind to document so callFunctionOn runs in the page world with
-            // a stable objectId (mirrors upstream utilityScript binding).
+            // Bind to window so callFunctionOn runs in the page world with
+            // a stable objectId. Prefer window over document — Darwin RSA
+            // under document-bound callFunctionOn still returned false on CI
+            // after OOPIF load even with emulateUserGesture.
             JsonElement? anchorResponse = await _session.SendAsync(
                 "Runtime.evaluate",
-                BuildEvaluateParams("document", returnByValue: false)).ConfigureAwait(false);
+                BuildEvaluateParams("window", returnByValue: false)).ConfigureAwait(false);
             if (anchorResponse == null)
             {
                 return null;
@@ -197,7 +199,7 @@ namespace PlaywrightNative.WebKit
                     {
                         objectId = anchorId,
                         functionDeclaration,
-                        returnByValue = false,
+                        returnByValue = true,
                         emulateUserGesture = true,
                         awaitPromise = true,
                     }).ConfigureAwait(false);

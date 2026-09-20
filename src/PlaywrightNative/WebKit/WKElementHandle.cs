@@ -119,8 +119,11 @@ namespace PlaywrightNative.WebKit
                     },
                     async () =>
                     {
+                        // force:true skips actionability and must not hang on
+                        // willCheckNavigationPolicy / overlay signal waits
+                        // (ShouldNotWorkWithForceTrue — interstitial covers #target).
                         await _page.RunWithSignalsAsync(
-                            noWaitAfter != true,
+                            noWaitAfter != true && force != true,
                             timeout,
                             () => ClickAction.RunModifiersAsync(
                                 modifiers,

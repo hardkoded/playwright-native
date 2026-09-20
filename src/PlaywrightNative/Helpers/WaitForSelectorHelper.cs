@@ -32,6 +32,17 @@ namespace PlaywrightNative.Helpers
     internal static class WaitForSelectorHelper
     {
         /// <summary>
+        /// One-shot preview + visibility so Darwin wait logs keep intermediate
+        /// nodes (mydiv) before a later match (another) replaces the query hit.
+        /// </summary>
+        private const string PreviewAndVisibilityFunction =
+            "el => { const preview = (" +
+            RemoteObject.PreviewNodeFunction +
+            ")(el); const visible = (" +
+            DomVisibility.IsVisibleFunction +
+            ")(el); return [preview, visible ? '1' : '0']; }";
+
+        /// <summary>
         /// Waits until <paramref name="selector"/> satisfies <paramref name="state"/>.
         /// </summary>
         /// <param name="querySelectorAsync">One-shot CSS query returning a handle or null.</param>
@@ -110,7 +121,7 @@ namespace PlaywrightNative.Helpers
 
                 IElementHandle handle = null;
                 bool attached = false;
-                bool visible = false;
+                bool? knownVisible = null;
                 string eagerPreview = null;
                 bool destroyedMidProbe = false;
                 try
@@ -119,39 +130,29 @@ namespace PlaywrightNative.Helpers
                     attached = handle != null;
                     if (attached)
                     {
-                        // Preview first (fast), then visibility. Combined
-                        // preview+visibility probes raced Darwin removals: the
-                        // evaluate was still in flight when mydiv was removed, so
-                        // Remember never ran and timeout logs only showed
-                        // "another". Persist the preview before the visibility
-                        // round-trip so Hidden/Visible log tests keep mydiv.
+                        // One round-trip for preview + visibility. Separate evaluates
+                        // raced Darwin removals (and starved under GiveItTimeToLog
+                        // load): mydiv never reached the timeout log, only "another".
                         if (wanted != WaitForSelectorState.Attached
                             && wanted != WaitForSelectorState.Detached)
                         {
                             try
                             {
-                                string previewValue = await handle.EvaluateAsync<string>(
-                                        RemoteObject.PreviewNodeFunction)
+                                string[] probe = await handle.EvaluateAsync<string[]>(
+                                        PreviewAndVisibilityFunction)
                                     .ConfigureAwait(false);
-                                if (!string.IsNullOrEmpty(previewValue))
+                                if (probe != null && probe.Length >= 2 && !string.IsNullOrEmpty(probe[0]))
                                 {
-                                    eagerPreview = previewValue;
+                                    eagerPreview = probe[0];
+                                    knownVisible = string.Equals(probe[1], "1", StringComparison.Ordinal);
                                     RememberResolvedSnapshot(
                                         resolvedSnapshots,
-                                        visible: wanted == WaitForSelectorState.Hidden,
+                                        knownVisible == true,
                                         eagerPreview);
-                                }
-                            }
-                            catch (PlaywrightException)
-                            {
-                            }
 
-                            try
-                            {
-                                visible = await handle.IsVisibleAsync().ConfigureAwait(false);
-                                if (!string.IsNullOrEmpty(eagerPreview))
-                                {
-                                    RememberResolvedSnapshot(resolvedSnapshots, visible, eagerPreview);
+                                    // Persist immediately so a later removal cannot
+                                    // drop this node from the timeout call log.
+                                    AppendResolvedLog(logs, knownVisible == true, eagerPreview);
                                 }
                             }
                             catch (PlaywrightException ex) when (
@@ -177,6 +178,7 @@ namespace PlaywrightNative.Helpers
                                         resolvedSnapshots,
                                         visible: false,
                                         eagerPreview);
+                                    AppendResolvedLog(logs, visible: false, eagerPreview);
                                 }
                             }
                             catch (PlaywrightException)
@@ -215,20 +217,16 @@ namespace PlaywrightNative.Helpers
                     // Hidden/Detached from this stale observation.
                     destroyedMidProbe = true;
                     attached = false;
-                    visible = false;
+                    knownVisible = null;
                 }
 
                 if (destroyedMidProbe)
                 {
                     if (timeoutMs != Timeout.Infinite && sw.ElapsedMilliseconds >= timeoutMs)
                     {
-                        if (resolvedSnapshots.Count > 0)
+                        foreach ((bool snapshotVisible, string snapshotPreview) in resolvedSnapshots)
                         {
-                            logs = new List<string>();
-                            foreach ((bool snapshotVisible, string snapshotPreview) in resolvedSnapshots)
-                            {
-                                AppendResolvedLog(logs, snapshotVisible, snapshotPreview);
-                            }
+                            AppendResolvedLog(logs, snapshotVisible, snapshotPreview);
                         }
 
                         string message = apiName +
@@ -249,12 +247,17 @@ namespace PlaywrightNative.Helpers
                     continue;
                 }
 
+                bool visible = knownVisible == true;
+
+                // Hidden must only succeed when detached, or when visibility is
+                // known false. A failed probe must not treat attached nodes as
+                // hidden (ShouldReportLogsWhileWaitingForHidden).
                 bool done = wanted switch
                 {
                     WaitForSelectorState.Attached => attached,
                     WaitForSelectorState.Detached => !attached,
-                    WaitForSelectorState.Hidden => !visible,
-                    _ => visible,
+                    WaitForSelectorState.Hidden => !attached || knownVisible == false,
+                    _ => knownVisible == true,
                 };
 
                 if (!done && !string.IsNullOrEmpty(eagerPreview))
@@ -295,13 +298,12 @@ namespace PlaywrightNative.Helpers
 
                 if (timeoutMs != Timeout.Infinite && sw.ElapsedMilliseconds >= timeoutMs)
                 {
-                    if (resolvedSnapshots.Count > 0)
+                    // Merge snapshots into logs without dropping earlier lines.
+                    // Replacing logs entirely lost #mydiv when only the final
+                    // "another" node remained in resolvedSnapshots on Darwin.
+                    foreach ((bool snapshotVisible, string snapshotPreview) in resolvedSnapshots)
                     {
-                        logs = new List<string>();
-                        foreach ((bool snapshotVisible, string snapshotPreview) in resolvedSnapshots)
-                        {
-                            AppendResolvedLog(logs, snapshotVisible, snapshotPreview);
-                        }
+                        AppendResolvedLog(logs, snapshotVisible, snapshotPreview);
                     }
 
                     string message = apiName +
@@ -397,10 +399,23 @@ namespace PlaywrightNative.Helpers
         private static void AppendResolvedLog(List<string> logs, bool visible, string preview)
         {
             string line = "locator resolved to " + (visible ? "visible" : "hidden") + " " + preview;
-            if (logs.Count == 0 || !string.Equals(logs[logs.Count - 1], line, StringComparison.Ordinal))
+            if (logs == null || string.IsNullOrEmpty(preview))
             {
-                logs.Add(line);
+                return;
             }
+
+            // Prefer last-line dedupe (progress-style). Also skip if this exact
+            // line already appears earlier so snapshot merges do not replay
+            // mydiv after another.
+            for (int i = 0; i < logs.Count; i++)
+            {
+                if (string.Equals(logs[i], line, StringComparison.Ordinal))
+                {
+                    return;
+                }
+            }
+
+            logs.Add(line);
         }
     }
 }

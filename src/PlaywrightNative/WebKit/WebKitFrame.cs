@@ -299,7 +299,17 @@ namespace PlaywrightNative.WebKit
                 urlFunc,
                 timeout,
                 waitUntil,
-                frame => ReferenceEquals(frame, this),
+                frame =>
+                {
+                    if (ReferenceEquals(frame, this))
+                    {
+                        return true;
+                    }
+
+                    // Same protocol frame id (wrapper cache miss / recycled public instance).
+                    return frame is WebKitFrame other
+                        && string.Equals(other._wkFrame.FrameId, _wkFrame.FrameId, StringComparison.Ordinal);
+                },
                 "frame.waitForNavigation");
 
         /// <inheritdoc/>
