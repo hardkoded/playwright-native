@@ -733,14 +733,23 @@ namespace PlaywrightNative.Helpers
                 // FrameHasOnlyLazyIframesAsync / iframe:not([loading=lazy]))
                 // before this path. Do not callFunctionOn a lazy iframe
                 // objectId — Darwin never replies (NUnit 30s wedge).
-                bool ready = await iframeEl.EvaluateAsync<bool>(IframeCaptureReadyFunction)
-                    .ConfigureAwait(false);
+                // Race a short budget: even reading loading via GetAttribute /
+                // Evaluate on the iframe objectId can hang Darwin forever.
+                bool ready = await RaceOrDefaultAsync(
+                    () => iframeEl.EvaluateAsync<bool>(IframeCaptureReadyFunction),
+                    Stopwatch.StartNew(),
+                    400,
+                    fallback: false).ConfigureAwait(false);
                 if (!ready)
                 {
                     return null;
                 }
 
-                return await iframeEl.ContentFrameAsync().ConfigureAwait(false);
+                return await RaceOrDefaultAsync(
+                    () => iframeEl.ContentFrameAsync(),
+                    Stopwatch.StartNew(),
+                    500,
+                    fallback: null).ConfigureAwait(false);
             }
             catch (PlaywrightException)
             {
@@ -777,11 +786,13 @@ namespace PlaywrightNative.Helpers
             }
             catch (PlaywrightException)
             {
-                return false;
+                // Fail closed: touching a lazy iframe objectId on Darwin wedges
+                // the target until the NUnit 30s kill.
+                return true;
             }
             catch (TimeoutException)
             {
-                return false;
+                return true;
             }
         }
 
@@ -799,11 +810,12 @@ namespace PlaywrightNative.Helpers
             }
             catch (PlaywrightException)
             {
-                return false;
+                // Fail closed — prefer an empty iframe stitch over a wedged session.
+                return true;
             }
             catch (TimeoutException)
             {
-                return false;
+                return true;
             }
         }
 

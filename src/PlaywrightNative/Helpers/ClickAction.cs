@@ -763,6 +763,12 @@ namespace PlaywrightNative.Helpers
         if (!node || node.nodeType !== 1) {
             return false;
         }
+        // Viewport scrollers (html/body) always report overflow on Darwin overlay
+        // scrollbars and would reject every candidate via the gutter check.
+        const tag = node.tagName;
+        if (tag === 'HTML' || tag === 'BODY') {
+            return false;
+        }
         let style = null;
         try {
             style = ((node.ownerDocument && node.ownerDocument.defaultView) || window).getComputedStyle(node);
@@ -774,8 +780,8 @@ namespace PlaywrightNative.Helpers
         }
         const ox = style.overflowX;
         const oy = style.overflowY;
-        const scrollX = (ox === 'scroll' || ox === 'auto') && node.scrollWidth > node.clientWidth + 1;
-        const scrollY = (oy === 'scroll' || oy === 'auto') && node.scrollHeight > node.clientHeight + 1;
+        const scrollX = (ox === 'scroll' || ox === 'auto' || ox === 'overlay') && node.scrollWidth > node.clientWidth + 1;
+        const scrollY = (oy === 'scroll' || oy === 'auto' || oy === 'overlay') && node.scrollHeight > node.clientHeight + 1;
         return scrollX || scrollY;
     }
     function isOnScrollbar(x, y) {

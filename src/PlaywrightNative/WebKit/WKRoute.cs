@@ -143,8 +143,11 @@ namespace PlaywrightNative.WebKit
                     WithoutTransferSizing(RouteContinue.RemoveCookie(baseline)));
             }
 
+            string originalUrl = !string.IsNullOrEmpty(Request.DocumentUrl)
+                ? Request.DocumentUrl
+                : Request.Url;
             Request.ApplyContinueOverrides(url, method, headers, body);
-            _page.NoteContinuedNavigation(Request);
+            _page.NoteContinuedNavigation(Request, originalUrl);
 
             EnsureNotHandled();
 

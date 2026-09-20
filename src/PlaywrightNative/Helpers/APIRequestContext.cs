@@ -2801,13 +2801,21 @@ namespace PlaywrightNative.Helpers
                 {
                 }
 
-                try
+                // Do not dispose synchronously here: HttpClient.Dispose can wait for
+                // in-flight SendAsync, while SendAsync waits for the hang-route server
+                // — a Windows CloseAsync deadlock that starves RequestAborted
+                // (ShouldAbortRequestsWhenBrowserContextCloses). Cancel is enough to
+                // fail the send; dispose on a background thread.
+                _ = Task.Run(() =>
                 {
-                    client.Dispose();
-                }
-                catch (ObjectDisposedException)
-                {
-                }
+                    try
+                    {
+                        client.Dispose();
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                    }
+                });
             }
         }
 

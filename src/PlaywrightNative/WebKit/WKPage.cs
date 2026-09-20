@@ -120,6 +120,7 @@ namespace PlaywrightNative.WebKit
         private bool _pendingNavigationCommitted;
         private string _pendingRedirectTarget;
         private WKRequest _pendingRedirectSource;
+        private string _pendingContinueOverrideSourceUrl;
         private bool _harRedirectInProgress;
         private string _lastCompetingNavigationUrl;
         private bool _provisionalSwapCommitted;
@@ -3060,6 +3061,7 @@ namespace PlaywrightNative.WebKit
                 _pendingNavigationCommitted = false;
                 _pendingRedirectTarget = null;
                 _pendingRedirectSource = null;
+                _pendingContinueOverrideSourceUrl = null;
                 _harRedirectInProgress = false;
                 _lastCompetingNavigationUrl = null;
                 _provisionalSwapCommitted = false;
@@ -3357,6 +3359,7 @@ namespace PlaywrightNative.WebKit
                     _pendingNavigationCommitted = false;
                     _pendingRedirectTarget = null;
                     _pendingRedirectSource = null;
+                    _pendingContinueOverrideSourceUrl = null;
                     _pendingLoadTcs = loadTcs;
                     _pendingDomContentTcs = domTcs;
                     _lifecycleEvents.Clear();
@@ -3702,11 +3705,21 @@ namespace PlaywrightNative.WebKit
             {
                 WKExecutionContext context = await WaitForFrameContextAsync(frame).ConfigureAwait(false);
 
+                // Child-frame requestStorageAccess must run under
+                // callFunctionOn+emulateUserGesture — Runtime.evaluate's gesture
+                // flag is not enough after OOPIF load on macOS. Check before the
+                // serialized-wrap path so RSA is never routed through plain evaluate.
+                bool needsUserGesture = frame?.ParentFrame != null
+                    && expression != null
+                    && expression.Contains("requestStorageAccess", StringComparison.Ordinal);
+
                 // Re-assert page activity after the frame context is ready so
                 // cross-process iframe navigations that steal focus between
                 // SetContent and evaluate do not leave requestStorageAccess
-                // without an active page (macOS).
-                if (frame?.ParentFrame != null)
+                // without an active page (macOS). Skip immediately before RSA:
+                // setActiveAndFocused clears transient user activation that the
+                // trusted mouse pulse is about to grant.
+                if (frame?.ParentFrame != null && !needsUserGesture)
                 {
                     try
                     {
@@ -3717,14 +3730,6 @@ namespace PlaywrightNative.WebKit
                     {
                     }
                 }
-
-                // Child-frame requestStorageAccess must run under
-                // callFunctionOn+emulateUserGesture — Runtime.evaluate's gesture
-                // flag is not enough after OOPIF load on macOS. Check before the
-                // serialized-wrap path so RSA is never routed through plain evaluate.
-                bool needsUserGesture = frame?.ParentFrame != null
-                    && expression != null
-                    && expression.Contains("requestStorageAccess", StringComparison.Ordinal);
 
                 if (!needsUserGesture && EvaluateSerialization.CanWrapExpression(expression))
                 {
@@ -5028,7 +5033,10 @@ namespace PlaywrightNative.WebKit
         /// <c>route.continue</c> / <c>fallback</c> changes a document URL.
         /// </summary>
         /// <param name="request">The continued navigation request.</param>
-        internal void NoteContinuedNavigation(WKRequest request)
+        /// <param name="originalUrl">
+        /// URL before continue overrides (DocumentUrl / pre-override Url).
+        /// </param>
+        internal void NoteContinuedNavigation(WKRequest request, string originalUrl = null)
         {
             if (request == null || !request.IsNavigationRequest || string.IsNullOrEmpty(request.Url))
             {
@@ -5042,16 +5050,37 @@ namespace PlaywrightNative.WebKit
                     return;
                 }
 
+                // ApplyContinueOverrides rewrites Request.Url (and ContinuedUrl) to the
+                // override target before this runs. Match the in-flight GoTo via identity,
+                // the pre-override URL, or an unset first-pending slot — otherwise
+                // ShouldOverrideRequestUrl leaves the waiter armed on /foo while the
+                // continued document loads /global-var.html (NUnit 30s hang).
+                string pending = NavigationTimeout.WithoutHash(_pendingNavigationUrl);
+                string original = NavigationTimeout.WithoutHash(
+                    !string.IsNullOrEmpty(originalUrl) ? originalUrl : request.DocumentUrl);
+                string target = NavigationTimeout.WithoutHash(
+                    !string.IsNullOrEmpty(request.ContinuedUrl) ? request.ContinuedUrl : request.Url);
                 bool isCurrent = ReferenceEquals(request, _firstPendingNavigationRequest)
                     || string.Equals(
                         NavigationTimeout.WithoutHash(request.Url),
-                        NavigationTimeout.WithoutHash(_pendingNavigationUrl),
+                        pending,
                         StringComparison.Ordinal)
                     || string.Equals(
                         NavigationTimeout.WithoutHash(request.ContinuedUrl),
-                        NavigationTimeout.WithoutHash(_pendingNavigationUrl),
-                        StringComparison.Ordinal);
+                        pending,
+                        StringComparison.Ordinal)
+                    || string.Equals(original, pending, StringComparison.Ordinal);
                 if (!isCurrent && _firstPendingNavigationRequest == null)
+                {
+                    isCurrent = true;
+                }
+
+                // Any document continue-with-URL while a goto waiter is armed must
+                // retarget that waiter. Matching only by identity raced request
+                // creation on WebKit and left ~1/3 of OverrideRequestUrl runs hung.
+                if (!isCurrent
+                    && !string.IsNullOrEmpty(request.ContinuedUrl)
+                    && !string.Equals(original, target, StringComparison.Ordinal))
                 {
                     isCurrent = true;
                 }
@@ -5061,8 +5090,45 @@ namespace PlaywrightNative.WebKit
                     return;
                 }
 
-                _pendingNavigationUrl = request.Url;
-                _pendingRedirectTarget = request.Url;
+                // Keep the pending waiter on the original Playwright.navigate URL so a
+                // late FrameNavigated for /foo still commits. Track the override as the
+                // redirect target (like an HTTP redirect). Retargeting pending to the
+                // override made /foo look like a competing navigation (quick interrupt)
+                // or, when ignored, left GoTo hung if WebKit never emits a second commit.
+                string sourceForOverride = original;
+                if (string.IsNullOrEmpty(sourceForOverride))
+                {
+                    sourceForOverride = pending;
+                }
+
+                if (!string.IsNullOrEmpty(target)
+                    && !string.IsNullOrEmpty(sourceForOverride)
+                    && !string.Equals(sourceForOverride, target, StringComparison.Ordinal))
+                {
+                    if (string.IsNullOrEmpty(pending)
+                        || string.Equals(pending, target, StringComparison.Ordinal))
+                    {
+                        _pendingNavigationUrl = !string.IsNullOrEmpty(originalUrl)
+                            ? originalUrl
+                            : (!string.IsNullOrEmpty(request.DocumentUrl)
+                                ? request.DocumentUrl
+                                : _pendingNavigationUrl);
+                    }
+
+                    _pendingRedirectTarget = request.Url;
+                    _pendingRedirectSource = request;
+                    _pendingContinueOverrideSourceUrl = !string.IsNullOrEmpty(originalUrl)
+                        ? originalUrl
+                        : (!string.IsNullOrEmpty(request.DocumentUrl)
+                            ? request.DocumentUrl
+                            : _pendingNavigationUrl);
+                    _lastCompetingNavigationUrl = null;
+                }
+                else
+                {
+                    _pendingNavigationUrl = request.Url;
+                    _pendingRedirectTarget = request.Url;
+                }
             }
         }
 
@@ -5574,6 +5640,23 @@ namespace PlaywrightNative.WebKit
             return FindCompetingNavigationUrl(pendingUrl, startUrl);
         }
 
+        private bool IsContinueOverrideSourceCommit(string committedUrl)
+        {
+            if (string.IsNullOrEmpty(committedUrl))
+            {
+                return false;
+            }
+
+            string sourceUrl = NavigationTimeout.WithoutHash(_pendingContinueOverrideSourceUrl);
+            if (string.IsNullOrEmpty(sourceUrl) && _pendingRedirectSource != null)
+            {
+                sourceUrl = NavigationTimeout.WithoutHash(_pendingRedirectSource.DocumentUrl);
+            }
+
+            return !string.IsNullOrEmpty(sourceUrl)
+                && IsSameNavigationDestination(committedUrl, sourceUrl);
+        }
+
         private void MaybeInterruptPendingNavigation(WKRequest request)
         {
             if (request == null)
@@ -5632,6 +5715,20 @@ namespace PlaywrightNative.WebKit
                     _emittedPendingNavigationRequest = false;
                     _emittedPendingNavigationFinished = false;
                     _firstPendingNavigationRequest = null;
+                    return;
+                }
+
+                // Original document URL of a route.continue({ url }) override —
+                // not a competing navigation.
+                string continueSource = NavigationTimeout.WithoutHash(_pendingContinueOverrideSourceUrl);
+                if (string.IsNullOrEmpty(continueSource) && _pendingRedirectSource != null)
+                {
+                    continueSource = NavigationTimeout.WithoutHash(_pendingRedirectSource.DocumentUrl);
+                }
+
+                if (!string.IsNullOrEmpty(continueSource)
+                    && IsSameNavigationDestination(requestUrl, continueSource))
+                {
                     return;
                 }
 
@@ -7504,6 +7601,18 @@ namespace PlaywrightNative.WebKit
 
             try
             {
+                // Active+focused first so Darwin accepts the page, then a
+                // trusted mouse click for transient activation. Do not
+                // re-activate after the click — that clears the gesture.
+                try
+                {
+                    await _session.SendAsync("Emulation.setActiveAndFocused", new { active = true })
+                        .ConfigureAwait(false);
+                }
+                catch (PlaywrightException)
+                {
+                }
+
                 WKExecutionContext parentContext = await WaitForFrameContextAsync(parent).ConfigureAwait(false);
                 string frameNameJson = JsonSerializer.Serialize(frame.Name ?? string.Empty);
                 string frameUrlJson = JsonSerializer.Serialize(frame.Url ?? string.Empty);
@@ -7551,10 +7660,6 @@ namespace PlaywrightNative.WebKit
                     "Input.dispatchMouseEvent",
                     new { type = "up", button = "left", x, y, modifiers = 0, buttons = 0, clickCount = 1 })
                     .ConfigureAwait(false);
-
-                // Do not call EnsureActiveAndFocusedAsync here — re-activating the
-                // page proxy after the iframe click clears transient user activation
-                // that requestStorageAccess needs on Darwin.
             }
             catch (PlaywrightException ex)
             {
@@ -8326,6 +8431,9 @@ namespace PlaywrightNative.WebKit
                 case "Page.didCheckNavigationPolicy":
                     OnDidCheckNavigationPolicy(parameters);
                     break;
+                case "Page.frameScheduledNavigation":
+                    OnFrameScheduledNavigation(parameters);
+                    break;
                 case "Page.loadEventFired":
                     OnLoadEventFired(parameters);
                     break;
@@ -8800,6 +8908,28 @@ namespace PlaywrightNative.WebKit
                         // official timeout messaging wins (child-redirect.html).
                         _pendingNavigationUrl = committedUrl;
                     }
+                    else if (!string.IsNullOrEmpty(_pendingContinueOverrideSourceUrl))
+                    {
+                        // route.continue({ url }) is in flight: commits for the original
+                        // navigate URL or intermediate override documents must not be
+                        // treated as competing navigations (ShouldOverrideRequestUrl).
+                        if (IsContinueOverrideSourceCommit(committedUrl)
+                            || IsSameNavigationDestination(
+                                committedUrl,
+                                NavigationTimeout.WithoutHash(_pendingRedirectTarget)))
+                        {
+                            _pendingNavigationCommitted = true;
+                            commitTcs = _pendingCommitTcs;
+                            _pendingCommitTcs = null;
+                            if (IsSameNavigationDestination(
+                                committedUrl,
+                                NavigationTimeout.WithoutHash(_pendingRedirectTarget)))
+                            {
+                                _pendingNavigationUrl = committedUrl;
+                                _pendingRedirectTarget = null;
+                            }
+                        }
+                    }
                     else if (!IsSameNavigationDestination(committedUrl, NavigationTimeout.WithoutHash(_navigationStartUrl)))
                     {
                         _lastCompetingNavigationUrl = committedUrl;
@@ -8822,6 +8952,7 @@ namespace PlaywrightNative.WebKit
                             _pendingDomContentTcs = null;
                             _pendingCommitTcs = null;
                             _pendingNavigationUrl = null;
+                            _pendingContinueOverrideSourceUrl = null;
                             _pendingNavigationCommitted = false;
                         }
                     }
@@ -8978,15 +9109,50 @@ namespace PlaywrightNative.WebKit
                 return;
             }
 
-            bool cancel = parameters.HasValue
-                && parameters.Value.TryGetProperty("cancel", out JsonElement cancelEl)
-                && cancelEl.ValueKind == JsonValueKind.True;
+            bool cancel = false;
+            if (parameters.HasValue && parameters.Value.TryGetProperty("cancel", out JsonElement cancelEl))
+            {
+                cancel = cancelEl.ValueKind == JsonValueKind.True
+                    || (cancelEl.ValueKind == JsonValueKind.Number && cancelEl.TryGetInt32(out int n) && n != 0)
+                    || (cancelEl.ValueKind == JsonValueKind.String
+                        && (string.Equals(cancelEl.GetString(), "true", StringComparison.OrdinalIgnoreCase)
+                            || string.Equals(cancelEl.GetString(), "1", StringComparison.Ordinal)));
+            }
+
             if (!cancel)
             {
                 return;
             }
 
+            // Upstream frameAbortedNavigation → InternalNavigation releases the
+            // click SignalBarrier. Without this, Darwin willCheck without a
+            // document commit leaves locator.click waiting until timeout
+            // (page-click-scroll scroll=none / NotHitScrollBar).
             _frameManager.Signals.OnMainFrameNavigated();
+        }
+
+        private void OnFrameScheduledNavigation(JsonElement? parameters)
+        {
+            if (!parameters.HasValue)
+            {
+                return;
+            }
+
+            JsonElement payload = parameters.Value;
+            bool targetIsCurrentFrame = payload.TryGetProperty("targetIsCurrentFrame", out JsonElement currentEl)
+                && currentEl.ValueKind == JsonValueKind.True;
+            if (!targetIsCurrentFrame)
+            {
+                return;
+            }
+
+            string frameId = null;
+            if (payload.TryGetProperty("frameId", out JsonElement frameIdEl))
+            {
+                frameId = frameIdEl.GetString();
+            }
+
+            _frameManager.FrameRequestedNavigation(frameId);
         }
 
         private void OnNavigatedWithinDocument(JsonElement? parameters)
@@ -9075,6 +9241,7 @@ namespace PlaywrightNative.WebKit
                     && !string.IsNullOrEmpty(currentUrl)
                     && !IsSameNavigationDestination(currentUrl, pendingUrl)
                     && !IsSameNavigationDestination(currentUrl, redirectUrl)
+                    && !IsContinueOverrideSourceCommit(currentUrl)
                     && !currentUrl.Equals("about:blank", StringComparison.OrdinalIgnoreCase))
                 {
                     string competing = !string.IsNullOrEmpty(_lastCompetingNavigationUrl)
@@ -9125,6 +9292,7 @@ namespace PlaywrightNative.WebKit
                     _pendingNavigationCommitted = false;
                     _pendingRedirectTarget = null;
                     _pendingRedirectSource = null;
+                    _pendingContinueOverrideSourceUrl = null;
                 }
 
                 if (loadError != null)

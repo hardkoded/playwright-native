@@ -230,10 +230,10 @@ namespace PlaywrightNative.Helpers
             // cannot cover another poll slice.
             bool chromiumPage = string.Equals(page?.GetType().Name, "Page", StringComparison.Ordinal);
 
-            // 24×16ms ≈ 384ms empty ceiling: with Page.enable epilogue, form
-            // willCheck usually retains before the poll; late Network-only
-            // GETs still fit. 40× was safe but left every non-nav click at ~0.75s.
-            int pollLimit = chromiumPage ? 16 : 24;
+            // Chromium: 16×16ms. WebKit: 40×16ms ≈ 640ms — long enough for late
+            // Network-only form GETs after Page.enable, short enough that
+            // HasPendingNavigations early-break keeps multi-click suites under 30s.
+            int pollLimit = chromiumPage ? 16 : 40;
             int timeoutMs = TimeoutSettings.TimeoutMs(timeout);
             for (int i = 0; i < pollLimit; i++)
             {

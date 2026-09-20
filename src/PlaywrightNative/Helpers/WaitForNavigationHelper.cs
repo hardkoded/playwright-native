@@ -100,12 +100,6 @@ namespace PlaywrightNative.Helpers
                 }
 
                 captured = response;
-
-                // Child-frame navigations can deliver the document Response before
-                // (or without) a matching public FrameNavigated for the waiter
-                // identity — still resolve so glob waits do not hang 30s
-                // (ShouldFilterChildNavigationByGlob).
-                navigatedTcs.TrySetResult(true);
             }
 
             void OnNavigated(object sender, IFrame frame)
