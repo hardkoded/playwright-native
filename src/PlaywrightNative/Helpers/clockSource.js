@@ -142,10 +142,15 @@ var ClockController = class {
     return toConsume;
   }
   async _innerPause() {
-    var _a;
     this._realTime = void 0;
-    await ((_a = this._currentRealTimeTimer) == null ? void 0 : _a.dispose());
+    const t = this._currentRealTimeTimer;
     this._currentRealTimeTimer = void 0;
+    if (t) {
+      t.cancel();
+      // Do not await t.promise. On Darwin WebKit an in-flight _runTo can
+      // sit on embedder.setTimeout that never fires after timers/performance
+      // are replaced, deadlocking pauseAt/runFor for the full NUnit timeout.
+    }
   }
   resume() {
     this._replayLogOnce();

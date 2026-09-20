@@ -142,19 +142,31 @@ namespace PlaywrightNative.WebKit
             Func<Task> pulseTrustedGestureAsync = null)
         {
             // WebKit WIP only accepts objectId-bound Runtime.callFunctionOn (not
-            // executionContextId). Enter the user expression synchronously so
-            // document.requestStorageAccess() runs inside the emulateUserGesture
-            // turn. An async wrapper awaits after Darwin has already dropped
-            // transient activation (requestStorageAccess → false).
+            // executionContextId) — same as upstream wkExecutionContext. Match
+            // utilityScript evaluate: enter an async function under
+            // emulateUserGesture, then await inside so Darwin keeps transient
+            // activation across requestStorageAccess microtasks. A sync
+            // callFunctionOn that merely returns a Promise ends the gesture
+            // scope before RSA settles (returns false on macOS).
             string functionDeclaration =
-                "function () {" +
+                "async function () {" +
                 "  let __pwRet = (" + expression + ");" +
                 "  if (typeof __pwRet === 'function') __pwRet = __pwRet();" +
-                "  return __pwRet;" +
+                "  return await __pwRet;" +
                 "}";
 
-            // Anchor without emulateUserGesture — that flag consumes the
-            // activation the following callFunctionOn needs on macOS.
+            // Pulse first so Darwin has transient activation before the
+            // objectId-anchor evaluate. A post-only pulse raced the
+            // callFunctionOn window on CI (requestStorageAccess → false).
+            if (pulseTrustedGestureAsync != null)
+            {
+                await pulseTrustedGestureAsync().ConfigureAwait(false);
+            }
+
+            // Bind to window so callFunctionOn runs in the page world with
+            // a stable objectId. Prefer window over document — Darwin RSA
+            // under document-bound callFunctionOn still returned false on CI
+            // after OOPIF load even with emulateUserGesture.
             object anchorParams = _contextId.HasValue
                 ? new { expression = "window", contextId = _contextId.Value, returnByValue = false, emulateUserGesture = false }
                 : (object)new { expression = "window", returnByValue = false, emulateUserGesture = false };

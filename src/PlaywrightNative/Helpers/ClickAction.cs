@@ -578,6 +578,12 @@ namespace PlaywrightNative.Helpers
         const box = range.getBoundingClientRect();
         return !!(box && box.width > 0 && box.height > 0);
     }
+    // Unloaded loading=lazy iframes: avoid getComputedStyle on Darwin WebKit.
+    const tag = (el.tagName || '').toUpperCase();
+    if ((tag === 'IFRAME' || tag === 'FRAME') &&
+        String(el.getAttribute('loading') || '').toLowerCase() === 'lazy') {
+        return true;
+    }
     const view = el.ownerDocument && el.ownerDocument.defaultView;
     if (!view) {
         return true;

@@ -51,6 +51,7 @@ namespace PlaywrightNative.Helpers
 
         private readonly object _clientGate = new object();
         private readonly List<HttpClient> _activeClients = new List<HttpClient>();
+        private readonly List<Socket> _activeSockets = new List<Socket>();
 
         // Upstream fetch.ts registers a Dispose listener per in-flight request that
         // rejects that request's promise. Close can land between awaits (UA resolve,
@@ -263,13 +264,16 @@ namespace PlaywrightNative.Helpers
                     // and mid-body "aborted" classification. Pair with keep-alive (do not force
                     // ConnectionClose): Close+HeaderCaptureStream hung SendAsync. Separate
                     // WebKit hang-ups came from LocaleHandshakeProxy via IHasProxy (also fixed).
-                    using HttpClient client = CreateClient(
+                    // Do not `using` the HttpClient: abort unwind must not sync-Dispose while
+                    // SendAsync is still waiting on a hang-route (Windows CloseAsync deadlock).
+                    HttpClient client = CreateClient(
                         ignoreTls,
                         proxy,
                         clientCertificates,
                         initialClientCertificate,
                         uri.Host,
                         tlsCapture,
+                        RegisterSocket,
                         captureRawHeaders: true);
                     RegisterClient(client);
                     try
@@ -381,7 +385,7 @@ namespace PlaywrightNative.Helpers
                     }
                     finally
                     {
-                        UnregisterClient(client);
+                        ReleaseClient(client);
                     }
                 }
                 finally
@@ -592,6 +596,7 @@ namespace PlaywrightNative.Helpers
             X509Certificate2 initialClientCertificate,
             string initialHost,
             TlsCapture tlsCapture,
+            Action<Socket> onSocket,
             bool captureRawHeaders = true)
         {
             SocketsHttpHandler handler = null;
@@ -666,7 +671,9 @@ namespace PlaywrightNative.Helpers
                         };
                 }
 
-                APIRequestProxyConnect.Apply(handler, proxy, ignoreTls);
+                // Always own ConnectCallback so Abort can RST sockets (Node agent.destroy).
+                // Proxy path still tunnels via APIRequestProxyConnect; direct path opens TCP.
+                APIRequestProxyConnect.Apply(handler, proxy, ignoreTls, onSocket);
 
                 // Capture wire header order/casing for HeadersArray and abort classification.
                 // Requires keep-alive: forcing ConnectionClose with this filter hung SendAsync.
@@ -2761,7 +2768,9 @@ namespace PlaywrightNative.Helpers
             {
                 if (_disposed)
                 {
-                    client.Dispose();
+                    // Never sync-Dispose on the fetch/close thread — same Windows hang
+                    // as AbortActiveClients when SendAsync is still waiting.
+                    DisposeClientInBackground(client);
                     return;
                 }
 
@@ -2782,16 +2791,55 @@ namespace PlaywrightNative.Helpers
             }
         }
 
-        private void AbortActiveClients()
+        private void ReleaseClient(HttpClient client)
         {
-            HttpClient[] copy;
-            lock (_clientGate)
+            if (client == null)
             {
-                copy = _activeClients.ToArray();
-                _activeClients.Clear();
+                return;
             }
 
-            foreach (HttpClient client in copy)
+            UnregisterClient(client);
+            DisposeClientInBackground(client);
+        }
+
+        private void RegisterSocket(Socket socket)
+        {
+            if (socket == null)
+            {
+                return;
+            }
+
+            lock (_clientGate)
+            {
+                if (_disposed)
+                {
+                    AbortSocket(socket);
+                    return;
+                }
+
+                _activeSockets.Add(socket);
+            }
+        }
+
+        private void AbortActiveClients()
+        {
+            HttpClient[] clients;
+            Socket[] sockets;
+            lock (_clientGate)
+            {
+                clients = _activeClients.ToArray();
+                _activeClients.Clear();
+                sockets = _activeSockets.ToArray();
+                _activeSockets.Clear();
+            }
+
+            // RST first so hang-route servers observe RequestAborted (Node agent.destroy).
+            for (int i = 0; i < sockets.Length; i++)
+            {
+                AbortSocket(sockets[i]);
+            }
+
+            foreach (HttpClient client in clients)
             {
                 try
                 {
@@ -2804,18 +2852,63 @@ namespace PlaywrightNative.Helpers
                 // Do not dispose synchronously here: HttpClient.Dispose can wait for
                 // in-flight SendAsync, while SendAsync waits for the hang-route server
                 // — a Windows CloseAsync deadlock that starves RequestAborted
-                // (ShouldAbortRequestsWhenBrowserContextCloses). Cancel is enough to
+                // (ShouldAbortRequestsWhenBrowserContextCloses). Cancel + socket RST
                 // fail the send; dispose on a background thread.
-                _ = Task.Run(() =>
+                DisposeClientInBackground(client);
+            }
+        }
+
+        private void DisposeClientInBackground(HttpClient client)
+        {
+            _ = Task.Run(() =>
+            {
+                try
                 {
-                    try
-                    {
-                        client.Dispose();
-                    }
-                    catch (ObjectDisposedException)
-                    {
-                    }
-                });
+                    client.Dispose();
+                }
+                catch (ObjectDisposedException)
+                {
+                }
+            });
+        }
+
+        private void AbortSocket(Socket socket)
+        {
+            if (socket == null)
+            {
+                return;
+            }
+
+            try
+            {
+                socket.LingerState = new LingerOption(true, 0);
+            }
+            catch (ObjectDisposedException)
+            {
+                return;
+            }
+            catch (SocketException)
+            {
+            }
+
+            try
+            {
+                socket.Shutdown(SocketShutdown.Both);
+            }
+            catch (ObjectDisposedException)
+            {
+                return;
+            }
+            catch (SocketException)
+            {
+            }
+
+            try
+            {
+                socket.Dispose();
+            }
+            catch (ObjectDisposedException)
+            {
             }
         }
 

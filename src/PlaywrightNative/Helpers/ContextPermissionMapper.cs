@@ -150,6 +150,9 @@ namespace PlaywrightNative.Helpers
                         // Official WebKit has no clipboard-write mapping.
                         // Leftover keyboard tests grant it alongside clipboard-read.
                         break;
+                    case ContextPermissions.StorageAccess:
+                        mapped.Add("storageAccess");
+                        break;
                     default:
                         throw new PlaywrightException("Unknown permission: " + permission);
                 }

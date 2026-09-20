@@ -477,10 +477,14 @@ namespace PlaywrightNative.Helpers
                 deadlineClock,
                 Math.Min(300, RemainingMs(deadlineClock, budgetMs)),
                 fallback: null).ConfigureAwait(false);
-            IFrame child = await ContentFrameOrNullAsync(iframeEl).ConfigureAwait(false);
+
+            // Prefer ChildFrames index over ContentFrame/describeNode — Windows
+            // Chromium describeNode for <frame> often exceeds the short race and
+            // leaves stitch empty (ShouldStitchIframesInsideAFramesetFrame).
+            IFrame child = await ChildFrameForAriaRefAsync(frame, ariaRef).ConfigureAwait(false);
             if (child == null || child.IsDetached)
             {
-                child = await ChildFrameForAriaRefAsync(frame, ariaRef).ConfigureAwait(false);
+                child = await ContentFrameOrNullAsync(iframeEl).ConfigureAwait(false);
             }
 
             if (child == null || child.IsDetached)
@@ -800,7 +804,7 @@ namespace PlaywrightNative.Helpers
                 return await RaceOrDefaultAsync(
                     () => iframeEl.ContentFrameAsync(),
                     Stopwatch.StartNew(),
-                    250,
+                    1000,
                     fallback: null).ConfigureAwait(false);
             }
             catch (PlaywrightException)

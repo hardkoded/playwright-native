@@ -7632,6 +7632,27 @@ namespace PlaywrightNative.WebKit
                 // Do not call Emulation.setActiveAndFocused here. It clears
                 // transient activation, and macOS requestStorageAccess then
                 // rejects before callFunctionOn's gesture flag is applied.
+
+                // Cross-process iframes on Darwin only honor a gesture delivered
+                // on the frame session. Prefer that path and skip the slow parent
+                // hit-test so activation survives into callFunctionOn.
+                if (frameSession != null && !ReferenceEquals(frameSession, _session))
+                {
+                    await frameSession.SendAsync(
+                        "Input.dispatchMouseEvent",
+                        new { type = "move", button = "none", x = 8, y = 8, modifiers = 0, buttons = 0 })
+                        .ConfigureAwait(false);
+                    await frameSession.SendAsync(
+                        "Input.dispatchMouseEvent",
+                        new { type = "down", button = "left", x = 8, y = 8, modifiers = 0, buttons = 1, clickCount = 1 })
+                        .ConfigureAwait(false);
+                    await frameSession.SendAsync(
+                        "Input.dispatchMouseEvent",
+                        new { type = "up", button = "left", x = 8, y = 8, modifiers = 0, buttons = 0, clickCount = 1 })
+                        .ConfigureAwait(false);
+                    return;
+                }
+
                 WKExecutionContext parentContext = await WaitForFrameContextAsync(parent).ConfigureAwait(false);
                 string frameNameJson = JsonSerializer.Serialize(frame.Name ?? string.Empty);
                 string frameUrlJson = JsonSerializer.Serialize(frame.Url ?? string.Empty);
@@ -7681,25 +7702,6 @@ namespace PlaywrightNative.WebKit
                     "Input.dispatchMouseEvent",
                     new { type = "up", button = "left", x, y, modifiers = 0, buttons = 0, clickCount = 1 })
                     .ConfigureAwait(false);
-
-                // Cross-process iframes on Darwin only honor a gesture delivered
-                // on the frame session. Page-proxy coordinates do not activate
-                // the iframe document (requestStorageAccess stays false).
-                if (frameSession != null && !ReferenceEquals(frameSession, _session))
-                {
-                    await frameSession.SendAsync(
-                        "Input.dispatchMouseEvent",
-                        new { type = "move", button = "none", x = 8, y = 8, modifiers = 0, buttons = 0 })
-                        .ConfigureAwait(false);
-                    await frameSession.SendAsync(
-                        "Input.dispatchMouseEvent",
-                        new { type = "down", button = "left", x = 8, y = 8, modifiers = 0, buttons = 1, clickCount = 1 })
-                        .ConfigureAwait(false);
-                    await frameSession.SendAsync(
-                        "Input.dispatchMouseEvent",
-                        new { type = "up", button = "left", x = 8, y = 8, modifiers = 0, buttons = 0, clickCount = 1 })
-                        .ConfigureAwait(false);
-                }
             }
             catch (PlaywrightException ex)
             {

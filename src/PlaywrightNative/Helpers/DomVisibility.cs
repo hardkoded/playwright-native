@@ -55,6 +55,14 @@ namespace PlaywrightNative.Helpers
     }
     function isVisible(element) {
         if (!element) return false;
+        // Unloaded loading=lazy iframes: never call getComputedStyle /
+        // getBoundingClientRect — Darwin WebKit wedges the target for the
+        // full command timeout (ReturnEmptySnapshotWhenIframeIsNotLoaded).
+        const tag = (element.tagName || '').toUpperCase();
+        if ((tag === 'IFRAME' || tag === 'FRAME') &&
+            String(element.getAttribute('loading') || '').toLowerCase() === 'lazy') {
+            return !!(element.isConnected);
+        }
         const view = element.ownerDocument && element.ownerDocument.defaultView;
         const style = view ? view.getComputedStyle(element) : null;
         if (!style) return true;
