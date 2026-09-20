@@ -2881,33 +2881,15 @@ namespace PlaywrightNative.Helpers
 
             try
             {
-                socket.LingerState = new LingerOption(true, 0);
+                // Linger timeout 0 + Close sends RST (Node agent.destroy). Do not
+                // Shutdown first — that begins a graceful FIN and leaves Windows
+                // hang-route servers without RequestAborted (Abort tests time out).
+                socket.Close(0);
             }
             catch (ObjectDisposedException)
             {
-                return;
             }
             catch (SocketException)
-            {
-            }
-
-            try
-            {
-                socket.Shutdown(SocketShutdown.Both);
-            }
-            catch (ObjectDisposedException)
-            {
-                return;
-            }
-            catch (SocketException)
-            {
-            }
-
-            try
-            {
-                socket.Dispose();
-            }
-            catch (ObjectDisposedException)
             {
             }
         }

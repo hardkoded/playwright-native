@@ -807,13 +807,28 @@ namespace PlaywrightNative.WebKit
             await EvaluateFunctionAsync<bool>(ElementStateScript.SetInputFilesFromJsonFunction, json).ConfigureAwait(false);
         }
 
-        private Task InitializePreviewAsync()
+        private async Task InitializePreviewAsync()
         {
-            // Do not callFunctionOn this objectId for preview. Unloaded
-            // loading=lazy iframes wedge Darwin WebKit for the full command
-            // timeout (WaitForSelector → InitializePreview on construct).
-            // Official preview is best-effort; keep the default JSHandle@node.
-            return Task.CompletedTask;
+            try
+            {
+                // WaitForSelector avoids constructing handles for loading=lazy
+                // iframes (AtomicSelectorRead). Other query paths still need the
+                // official PreviewNodeFunction preview (JSHandle@<body>, …).
+                string nodePreview = await EvaluateFunctionAsync<string>(RemoteObject.PreviewNodeFunction)
+                    .ConfigureAwait(false);
+                if (!string.IsNullOrEmpty(nodePreview))
+                {
+                    SetPreview("JSHandle@" + nodePreview);
+                }
+            }
+            catch (PlaywrightException)
+            {
+                // Best-effort preview, matching upstream ElementHandle._initializePreview.
+            }
+            catch (TimeoutException)
+            {
+                // describeNode/callFunctionOn can time out on unloaded lazy iframes.
+            }
         }
 
 #pragma warning disable SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648

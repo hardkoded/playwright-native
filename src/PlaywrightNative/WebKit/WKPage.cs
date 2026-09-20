@@ -1904,15 +1904,18 @@ namespace PlaywrightNative.WebKit
         {
             WaitForSelectorName.Validate(waitFor, visibility);
             bool strictSelectors = strict ?? (Context is IHasStrictSelectors s && s.StrictSelectors);
-            return WaitForSelectorHelper.WaitAsync(
-                sel => QueryActionAsync(sel, strict),
-                selector,
-                state,
-                timeout,
-                readVisibilityBySelectorAsync: async sel =>
+
+            // Frame-control selectors (enter-frame / pierce / any-frame) must go
+            // through FrameSelector via QueryActionAsync — AtomicSelectorRead runs
+            // in-page CSS only and would hang ShouldNotAllowLeadingEnterFrame.
+            Func<string, Task<bool?>> readVisibility = FrameSelector.ContainsControl(selector)
+                ? null
+                : async sel =>
                 {
                     // Document-scoped DomVisibility — never callFunctionOn a
                     // loading=lazy iframe objectId (Darwin WaitForSelector hang).
+                    // Do not swallow strict-mode violations — that turned
+                    // ShouldFailPageWaitForSelectorInStrictMode into a 30s wait.
                     try
                     {
                         return await AtomicSelectorRead.IsVisibleAsync(
@@ -1921,11 +1924,19 @@ namespace PlaywrightNative.WebKit
                                 strictSelectors)
                             .ConfigureAwait(false);
                     }
-                    catch (PlaywrightException)
+                    catch (PlaywrightException ex) when (
+                        ex.Message == null
+                        || !ex.Message.Contains("strict mode violation", StringComparison.Ordinal))
                     {
                         return null;
                     }
-                });
+                };
+            return WaitForSelectorHelper.WaitAsync(
+                sel => QueryActionAsync(sel, strict),
+                selector,
+                state,
+                timeout,
+                readVisibilityBySelectorAsync: readVisibility);
         }
 
         /// <inheritdoc/>

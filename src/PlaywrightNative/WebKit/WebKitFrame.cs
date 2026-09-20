@@ -335,15 +335,10 @@ namespace PlaywrightNative.WebKit
         {
             WaitForSelectorName.Validate(waitFor, visibility);
             bool strictSelectors = strict ?? (_page.Context is IHasStrictSelectors s && s.StrictSelectors);
-            return WaitForSelectorHelper.WaitAsync(
-                sel => QueryActionAsync(sel, strict),
-                selector,
-                state,
-                timeout,
-                "frame.waitForSelector",
-                () => IsDetached,
-                readObservedPreviewsAsync: () => ReadSelectorPreviewLogAsync(selector),
-                readVisibilityBySelectorAsync: async sel =>
+
+            Func<string, Task<bool?>> readVisibility = FrameSelector.ContainsControl(selector)
+                ? null
+                : async sel =>
                 {
                     try
                     {
@@ -353,11 +348,22 @@ namespace PlaywrightNative.WebKit
                                 strictSelectors)
                             .ConfigureAwait(false);
                     }
-                    catch (PlaywrightException)
+                    catch (PlaywrightException ex) when (
+                        ex.Message == null
+                        || !ex.Message.Contains("strict mode violation", StringComparison.Ordinal))
                     {
                         return null;
                     }
-                });
+                };
+            return WaitForSelectorHelper.WaitAsync(
+                sel => QueryActionAsync(sel, strict),
+                selector,
+                state,
+                timeout,
+                "frame.waitForSelector",
+                () => IsDetached,
+                readObservedPreviewsAsync: () => ReadSelectorPreviewLogAsync(selector),
+                readVisibilityBySelectorAsync: readVisibility);
         }
 
         /// <inheritdoc/>
