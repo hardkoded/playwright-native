@@ -2229,10 +2229,13 @@ namespace PlaywrightNative.Helpers
                             HttpCompletionOption.ResponseContentRead,
                             token);
                         Task finished = await Task.WhenAny(sendTask, _abortGate.Task).ConfigureAwait(false);
-                        if (finished != sendTask || IsAborted())
+                        if (_abortGate.Task.IsCompleted || finished != sendTask || IsAborted())
                         {
                             // AbortActiveClients disposes the HttpClient; do not sync-block
                             // on sendTask.Result (VSTHRD103) while racing dispose.
+                            // Prefer the abort gate even when SendAsync also completed —
+                            // a cancelled hang-route can still yield a successful HTTP
+                            // response that would otherwise mask "Request context disposed".
                             throw DisposedException(inFlight: true);
                         }
 

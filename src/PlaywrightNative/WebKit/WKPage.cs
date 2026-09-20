@@ -4739,7 +4739,7 @@ namespace PlaywrightNative.WebKit
             DisposeTargetSession(ref _targetSession);
             DisposeTargetSession(ref _provisionalSession);
 
-            _initializedTcs.TrySetException(PageClosedException(" closed before initialization completed."));
+            _initializedTcs.TrySetException(PageClosedException());
 
             lock (_navigationLock)
             {

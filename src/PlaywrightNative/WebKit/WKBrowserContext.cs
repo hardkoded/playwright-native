@@ -938,7 +938,19 @@ namespace PlaywrightNative.WebKit
                 // If the pageProxyCreated event already fired, claim it from the early-arrival map.
                 if (earlyPage != null)
                 {
-                    await earlyPage.InitializedTask.ConfigureAwait(false);
+                    try
+                    {
+                        await earlyPage.InitializedTask.ConfigureAwait(false);
+                    }
+#pragma warning disable RCS1075
+                    catch (Exception)
+#pragma warning restore RCS1075
+                    {
+                        // Official reportAsNew: init can fail if the page closes
+                        // during bootstrap (ShouldCloseAllBelongingPages*). Still
+                        // hand the page back so CloseAsync can finish cleaning up.
+                    }
+
                     await WaitAndReportAsNewAsync(earlyPage).ConfigureAwait(false);
                     return earlyPage;
                 }
@@ -954,7 +966,16 @@ namespace PlaywrightNative.WebKit
                     throw;
                 }
 
-                await page.InitializedTask.ConfigureAwait(false);
+                try
+                {
+                    await page.InitializedTask.ConfigureAwait(false);
+                }
+#pragma warning disable RCS1075
+                catch (Exception)
+#pragma warning restore RCS1075
+                {
+                }
+
                 await WaitAndReportAsNewAsync(page).ConfigureAwait(false);
                 return page;
             }
