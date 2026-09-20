@@ -426,6 +426,9 @@ namespace PlaywrightNative.Chromium
             }
 
             _closeReason = reason;
+
+            // Abort APIRequest before HAR/video flush so WaitForRequest→Close races
+            // cannot finish an in-flight fetch successfully (Windows hang-route).
             APIRequestContext.AbortFor(this);
             foreach (IPage page in Pages)
             {
