@@ -47,6 +47,12 @@ namespace PlaywrightNative.Helpers
         /// Optional connected check for element-handle waits. A disconnected host
         /// succeeds hidden/detached waits and fails attached/visible waits.
         /// </param>
+        /// <param name="readObservedPreviewsAsync">
+        /// Optional in-page preview log. WebKit polls over the protocol and can
+        /// miss a node that is added and removed between round-trips (Darwin
+        /// <c>#mydiv</c> wait logs). The callback installs a mutation observer
+        /// and returns <c>hidden|preview</c> / <c>visible|preview</c> lines.
+        /// </param>
         /// <returns>
         /// The matching handle for attached/visible (and hidden-but-attached).
         /// <see langword="null"/> when waiting for detached, or hidden and the node is gone.
@@ -58,7 +64,8 @@ namespace PlaywrightNative.Helpers
             float? timeout,
             string apiName = "page.waitForSelector",
             Func<bool> isDetached = null,
-            Func<Task<bool>> isScopeConnectedAsync = null)
+            Func<Task<bool>> isScopeConnectedAsync = null,
+            Func<Task<IReadOnlyList<string>>> readObservedPreviewsAsync = null)
         {
             if (querySelectorAsync == null)
             {
@@ -84,6 +91,20 @@ namespace PlaywrightNative.Helpers
             // snapshots (e.g. #mydiv) even after a later node (#another) logs.
             List<(bool Visible, string Preview)> resolvedSnapshots = new List<(bool, string)>();
             int consecutiveHidden = 0;
+
+            if (readObservedPreviewsAsync != null)
+            {
+                try
+                {
+                    MergeObservedPreviews(logs, resolvedSnapshots, await readObservedPreviewsAsync().ConfigureAwait(false));
+                }
+                catch (PlaywrightException)
+                {
+                }
+                catch (TimeoutException)
+                {
+                }
+            }
 
             while (true)
             {
@@ -311,6 +332,23 @@ namespace PlaywrightNative.Helpers
 
                 if (timeoutMs != Timeout.Infinite && sw.ElapsedMilliseconds >= timeoutMs)
                 {
+                    if (readObservedPreviewsAsync != null)
+                    {
+                        try
+                        {
+                            MergeObservedPreviews(
+                                logs,
+                                resolvedSnapshots,
+                                await readObservedPreviewsAsync().ConfigureAwait(false));
+                        }
+                        catch (PlaywrightException)
+                        {
+                        }
+                        catch (TimeoutException)
+                        {
+                        }
+                    }
+
                     // Merge snapshots into logs without dropping earlier lines.
                     // Replacing logs entirely lost #mydiv when only the final
                     // "another" node remained in resolvedSnapshots on Darwin.
@@ -334,6 +372,42 @@ namespace PlaywrightNative.Helpers
                 }
 
                 await Task.Delay(16).ConfigureAwait(false);
+            }
+        }
+
+        private static void MergeObservedPreviews(
+            List<string> logs,
+            List<(bool Visible, string Preview)> snapshots,
+            IReadOnlyList<string> observed)
+        {
+            if (observed == null)
+            {
+                return;
+            }
+
+            for (int i = 0; i < observed.Count; i++)
+            {
+                string entry = observed[i];
+                if (string.IsNullOrEmpty(entry))
+                {
+                    continue;
+                }
+
+                bool hidden = entry.StartsWith("hidden ", StringComparison.Ordinal);
+                bool visible = entry.StartsWith("visible ", StringComparison.Ordinal);
+                if (!hidden && !visible)
+                {
+                    continue;
+                }
+
+                string preview = entry.Substring(hidden ? "hidden ".Length : "visible ".Length);
+                if (string.IsNullOrEmpty(preview))
+                {
+                    continue;
+                }
+
+                RememberResolvedSnapshot(snapshots, !hidden, preview);
+                AppendResolvedLog(logs, !hidden, preview);
             }
         }
 

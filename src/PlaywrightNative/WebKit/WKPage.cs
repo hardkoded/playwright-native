@@ -3742,7 +3742,7 @@ namespace PlaywrightNative.WebKit
                 JsonElement? remote = needsUserGesture
                     ? await context.EvaluateHandleWithUserGestureAsync(
                         expression,
-                        () => PulseTrustedGestureOnFrameAsync(frame)).ConfigureAwait(false)
+                        () => PulseTrustedGestureOnFrameAsync(frame, context.Session)).ConfigureAwait(false)
                     : await context.EvaluateHandleAsync(expression).ConfigureAwait(false);
                 if (needsUserGesture)
                 {
@@ -4800,6 +4800,14 @@ namespace PlaywrightNative.WebKit
                     new PlaywrightException(
                         string.IsNullOrEmpty(errorText) ? "Initial load failed" : errorText));
                 return;
+            }
+
+            // Bad TLS (and other terminal provisional failures) often arrive
+            // with no provisional session. Click auto-wait still holds willCheck
+            // retains; release them or page.click hangs until the test timeout.
+            if (!string.IsNullOrEmpty(errorText) && !IsSupersededNavigationFailure(errorText))
+            {
+                _frameManager.Signals.OnTerminalDocumentNavigationFailed();
             }
 
             if (_provisionalSession == null)
@@ -6011,6 +6019,21 @@ namespace PlaywrightNative.WebKit
 
         private async Task SyncBootstrapScriptAsync()
         {
+            // NewPage applies context init scripts as soon as the page object
+            // exists. On Darwin the inner target can lag Target.created; throwing
+            // here fails the next aria test's SetUp after a slow snapshot.
+            DateTime deadline = DateTime.UtcNow.AddSeconds(2);
+            while (_targetSession == null && DateTime.UtcNow < deadline && !_closed)
+            {
+                Task init = _initializedTcs.Task;
+                if (init.IsCompleted)
+                {
+                    break;
+                }
+
+                await Task.WhenAny(init, Task.Delay(50)).ConfigureAwait(false);
+            }
+
             WKTargetSession target = _targetSession
                 ?? throw new PlaywrightException("Inner target session is not yet available — the page has not finished initializing.");
             await SyncBootstrapScriptOnAsync(target).ConfigureAwait(false);
@@ -7594,8 +7617,9 @@ namespace PlaywrightNative.WebKit
         /// <c>window.focus()</c> (that breaks <c>document.hasFocus()</c> checks).
         /// </summary>
         /// <param name="frame">The child frame about to evaluate.</param>
+        /// <param name="frameSession">Session that owns the frame, or <see langword="null"/>.</param>
         /// <returns>A task that completes when the gesture has been sent or skipped.</returns>
-        private async Task PulseTrustedGestureOnFrameAsync(WKFrame frame)
+        private async Task PulseTrustedGestureOnFrameAsync(WKFrame frame, WKTargetSession frameSession = null)
         {
             WKFrame parent = frame?.ParentFrame;
             if (parent == null)
@@ -7605,18 +7629,9 @@ namespace PlaywrightNative.WebKit
 
             try
             {
-                // Active+focused first so Darwin accepts the page, then a
-                // trusted mouse click for transient activation. Do not
-                // re-activate after the click — that clears the gesture.
-                try
-                {
-                    await _session.SendAsync("Emulation.setActiveAndFocused", new { active = true })
-                        .ConfigureAwait(false);
-                }
-                catch (PlaywrightException)
-                {
-                }
-
+                // Do not call Emulation.setActiveAndFocused here. It clears
+                // transient activation, and macOS requestStorageAccess then
+                // rejects before callFunctionOn's gesture flag is applied.
                 WKExecutionContext parentContext = await WaitForFrameContextAsync(parent).ConfigureAwait(false);
                 string frameNameJson = JsonSerializer.Serialize(frame.Name ?? string.Empty);
                 string frameUrlJson = JsonSerializer.Serialize(frame.Url ?? string.Empty);
@@ -7666,6 +7681,25 @@ namespace PlaywrightNative.WebKit
                     "Input.dispatchMouseEvent",
                     new { type = "up", button = "left", x, y, modifiers = 0, buttons = 0, clickCount = 1 })
                     .ConfigureAwait(false);
+
+                // Cross-process iframes on Darwin only honor a gesture delivered
+                // on the frame session. Page-proxy coordinates do not activate
+                // the iframe document (requestStorageAccess stays false).
+                if (frameSession != null && !ReferenceEquals(frameSession, _session))
+                {
+                    await frameSession.SendAsync(
+                        "Input.dispatchMouseEvent",
+                        new { type = "move", button = "none", x = 8, y = 8, modifiers = 0, buttons = 0 })
+                        .ConfigureAwait(false);
+                    await frameSession.SendAsync(
+                        "Input.dispatchMouseEvent",
+                        new { type = "down", button = "left", x = 8, y = 8, modifiers = 0, buttons = 1, clickCount = 1 })
+                        .ConfigureAwait(false);
+                    await frameSession.SendAsync(
+                        "Input.dispatchMouseEvent",
+                        new { type = "up", button = "left", x = 8, y = 8, modifiers = 0, buttons = 0, clickCount = 1 })
+                        .ConfigureAwait(false);
+                }
             }
             catch (PlaywrightException ex)
             {

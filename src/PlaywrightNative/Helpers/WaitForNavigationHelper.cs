@@ -212,6 +212,11 @@ namespace PlaywrightNative.Helpers
                     }
                 }
 
+                if (waitUntil == WaitUntilState.Commit)
+                {
+                    await WaitForCommitParserAsync(page, navigatedUrls, timeoutMs, sw).ConfigureAwait(false);
+                }
+
                 return captured;
             }
             finally
@@ -220,6 +225,50 @@ namespace PlaywrightNative.Helpers
                 page.FrameNavigated -= OnNavigated;
                 page.FrameDetached -= OnDetached;
                 page.RequestFailed -= OnRequestFailed;
+            }
+        }
+
+        /// <summary>
+        /// macOS WebKit can emit <c>frameNavigated</c> before the parser has
+        /// applied <c>&lt;title&gt;</c>. Commit should still observe that title
+        /// (page-wait-for-navigation "should work with commit") without waiting
+        /// for a document that never reaches <c>load</c> (blocking script).
+        /// </summary>
+        private static async Task WaitForCommitParserAsync(
+            IPage page,
+            List<string> navigatedUrls,
+            int timeoutMs,
+            Stopwatch sw)
+        {
+            string committed = navigatedUrls.Count > 0 ? navigatedUrls[navigatedUrls.Count - 1] : page.Url;
+            if (string.IsNullOrEmpty(committed)
+                || committed.Equals("about:blank", StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            int remain = RemainingTimeoutMs(timeoutMs, sw);
+            int parserWait = remain == Timeout.Infinite ? 1000 : Math.Min(1000, Math.Max(0, remain));
+            if (parserWait <= 0)
+            {
+                return;
+            }
+
+            try
+            {
+                await page.WaitForFunctionAsync(
+                    "() => {"
+                    + "const href = String(location.href || '');"
+                    + "if (!href || href === 'about:blank') return false;"
+                    + "return document.readyState !== 'loading' || !!document.title || !!document.body;"
+                    + "}",
+                    timeout: parserWait).ConfigureAwait(false);
+            }
+            catch (TimeoutException)
+            {
+            }
+            catch (PlaywrightException)
+            {
             }
         }
 

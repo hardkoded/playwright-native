@@ -527,10 +527,32 @@ namespace PlaywrightNative.Helpers
                     });
             }
 
-            private static Task<List<KeyValuePair<string, string>>> RequestHeadersAsync(IRequest request)
+            private static async Task<List<KeyValuePair<string, string>>> RequestHeadersAsync(IRequest request)
             {
                 List<KeyValuePair<string, string>> headers = new();
-                if (request?.Headers != null)
+                if (request == null)
+                {
+                    return headers;
+                }
+
+                // Prefer allHeaders so custom fetch headers (HAR disambiguation)
+                // are visible even when the provisional Headers map is incomplete.
+                try
+                {
+                    Dictionary<string, string> all = await request.AllHeadersAsync().ConfigureAwait(false);
+                    if (all != null && all.Count > 0)
+                    {
+                        foreach (KeyValuePair<string, string> header in all)
+                        {
+                            headers.Add(header);
+                        }
+                    }
+                }
+                catch (Microsoft.Playwright.PlaywrightException)
+                {
+                }
+
+                if (headers.Count == 0 && request.Headers != null)
                 {
                     foreach (KeyValuePair<string, string> header in request.Headers)
                     {
@@ -539,7 +561,7 @@ namespace PlaywrightNative.Helpers
                 }
 
                 if (HeaderValue(headers, "content-type") == null
-                    && request?.PostDataBuffer != null
+                    && request.PostDataBuffer != null
                     && request.PostDataBuffer.Length >= 4
                     && request.PostDataBuffer[0] == (byte)'-'
                     && request.PostDataBuffer[1] == (byte)'-')
@@ -553,7 +575,7 @@ namespace PlaywrightNative.Helpers
                     }
                 }
 
-                return Task.FromResult(headers);
+                return headers;
             }
 
             private static string ReadString(JsonElement element, string name)
@@ -695,6 +717,8 @@ namespace PlaywrightNative.Helpers
 
             private static int CountMatchingHeaders(List<KeyValuePair<string, string>> harHeaders, List<KeyValuePair<string, string>> headers)
             {
+                // Case-insensitive name:value keys (official uses toLowerCase;
+                // CA1308 requires ToUpperInvariant here).
                 HashSet<string> set = new(StringComparer.Ordinal);
                 foreach (KeyValuePair<string, string> header in headers)
                 {

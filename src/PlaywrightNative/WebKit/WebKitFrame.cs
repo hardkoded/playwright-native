@@ -340,7 +340,8 @@ namespace PlaywrightNative.WebKit
                 state,
                 timeout,
                 "frame.waitForSelector",
-                () => IsDetached);
+                () => IsDetached,
+                readObservedPreviewsAsync: () => ReadSelectorPreviewLogAsync(selector));
         }
 
         /// <inheritdoc/>
@@ -415,6 +416,64 @@ namespace PlaywrightNative.WebKit
         /// </summary>
         /// <returns><see langword="true"/> when the document is already usable.</returns>
         internal bool HasQueryableContext() => _page.HasFrameContext(_wkFrame);
+
+        private async Task<IReadOnlyList<string>> ReadSelectorPreviewLogAsync(string selector)
+        {
+            if (string.IsNullOrEmpty(selector)
+                || selector.Contains(">>", StringComparison.Ordinal)
+                || selector.Contains("=", StringComparison.Ordinal))
+            {
+                return Array.Empty<string>();
+            }
+
+            string script = "(selector) => {"
+                + "const preview = " + RemoteObject.PreviewNodeFunction + ";"
+                + "const root = document.documentElement || document;"
+                + "if (!window.__pwSelLog || window.__pwSelWatch !== selector) {"
+                + "  window.__pwSelWatch = selector;"
+                + "  window.__pwSelLog = [];"
+                + "}"
+                + "const logs = window.__pwSelLog;"
+                + "const snap = () => {"
+                + "  let el = null;"
+                + "  try { el = document.querySelector(selector); } catch (e) { return; }"
+                + "  if (!el) return;"
+                + "  let hidden = false;"
+                + "  try {"
+                + "    const st = getComputedStyle(el);"
+                + "    hidden = !st || st.display === 'none' || st.visibility === 'hidden';"
+                + "  } catch (e) {}"
+                + "  const line = (hidden ? 'hidden ' : 'visible ') + preview(el);"
+                + "  if (!logs.length || logs[logs.length - 1] !== line) logs.push(line);"
+                + "  if (logs.length > 30) logs.shift();"
+                + "};"
+                + "if (!window.__pwSelObs) {"
+                + "  window.__pwSelObs = new MutationObserver(snap);"
+                + "  window.__pwSelObs.observe(root, { subtree: true, childList: true, attributes: true, characterData: true });"
+                + "}"
+                + "snap();"
+                + "return JSON.stringify(logs);"
+                + "}";
+
+            try
+            {
+                string json = await EvaluateInOwnFrameAsync<string>(script, selector).ConfigureAwait(false);
+                if (string.IsNullOrEmpty(json))
+                {
+                    return Array.Empty<string>();
+                }
+
+                return JsonSerializer.Deserialize<string[]>(json) ?? Array.Empty<string>();
+            }
+            catch (PlaywrightException)
+            {
+                return Array.Empty<string>();
+            }
+            catch (JsonException)
+            {
+                return Array.Empty<string>();
+            }
+        }
 
         private async Task<IJSHandle> EvaluatePreparedHandleAsync(string handleFn, object[] handleArgs)
         {

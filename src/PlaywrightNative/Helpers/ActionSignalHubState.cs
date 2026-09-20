@@ -107,6 +107,18 @@ namespace PlaywrightNative.Helpers
             }
         }
 
+        /// <summary>
+        /// Tells every barrier that a main-frame document navigation failed
+        /// terminally and will not commit.
+        /// </summary>
+        internal void OnTerminalDocumentNavigationFailed()
+        {
+            foreach (ActionSignalBarrier barrier in Snapshot())
+            {
+                barrier.OnTerminalDocumentNavigationFailed();
+            }
+        }
+
         private ActionSignalBarrier[] Snapshot()
         {
             lock (_lock)

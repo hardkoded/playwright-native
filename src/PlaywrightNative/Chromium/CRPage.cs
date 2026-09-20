@@ -2364,7 +2364,6 @@ namespace PlaywrightNative.Chromium
             string expectedDocumentId = null;
             bool navigationSettled = false;
             bool sawTargetLifecycle = false;
-            bool supersededByNewerNavigation = false;
 
             void OnLifecycle(string name)
             {
@@ -2404,15 +2403,16 @@ namespace PlaywrightNative.Chromium
 
                 // Same-document (hash) navigations have no loaderId. Complete
                 // once the frame URL has been updated.
-                if (string.IsNullOrEmpty(expectedDocumentId) && !supersededByNewerNavigation)
+                if (string.IsNullOrEmpty(expectedDocumentId))
                 {
                     lifecycleTcs.TrySetResult(true);
                     return;
                 }
 
-                // Client redirect / meta refresh / superseded Page.navigate committed
-                // a newer document before waitUntil on the original navigation. Keep
-                // waiting for the target lifecycle on the latest document.
+                // Client redirect / meta refresh committed a newer document
+                // before waitUntil on the original navigation. Keep waiting
+                // for the target lifecycle on the latest document (upstream
+                // page.goto does not resolve early on intermediate commits).
                 if (!string.IsNullOrEmpty(documentId) && documentId != expectedDocumentId)
                 {
                     expectedDocumentId = documentId;
@@ -2457,33 +2457,10 @@ namespace PlaywrightNative.Chromium
                 {
                     throw NavigationTimeout.Exceeded(apiName, url, NavigationTimeout.WaitUntilName(waitUntil), timeout);
                 }
-                catch (NavigationException ex) when (IsSupersededNavigationAbort(ex))
-                {
-                    // Page.navigate cancelled before its CDP ack (Windows CI race when a
-                    // newer goto starts mid-flight). Wait for the replacement document.
-                    supersededByNewerNavigation = true;
-                }
             }
 
-            if (!supersededByNewerNavigation)
-            {
-                try
-                {
-                    GotoResult result = await navigateTask.ConfigureAwait(false);
-                    expectedDocumentId = result.NewDocumentId;
-                }
-                catch (NavigationException ex) when (IsSupersededNavigationAbort(ex))
-                {
-                    supersededByNewerNavigation = true;
-                }
-            }
-
-            if (supersededByNewerNavigation)
-            {
-                // Accept the document that won (already committed or about to).
-                expectedDocumentId = string.IsNullOrEmpty(frame.DocumentId) ? null : frame.DocumentId;
-            }
-
+            GotoResult result = await navigateTask.ConfigureAwait(false);
+            expectedDocumentId = result.NewDocumentId;
             navigationSettled = true;
 
             try
@@ -2495,18 +2472,15 @@ namespace PlaywrightNative.Chromium
 
                 // Fast-path: lifecycle may have fired during navigate (sawTargetLifecycle)
                 // or already be present in LifecycleEvents after subscribe.
-                bool hasTargetLifecycle =
-                    sawTargetLifecycle || frame.LifecycleEvents.Contains(targetLifecycleEvent);
-                bool documentMatches =
-                    expectedDocumentId == null
-                    || string.Equals(frame.DocumentId, expectedDocumentId, StringComparison.Ordinal);
-                bool urlMatches = supersededByNewerNavigation
-                    || !string.IsNullOrEmpty(expectedDocumentId)
-                    || string.Equals(
-                        NavigationTimeout.WithoutUserInfo(frame.Url),
-                        NavigationTimeout.WithoutUserInfo(url),
-                        StringComparison.Ordinal);
-                bool lifecycleReady = hasTargetLifecycle && documentMatches && urlMatches;
+                bool lifecycleReady =
+                    (sawTargetLifecycle || frame.LifecycleEvents.Contains(targetLifecycleEvent)) &&
+                    (expectedDocumentId == null || frame.DocumentId == expectedDocumentId) &&
+                    (string.IsNullOrEmpty(expectedDocumentId)
+                        ? string.Equals(
+                            NavigationTimeout.WithoutUserInfo(frame.Url),
+                            NavigationTimeout.WithoutUserInfo(url),
+                            StringComparison.Ordinal)
+                        : true);
 
                 // Same-document navigations (including about:blank -> about:blank with a
                 // null loaderId) resolve once navigate returns, but only once frame.Url
@@ -2519,11 +2493,7 @@ namespace PlaywrightNative.Chromium
                 // once the frame really has the new URL.
                 if (lifecycleReady)
                 {
-                    if (!supersededByNewerNavigation)
-                    {
-                        frame.Url = NavigationTimeout.PreserveUserInfo(url, frame.Url);
-                    }
-
+                    frame.Url = NavigationTimeout.PreserveUserInfo(url, frame.Url);
                     return;
                 }
 
@@ -2532,9 +2502,7 @@ namespace PlaywrightNative.Chromium
                 // Frame.Url may still be "" while the public page URL is about:blank.
                 // Replay lifecycle so WaitForLoad / WaitForDOMContentLoaded hear it
                 // (subscriptions from WhenAll are already armed after the navigate hop).
-                if (!supersededByNewerNavigation
-                    && IsBlankNavigationUrl(url)
-                    && IsBlankNavigationUrl(frame.Url))
+                if (IsBlankNavigationUrl(url) && IsBlankNavigationUrl(frame.Url))
                 {
                     frame.Url = NavigationTimeout.PreserveUserInfo(url, frame.Url);
                     await ReplayPageInitScriptsAsync().ConfigureAwait(false);
@@ -2549,10 +2517,7 @@ namespace PlaywrightNative.Chromium
                         NavigationTimeout.Exceeded(apiName, url, NavigationTimeout.WaitUntilName(waitUntil), timeout)));
 
                 await lifecycleTcs.Task.ConfigureAwait(false);
-                if (!supersededByNewerNavigation)
-                {
-                    frame.Url = NavigationTimeout.PreserveUserInfo(url, frame.Url);
-                }
+                frame.Url = NavigationTimeout.PreserveUserInfo(url, frame.Url);
             }
             finally
             {
@@ -2608,21 +2573,6 @@ namespace PlaywrightNative.Chromium
                     throw new PlaywrightException(
                         "Cannot navigate to \"" + url + "\": this page is not available in an isolated browser context, and opening it crashes the browser. Use browserType.launchPersistentContext() instead.");
                 }
-            }
-
-            static bool IsSupersededNavigationAbort(NavigationException ex)
-            {
-                string message = ex?.Message;
-                if (string.IsNullOrEmpty(message))
-                {
-                    return false;
-                }
-
-                // CDP Page.navigate errorText when a newer navigation cancels this one
-                // before the navigate ack (page-goto "new navigation is started").
-                return message.Contains("ERR_ABORTED", StringComparison.OrdinalIgnoreCase)
-                    || message.Contains("NS_BINDING_ABORTED", StringComparison.OrdinalIgnoreCase)
-                    || message.Contains("interrupted", StringComparison.OrdinalIgnoreCase);
             }
         }
 

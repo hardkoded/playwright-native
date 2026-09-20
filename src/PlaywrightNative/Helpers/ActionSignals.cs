@@ -154,7 +154,19 @@ namespace PlaywrightNative.Helpers
                     return;
                 }
 
-                hub.OnDocumentNavigationAborted();
+                // Redirect / superseded aborts ("cancelled", "interrupted") must
+                // drop only the failed document retain. A terminal failure
+                // (bad TLS certificate) never commits, and leaving the
+                // willCheck policy retains armed hangs click() for the full
+                // timeout (clicking on links which do not commit navigation).
+                if (IsSupersededNavigationFailure(request.Failure))
+                {
+                    hub.OnDocumentNavigationAborted();
+                }
+                else
+                {
+                    hub.OnTerminalDocumentNavigationFailed();
+                }
             }
 
             void OnDownload(object sender, IDownload download)
@@ -496,6 +508,15 @@ namespace PlaywrightNative.Helpers
 
             return await liveTask.ConfigureAwait(false);
         }
+
+        private static bool IsSupersededNavigationFailure(string reason)
+            => !string.IsNullOrEmpty(reason)
+                && (reason.Contains("interrupted", StringComparison.OrdinalIgnoreCase)
+                    || reason.Contains("cancelled", StringComparison.OrdinalIgnoreCase)
+                    || reason.Contains("canceled", StringComparison.OrdinalIgnoreCase))
+                && reason.IndexOf("certificate", StringComparison.OrdinalIgnoreCase) < 0
+                && reason.IndexOf("SSL", StringComparison.OrdinalIgnoreCase) < 0
+                && reason.IndexOf("TLS", StringComparison.OrdinalIgnoreCase) < 0;
 
         private static TimeoutException ClickTimeout(int timeoutMs)
         {

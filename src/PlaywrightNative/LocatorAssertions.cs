@@ -178,6 +178,31 @@ namespace PlaywrightNative
 
                 if (timeoutMs != Timeout.Infinite && sw.ElapsedMilliseconds >= timeoutMs)
                 {
+                    // A poll that started before the element appeared can return
+                    // hidden and then cross the deadline. One more probe catches
+                    // an element that showed up between retries (expect-timeout).
+                    if (wantVisible && !_negate)
+                    {
+                        try
+                        {
+                            IReadOnlyList<IElementHandle> lastChance = await ElementHandlesOrEmptyAsync(200).ConfigureAwait(false);
+                            if (lastChance.Count == 1)
+                            {
+                                bool nowVisible = await lastChance[0].IsVisibleAsync().ConfigureAwait(false);
+                                if (nowVisible)
+                                {
+                                    return;
+                                }
+                            }
+                        }
+                        catch (PlaywrightException)
+                        {
+                        }
+                        catch (TimeoutException)
+                        {
+                        }
+                    }
+
                     ExpectSnapshotKind snapshotKind = resolved == 0 || !lastIsVisible
                         ? ExpectSnapshotKind.Page
                         : ExpectSnapshotKind.Property;

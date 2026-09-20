@@ -115,16 +115,9 @@ namespace PlaywrightNative.Helpers
   if (!el) return false;
   try {
     const loading = (el.getAttribute('loading') || '').toLowerCase();
-    if (loading === 'lazy') {
-      const doc = el.contentDocument;
-      return !!(doc && doc.documentElement && doc.readyState !== 'loading' && doc.URL && doc.URL !== 'about:blank');
-    }
+    if (loading === 'lazy') return false;
     const doc = el.contentDocument;
-    if (doc) {
-      if (!doc.documentElement) return false;
-      if (doc.readyState === 'loading') return false;
-      return true;
-    }
+    if (doc && doc.documentElement) return true;
     return !!el.contentWindow;
   } catch (e) {
     return true;
@@ -487,6 +480,11 @@ namespace PlaywrightNative.Helpers
             IFrame child = await ContentFrameOrNullAsync(iframeEl).ConfigureAwait(false);
             if (child == null || child.IsDetached)
             {
+                child = await ChildFrameForAriaRefAsync(frame, ariaRef).ConfigureAwait(false);
+            }
+
+            if (child == null || child.IsDetached)
+            {
                 return null;
             }
 
@@ -612,6 +610,11 @@ namespace PlaywrightNative.Helpers
             IFrame child = await ContentFrameOrNullAsync(iframeEl).ConfigureAwait(false);
             if (child == null || child.IsDetached)
             {
+                child = await ChildFrameForAriaRefAsync(frame, ariaRef).ConfigureAwait(false);
+            }
+
+            if (child == null || child.IsDetached)
+            {
                 return (null, null);
             }
 
@@ -727,6 +730,56 @@ namespace PlaywrightNative.Helpers
                     }
                 }
             }
+        }
+
+        private static async Task<IFrame> ChildFrameForAriaRefAsync(IFrame frame, string ariaRef)
+        {
+            if (frame == null || frame.IsDetached || string.IsNullOrEmpty(ariaRef))
+            {
+                return null;
+            }
+
+            int index;
+            try
+            {
+                index = await frame.EvaluateAsync<int>(
+                    @"(ref) => {
+  const want = String(ref || '');
+  const frames = document.querySelectorAll('iframe, frame');
+  for (let i = 0; i < frames.length; i++) {
+    const aria = frames[i]._ariaRef;
+    if (aria && aria.ref === want) return i;
+  }
+  return frames.length === 1 ? 0 : -1;
+}",
+                    ariaRef).ConfigureAwait(false);
+            }
+            catch (PlaywrightException)
+            {
+                return null;
+            }
+            catch (TimeoutException)
+            {
+                return null;
+            }
+
+            if (index < 0)
+            {
+                return null;
+            }
+
+            int seen = 0;
+            foreach (IFrame child in frame.ChildFrames)
+            {
+                if (seen == index)
+                {
+                    return child;
+                }
+
+                seen++;
+            }
+
+            return null;
         }
 
         private static async Task<IFrame> ContentFrameOrNullAsync(IElementHandle iframeEl)

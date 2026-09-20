@@ -92,6 +92,10 @@ namespace PlaywrightNative.Helpers
   const valueRoles = {listitem:1,paragraph:1,group:1,region:1,cell:1,row:1};
 
   const tagName = (e) => (e && e.tagName) ? String(e.tagName).toUpperCase() : '';
+  const isUnloadedLazyFrame = (e) => {
+    const t = tagName(e);
+    return (t === 'IFRAME' || t === 'FRAME') && String(e.getAttribute('loading') || '').toLowerCase() === 'lazy';
+  };
   const styleOf = (e, pseudo) => {
     try { return e.ownerDocument.defaultView.getComputedStyle(e, pseudo || null); } catch (err) { return null; }
   };
@@ -99,6 +103,9 @@ namespace PlaywrightNative.Helpers
     if (!e || e.nodeType !== 1) return true;
     const t = tagName(e);
     if (t === 'STYLE' || t === 'SCRIPT' || t === 'NOSCRIPT' || t === 'TEMPLATE' || t === 'HEAD' || t === 'META' || t === 'LINK') return true;
+    // checkVisibility / getComputedStyle on an unloaded lazy iframe wedges
+    // Darwin WebKit for the whole command timeout (empty iframe snapshot).
+    if (isUnloadedLazyFrame(e)) return false;
     if (t !== 'SLOT' && typeof e.checkVisibility === 'function') {
       try { if (!e.checkVisibility()) return true; } catch (err) {}
     } else if (t !== 'SLOT') {
@@ -325,7 +332,8 @@ namespace PlaywrightNative.Helpers
     const t = tagName(element);
     const active = !!(element.ownerDocument.activeElement === element && element.ownerDocument.hasFocus());
     if (t === 'IFRAME' || t === 'FRAME') {
-      const node = { role: 'iframe', name: '', children: [], props: {}, el: element, box: computeBox(element), receivesPointerEvents: true, active: active };
+      const lazy = isUnloadedLazyFrame(element);
+      const node = { role: 'iframe', name: '', children: [], props: {}, el: element, box: lazy ? { visible: true, inline: false } : computeBox(element), receivesPointerEvents: true, active: active };
       assignRef(node);
       return node;
     }
@@ -395,6 +403,7 @@ namespace PlaywrightNative.Helpers
   };
 
   const process = (ariaNode, element, owns, parentVisible) => {
+    if (isUnloadedLazyFrame(element)) return;
     const display = (styleOf(element) || {}).display || 'inline';
     const block = (display !== 'inline' || element.nodeName === 'BR') ? ' ' : '';
     if (block) ariaNode.children.push(block);

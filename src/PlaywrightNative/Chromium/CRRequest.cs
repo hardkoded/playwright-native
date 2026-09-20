@@ -97,6 +97,13 @@ namespace PlaywrightNative.Chromium
         internal string RequestId { get; }
 
         /// <summary>
+        /// Set once this request has been handed to a route (user or
+        /// auto-continue). A later <c>Fetch.requestPaused</c> with the same
+        /// network id is a redirect hop and must not be routed again.
+        /// </summary>
+        internal bool InterceptionDelivered { get; set; }
+
+        /// <summary>
         /// Raw CDP <c>requestId</c> without a session prefix. Used for
         /// <c>Network.getResponseBody</c> on OOPIF sessions.
         /// </summary>

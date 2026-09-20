@@ -147,6 +147,26 @@ namespace PlaywrightNative.Helpers
         }
 
         /// <summary>
+        /// Releases every click retain when a main-frame document navigation
+        /// fails terminally (TLS / certificate). A cancelled speculative
+        /// willCheck must not use this path — that leaves the real form GET
+        /// retained (ShouldWorkWithGotoFollowingClick).
+        /// </summary>
+        internal void OnTerminalDocumentNavigationFailed()
+        {
+            lock (_lock)
+            {
+                int pending = _pendingPolicyNavigations + _pendingDocumentNavigations;
+                _pendingPolicyNavigations = 0;
+                _pendingDocumentNavigations = 0;
+                for (int i = 0; i < pending; i++)
+                {
+                    ReleaseUnderLock();
+                }
+            }
+        }
+
+        /// <summary>
         /// Drops the constructor retain and waits until the protect count is 0.
         /// Reopens if a late <see cref="ExpectMainFrameNavigation"/> races the release
         /// (WebKit form GET after empty poll — ShouldWorkWithGotoFollowingClick).

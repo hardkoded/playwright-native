@@ -1540,6 +1540,21 @@ namespace PlaywrightNative.Chromium
 
             if (!string.IsNullOrEmpty(networkId) && TryGetRequestByNetworkId(session, networkId, out CRRequest request))
             {
+                // Redirects reuse networkId with a new Fetch id. The previous hop
+                // was already routed. Buffer this pause so the redirect
+                // requestWillBeSent can link RedirectedTo and auto-continue.
+                // Official: "We do not support intercepting redirects."
+                if (request.InterceptionDelivered)
+                {
+                    _handledFetchIds.TryRemove(interceptionId, out _);
+                    if (!_networkIdToFetchRequestPaused.ContainsKey(networkId))
+                    {
+                        _networkIdToFetchRequestPaused[networkId] = new BufferedFetch(session, p);
+                    }
+
+                    return;
+                }
+
                 ApplyPausedRequestDetails(request, p);
                 OnInterceptedRequest(interceptionId, request, session);
                 return;
@@ -1671,6 +1686,7 @@ namespace PlaywrightNative.Chromium
 
         private void OnInterceptedRequest(string interceptionId, CRRequest request, CRSession session)
         {
+            request.InterceptionDelivered = true;
             request.ApplyInterceptedHeaders(request.Headers, EffectiveExtraHeaders());
             ApplyChromiumRefererConcatenation(request);
             request.SetRawRequestHeaders(HeaderMap.Array(request.Headers), isFinal: true);
