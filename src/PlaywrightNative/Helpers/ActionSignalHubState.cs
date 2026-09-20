@@ -63,11 +63,14 @@ namespace PlaywrightNative.Helpers
         /// <summary>
         /// Tells every barrier that a main-frame navigation was requested.
         /// </summary>
-        internal void ExpectMainFrameNavigation()
+        /// <param name="fromDocumentRequest">
+        /// When <see langword="true"/>, the retain survives policy-check aborts.
+        /// </param>
+        internal void ExpectMainFrameNavigation(bool fromDocumentRequest = false)
         {
             foreach (ActionSignalBarrier barrier in Snapshot())
             {
-                barrier.ExpectMainFrameNavigation();
+                barrier.ExpectMainFrameNavigation(fromDocumentRequest);
             }
         }
 
@@ -79,6 +82,28 @@ namespace PlaywrightNative.Helpers
             foreach (ActionSignalBarrier barrier in Snapshot())
             {
                 barrier.OnMainFrameNavigated();
+            }
+        }
+
+        /// <summary>
+        /// Tells every barrier that one scheduled navigation was cancelled.
+        /// </summary>
+        internal void OnNavigationAborted()
+        {
+            foreach (ActionSignalBarrier barrier in Snapshot())
+            {
+                barrier.OnNavigationAborted();
+            }
+        }
+
+        /// <summary>
+        /// Tells every barrier that a document navigation request failed.
+        /// </summary>
+        internal void OnDocumentNavigationAborted()
+        {
+            foreach (ActionSignalBarrier barrier in Snapshot())
+            {
+                barrier.OnDocumentNavigationAborted();
             }
         }
 

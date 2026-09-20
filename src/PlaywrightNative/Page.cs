@@ -2087,12 +2087,7 @@ namespace PlaywrightNative
                 }
                 catch (PlaywrightException ex) when (
                     DestroyedContext.IsDestroyedContext(ex)
-
-                    // Mid-flight awaitPromise aborted by MarkDestroyed uses the exact
-                    // NavigationMessage — do not retry or a hanging evaluate restarts.
-                    // CDP "Execution context was destroyed, most likely…" (stale id) must
-                    // still retry once a fresh context exists (Windows headful about:blank).
-                    && !string.Equals(ex.Message, EvaluateSerialization.NavigationMessage, StringComparison.Ordinal)
+                    && !(ex.Message?.Contains("most likely because of a navigation", StringComparison.Ordinal) ?? false)
                     && attempt < maxAttempts - 1)
                 {
                     _crPage.InvalidateExecutionContext(context);

@@ -223,22 +223,25 @@ namespace PlaywrightNative.Helpers
 
                     return WaitPageErrorAsArgsAsync(page, matches, timeout);
                 case "Load":
-                    // WKPage raises Load off the transport thread; default deferred
-                    // predicate evaluation is safe. Autowait order uses LifecycleWaiter's
-                    // Delay(1) drain when load is already recorded.
+                    // Resolve inline so waitForEvent('load') posts its RCA continuation
+                    // before waitForLoadState's LifecycleChanged handler (autowait
+                    // route|load|clickload). Continuations stay RCA so protocol I/O
+                    // from the awaiter cannot block the CDP/WebKit read loop.
                     return WaitTypedAsync<T, IPage>(
                         page,
                         h => page.Load += h,
                         h => page.Load -= h,
                         matches,
-                        timeout);
+                        timeout,
+                        deferPredicateEvaluation: false);
                 case "DOMContentLoaded":
                     return WaitTypedAsync<T, IPage>(
                         page,
                         h => page.DOMContentLoaded += h,
                         h => page.DOMContentLoaded -= h,
                         matches,
-                        timeout);
+                        timeout,
+                        deferPredicateEvaluation: false);
                 case "Worker":
                     return WaitTypedAsync<T, IWorker>(
                         page,

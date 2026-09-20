@@ -55,6 +55,10 @@ namespace PlaywrightNative.Helpers
         /// Commits a same-document navigation when the live URL changed
         /// without a protocol event (WebKit Navigation API intercept).
         /// </param>
+        /// <param name="expectNavigation">
+        /// When <see langword="true"/>, WebKit uses a longer empty poll for
+        /// late form GETs (submit / link clicks).
+        /// </param>
         /// <returns>A task that completes when the action and wait finish.</returns>
         internal static async Task RunAsync(
             ActionSignalHubState hub,
@@ -63,7 +67,8 @@ namespace PlaywrightNative.Helpers
             float? timeout,
             Func<Task> action,
             IPage page = null,
-            Action<string> commitSameDocumentUrl = null)
+            Action<string> commitSameDocumentUrl = null,
+            bool expectNavigation = false)
         {
             if (action == null)
             {
@@ -124,7 +129,7 @@ namespace PlaywrightNative.Helpers
                 }
 
                 sawDocumentRequest = true;
-                hub.ExpectMainFrameNavigation();
+                hub.ExpectMainFrameNavigation(fromDocumentRequest: true);
             }
 
             void OnRequestFailed(object sender, IRequest request)
@@ -149,7 +154,7 @@ namespace PlaywrightNative.Helpers
                     return;
                 }
 
-                hub.OnMainFrameNavigated();
+                hub.OnDocumentNavigationAborted();
             }
 
             void OnDownload(object sender, IDownload download)
@@ -179,7 +184,8 @@ namespace PlaywrightNative.Helpers
                     timeout,
                     sw,
                     barrier,
-                    () => sawDocumentRequest);
+                    () => sawDocumentRequest,
+                    expectNavigation);
                 await WaitForOrTimeoutAsync(waitAfterTask, timeout, sw).ConfigureAwait(false);
             }
             finally
@@ -203,9 +209,34 @@ namespace PlaywrightNative.Helpers
             float? timeout,
             Stopwatch sw,
             ActionSignalBarrier barrier,
-            Func<bool> sawDocumentRequest)
+            Func<bool> sawDocumentRequest,
+            bool expectNavigation)
         {
             await action().ConfigureAwait(false);
+
+            // Snapshot URL before WebKit's async form/link navigation lands so
+            // expectNavigation can wait for a real commit, not just a barrier
+            // release from a cancelled willCheck (ShouldWorkWithGotoFollowingClick).
+            string urlAfterAction = page?.Url ?? string.Empty;
+
+            // WebKit processes form submits asynchronously after Input.dispatch*
+            // returns. A rAF pair lets willCheck / Network land before Page.enable.
+            // Navigable targets (expectNavigation) get a longer empty ceiling;
+            // ordinary buttons stay short so Darwin multi-click / scroll=none survive.
+            bool chromiumPage = string.Equals(page?.GetType().Name, "Page", StringComparison.Ordinal);
+            if (!chromiumPage && page != null)
+            {
+                try
+                {
+                    await page.EvaluateAsync<object>(
+                        "() => new Promise(f => requestAnimationFrame(() => requestAnimationFrame(f)))")
+                        .ConfigureAwait(false);
+                }
+                catch (PlaywrightException)
+                {
+                }
+            }
+
             if (epilogueAsync != null)
             {
                 try
@@ -217,39 +248,36 @@ namespace PlaywrightNative.Helpers
                 }
             }
 
-            // WebKit form navigations often request after the input command
-            // returns. Hold the constructor retain until that signal lands.
-            // A fixed 100×16ms empty poll (~1.6s) on every WebKit click makes
-            // 20-click / 30-click suites exceed 30s
-            // (ShouldBeAbleToClickAcrossBrowserContexts,
-            // ShouldClickAButtonThatIsOverlaidByAPermissionPopup).
-            // Break as soon as policy-check / document request retains a
-            // navigation; keep a modest empty ceiling for late form GETs
-            // (ShouldWorkWithGotoFollowingClick). Chromium acks promptly.
-            // Darwin force-clicks still break out when the remaining budget
-            // cannot cover another poll slice.
-            bool chromiumPage = string.Equals(page?.GetType().Name, "Page", StringComparison.Ordinal);
-
-            // Chromium: 16×16ms. WebKit: 40×16ms ≈ 640ms — long enough for late
-            // Network-only form GETs after Page.enable, short enough that
-            // HasPendingNavigations early-break keeps multi-click suites under 30s.
-            int pollLimit = chromiumPage ? 16 : 40;
+            // Chromium: 16×16ms. WebKit buttons: 8×16ms ≈ 128ms. WebKit
+            // submit/link/form: 64×16ms ≈ 1s for late Network-only form GETs
+            // under CI load (ShouldWorkWithGotoFollowingClick).
+            int pollLimit = chromiumPage ? 16 : (expectNavigation ? 64 : 8);
             int timeoutMs = TimeoutSettings.TimeoutMs(timeout);
+            bool sawNavigationSignal = false;
             for (int i = 0; i < pollLimit; i++)
             {
                 if (sawDocumentRequest != null && sawDocumentRequest())
                 {
+                    sawNavigationSignal = true;
                     break;
                 }
 
                 if (barrier != null && barrier.HasPendingNavigations)
                 {
-                    break;
+                    sawNavigationSignal = true;
+
+                    // Navigable WebKit clicks must not early-break on willCheck alone:
+                    // didCheck cancel releases that retain before the form GET is
+                    // retained, and WaitForAsync would then return too early.
+                    if (!expectNavigation)
+                    {
+                        break;
+                    }
                 }
 
                 // Darwin clicks spend most of a 2s timeout in hit-testing.
-                // A fixed 40×16ms poll after pressAsync then fails the click
-                // even when the pointer action already succeeded (force:true).
+                // A long empty poll after pressAsync then fails the click
+                // even when the pointer action already succeeded.
                 if (timeoutMs != Timeout.Infinite && sw.ElapsedMilliseconds + 16 >= timeoutMs)
                 {
                     break;
@@ -266,9 +294,106 @@ namespace PlaywrightNative.Helpers
                 sawDocumentRequest).ConfigureAwait(false);
             await barrier.WaitForAsync(timeout).ConfigureAwait(false);
 
+            // Navigable WebKit clicks: wait for a non-blank main-frame navigation
+            // to settle (FrameNavigated + load). Returning on a provisional URL /
+            // barrier idle alone races a following goto
+            // (ShouldWorkWithGotoFollowingClick under suite load).
+            if (!chromiumPage
+                && page != null
+                && (expectNavigation || sawNavigationSignal))
+            {
+                await WaitForWebKitNavigationSettleAsync(
+                    page,
+                    urlAfterAction,
+                    expectNavigation,
+                    sawDocumentRequest,
+                    barrier,
+                    timeout,
+                    sw).ConfigureAwait(false);
+            }
+
             // Official waits one extra task so public framenavigated
             // listeners run before click() resolves.
             await Task.Delay(1).ConfigureAwait(false);
+        }
+
+        private static async Task WaitForWebKitNavigationSettleAsync(
+            IPage page,
+            string urlAfterAction,
+            bool expectNavigation,
+            Func<bool> sawDocumentRequest,
+            ActionSignalBarrier barrier,
+            float? timeout,
+            Stopwatch sw)
+        {
+            int timeoutMs = TimeoutSettings.TimeoutMs(timeout);
+            int settleMs = expectNavigation ? 2000 : 640;
+            if (timeoutMs != Timeout.Infinite)
+            {
+                int remaining = timeoutMs - (int)sw.ElapsedMilliseconds;
+                if (remaining <= 0)
+                {
+                    return;
+                }
+
+                settleMs = Math.Min(settleMs, remaining);
+            }
+
+            Stopwatch settleWatch = Stopwatch.StartNew();
+            while (settleWatch.ElapsedMilliseconds < settleMs)
+            {
+                if (IsCommittedNavigationUrlChange(urlAfterAction, page.Url ?? string.Empty))
+                {
+                    if (barrier != null && barrier.HasPendingNavigations)
+                    {
+                        await barrier.WaitUntilIdleAsync(timeout).ConfigureAwait(false);
+                    }
+
+                    // Give the document commit a beat after the public URL flips
+                    // so a following goto is not interrupted by the form GET
+                    // (ShouldWorkWithGotoFollowingClick under suite load).
+                    await Task.Delay(50).ConfigureAwait(false);
+                    return;
+                }
+
+                if (sawDocumentRequest != null && sawDocumentRequest())
+                {
+                    await barrier.WaitUntilIdleAsync(timeout).ConfigureAwait(false);
+                    if (IsCommittedNavigationUrlChange(urlAfterAction, page.Url ?? string.Empty))
+                    {
+                        await Task.Delay(50).ConfigureAwait(false);
+                        return;
+                    }
+                }
+                else if (barrier != null && barrier.HasPendingNavigations)
+                {
+                    await barrier.WaitUntilIdleAsync(timeout).ConfigureAwait(false);
+                    continue;
+                }
+
+                await Task.Delay(16).ConfigureAwait(false);
+            }
+        }
+
+        /// <summary>
+        /// Returns whether <paramref name="currentUrl"/> reflects a real
+        /// cross-document navigation away from <paramref name="urlAfterAction"/>.
+        /// Ignores blank churn (<c>""</c> ↔ <c>about:blank</c>).
+        /// </summary>
+        private static bool IsCommittedNavigationUrlChange(string urlAfterAction, string currentUrl)
+        {
+            if (string.IsNullOrEmpty(currentUrl) || PopupOpenedHelper.IsBlankUrl(currentUrl))
+            {
+                return false;
+            }
+
+            string baseline = urlAfterAction ?? string.Empty;
+            if (PopupOpenedHelper.IsBlankUrl(baseline))
+            {
+                return true;
+            }
+
+            return !string.Equals(currentUrl, baseline, StringComparison.Ordinal);
         }
 
         private static async Task WaitForOrTimeoutAsync(Task task, float? timeout, Stopwatch sw)

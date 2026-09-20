@@ -739,15 +739,18 @@ namespace PlaywrightNative.WebKit
                 if (_requestsById.TryRemove(requestId, out WKRequest existingRequest))
                 {
                     _handledIntercepts.TryRemove(requestId, out _);
-                    string redirectUrl = GetString(redirectResponse, "url");
                     int redirectStatus = GetInt(redirectResponse, "status");
                     string redirectStatusText = GetString(redirectResponse, "statusText");
                     IDictionary<string, string> redirectHeaders = ParseHeaders(redirectResponse, caseInsensitive: true);
 
+                    // Upstream Response.url is always request.url(), not
+                    // redirectResponse.url (which WebKit sometimes sets to the
+                    // Location target). Using the payload URL mis-keys page
+                    // Response events (ShouldSupportRedirects).
                     WKResponse redirectResponseObj = new(
                         _session,
                         existingRequest,
-                        redirectUrl,
+                        existingRequest.Url,
                         redirectStatus,
                         redirectStatusText,
                         redirectHeaders,

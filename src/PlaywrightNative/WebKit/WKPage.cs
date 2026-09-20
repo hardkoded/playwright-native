@@ -5270,8 +5270,11 @@ namespace PlaywrightNative.WebKit
         /// <param name="waitAfter">When <see langword="false"/>, skip the wait.</param>
         /// <param name="timeout">Click timeout in milliseconds.</param>
         /// <param name="action">The pointer action.</param>
+        /// <param name="expectNavigation">
+        /// When <see langword="true"/>, lengthen the WebKit empty poll for form/link clicks.
+        /// </param>
         /// <returns>A task that completes when the action and wait finish.</returns>
-        internal Task RunWithSignalsAsync(bool waitAfter, float? timeout, Func<Task> action)
+        internal Task RunWithSignalsAsync(bool waitAfter, float? timeout, Func<Task> action, bool expectNavigation = false)
             => ActionSignals.RunAsync(
                 _frameManager.Signals,
                 () =>
@@ -5296,7 +5299,8 @@ namespace PlaywrightNative.WebKit
 
                     _frameManager.FrameCommittedSameDocumentNavigation(_frameManager.MainFrame.FrameId, url);
                     _mainFrameUrl = _frameManager.MainFrame.Url;
-                });
+                },
+                expectNavigation);
 
         private static void DisposeTargetSession(ref WKTargetSession session)
         {
@@ -7639,7 +7643,9 @@ namespace PlaywrightNative.WebKit
 
                 if (point == null || point.Length < 2)
                 {
-                    return;
+                    // OOPIF / empty rect: still synthesize a trusted click so
+                    // Darwin grants transient activation for RSA.
+                    point = new[] { 20.0, 20.0 };
                 }
 
                 double x = point[0];
@@ -9125,10 +9131,10 @@ namespace PlaywrightNative.WebKit
             }
 
             // Upstream frameAbortedNavigation → InternalNavigation releases the
-            // click SignalBarrier. Without this, Darwin willCheck without a
-            // document commit leaves locator.click waiting until timeout
-            // (page-click-scroll scroll=none / NotHitScrollBar).
-            _frameManager.Signals.OnMainFrameNavigated();
+            // click SignalBarrier. Release only one retain — clearing all would
+            // drop a concurrent real form navigation's retain when a speculative
+            // willCheck is cancelled (ShouldWorkWithGotoFollowingClick).
+            _frameManager.Signals.OnNavigationAborted();
         }
 
         private void OnFrameScheduledNavigation(JsonElement? parameters)

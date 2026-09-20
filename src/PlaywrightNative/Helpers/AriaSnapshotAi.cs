@@ -90,44 +90,43 @@ namespace PlaywrightNative.Helpers
 }";
 
         /// <summary>
-        /// True when the iframe is safe to resolve via protocol ContentFrame.
-        /// Same-origin documents must be past <c>loading</c>. Opaque frames
-        /// such as <c>data:</c> expose <c>contentWindow</c> with a null
-        /// <c>contentDocument</c> and must still return true. Cross-origin
-        /// frames throw on <c>contentDocument</c> and return true. Lazy-
-        /// unloaded frames without a window return false so Darwin WebKit
-        /// can skip hanging <c>DOM.describeNode</c>.
+        /// Parent-document capture-ready check by aria-ref (no iframe objectId).
         /// </summary>
-        private const string IframeCaptureReadyFunction = @"(el) => {
+        private const string IframeCaptureReadyByRefFunction = @"(ref) => {
+  const want = String(ref || '');
+  const visit = (el) => {
+    if (!el || el.nodeType !== 1) return null;
+    if (el._ariaRef && el._ariaRef.ref === want) return el;
+    const kids = el.children || [];
+    for (let i = 0; i < kids.length; i++) {
+      const hit = visit(kids[i]);
+      if (hit) return hit;
+    }
+    if (el.shadowRoot) {
+      const sk = el.shadowRoot.children || [];
+      for (let i = 0; i < sk.length; i++) {
+        const hit = visit(sk[i]);
+        if (hit) return hit;
+      }
+    }
+    return null;
+  };
+  const el = visit(document.documentElement);
+  if (!el) return false;
   try {
     const loading = (el.getAttribute('loading') || '').toLowerCase();
-    // Unloaded lazy iframes: never touch contentDocument / describeNode —
-    // Darwin WebKit never replies, and a stuck command blocks later evaluates
-    // on the same target until the session command timeout (NUnit 30s).
     if (loading === 'lazy') {
-      return false;
+      const doc = el.contentDocument;
+      return !!(doc && doc.documentElement && doc.readyState !== 'loading' && doc.URL && doc.URL !== 'about:blank');
     }
-    const src = el.getAttribute('src') || '';
     const doc = el.contentDocument;
     if (doc) {
-      if (!doc.documentElement) {
-        return false;
-      }
-      const url = doc.URL || '';
-      if (src && src !== 'about:blank' && (!url || url === 'about:blank')) {
-        return false;
-      }
-      if (doc.readyState === 'loading') {
-        return false;
-      }
+      if (!doc.documentElement) return false;
+      if (doc.readyState === 'loading') return false;
       return true;
     }
-    // Opaque / cross-origin frames (e.g. data:) expose contentWindow but
-    // null contentDocument without throwing. Still ask the protocol for the
-    // content frame so AI stitch can capture them.
     return !!el.contentWindow;
   } catch (e) {
-    // Cross-origin contentDocument access throws — still stitch via protocol.
     return true;
   }
 }";
@@ -474,19 +473,28 @@ namespace PlaywrightNative.Helpers
             // Darwin WebKit wedges the target for the full command timeout
             // (ReturnEmptySnapshotWhenIframeIsNotLoaded → NUnit 30s).
             if (await IsLazyIframeRefAsync(frame, ariaRef).ConfigureAwait(false)
-                || await FrameHasOnlyLazyIframesAsync(frame).ConfigureAwait(false))
+                || await FrameHasOnlyLazyIframesAsync(frame).ConfigureAwait(false)
+                || !await IsCaptureReadyIframeRefAsync(frame, ariaRef).ConfigureAwait(false))
             {
                 return null;
             }
 
-            IElementHandle iframeEl = await FindInFrameAsync(frame, ariaRef).ConfigureAwait(false);
+            IElementHandle iframeEl = await RaceOrDefaultAsync(
+                () => FindInFrameAsync(frame, ariaRef),
+                deadlineClock,
+                Math.Min(300, RemainingMs(deadlineClock, budgetMs)),
+                fallback: null).ConfigureAwait(false);
             IFrame child = await ContentFrameOrNullAsync(iframeEl).ConfigureAwait(false);
             if (child == null || child.IsDetached)
             {
                 return null;
             }
 
-            IElementHandle childRoot = await child.QuerySelectorAsync("body, frameset").ConfigureAwait(false);
+            IElementHandle childRoot = await RaceOrDefaultAsync(
+                () => child.QuerySelectorAsync("body, frameset"),
+                deadlineClock,
+                Math.Min(400, RemainingMs(deadlineClock, budgetMs)),
+                fallback: null).ConfigureAwait(false);
             if (childRoot == null)
             {
                 return null;
@@ -594,7 +602,8 @@ namespace PlaywrightNative.Helpers
             int startDepth)
         {
             if (await IsLazyIframeRefAsync(frame, ariaRef).ConfigureAwait(false)
-                || await FrameHasOnlyLazyIframesAsync(frame).ConfigureAwait(false))
+                || await FrameHasOnlyLazyIframesAsync(frame).ConfigureAwait(false)
+                || !await IsCaptureReadyIframeRefAsync(frame, ariaRef).ConfigureAwait(false))
             {
                 return (null, null);
             }
@@ -729,26 +738,16 @@ namespace PlaywrightNative.Helpers
 
             try
             {
-                // Prefer parent-document lazy checks (IsLazyIframeRefAsync /
-                // FrameHasOnlyLazyIframesAsync / iframe:not([loading=lazy]))
-                // before this path. Do not callFunctionOn a lazy iframe
-                // objectId — Darwin never replies (NUnit 30s wedge).
-                // Race a short budget: even reading loading via GetAttribute /
-                // Evaluate on the iframe objectId can hang Darwin forever.
-                bool ready = await RaceOrDefaultAsync(
-                    () => iframeEl.EvaluateAsync<bool>(IframeCaptureReadyFunction),
-                    Stopwatch.StartNew(),
-                    400,
-                    fallback: false).ConfigureAwait(false);
-                if (!ready)
-                {
-                    return null;
-                }
-
+                // Never Evaluate / callFunctionOn the iframe objectId. Darwin
+                // WebKit never replies for unloaded lazy iframes, and a stuck
+                // command wedges the target until the NUnit 30s kill even when
+                // RaceOrDefaultAsync returns a fallback (the in-flight evaluate
+                // is not cancelled). Callers must fail-closed via parent-document
+                // lazy checks before this path; only attempt ContentFrame.
                 return await RaceOrDefaultAsync(
                     () => iframeEl.ContentFrameAsync(),
                     Stopwatch.StartNew(),
-                    500,
+                    250,
                     fallback: null).ConfigureAwait(false);
             }
             catch (PlaywrightException)
@@ -816,6 +815,33 @@ namespace PlaywrightNative.Helpers
             catch (TimeoutException)
             {
                 return true;
+            }
+        }
+
+        /// <summary>
+        /// Parent-document check: iframe is safe for <c>ContentFrame</c> /
+        /// <c>DOM.describeNode</c>. Unloaded lazy frames return false without
+        /// touching the iframe objectId.
+        /// </summary>
+        private static async Task<bool> IsCaptureReadyIframeRefAsync(IFrame frame, string ariaRef)
+        {
+            if (frame == null || frame.IsDetached || string.IsNullOrEmpty(ariaRef))
+            {
+                return false;
+            }
+
+            try
+            {
+                return await frame.EvaluateAsync<bool>(IframeCaptureReadyByRefFunction, ariaRef)
+                    .ConfigureAwait(false);
+            }
+            catch (PlaywrightException)
+            {
+                return false;
+            }
+            catch (TimeoutException)
+            {
+                return false;
             }
         }
 

@@ -54,6 +54,7 @@ namespace PlaywrightNative
         private string _url;
         private string _name;
         private string _documentId = string.Empty;
+        private string _documentRequestId;
         private CRExecutionContext _executionContext;
         private Timer _networkIdleTimer;
         private bool _firedNetworkIdleSelf;
@@ -222,6 +223,9 @@ namespace PlaywrightNative
         /// starts with no cached lifecycle signals and no pending idle timer. All
         /// mutations happen under the inflight lock so a concurrent timer callback
         /// cannot emit a stale <c>networkidle</c> onto the new document.
+        /// Upstream keeps the current navigation request in flight across the clear
+        /// so networkidle cannot fire before document load finishes and page scripts
+        /// schedule follow-up fetches (page-network-idle repeated navigations).
         /// </summary>
         internal void ClearLifecycleEvents()
         {
@@ -231,8 +235,23 @@ namespace PlaywrightNative
                 _firedNetworkIdleSelf = false;
                 _networkIdleTimer?.Dispose();
                 _networkIdleTimer = null;
+
+                string keep = null;
+                if (!string.IsNullOrEmpty(_documentRequestId)
+                    && _inflightRequestIds.Contains(_documentRequestId))
+                {
+                    keep = _documentRequestId;
+                }
+
                 _inflightRequestIds.Clear();
-                StartNetworkIdleTimerLocked();
+                if (keep != null)
+                {
+                    _inflightRequestIds.Add(keep);
+                }
+                else
+                {
+                    StartNetworkIdleTimerLocked();
+                }
             }
 
             RootFrame().RecalculateNetworkIdle(allowRemove: this);
@@ -248,7 +267,11 @@ namespace PlaywrightNative
         /// <see langword="true"/> when the request must be ignored for idle
         /// (favicon, EventSource, WebSocket); otherwise <see langword="false"/>.
         /// </param>
-        internal void OnInflightRequestStarted(string requestId, bool excluded)
+        /// <param name="isNavigationRequest">
+        /// <see langword="true"/> when this is the document navigation request
+        /// that should be retained across <see cref="ClearLifecycleEvents"/>.
+        /// </param>
+        internal void OnInflightRequestStarted(string requestId, bool excluded, bool isNavigationRequest = false)
         {
             if (excluded || string.IsNullOrEmpty(requestId))
             {
@@ -258,6 +281,11 @@ namespace PlaywrightNative
             lock (_inflightLock)
             {
                 _inflightRequestIds.Add(requestId);
+                if (isNavigationRequest)
+                {
+                    _documentRequestId = requestId;
+                }
+
                 StopNetworkIdleTimerLocked();
             }
         }
@@ -277,6 +305,11 @@ namespace PlaywrightNative
 
             lock (_inflightLock)
             {
+                if (string.Equals(_documentRequestId, requestId, StringComparison.Ordinal))
+                {
+                    _documentRequestId = null;
+                }
+
                 if (!_inflightRequestIds.Remove(requestId))
                 {
                     return;
@@ -361,6 +394,7 @@ namespace PlaywrightNative
             lock (_inflightLock)
             {
                 _inflightRequestIds.Clear();
+                _documentRequestId = null;
                 _networkIdleTimer?.Dispose();
                 _networkIdleTimer = null;
                 _firedNetworkIdleSelf = false;

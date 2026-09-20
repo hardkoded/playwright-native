@@ -49,7 +49,7 @@ var ClockController = class {
   }
   install(time) {
     this._replayLogOnce();
-    this._innerSetTime(asWallTime(time));
+    this._innerInstall(asWallTime(time));
   }
   setSystemTime(time) {
     this._replayLogOnce();
@@ -79,6 +79,14 @@ var ClockController = class {
     this._now.isFixedTime = false;
     if (this._now.origin < 0)
       this._now.origin = this._now.time;
+  }
+  _innerInstall(time) {
+    // On a fresh install, reset the monotonic counter so that drift
+    // accumulated by the realTime ticker before the user called install()
+    // does not leak into performance.now().
+    if (this._now.origin < 0)
+      this._now.ticks = 0;
+    this._innerSetTime(time);
   }
   _innerSetFixedTime(time) {
     this._innerSetTime(time);
@@ -329,7 +337,7 @@ var ClockController = class {
         this._advanceNow(shiftTicks(this._now.ticks, time - lastLogTime));
       lastLogTime = time;
       if (type === "install") {
-        this._innerSetTime(asWallTime(param));
+        this._innerInstall(asWallTime(param));
       } else if (type === "fastForward" || type === "runFor") {
         this._advanceNow(shiftTicks(this._now.ticks, param));
       } else if (type === "pauseAt") {

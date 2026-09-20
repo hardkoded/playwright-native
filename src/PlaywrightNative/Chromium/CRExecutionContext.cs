@@ -618,17 +618,14 @@ namespace PlaywrightNative.Chromium
         /// <returns>The protocol response when the context survives.</returns>
         private async Task<T> RaceDestroyedAsync<T>(Task<T> task)
         {
-            // Already-dead context: retryable stale-id signal (Page.EvaluateSerializedAsync).
             if (_destroyed.Task.IsCompleted)
             {
-                throw new PlaywrightException("Execution context was destroyed");
+                throw new PlaywrightException(EvaluateSerialization.NavigationMessage);
             }
 
             Task completed = await Task.WhenAny(task, _destroyed.Task).ConfigureAwait(false);
             if (completed == _destroyed.Task)
             {
-                // Mid-flight awaitPromise aborted by navigation — exact message so
-                // EvaluateSerializedAsync does not restart a hanging evaluate.
                 throw new PlaywrightException(EvaluateSerialization.NavigationMessage);
             }
 
@@ -642,9 +639,7 @@ namespace PlaywrightNative.Chromium
                     || ex.Message.Contains("Inspected target navigated or closed", StringComparison.Ordinal)
                     || ex.Message.Contains("Execution context was destroyed", StringComparison.Ordinal)))
             {
-                // CDP rejected a stale context id — keep a retryable message (not the
-                // exact NavigationMessage reserved for MarkDestroyed mid-flight).
-                throw new PlaywrightException("Execution context was destroyed");
+                throw new PlaywrightException(EvaluateSerialization.NavigationMessage);
             }
         }
 

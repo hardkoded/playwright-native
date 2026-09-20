@@ -27,9 +27,17 @@ namespace PlaywrightNative.Helpers
     /// </summary>
     internal sealed class ActionSignalBarrier
     {
-        private readonly TaskCompletionSource<bool> _done = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly object _lock = new object();
+        private TaskCompletionSource<bool> _done = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private int _protectCount;
-        private int _pendingNavigations;
+
+        // Policy-check / scheduled navigations — cancelled by didCheck abort.
+        private int _pendingPolicyNavigations;
+
+        // Document Network requests — only cleared by commit. A late didCheck
+        // cancel must not drop the retain for a real form GET
+        // (ShouldWorkWithGotoFollowingClick under suite load).
+        private int _pendingDocumentNavigations;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="ActionSignalBarrier"/> class.
@@ -37,7 +45,10 @@ namespace PlaywrightNative.Helpers
         /// </summary>
         internal ActionSignalBarrier()
         {
-            Retain();
+            lock (_lock)
+            {
+                RetainUnderLock();
+            }
         }
 
         /// <summary>
@@ -45,16 +56,40 @@ namespace PlaywrightNative.Helpers
         /// Used to end the post-action poll as soon as policy-check / request
         /// signals arrive instead of burning the full WebKit empty-poll budget.
         /// </summary>
-        internal bool HasPendingNavigations => Volatile.Read(ref _pendingNavigations) > 0;
+        internal bool HasPendingNavigations
+        {
+            get
+            {
+                lock (_lock)
+                {
+                    return _pendingPolicyNavigations > 0 || _pendingDocumentNavigations > 0;
+                }
+            }
+        }
 
         /// <summary>
         /// Records that a main-frame navigation was requested and waits for
         /// the matching commit.
         /// </summary>
-        internal void ExpectMainFrameNavigation()
+        /// <param name="fromDocumentRequest">
+        /// When <see langword="true"/>, the retain is only released by commit
+        /// (not by <see cref="OnNavigationAborted"/>).
+        /// </param>
+        internal void ExpectMainFrameNavigation(bool fromDocumentRequest = false)
         {
-            Interlocked.Increment(ref _pendingNavigations);
-            Retain();
+            lock (_lock)
+            {
+                if (fromDocumentRequest)
+                {
+                    _pendingDocumentNavigations++;
+                }
+                else
+                {
+                    _pendingPolicyNavigations++;
+                }
+
+                RetainUnderLock();
+            }
         }
 
         /// <summary>
@@ -63,31 +98,129 @@ namespace PlaywrightNative.Helpers
         /// </summary>
         internal void OnMainFrameNavigated()
         {
-            int pending = Interlocked.Exchange(ref _pendingNavigations, 0);
-            for (int i = 0; i < pending; i++)
+            lock (_lock)
             {
-                Release();
+                int pending = _pendingPolicyNavigations + _pendingDocumentNavigations;
+                _pendingPolicyNavigations = 0;
+                _pendingDocumentNavigations = 0;
+                for (int i = 0; i < pending; i++)
+                {
+                    ReleaseUnderLock();
+                }
+            }
+        }
+
+        /// <summary>
+        /// Releases a single policy-check retain when a navigation is cancelled.
+        /// Must not clear document-request retains (a cancelled speculative
+        /// willCheck must not drop the retain for the real form GET).
+        /// </summary>
+        internal void OnNavigationAborted()
+        {
+            lock (_lock)
+            {
+                if (_pendingPolicyNavigations <= 0)
+                {
+                    return;
+                }
+
+                _pendingPolicyNavigations--;
+                ReleaseUnderLock();
+            }
+        }
+
+        /// <summary>
+        /// Releases a single document-request retain when that navigation fails.
+        /// </summary>
+        internal void OnDocumentNavigationAborted()
+        {
+            lock (_lock)
+            {
+                if (_pendingDocumentNavigations <= 0)
+                {
+                    return;
+                }
+
+                _pendingDocumentNavigations--;
+                ReleaseUnderLock();
             }
         }
 
         /// <summary>
         /// Drops the constructor retain and waits until the protect count is 0.
+        /// Reopens if a late <see cref="ExpectMainFrameNavigation"/> races the release
+        /// (WebKit form GET after empty poll — ShouldWorkWithGotoFollowingClick).
         /// </summary>
         /// <param name="timeout">Timeout in milliseconds. <c>0</c> waits forever.</param>
         /// <returns>A task that completes when no retains remain.</returns>
         internal async Task WaitForAsync(float? timeout)
         {
-            Release();
+            Task wait;
+            lock (_lock)
+            {
+                ReleaseUnderLock();
+                wait = _done.Task;
+            }
+
+            while (true)
+            {
+                await WaitUntilDoneAsync(wait, timeout).ConfigureAwait(false);
+
+                lock (_lock)
+                {
+                    if (_protectCount <= 0
+                        && _pendingPolicyNavigations <= 0
+                        && _pendingDocumentNavigations <= 0
+                        && _done.Task.IsCompleted)
+                    {
+                        return;
+                    }
+
+                    wait = _done.Task;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Waits until protect count is 0 without an additional Release.
+        /// Used after a late retain reopens the barrier.
+        /// </summary>
+        /// <param name="timeout">Timeout in milliseconds.</param>
+        /// <returns>A task that completes when idle.</returns>
+        internal async Task WaitUntilIdleAsync(float? timeout)
+        {
+            while (true)
+            {
+                Task wait;
+                lock (_lock)
+                {
+                    if (_protectCount <= 0
+                        && _pendingPolicyNavigations <= 0
+                        && _pendingDocumentNavigations <= 0
+                        && _done.Task.IsCompleted)
+                    {
+                        return;
+                    }
+
+                    wait = _done.Task;
+                }
+
+                await WaitUntilDoneAsync(wait, timeout).ConfigureAwait(false);
+            }
+        }
+
+        private static async Task WaitUntilDoneAsync(Task wait, float? timeout)
+        {
             int timeoutMs = TimeoutSettings.TimeoutMs(timeout);
             if (timeoutMs == Timeout.Infinite)
             {
-                await _done.Task.ConfigureAwait(false);
+                await wait.ConfigureAwait(false);
                 return;
             }
 
             Task delay = Task.Delay(timeoutMs);
-            Task completed = await Task.WhenAny(_done.Task, delay).ConfigureAwait(false);
-            if (completed != _done.Task)
+            Task completed = await Task.WhenAny(wait, delay).ConfigureAwait(false);
+            if (completed != wait)
             {
                 throw new TimeoutException(
                     "Timeout " +
@@ -95,14 +228,20 @@ namespace PlaywrightNative.Helpers
                     "ms exceeded.\nCall log:\n  - waiting for scheduled navigations to finish");
             }
 
-            await _done.Task.ConfigureAwait(false);
+            await wait.ConfigureAwait(false);
         }
 
-        private void Retain() => Interlocked.Increment(ref _protectCount);
-
-        private void Release()
+        private void RetainUnderLock()
         {
-            if (Interlocked.Decrement(ref _protectCount) == 0)
+            if (_protectCount++ == 0 && _done.Task.IsCompleted)
+            {
+                _done = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            }
+        }
+
+        private void ReleaseUnderLock()
+        {
+            if (--_protectCount == 0)
             {
                 _done.TrySetResult(true);
             }

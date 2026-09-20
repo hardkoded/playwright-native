@@ -83,6 +83,7 @@ namespace PlaywrightNative.Helpers
             // visibility probes; replaying this list on timeout keeps earlier
             // snapshots (e.g. #mydiv) even after a later node (#another) logs.
             List<(bool Visible, string Preview)> resolvedSnapshots = new List<(bool, string)>();
+            int consecutiveHidden = 0;
 
             while (true)
             {
@@ -110,7 +111,7 @@ namespace PlaywrightNative.Helpers
 
                 IElementHandle handle = null;
                 bool attached = false;
-                bool visible = false;
+                bool? knownVisible = null;
                 string eagerPreview = null;
                 bool destroyedMidProbe = false;
                 try
@@ -119,12 +120,10 @@ namespace PlaywrightNative.Helpers
                     attached = handle != null;
                     if (attached)
                     {
-                        // Preview first (fast), then visibility. Combined
-                        // preview+visibility probes raced Darwin removals: the
-                        // evaluate was still in flight when mydiv was removed, so
-                        // Remember never ran and timeout logs only showed
-                        // "another". Persist the preview before the visibility
-                        // round-trip so Hidden/Visible log tests keep mydiv.
+                        // Preview first, then visibility. For Visible waits, persist
+                        // the preview as hidden immediately so Darwin removals under
+                        // GiveItTimeToLog still leave #mydiv in the timeout log.
+                        // Hidden waits must not treat a failed/unknown probe as hidden.
                         if (wanted != WaitForSelectorState.Attached
                             && wanted != WaitForSelectorState.Detached)
                         {
@@ -136,10 +135,14 @@ namespace PlaywrightNative.Helpers
                                 if (!string.IsNullOrEmpty(previewValue))
                                 {
                                     eagerPreview = previewValue;
-                                    RememberResolvedSnapshot(
-                                        resolvedSnapshots,
-                                        visible: wanted == WaitForSelectorState.Hidden,
-                                        eagerPreview);
+                                    if (wanted == WaitForSelectorState.Visible)
+                                    {
+                                        RememberResolvedSnapshot(
+                                            resolvedSnapshots,
+                                            visible: false,
+                                            eagerPreview);
+                                        AppendResolvedLog(logs, visible: false, eagerPreview);
+                                    }
                                 }
                             }
                             catch (PlaywrightException)
@@ -148,10 +151,12 @@ namespace PlaywrightNative.Helpers
 
                             try
                             {
-                                visible = await handle.IsVisibleAsync().ConfigureAwait(false);
+                                bool isVisible = await handle.IsVisibleAsync().ConfigureAwait(false);
+                                knownVisible = isVisible;
                                 if (!string.IsNullOrEmpty(eagerPreview))
                                 {
-                                    RememberResolvedSnapshot(resolvedSnapshots, visible, eagerPreview);
+                                    RememberResolvedSnapshot(resolvedSnapshots, isVisible, eagerPreview);
+                                    AppendResolvedLog(logs, isVisible, eagerPreview);
                                 }
                             }
                             catch (PlaywrightException ex) when (
@@ -215,7 +220,7 @@ namespace PlaywrightNative.Helpers
                     // Hidden/Detached from this stale observation.
                     destroyedMidProbe = true;
                     attached = false;
-                    visible = false;
+                    knownVisible = null;
                 }
 
                 if (destroyedMidProbe)
@@ -245,12 +250,27 @@ namespace PlaywrightNative.Helpers
                     continue;
                 }
 
+                bool visible = knownVisible == true;
+
+                // Hidden must only succeed when detached, or when visibility is
+                // known false across consecutive polls. A single empty-box probe
+                // right after insert can look hidden on Darwin under load and
+                // wrongly resolve ShouldReportLogsWhileWaitingForHidden.
+                if (wanted == WaitForSelectorState.Hidden && attached && knownVisible == false)
+                {
+                    consecutiveHidden++;
+                }
+                else if (wanted == WaitForSelectorState.Hidden)
+                {
+                    consecutiveHidden = 0;
+                }
+
                 bool done = wanted switch
                 {
                     WaitForSelectorState.Attached => attached,
                     WaitForSelectorState.Detached => !attached,
-                    WaitForSelectorState.Hidden => !visible,
-                    _ => visible,
+                    WaitForSelectorState.Hidden => !attached || consecutiveHidden >= 2,
+                    _ => knownVisible == true,
                 };
 
                 if (!done && !string.IsNullOrEmpty(eagerPreview))

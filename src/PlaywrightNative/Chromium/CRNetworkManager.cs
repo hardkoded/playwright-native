@@ -1093,7 +1093,8 @@ namespace PlaywrightNative.Chromium
             RaiseRequestCreated(request);
             frame?.OnInflightRequestStarted(
                 requestId,
-                NetworkIdleRules.IsExcluded(request.Url, request.ResourceType));
+                NetworkIdleRules.IsExcluded(request.Url, request.ResourceType),
+                isNavigationRequest);
 
             // Fetch.requestPaused for worker fetches arrives on the page session
             // (Chrome 130+), while Network.requestWillBeSent arrives on the worker

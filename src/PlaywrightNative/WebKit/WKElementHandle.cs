@@ -122,6 +122,48 @@ namespace PlaywrightNative.WebKit
                         // force:true skips actionability and must not hang on
                         // willCheckNavigationPolicy / overlay signal waits
                         // (ShouldNotWorkWithForceTrue — interstitial covers #target).
+                        // WebKit form/link navigations often request after Input
+                        // returns; use the navigable empty-poll budget only for
+                        // targets that typically navigate (submit / link).
+                        bool expectNavigation = false;
+                        if (noWaitAfter != true && force != true)
+                        {
+                            try
+                            {
+                                expectNavigation = await EvaluateFunctionAsync<bool>(
+                                    @"el => {
+                                      const tag = (el.tagName || '').toUpperCase();
+                                      if (tag === 'A' || tag === 'AREA') {
+                                        const href = el.href || el.getAttribute('href') || '';
+                                        return !!href && !/^javascript:/i.test(String(href));
+                                      }
+                                      if (tag === 'INPUT') {
+                                        const type = String(el.type || el.getAttribute('type') || 'text').toLowerCase();
+                                        // Do not require el.form — under WebKit load the
+                                        // form owner can briefly look unset while the
+                                        // submit still navigates (GotoFollowingClick).
+                                        return type === 'submit' || type === 'image';
+                                      }
+                                      if (tag === 'BUTTON') {
+                                        const type = String(el.type || 'submit').toLowerCase();
+                                        return type === 'submit' && !!el.form;
+                                      }
+                                      const link = typeof el.closest === 'function'
+                                        ? el.closest('a[href], area[href]')
+                                        : null;
+                                      if (link) {
+                                        const href = link.href || link.getAttribute('href') || '';
+                                        return !!href && !/^javascript:/i.test(String(href));
+                                      }
+                                      return false;
+                                    }").ConfigureAwait(false);
+                            }
+                            catch (PlaywrightException)
+                            {
+                                expectNavigation = true;
+                            }
+                        }
+
                         await _page.RunWithSignalsAsync(
                             noWaitAfter != true && force != true,
                             timeout,
@@ -143,7 +185,8 @@ namespace PlaywrightNative.WebKit
 
                                         await _page.Mouse.UpAsync(button, i).ConfigureAwait(false);
                                     }
-                                })).ConfigureAwait(false);
+                                }),
+                            expectNavigation).ConfigureAwait(false);
                     }).ConfigureAwait(false);
             }).ConfigureAwait(false);
         }
