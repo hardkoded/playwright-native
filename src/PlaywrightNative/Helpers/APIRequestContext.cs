@@ -2865,8 +2865,11 @@ namespace PlaywrightNative.Helpers
 
         private void DisposeClientInBackground(HttpClient client)
         {
-            _ = Task.Run(() =>
+            _ = Task.Run(async () =>
             {
+                // Let AbortSocket RST reach the hang-route server before
+                // NetworkStream(ownsSocket:true) dispose races a FIN.
+                await Task.Delay(1).ConfigureAwait(false);
                 try
                 {
                     client.Dispose();

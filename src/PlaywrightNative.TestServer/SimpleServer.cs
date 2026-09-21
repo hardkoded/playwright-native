@@ -172,6 +172,20 @@ namespace PlaywrightNative.TestServer
                         }
                         if (TryGetRequestWait(context, out var requestWait))
                         {
+                            // Defer waiter until after the route handler's sync preamble
+                            // (RequestAborted.Register) so Abort/RST cannot race registration
+                            // (ShouldAbortRequestsWhenBrowserContextCloses on Windows).
+                            string deferredRouteKey = (context.Request.Path.Value ?? string.Empty)
+                                + (context.Request.QueryString.HasValue ? context.Request.QueryString.Value : string.Empty);
+                            if (_routes.TryGetValue(deferredRouteKey, out var deferredHandler)
+                                || _routes.TryGetValue(context.Request.Path.Value ?? string.Empty, out deferredHandler))
+                            {
+                                Task handlerTask = deferredHandler(context);
+                                requestWait(context);
+                                await handlerTask.ConfigureAwait(false);
+                                return;
+                            }
+
                             requestWait(context);
                         }
                         string routeKey = (context.Request.Path.Value ?? string.Empty)

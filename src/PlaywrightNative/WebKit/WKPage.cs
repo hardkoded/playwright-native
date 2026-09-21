@@ -4072,14 +4072,30 @@ namespace PlaywrightNative.WebKit
                 }
 
                 JsonElement? customArray = await evalContext.EvaluateHandleAsync(call.DocumentQueryAllExpression).ConfigureAwait(false);
-                return await UnwrapElementArrayAsync(evalContext, customArray).ConfigureAwait(false);
+                return await UnwrapElementArrayAsync(evalContext, customArray, !SkipPreview(selector))
+                    .ConfigureAwait(false);
             }
 
             string selectorLiteral = JsonSerializer.Serialize(selector);
             JsonElement? arrayRemote = await context
                 .EvaluateHandleAsync($"({ShadowPiercingQuery.QueryAllFunction})({selectorLiteral})")
                 .ConfigureAwait(false);
-            return await UnwrapElementArrayAsync(context, arrayRemote).ConfigureAwait(false);
+            return await UnwrapElementArrayAsync(context, arrayRemote, !SkipPreview(selector))
+                .ConfigureAwait(false);
+
+            static bool SkipPreview(string value)
+            {
+                if (string.IsNullOrEmpty(value))
+                {
+                    return false;
+                }
+
+                string trimmed = value.Trim();
+                return string.Equals(trimmed, "iframe", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(trimmed, "frame", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(trimmed, "iframe, frame", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(trimmed, "frame, iframe", StringComparison.OrdinalIgnoreCase);
+            }
         }
 
         /// <summary>
@@ -4088,10 +4104,12 @@ namespace PlaywrightNative.WebKit
         /// </summary>
         /// <param name="context">The execution context that owns the array.</param>
         /// <param name="arrayRemote">The remote array object, or <see langword="null"/>.</param>
+        /// <param name="initializePreview">When false, skip callFunctionOn preview (iframe/frame).</param>
         /// <returns>Handles for the array items that are DOM nodes.</returns>
         internal async Task<IReadOnlyList<IElementHandle>> UnwrapElementArrayAsync(
             WKExecutionContext context,
-            JsonElement? arrayRemote)
+            JsonElement? arrayRemote,
+            bool initializePreview = true)
         {
             string arrayId = RemoteObject.GetObjectId(arrayRemote);
             if (string.IsNullOrEmpty(arrayId))
@@ -4108,7 +4126,7 @@ namespace PlaywrightNative.WebKit
                     JsonElement? item = await context
                         .EvaluateHandleOnHandleAsync(arrayId, "(arr, i) => arr[i]", i)
                         .ConfigureAwait(false);
-                    if (WrapWKHandle(context, item) is IElementHandle element)
+                    if (WrapWKHandle(context, item, initializePreview) is IElementHandle element)
                     {
                         result.Add(element);
                     }
@@ -7683,11 +7701,19 @@ namespace PlaywrightNative.WebKit
                 // transient activation, and macOS requestStorageAccess then
                 // rejects before callFunctionOn's gesture flag is applied.
                 //
-                // Fast page-proxy click only — no parent hit-test evaluate (burns
-                // Darwin's short activation window) and no frame-session Input
-                // (WKRawMouse is page-proxy; EnableFrameSessions is off on 2276).
-                const double x = 20;
-                const double y = 20;
+                // Cheap single querySelector for iframe center — page-proxy Input
+                // only (no frame-session; EnableFrameSessions is off on 2276).
+                WKExecutionContext parentContext = await WaitForFrameContextAsync(parent).ConfigureAwait(false);
+                double[] point = await parentContext.EvaluateAsync<double[]>(
+                    @"() => {
+  const el = document.querySelector('iframe');
+  if (!el) return null;
+  const r = el.getBoundingClientRect();
+  if (!r.width || !r.height) return null;
+  return [r.left + (r.width / 2), r.top + (r.height / 2)];
+}").ConfigureAwait(false);
+                double x = point != null && point.Length >= 2 ? point[0] : 20;
+                double y = point != null && point.Length >= 2 ? point[1] : 20;
                 await _session.SendAsync(
                     "Input.dispatchMouseEvent",
                     new { type = "move", button = "none", x, y, modifiers = 0, buttons = 0 })

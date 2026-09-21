@@ -476,14 +476,9 @@ namespace PlaywrightNative.Helpers
                 Math.Min(300, RemainingMs(deadlineClock, budgetMs)),
                 fallback: null).ConfigureAwait(false);
 
-            // Prefer FrameElement identity — order-independent, works for srcdoc
-            // after remove/re-add. Bound the walk so a stuck FrameElement cannot
-            // eat the snapshot budget (ShouldSupportManyPropertiesOnIframes).
-            IFrame child = await RaceOrDefaultAsync(
-                () => ChildFrameByElementIdentityAsync(frame, iframeEl),
-                deadlineClock,
-                Math.Min(400, RemainingMs(deadlineClock, budgetMs)),
-                fallback: null).ConfigureAwait(false);
+            // Name/src / single-child first (no iframe objectId). Identity and
+            // ContentFrame are slower and can burn the 3s snapshot budget.
+            IFrame child = await ChildFrameForAriaRefAsync(frame, ariaRef).ConfigureAwait(false);
             if (child == null || child.IsDetached)
             {
                 child = await ContentFrameOrNullAsync(iframeEl).ConfigureAwait(false);
@@ -491,7 +486,11 @@ namespace PlaywrightNative.Helpers
 
             if (child == null || child.IsDetached)
             {
-                child = await ChildFrameForAriaRefAsync(frame, ariaRef).ConfigureAwait(false);
+                child = await RaceOrDefaultAsync(
+                    () => ChildFrameByElementIdentityAsync(frame, iframeEl),
+                    deadlineClock,
+                    Math.Min(250, RemainingMs(deadlineClock, budgetMs)),
+                    fallback: null).ConfigureAwait(false);
             }
 
             if (child == null || child.IsDetached)
@@ -618,7 +617,7 @@ namespace PlaywrightNative.Helpers
             }
 
             IElementHandle iframeEl = await FindInFrameAsync(frame, ariaRef).ConfigureAwait(false);
-            IFrame child = await ChildFrameByElementIdentityAsync(frame, iframeEl).ConfigureAwait(false);
+            IFrame child = await ChildFrameForAriaRefAsync(frame, ariaRef).ConfigureAwait(false);
             if (child == null || child.IsDetached)
             {
                 child = await ContentFrameOrNullAsync(iframeEl).ConfigureAwait(false);
@@ -626,7 +625,7 @@ namespace PlaywrightNative.Helpers
 
             if (child == null || child.IsDetached)
             {
-                child = await ChildFrameForAriaRefAsync(frame, ariaRef).ConfigureAwait(false);
+                child = await ChildFrameByElementIdentityAsync(frame, iframeEl).ConfigureAwait(false);
             }
 
             if (child == null || child.IsDetached)
@@ -813,8 +812,7 @@ namespace PlaywrightNative.Helpers
             }
 
             if (!string.IsNullOrEmpty(wantSrc)
-                && !wantSrc.StartsWith("about:", StringComparison.OrdinalIgnoreCase)
-                && !wantSrc.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+                && !wantSrc.StartsWith("about:", StringComparison.OrdinalIgnoreCase))
             {
                 foreach (IFrame child in frame.ChildFrames)
                 {
@@ -826,7 +824,9 @@ namespace PlaywrightNative.Helpers
                     string childUrl = child.Url ?? string.Empty;
                     if (childUrl.Contains(wantSrc, StringComparison.Ordinal)
                         || wantSrc.Contains(childUrl, StringComparison.Ordinal)
-                        || string.Equals(childUrl, wantSrc, StringComparison.Ordinal))
+                        || string.Equals(childUrl, wantSrc, StringComparison.Ordinal)
+                        || (wantSrc.StartsWith("data:", StringComparison.OrdinalIgnoreCase)
+                            && childUrl.StartsWith("data:", StringComparison.OrdinalIgnoreCase)))
                     {
                         return child;
                     }
