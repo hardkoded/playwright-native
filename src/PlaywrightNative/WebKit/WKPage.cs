@@ -3310,21 +3310,15 @@ namespace PlaywrightNative.WebKit
                         break;
                     }
 
-                    // Darwin WebKit often omits Page.loadEventFired for about:blank →
-                    // about:blank (persistent relaunch). Replay after Playwright.navigate
-                    // returns — same window as Chromium CRPage — so waitForEvent
-                    // subscribers are already armed. Do not seed on FrameNavigated
-                    // (SetContent / early Load ordering).
-                    if (!waitTcs.Task.IsCompleted
-                        && PopupOpenedHelper.IsBlankUrl(url)
-                        && PopupOpenedHelper.IsBlankUrl(_mainFrameUrl))
+                    // blank→blank often skips Page.frameNavigated / loadEventFired on
+                    // Darwin WebKit after persistent relaunch. Seed from readyState when
+                    // the navigate RPC finished but lifecycle waiters are still open.
+                    // Do not synchronously replay Load (that races evaluate / NewPage
+                    // bootstrap and destroys execution contexts under load).
+                    if (PopupOpenedHelper.IsBlankUrl(url))
                     {
-                        ReplayBlankNavigationLifecycleAfterNavigate();
-                    }
-
-                    if (waitTcs.Task.IsCompletedSuccessfully)
-                    {
-                        break;
+                        int seedGeneration = Interlocked.Increment(ref _lifecycleSeedGeneration);
+                        _ = SeedLifecycleFromReadyStateAfterDataNavigationAsync(seedGeneration);
                     }
 
                     Task lifecycle = await Task.WhenAny(waitTcs.Task, timeoutTask).ConfigureAwait(false);
@@ -8504,48 +8498,6 @@ namespace PlaywrightNative.WebKit
             }
         }
 
-        /// <summary>
-        /// Completes blank→blank <see cref="NavigateAsync"/> waiters when WebKit
-        /// omits <c>Page.loadEventFired</c> (persistent relaunch). Mirrors Chromium
-        /// <c>CRPage</c> replay after <c>Page.navigate</c> returns.
-        /// </summary>
-        private void ReplayBlankNavigationLifecycleAfterNavigate()
-        {
-            TaskCompletionSource<bool> commitTcs;
-            TaskCompletionSource<bool> domTcs;
-            TaskCompletionSource<bool> loadTcs;
-            lock (_navigationLock)
-            {
-                if (_pendingLoadTcs == null && _pendingDomContentTcs == null && _pendingCommitTcs == null)
-                {
-                    return;
-                }
-
-                if (!PopupOpenedHelper.IsBlankUrl(_pendingNavigationUrl)
-                    || !PopupOpenedHelper.IsBlankUrl(_mainFrameUrl))
-                {
-                    return;
-                }
-
-                _pendingNavigationCommitted = true;
-                commitTcs = _pendingCommitTcs;
-                domTcs = _pendingDomContentTcs;
-                loadTcs = _pendingLoadTcs;
-                _pendingCommitTcs = null;
-                _pendingDomContentTcs = null;
-                _pendingLoadTcs = null;
-            }
-
-            commitTcs?.TrySetResult(true);
-
-            // Raise public events before recording (same order as OnLoadEventFired /
-            // RecordLifecycleFromDocumentSeed) so waitForEvent beats waitForLoadState.
-            RecordLifecycleFromDocumentSeed("DOMContentLoaded");
-            RecordLifecycleFromDocumentSeed("load");
-            domTcs?.TrySetResult(true);
-            loadTcs?.TrySetResult(true);
-        }
-
         private void OnDispatchMessageFromTarget(JsonElement? parameters)
         {
             if (!parameters.HasValue
@@ -9330,12 +9282,20 @@ namespace PlaywrightNative.WebKit
 
                 // data: navigations skip Network.* events. On some Darwin WebKit
                 // builds Page.loadEventFired can also race past waiter arming; seed
-                // load/DOMContentLoaded from readyState after commit. Do not seed
-                // about:blank here — SetContent / blank→blank reuse that URL and a
-                // stale poll would resolve pending load waiters too early. blank→blank
-                // is handled after Playwright.navigate returns (NavigateAsync).
-                if (!string.IsNullOrEmpty(_mainFrameUrl)
-                    && _mainFrameUrl.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+                // load/DOMContentLoaded from readyState after commit. Same for
+                // about:blank→about:blank (persistent relaunch) when a NavigateAsync
+                // waiter is armed — SetContent does not arm _pendingLoadTcs.
+                bool seedBlankPending;
+                lock (_navigationLock)
+                {
+                    seedBlankPending = _pendingLoadTcs != null
+                        && PopupOpenedHelper.IsBlankUrl(_mainFrameUrl)
+                        && PopupOpenedHelper.IsBlankUrl(_pendingNavigationUrl);
+                }
+
+                if ((!string.IsNullOrEmpty(_mainFrameUrl)
+                        && _mainFrameUrl.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+                    || seedBlankPending)
                 {
                     int seedGeneration = Interlocked.Increment(ref _lifecycleSeedGeneration);
                     _ = SeedLifecycleFromReadyStateAfterDataNavigationAsync(seedGeneration);
@@ -9393,8 +9353,17 @@ namespace PlaywrightNative.WebKit
                     // navigations clear lifecycle and must not be completed by a
                     // leftover about:/data: seed task.
                     string url = _mainFrameUrl;
+                    bool allowBlankSeed;
+                    lock (_navigationLock)
+                    {
+                        allowBlankSeed = _pendingLoadTcs != null
+                            && PopupOpenedHelper.IsBlankUrl(url)
+                            && PopupOpenedHelper.IsBlankUrl(_pendingNavigationUrl);
+                    }
+
                     if (string.IsNullOrEmpty(url)
-                        || !url.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+                        || (!url.StartsWith("data:", StringComparison.OrdinalIgnoreCase)
+                            && !allowBlankSeed))
                     {
                         return;
                     }

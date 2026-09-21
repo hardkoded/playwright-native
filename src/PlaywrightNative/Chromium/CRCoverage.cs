@@ -31,6 +31,10 @@ namespace PlaywrightNative.Chromium
         private readonly CRSession _session;
         private readonly ConcurrentDictionary<string, ScriptRecord> _scripts = new(StringComparer.Ordinal);
         private readonly ConcurrentDictionary<string, StyleRecord> _styles = new(StringComparer.Ordinal);
+
+        // Retains stylesheets displaced when Chromium reuses styleSheetId across
+        // navigations while resetOnNavigation is false.
+        private readonly ConcurrentDictionary<string, StyleRecord> _retainedStyles = new(StringComparer.Ordinal);
         private bool _jsEnabled;
         private bool _cssEnabled;
         private bool _jsResetOnNavigation = true;
@@ -177,6 +181,7 @@ namespace PlaywrightNative.Chromium
         {
             _cssResetOnNavigation = resetOnNavigation;
             _styles.Clear();
+            _retainedStyles.Clear();
             await _session.SendAsync("DOM.enable").ConfigureAwait(false);
             await _session.SendAsync("CSS.enable").ConfigureAwait(false);
             await _session.SendAsync("Runtime.enable").ConfigureAwait(false);
@@ -245,14 +250,35 @@ namespace PlaywrightNative.Chromium
             }
 
             List<CSSCoverageEntry> entries = new();
+            HashSet<string> emittedUrls = new(StringComparer.Ordinal);
             foreach (KeyValuePair<string, StyleRecord> pair in _styles)
             {
                 used.TryGetValue(pair.Key, out List<UsageRange> nested);
+                string url = pair.Value.Url ?? string.Empty;
                 entries.Add(new CSSCoverageEntry
                 {
-                    Url = pair.Value.Url ?? string.Empty,
+                    Url = url,
                     Text = pair.Value.Text,
                     Ranges = ConvertToDisjointRanges(nested),
+                });
+                if (!string.IsNullOrEmpty(url))
+                {
+                    emittedUrls.Add(url);
+                }
+            }
+
+            foreach (KeyValuePair<string, StyleRecord> pair in _retainedStyles)
+            {
+                if (emittedUrls.Contains(pair.Key))
+                {
+                    continue;
+                }
+
+                entries.Add(new CSSCoverageEntry
+                {
+                    Url = pair.Key,
+                    Text = pair.Value.Text,
+                    Ranges = Array.Empty<CSSCoverageRange>(),
                 });
             }
 
@@ -324,6 +350,7 @@ namespace PlaywrightNative.Chromium
                 if (_cssEnabled && _cssResetOnNavigation)
                 {
                     _styles.Clear();
+                    _retainedStyles.Clear();
                 }
 
                 return;
@@ -386,12 +413,44 @@ namespace PlaywrightNative.Chromium
                 return;
             }
 
-            StyleRecord record = new()
+            // Await text like upstream so a navigated-away sheet is dropped instead
+            // of leaving a URL-only record that later navigations can overwrite by id.
+            _ = TrackStyleSheetAsync(styleSheetId, sourceUrl);
+        }
+
+        private async Task TrackStyleSheetAsync(string styleSheetId, string sourceUrl)
+        {
+            StyleRecord record = new StyleRecord
             {
                 Url = sourceUrl,
             };
+
+            if (!_cssResetOnNavigation
+                && _styles.TryGetValue(styleSheetId, out StyleRecord displaced)
+                && !string.IsNullOrEmpty(displaced.Url)
+                && !string.Equals(displaced.Url, sourceUrl, StringComparison.Ordinal))
+            {
+                _retainedStyles[displaced.Url] = displaced;
+            }
+
             _styles[styleSheetId] = record;
-            _ = FetchStyleSheetTextAsync(styleSheetId, record);
+
+            try
+            {
+                JsonElement? response = await _session.SendAsync(
+                    "CSS.getStyleSheetText",
+                    new { styleSheetId }).ConfigureAwait(false);
+                if (response.HasValue)
+                {
+                    record.Text = GetString(response.Value, "text");
+                }
+            }
+            catch (TargetClosedException)
+            {
+            }
+            catch (PlaywrightException)
+            {
+            }
         }
 
         private async Task ResumeDebuggerAsync()
@@ -418,26 +477,6 @@ namespace PlaywrightNative.Chromium
                 if (response.HasValue)
                 {
                     record.Source = GetString(response.Value, "scriptSource");
-                }
-            }
-            catch (TargetClosedException)
-            {
-            }
-            catch (PlaywrightException)
-            {
-            }
-        }
-
-        private async Task FetchStyleSheetTextAsync(string styleSheetId, StyleRecord record)
-        {
-            try
-            {
-                JsonElement? response = await _session.SendAsync(
-                    "CSS.getStyleSheetText",
-                    new { styleSheetId }).ConfigureAwait(false);
-                if (response.HasValue)
-                {
-                    record.Text = GetString(response.Value, "text");
                 }
             }
             catch (TargetClosedException)

@@ -353,7 +353,11 @@ namespace PlaywrightNative.Helpers
             Task finished = await Task.WhenAny(operation, timeoutTask).ConfigureAwait(false);
             if (finished == timeoutTask || sw.ElapsedMilliseconds >= timeoutMs)
             {
-                await Task.WhenAny(operation, Task.Delay(250)).ConfigureAwait(false);
+                // Drain the in-flight poll so page-side side effects (e.g. console.log
+                // from the predicate) finish before the timeout error surfaces. A short
+                // cap left orphans that fire after ThrowsAsync returns and fail
+                // "should avoid side effects after timeout".
+                await Task.WhenAny(operation, Task.Delay(5_000)).ConfigureAwait(false);
                 throw new TimeoutException($"{apiName}: Timeout {timeoutMs}ms exceeded.");
             }
         }
