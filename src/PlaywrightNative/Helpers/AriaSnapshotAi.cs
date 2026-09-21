@@ -478,10 +478,15 @@ namespace PlaywrightNative.Helpers
                 Math.Min(300, RemainingMs(deadlineClock, budgetMs)),
                 fallback: null).ConfigureAwait(false);
 
-            // ContentFrame first: ChildFrames order is creation order, not DOM
-            // order, so index matching swaps stitches after remove/re-add
-            // (ShouldPersistIframeReferences → button1/button2 swapped).
-            IFrame child = await ContentFrameOrNullAsync(iframeEl).ConfigureAwait(false);
+            // Prefer FrameElement identity — order-independent, works for srcdoc
+            // after remove/re-add (ShouldPersistIframeReferences). ContentFrame
+            // describeNode can burn the 3s budget on Windows Chromium framesets.
+            IFrame child = await ChildFrameByElementIdentityAsync(frame, iframeEl).ConfigureAwait(false);
+            if (child == null || child.IsDetached)
+            {
+                child = await ContentFrameOrNullAsync(iframeEl).ConfigureAwait(false);
+            }
+
             if (child == null || child.IsDetached)
             {
                 child = await ChildFrameForAriaRefAsync(frame, ariaRef).ConfigureAwait(false);
@@ -611,7 +616,12 @@ namespace PlaywrightNative.Helpers
             }
 
             IElementHandle iframeEl = await FindInFrameAsync(frame, ariaRef).ConfigureAwait(false);
-            IFrame child = await ContentFrameOrNullAsync(iframeEl).ConfigureAwait(false);
+            IFrame child = await ChildFrameByElementIdentityAsync(frame, iframeEl).ConfigureAwait(false);
+            if (child == null || child.IsDetached)
+            {
+                child = await ContentFrameOrNullAsync(iframeEl).ConfigureAwait(false);
+            }
+
             if (child == null || child.IsDetached)
             {
                 child = await ChildFrameForAriaRefAsync(frame, ariaRef).ConfigureAwait(false);
@@ -821,14 +831,7 @@ namespace PlaywrightNative.Helpers
                 }
             }
 
-            if (!int.TryParse(info[2], NumberStyles.Integer, CultureInfo.InvariantCulture, out int index)
-                || index < 0)
-            {
-                return null;
-            }
-
-            // Index fallback only when a single child remains (safe) or names/srcs
-            // were empty — still prefer exact count match.
+            // Index is only used for the single-child fallback below.
             IReadOnlyList<IFrame> children = frame.ChildFrames;
             if (children == null || children.Count == 0)
             {
@@ -840,9 +843,59 @@ namespace PlaywrightNative.Helpers
                 return children[0].IsDetached ? null : children[0];
             }
 
-            if (index < children.Count && children[index] != null && !children[index].IsDetached)
+            // Do not index-match when multiple children — creation order ≠ DOM order.
+            return null;
+        }
+
+        /// <summary>
+        /// Resolves the child frame whose <c>FrameElement</c> is the same DOM node
+        /// as <paramref name="iframeEl"/> (srcdoc-safe, order-independent).
+        /// </summary>
+        private static async Task<IFrame> ChildFrameByElementIdentityAsync(
+            IFrame parent,
+            IElementHandle iframeEl)
+        {
+            if (parent == null || parent.IsDetached || iframeEl == null)
             {
-                return children[index];
+                return null;
+            }
+
+            IReadOnlyList<IFrame> children = parent.ChildFrames;
+            if (children == null || children.Count == 0)
+            {
+                return null;
+            }
+
+            for (int i = 0; i < children.Count; i++)
+            {
+                IFrame child = children[i];
+                if (child == null || child.IsDetached)
+                {
+                    continue;
+                }
+
+                try
+                {
+                    IElementHandle host = await FrameElementHelper.ResolveAsync(child).ConfigureAwait(false);
+                    if (host == null)
+                    {
+                        continue;
+                    }
+
+                    bool same = await iframeEl
+                        .EvaluateAsync<bool>("(a, b) => a === b", host)
+                        .ConfigureAwait(false);
+                    if (same)
+                    {
+                        return child;
+                    }
+                }
+                catch (PlaywrightException)
+                {
+                }
+                catch (TimeoutException)
+                {
+                }
             }
 
             return null;
@@ -866,7 +919,7 @@ namespace PlaywrightNative.Helpers
                 return await RaceOrDefaultAsync(
                     () => iframeEl.ContentFrameAsync(),
                     Stopwatch.StartNew(),
-                    1000,
+                    250,
                     fallback: null).ConfigureAwait(false);
             }
             catch (PlaywrightException)

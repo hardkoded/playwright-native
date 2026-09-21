@@ -3775,7 +3775,7 @@ namespace PlaywrightNative.WebKit
                 JsonElement? remote = needsUserGesture
                     ? await context.EvaluateHandleWithUserGestureAsync(
                         expression,
-                        () => PulseTrustedGestureOnFrameAsync(frame, context.Session)).ConfigureAwait(false)
+                        () => PulseTrustedGestureOnFrameAsync(frame)).ConfigureAwait(false)
                     : await context.EvaluateHandleAsync(expression).ConfigureAwait(false);
                 if (needsUserGesture)
                 {
@@ -7644,15 +7644,13 @@ namespace PlaywrightNative.WebKit
         }
 
         /// <summary>
-        /// Dispatches a trusted mouse click centered on the iframe element that hosts
-        /// <paramref name="frame"/> so macOS WebKit grants transient activation for
-        /// <c>document.requestStorageAccess()</c>. Does not run in-page
-        /// <c>window.focus()</c> (that breaks <c>document.hasFocus()</c> checks).
+        /// Dispatches a trusted mouse click so macOS WebKit grants transient
+        /// activation for <c>document.requestStorageAccess()</c>. Does not run
+        /// in-page <c>window.focus()</c> (that breaks <c>document.hasFocus()</c>).
         /// </summary>
         /// <param name="frame">The child frame about to evaluate.</param>
-        /// <param name="frameSession">Session that owns the frame, or <see langword="null"/>.</param>
         /// <returns>A task that completes when the gesture has been sent or skipped.</returns>
-        private async Task PulseTrustedGestureOnFrameAsync(WKFrame frame, WKTargetSession frameSession = null)
+        private async Task PulseTrustedGestureOnFrameAsync(WKFrame frame)
         {
             WKFrame parent = frame?.ParentFrame;
             if (parent == null)
@@ -7665,48 +7663,12 @@ namespace PlaywrightNative.WebKit
                 // Do not call Emulation.setActiveAndFocused here. It clears
                 // transient activation, and macOS requestStorageAccess then
                 // rejects before callFunctionOn's gesture flag is applied.
-
-                // Parent-document click on the iframe element first — Darwin
-                // needs that hit to select which frame receives activation.
-                // OOPIF-only (8,8) frame-session pulses without this step left
-                // requestStorageAccess resolving false on macOS CI.
-                WKExecutionContext parentContext = await WaitForFrameContextAsync(parent).ConfigureAwait(false);
-                string frameNameJson = JsonSerializer.Serialize(frame.Name ?? string.Empty);
-                string frameUrlJson = JsonSerializer.Serialize(frame.Url ?? string.Empty);
-
-                // Prefer matching by name/src, then the first iframe.
-                double[] point = await parentContext.EvaluateAsync<double[]>(
-                    "(() => {" +
-                    "const frames = Array.from(document.querySelectorAll('iframe'));" +
-                    "let el = null;" +
-                    "const wantName = " + frameNameJson + ";" +
-                    "const wantUrl = " + frameUrlJson + ";" +
-                    "for (const f of frames) {" +
-                    "  try {" +
-                    "    if (wantName && f.name === wantName) { el = f; break; }" +
-                    "    if (wantUrl && (f.src === wantUrl || (f.contentWindow && f.contentWindow.location.href === wantUrl))) { el = f; break; }" +
-                    "  } catch (e) {}" +
-                    "}" +
-                    "if (!el && frames.length) el = frames[0];" +
-                    "if (!el) return null;" +
-                    "const r = el.getBoundingClientRect();" +
-                    "if (!r.width || !r.height) return null;" +
-                    "return [r.left + (r.width / 2), r.top + (r.height / 2)];" +
-                    "})()").ConfigureAwait(false);
-
-                if (point == null || point.Length < 2)
-                {
-                    // OOPIF / empty rect: still synthesize a trusted click so
-                    // Darwin grants transient activation for RSA.
-                    point = new[] { 20.0, 20.0 };
-                }
-
-                double x = point[0];
-                double y = point[1];
-
-                // Fast raw mouse down/up so Darwin retains transient activation
-                // into the subsequent callFunctionOn. Input.Mouse.ClickAsync can
-                // take long enough that activation expires before RSA runs.
+                //
+                // Fast page-proxy click only — no parent hit-test evaluate (burns
+                // Darwin's short activation window) and no frame-session Input
+                // (WKRawMouse is page-proxy; EnableFrameSessions is off on 2276).
+                const double x = 20;
+                const double y = 20;
                 await _session.SendAsync(
                     "Input.dispatchMouseEvent",
                     new { type = "move", button = "none", x, y, modifiers = 0, buttons = 0 })
@@ -7719,26 +7681,6 @@ namespace PlaywrightNative.WebKit
                     "Input.dispatchMouseEvent",
                     new { type = "up", button = "left", x, y, modifiers = 0, buttons = 0, clickCount = 1 })
                     .ConfigureAwait(false);
-
-                // Cross-process iframes on Darwin only honor a gesture delivered
-                // on the frame session. Page-proxy coordinates activate the
-                // iframe chrome; this last pulse must land immediately before
-                // callFunctionOn so transient activation survives into RSA.
-                if (frameSession != null && !ReferenceEquals(frameSession, _session))
-                {
-                    await frameSession.SendAsync(
-                        "Input.dispatchMouseEvent",
-                        new { type = "move", button = "none", x = 8, y = 8, modifiers = 0, buttons = 0 })
-                        .ConfigureAwait(false);
-                    await frameSession.SendAsync(
-                        "Input.dispatchMouseEvent",
-                        new { type = "down", button = "left", x = 8, y = 8, modifiers = 0, buttons = 1, clickCount = 1 })
-                        .ConfigureAwait(false);
-                    await frameSession.SendAsync(
-                        "Input.dispatchMouseEvent",
-                        new { type = "up", button = "left", x = 8, y = 8, modifiers = 0, buttons = 0, clickCount = 1 })
-                        .ConfigureAwait(false);
-                }
             }
             catch (PlaywrightException ex)
             {

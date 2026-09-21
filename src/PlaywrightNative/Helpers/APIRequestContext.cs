@@ -434,6 +434,10 @@ namespace PlaywrightNative.Helpers
             }
 
             _disposed = true;
+
+            // RST before abort-gate (same ordering as MarkOwnerClosed).
+            AbortActiveClients();
+
             _abortGate.TrySetResult(null);
             RejectInFlightAborts();
             if (!_lifetime.IsCancellationRequested)
@@ -445,8 +449,6 @@ namespace PlaywrightNative.Helpers
             {
                 _context.Close -= OnOwningContextClosed;
             }
-
-            AbortActiveClients();
 
             IAPIResponse[] copy;
             lock (_responses)
@@ -2624,6 +2626,13 @@ namespace PlaywrightNative.Helpers
             }
 
             _disposed = true;
+
+            // RST sockets before completing abort gates. Completing the gate first
+            // lets fetch finally → ReleaseClient → NetworkStream(ownsSocket) dispose
+            // race AbortSocket, so hang-route servers never see RequestAborted
+            // (Windows ShouldAbortRequestsWhenBrowserContextCloses).
+            AbortActiveClients();
+
             _abortGate.TrySetResult(null);
             RejectInFlightAborts();
             try
@@ -2638,10 +2647,6 @@ namespace PlaywrightNative.Helpers
             catch (ObjectDisposedException)
             {
             }
-
-            // Upstream agent.destroy(): tear down active sockets so hanging
-            // SendAsync fails promptly instead of racing CancellationToken.
-            AbortActiveClients();
         }
 
         private TaskCompletionSource<object> RegisterInFlightAbort()
@@ -2799,6 +2804,36 @@ namespace PlaywrightNative.Helpers
             }
 
             UnregisterClient(client);
+
+            // ownsSocket: false — dispose tracked sockets when no clients remain
+            // so successful fetches do not leak FDs until context close.
+            Socket[] idle = null;
+            lock (_clientGate)
+            {
+                if (_activeClients.Count == 0 && _activeSockets.Count > 0)
+                {
+                    idle = _activeSockets.ToArray();
+                    _activeSockets.Clear();
+                }
+            }
+
+            if (idle != null)
+            {
+                for (int i = 0; i < idle.Length; i++)
+                {
+                    try
+                    {
+                        idle[i].Dispose();
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                    }
+                    catch (SocketException)
+                    {
+                    }
+                }
+            }
+
             DisposeClientInBackground(client);
         }
 

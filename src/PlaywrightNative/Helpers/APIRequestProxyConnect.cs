@@ -74,7 +74,10 @@ namespace PlaywrightNative.Helpers
         {
             Socket socket = await OpenSocketAsync(host, port, cancellationToken).ConfigureAwait(false);
             onSocket?.Invoke(socket);
-            return new NetworkStream(socket, ownsSocket: true);
+
+            // Abort owns the socket (Close(0) RST). HttpClient must not FIN it
+            // via NetworkStream dispose before AbortActiveClients runs.
+            return new NetworkStream(socket, ownsSocket: false);
         }
 
         private static async ValueTask<Stream> ConnectAsync(
@@ -96,7 +99,7 @@ namespace PlaywrightNative.Helpers
             Socket proxySocket = await OpenSocketAsync(proxyUri.IdnHost, ResolvePort(proxyUri), cancellationToken)
                 .ConfigureAwait(false);
             onSocket?.Invoke(proxySocket);
-            Stream stream = new NetworkStream(proxySocket, ownsSocket: true);
+            Stream stream = new NetworkStream(proxySocket, ownsSocket: false);
             try
             {
                 if (IsSocks(proxyUri))

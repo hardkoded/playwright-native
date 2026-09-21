@@ -811,9 +811,16 @@ namespace PlaywrightNative.WebKit
         {
             try
             {
-                // WaitForSelector avoids constructing handles for loading=lazy
-                // iframes (AtomicSelectorRead). Other query paths still need the
-                // official PreviewNodeFunction preview (JSHandle@<body>, …).
+                // Unloaded loading=lazy iframes wedge Darwin on callFunctionOn
+                // (ReturnEmptySnapshot WaitForSelector → construct handle → preview).
+                // describeNode is time-bounded (500ms); skip preview for iframe/frame
+                // or when describeNode times out. Fail open for other elements so
+                // ShouldHaveANicePreview still gets JSHandle@<body>.
+                if (await IsIframeOrFrameElementAsync().ConfigureAwait(false))
+                {
+                    return;
+                }
+
                 string nodePreview = await EvaluateFunctionAsync<string>(RemoteObject.PreviewNodeFunction)
                     .ConfigureAwait(false);
                 if (!string.IsNullOrEmpty(nodePreview))
@@ -827,7 +834,60 @@ namespace PlaywrightNative.WebKit
             }
             catch (TimeoutException)
             {
-                // describeNode/callFunctionOn can time out on unloaded lazy iframes.
+            }
+        }
+
+        private async Task<bool> IsIframeOrFrameElementAsync()
+        {
+            try
+            {
+                JsonElement? described = await ExecutionContext.Session
+                    .SendAsync("DOM.describeNode", new { objectId = ObjectId })
+                    .ConfigureAwait(false);
+                if (described == null)
+                {
+                    return false;
+                }
+
+                JsonElement payload = described.Value;
+                if (payload.TryGetProperty("contentFrameId", out JsonElement contentEl)
+                    && contentEl.ValueKind == JsonValueKind.String
+                    && !string.IsNullOrEmpty(contentEl.GetString()))
+                {
+                    return true;
+                }
+
+                if (payload.TryGetProperty("node", out JsonElement node))
+                {
+                    string name = null;
+                    if (node.TryGetProperty("nodeName", out JsonElement nodeName)
+                        && nodeName.ValueKind == JsonValueKind.String)
+                    {
+                        name = nodeName.GetString();
+                    }
+                    else if (node.TryGetProperty("localName", out JsonElement localName)
+                        && localName.ValueKind == JsonValueKind.String)
+                    {
+                        name = localName.GetString();
+                    }
+
+                    if (string.Equals(name, "IFRAME", StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(name, "FRAME", StringComparison.OrdinalIgnoreCase))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            }
+            catch (TimeoutException)
+            {
+                // Unloaded lazy iframe — skip preview rather than wedge.
+                return true;
+            }
+            catch (PlaywrightException)
+            {
+                return false;
             }
         }
 
