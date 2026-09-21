@@ -4003,23 +4003,28 @@ namespace PlaywrightNative.WebKit
 
                 string selectorLiteral = JsonSerializer.Serialize(selector);
                 JsonElement? handleValue = await context
-                    .EvaluateHandleAsync(
-                        "(() => { const el = (" + ShadowPiercingQuery.QueryFunction + ")(" + selectorLiteral + ");" +
-                        " window.__pwQueryTag = (el && el.tagName) ? String(el.tagName) : ''; return el; })()")
+                    .EvaluateHandleAsync($"({ShadowPiercingQuery.QueryFunction})({selectorLiteral})")
                     .ConfigureAwait(false);
-                bool initializePreview = true;
-                try
-                {
-                    string tag = await context.EvaluateAsync<string>("() => window.__pwQueryTag || ''")
-                        .ConfigureAwait(false);
-                    initializePreview = !string.Equals(tag, "IFRAME", StringComparison.OrdinalIgnoreCase)
-                        && !string.Equals(tag, "FRAME", StringComparison.OrdinalIgnoreCase);
-                }
-                catch (PlaywrightException)
-                {
-                }
 
+                // Do not callFunctionOn iframe/frame objectIds (Darwin lazy-load wedge).
+                // Detect from the selector — a follow-up evaluate of window.__pwQueryTag
+                // returns a remote object on WebKit and breaks getByTestId.
+                bool initializePreview = !IsFrameElementSelector(selector);
                 return WrapWKHandle(context, handleValue, initializePreview) as IElementHandle;
+
+                static bool IsFrameElementSelector(string value)
+                {
+                    if (string.IsNullOrEmpty(value))
+                    {
+                        return false;
+                    }
+
+                    string trimmed = value.Trim();
+                    return string.Equals(trimmed, "iframe", StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(trimmed, "frame", StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(trimmed, "iframe, frame", StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(trimmed, "frame, iframe", StringComparison.OrdinalIgnoreCase);
+                }
             }
             catch (PlaywrightException ex) when (PlaywrightNative.Helpers.DestroyedContext.IsDestroyedContext(ex))
             {

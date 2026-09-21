@@ -116,9 +116,7 @@ namespace PlaywrightNative.Helpers
   try {
     const loading = (el.getAttribute('loading') || '').toLowerCase();
     if (loading === 'lazy') return false;
-    const doc = el.contentDocument;
-    if (doc && doc.documentElement) return true;
-    return !!el.contentWindow;
+    return true;
   } catch (e) {
     return true;
   }
@@ -479,9 +477,13 @@ namespace PlaywrightNative.Helpers
                 fallback: null).ConfigureAwait(false);
 
             // Prefer FrameElement identity — order-independent, works for srcdoc
-            // after remove/re-add (ShouldPersistIframeReferences). ContentFrame
-            // describeNode can burn the 3s budget on Windows Chromium framesets.
-            IFrame child = await ChildFrameByElementIdentityAsync(frame, iframeEl).ConfigureAwait(false);
+            // after remove/re-add. Bound the walk so a stuck FrameElement cannot
+            // eat the snapshot budget (ShouldSupportManyPropertiesOnIframes).
+            IFrame child = await RaceOrDefaultAsync(
+                () => ChildFrameByElementIdentityAsync(frame, iframeEl),
+                deadlineClock,
+                Math.Min(400, RemainingMs(deadlineClock, budgetMs)),
+                fallback: null).ConfigureAwait(false);
             if (child == null || child.IsDetached)
             {
                 child = await ContentFrameOrNullAsync(iframeEl).ConfigureAwait(false);
