@@ -2420,15 +2420,18 @@ namespace PlaywrightNative.WebKit
 
         private void ReportAsNew(WKPage page)
         {
-            if (page == null || !page.TryMarkReportedAsNew())
+            if (page == null)
             {
                 return;
             }
 
-            if (!_creatingStorageStatePage)
+            page.ReportAsNewOnce(() =>
             {
-                Page?.Invoke(this, page);
-            }
+                if (!_creatingStorageStatePage)
+                {
+                    Page?.Invoke(this, page);
+                }
+            });
         }
 
 #pragma warning disable SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648

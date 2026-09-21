@@ -472,6 +472,15 @@ namespace PlaywrightNative.Helpers
             // avoids IsCaptureReady false-negatives when refs live in another world
             // (ShouldStitchAllFrameSnapshots on Windows).
             IFrame child = await ChildFrameForAriaRefAsync(frame, ariaRef).ConfigureAwait(false);
+            if (child != null
+                && !child.IsDetached
+                && PopupOpenedHelper.IsBlankUrl(child.Url))
+            {
+                // Darwin data: iframes often keep ChildFrames.Url at about:blank
+                // after load — fall through to ContentFrame (same as FocusAsync).
+                child = null;
+            }
+
             if (child == null || child.IsDetached)
             {
                 if (!await IsCaptureReadyIframeRefAsync(frame, ariaRef).ConfigureAwait(false))
@@ -618,6 +627,13 @@ namespace PlaywrightNative.Helpers
             }
 
             IFrame child = await ChildFrameForAriaRefAsync(frame, ariaRef).ConfigureAwait(false);
+            if (child != null
+                && !child.IsDetached
+                && PopupOpenedHelper.IsBlankUrl(child.Url))
+            {
+                child = null;
+            }
+
             if (child == null || child.IsDetached)
             {
                 if (!await IsCaptureReadyIframeRefAsync(frame, ariaRef).ConfigureAwait(false))
@@ -888,6 +904,16 @@ namespace PlaywrightNative.Helpers
 
             if (childCount == 1)
             {
+                // Darwin WebKit often leaves ChildFrames.Url at about:blank for data:
+                // documents after load. Returning it yields an empty body capture and
+                // skips ContentFrame (FocusAsync / FrameLocator path), so AI snapshots
+                // show `iframe [active]` with no nested children.
+                if (wantSrc.StartsWith("data:", StringComparison.OrdinalIgnoreCase)
+                    && PopupOpenedHelper.IsBlankUrl(only.Url))
+                {
+                    return null;
+                }
+
                 return only;
             }
 

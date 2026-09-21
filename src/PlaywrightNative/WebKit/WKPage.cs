@@ -63,6 +63,8 @@ namespace PlaywrightNative.WebKit
         private readonly TaskCompletionSource<bool> _initializedTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly TaskCompletionSource<bool> _firstNonInitialNavigationTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly TaskCompletionSource<bool> _reportAsNewNavigationTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly object _reportAsNewLock = new object();
+        private readonly TaskCompletionSource<bool> _reportedAsNewTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly object _navigationLock = new();
         private readonly HashSet<string> _lifecycleEvents = new();
         private readonly List<string> _initScripts = new() { WebKitFormDataScript.Source };
@@ -474,6 +476,12 @@ namespace PlaywrightNative.WebKit
         /// Official first non-initial URL from getResourceTree / frameNavigated.
         /// </summary>
         internal Task ReportAsNewNavigationTask => _reportAsNewNavigationTcs.Task;
+
+        /// <summary>
+        /// Completes when the context <c>page</c> event has been raised for this page
+        /// (or the page was already marked reported).
+        /// </summary>
+        internal Task ReportedAsNewTask => _reportedAsNewTcs.Task;
 
         /// <summary>
         /// Gets a value indicating whether <see cref="Popup"/> has subscribers
@@ -2029,7 +2037,37 @@ namespace PlaywrightNative.WebKit
         /// </summary>
         /// <returns><see langword="true"/> when this is the first report.</returns>
         internal bool TryMarkReportedAsNew()
-            => Interlocked.Exchange(ref _reportedAsNew, 1) == 0;
+        {
+            if (Interlocked.Exchange(ref _reportedAsNew, 1) != 0)
+            {
+                return false;
+            }
+
+            _reportedAsNewTcs.TrySetResult(true);
+            return true;
+        }
+
+        /// <summary>
+        /// Emits the context <c>page</c> event at most once. Mark and emit are atomic
+        /// so a concurrent binding cannot run between mark and <c>Page.Invoke</c>
+        /// (<c>page|binding</c> vs <c>binding|page</c>).
+        /// </summary>
+        /// <param name="emit">Raises <c>BrowserContext.Page</c> for this page.</param>
+        internal void ReportAsNewOnce(Action emit)
+        {
+            lock (_reportAsNewLock)
+            {
+                if (_reportedAsNew != 0)
+                {
+                    _reportedAsNewTcs.TrySetResult(true);
+                    return;
+                }
+
+                _reportedAsNew = 1;
+                emit?.Invoke();
+                _reportedAsNewTcs.TrySetResult(true);
+            }
+        }
 
         /// <summary>
         /// Official <c>reportAsNew</c> for popups: wait until init finishes, and if
@@ -3272,13 +3310,21 @@ namespace PlaywrightNative.WebKit
                         break;
                     }
 
-                    // blank→blank often skips Page.frameNavigated / loadEventFired on
-                    // Darwin WebKit after persistent relaunch. Seed from readyState when
-                    // the navigate RPC finished but lifecycle waiters are still open.
-                    if (PopupOpenedHelper.IsBlankUrl(url))
+                    // Darwin WebKit often omits Page.loadEventFired for about:blank →
+                    // about:blank (persistent relaunch). Replay after Playwright.navigate
+                    // returns — same window as Chromium CRPage — so waitForEvent
+                    // subscribers are already armed. Do not seed on FrameNavigated
+                    // (SetContent / early Load ordering).
+                    if (!waitTcs.Task.IsCompleted
+                        && PopupOpenedHelper.IsBlankUrl(url)
+                        && PopupOpenedHelper.IsBlankUrl(_mainFrameUrl))
                     {
-                        int seedGeneration = Interlocked.Increment(ref _lifecycleSeedGeneration);
-                        _ = SeedLifecycleFromReadyStateAfterDataNavigationAsync(seedGeneration);
+                        ReplayBlankNavigationLifecycleAfterNavigate();
+                    }
+
+                    if (waitTcs.Task.IsCompletedSuccessfully)
+                    {
+                        break;
                     }
 
                     Task lifecycle = await Task.WhenAny(waitTcs.Task, timeoutTask).ConfigureAwait(false);
@@ -7795,7 +7841,7 @@ namespace PlaywrightNative.WebKit
 
             return await context.EvaluateHandleWithUserGestureAsync(
                     expression,
-                    () => PulseTrustedGestureOnFrameAsync(frame))
+                    () => PulseTrustedGestureOnFrameAsync(frame, context.Session))
                 .ConfigureAwait(false);
         }
 
@@ -7805,8 +7851,12 @@ namespace PlaywrightNative.WebKit
         /// in-page <c>window.focus()</c> (that breaks <c>document.hasFocus()</c>).
         /// </summary>
         /// <param name="frame">The child frame about to evaluate.</param>
+        /// <param name="frameSession">
+        /// Child-frame target session for a second Input pulse (macOS WebKit 2251
+        /// OOPIF activation). May be <see langword="null"/>.
+        /// </param>
         /// <returns>A task that completes when the gesture has been sent or skipped.</returns>
-        private async Task PulseTrustedGestureOnFrameAsync(WKFrame frame)
+        private async Task PulseTrustedGestureOnFrameAsync(WKFrame frame, WKTargetSession frameSession = null)
         {
             WKFrame parent = frame?.ParentFrame;
             if (parent == null)
@@ -7889,7 +7939,9 @@ namespace PlaywrightNative.WebKit
 
             try
             {
-                // Page-proxy Input only (no frame-session; EnableFrameSessions is off on 2276).
+                // Page-proxy click on the iframe chrome, then target-session pulse
+                // inside the OOPIF (macOS WebKit 2251). Page-proxy alone does not
+                // arm child-frame transient activation for requestStorageAccess.
                 await _session.SendAsync(
                     "Input.dispatchMouseEvent",
                     new { type = "move", button = "none", x, y, modifiers = 0, buttons = 0 })
@@ -7902,6 +7954,22 @@ namespace PlaywrightNative.WebKit
                     "Input.dispatchMouseEvent",
                     new { type = "up", button = "left", x, y, modifiers = 0, buttons = 0, clickCount = 1 })
                     .ConfigureAwait(false);
+
+                if (frameSession != null)
+                {
+                    await frameSession.SendAsync(
+                        "Input.dispatchMouseEvent",
+                        new { type = "move", button = "none", x = 8.0, y = 8.0, modifiers = 0, buttons = 0 })
+                        .ConfigureAwait(false);
+                    await frameSession.SendAsync(
+                        "Input.dispatchMouseEvent",
+                        new { type = "down", button = "left", x = 8.0, y = 8.0, modifiers = 0, buttons = 1, clickCount = 1 })
+                        .ConfigureAwait(false);
+                    await frameSession.SendAsync(
+                        "Input.dispatchMouseEvent",
+                        new { type = "up", button = "left", x = 8.0, y = 8.0, modifiers = 0, buttons = 0, clickCount = 1 })
+                        .ConfigureAwait(false);
+                }
             }
             catch (PlaywrightException ex)
             {
@@ -8434,6 +8502,48 @@ namespace PlaywrightNative.WebKit
                     _pendingLoadTcs?.TrySetResult(true);
                 }
             }
+        }
+
+        /// <summary>
+        /// Completes blank→blank <see cref="NavigateAsync"/> waiters when WebKit
+        /// omits <c>Page.loadEventFired</c> (persistent relaunch). Mirrors Chromium
+        /// <c>CRPage</c> replay after <c>Page.navigate</c> returns.
+        /// </summary>
+        private void ReplayBlankNavigationLifecycleAfterNavigate()
+        {
+            TaskCompletionSource<bool> commitTcs;
+            TaskCompletionSource<bool> domTcs;
+            TaskCompletionSource<bool> loadTcs;
+            lock (_navigationLock)
+            {
+                if (_pendingLoadTcs == null && _pendingDomContentTcs == null && _pendingCommitTcs == null)
+                {
+                    return;
+                }
+
+                if (!PopupOpenedHelper.IsBlankUrl(_pendingNavigationUrl)
+                    || !PopupOpenedHelper.IsBlankUrl(_mainFrameUrl))
+                {
+                    return;
+                }
+
+                _pendingNavigationCommitted = true;
+                commitTcs = _pendingCommitTcs;
+                domTcs = _pendingDomContentTcs;
+                loadTcs = _pendingLoadTcs;
+                _pendingCommitTcs = null;
+                _pendingDomContentTcs = null;
+                _pendingLoadTcs = null;
+            }
+
+            commitTcs?.TrySetResult(true);
+
+            // Raise public events before recording (same order as OnLoadEventFired /
+            // RecordLifecycleFromDocumentSeed) so waitForEvent beats waitForLoadState.
+            RecordLifecycleFromDocumentSeed("DOMContentLoaded");
+            RecordLifecycleFromDocumentSeed("load");
+            domTcs?.TrySetResult(true);
+            loadTcs?.TrySetResult(true);
         }
 
         private void OnDispatchMessageFromTarget(JsonElement? parameters)
@@ -9220,20 +9330,12 @@ namespace PlaywrightNative.WebKit
 
                 // data: navigations skip Network.* events. On some Darwin WebKit
                 // builds Page.loadEventFired can also race past waiter arming; seed
-                // load/DOMContentLoaded from readyState after commit. Same for
-                // about:blank→about:blank (persistent relaunch) when a NavigateAsync
-                // waiter is armed — SetContent does not arm _pendingLoadTcs.
-                bool seedBlankPending;
-                lock (_navigationLock)
-                {
-                    seedBlankPending = _pendingLoadTcs != null
-                        && PopupOpenedHelper.IsBlankUrl(_mainFrameUrl)
-                        && PopupOpenedHelper.IsBlankUrl(_pendingNavigationUrl);
-                }
-
-                if ((!string.IsNullOrEmpty(_mainFrameUrl)
-                        && _mainFrameUrl.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
-                    || seedBlankPending)
+                // load/DOMContentLoaded from readyState after commit. Do not seed
+                // about:blank here — SetContent / blank→blank reuse that URL and a
+                // stale poll would resolve pending load waiters too early. blank→blank
+                // is handled after Playwright.navigate returns (NavigateAsync).
+                if (!string.IsNullOrEmpty(_mainFrameUrl)
+                    && _mainFrameUrl.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
                 {
                     int seedGeneration = Interlocked.Increment(ref _lifecycleSeedGeneration);
                     _ = SeedLifecycleFromReadyStateAfterDataNavigationAsync(seedGeneration);
@@ -9291,17 +9393,8 @@ namespace PlaywrightNative.WebKit
                     // navigations clear lifecycle and must not be completed by a
                     // leftover about:/data: seed task.
                     string url = _mainFrameUrl;
-                    bool allowBlankSeed;
-                    lock (_navigationLock)
-                    {
-                        allowBlankSeed = _pendingLoadTcs != null
-                            && PopupOpenedHelper.IsBlankUrl(url)
-                            && PopupOpenedHelper.IsBlankUrl(_pendingNavigationUrl);
-                    }
-
                     if (string.IsNullOrEmpty(url)
-                        || (!url.StartsWith("data:", StringComparison.OrdinalIgnoreCase)
-                            && !allowBlankSeed))
+                        || !url.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
                     {
                         return;
                     }
@@ -9748,8 +9841,8 @@ namespace PlaywrightNative.WebKit
         {
             // Do not require <see cref="_opener"/> — Darwin WebKit sometimes omits
             // protocol openerId for window.open, and inferred siblings leave Opener
-            // null. TryMarkReportedAsNew makes this a no-op for already-reported
-            // pages (including context.newPage).
+            // null. ReportAsNewOnce makes this a no-op for already-reported pages
+            // (including context.newPage) after Page has already been raised.
             WKBrowserContext context = _context ?? OwnerContext as WKBrowserContext;
             context?.ReportPopupAsNew(this);
         }
