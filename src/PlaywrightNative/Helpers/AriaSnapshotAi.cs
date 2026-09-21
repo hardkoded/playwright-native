@@ -112,7 +112,7 @@ namespace PlaywrightNative.Helpers
     return null;
   };
   const el = visit(document.documentElement);
-  if (!el) return false;
+  if (!el) return true;
   try {
     const loading = (el.getAttribute('loading') || '').toLowerCase();
     if (loading === 'lazy') return false;
@@ -463,34 +463,37 @@ namespace PlaywrightNative.Helpers
             // Never resolve ContentFrame / evaluate on lazy iframe objectIds —
             // Darwin WebKit wedges the target for the full command timeout
             // (ReturnEmptySnapshotWhenIframeIsNotLoaded → NUnit 30s).
-            if (await IsLazyIframeRefAsync(frame, ariaRef).ConfigureAwait(false)
-                || await FrameHasOnlyLazyIframesAsync(frame).ConfigureAwait(false)
-                || !await IsCaptureReadyIframeRefAsync(frame, ariaRef).ConfigureAwait(false))
+            if (await IsLazyIframeRefAsync(frame, ariaRef).ConfigureAwait(false))
             {
                 return null;
             }
 
-            IElementHandle iframeEl = await RaceOrDefaultAsync(
-                () => FindInFrameAsync(frame, ariaRef),
-                deadlineClock,
-                Math.Min(300, RemainingMs(deadlineClock, budgetMs)),
-                fallback: null).ConfigureAwait(false);
-
-            // Name/src / single-child first (no iframe objectId). Identity and
-            // ContentFrame are slower and can burn the 3s snapshot budget.
+            // Name/src match first — does not need _ariaRef on the element and
+            // avoids IsCaptureReady false-negatives when refs live in another world
+            // (ShouldStitchAllFrameSnapshots on Windows).
             IFrame child = await ChildFrameForAriaRefAsync(frame, ariaRef).ConfigureAwait(false);
             if (child == null || child.IsDetached)
             {
-                child = await ContentFrameOrNullAsync(iframeEl).ConfigureAwait(false);
-            }
+                if (!await IsCaptureReadyIframeRefAsync(frame, ariaRef).ConfigureAwait(false))
+                {
+                    return null;
+                }
 
-            if (child == null || child.IsDetached)
-            {
-                child = await RaceOrDefaultAsync(
-                    () => ChildFrameByElementIdentityAsync(frame, iframeEl),
+                IElementHandle iframeEl = await RaceOrDefaultAsync(
+                    () => FindInFrameAsync(frame, ariaRef),
                     deadlineClock,
-                    Math.Min(250, RemainingMs(deadlineClock, budgetMs)),
+                    Math.Min(300, RemainingMs(deadlineClock, budgetMs)),
                     fallback: null).ConfigureAwait(false);
+
+                child = await ContentFrameOrNullAsync(iframeEl).ConfigureAwait(false);
+                if (child == null || child.IsDetached)
+                {
+                    child = await RaceOrDefaultAsync(
+                        () => ChildFrameByElementIdentityAsync(frame, iframeEl),
+                        deadlineClock,
+                        Math.Min(250, RemainingMs(deadlineClock, budgetMs)),
+                        fallback: null).ConfigureAwait(false);
+                }
             }
 
             if (child == null || child.IsDetached)
@@ -609,23 +612,25 @@ namespace PlaywrightNative.Helpers
             bool boxes,
             int startDepth)
         {
-            if (await IsLazyIframeRefAsync(frame, ariaRef).ConfigureAwait(false)
-                || await FrameHasOnlyLazyIframesAsync(frame).ConfigureAwait(false)
-                || !await IsCaptureReadyIframeRefAsync(frame, ariaRef).ConfigureAwait(false))
+            if (await IsLazyIframeRefAsync(frame, ariaRef).ConfigureAwait(false))
             {
                 return (null, null);
             }
 
-            IElementHandle iframeEl = await FindInFrameAsync(frame, ariaRef).ConfigureAwait(false);
             IFrame child = await ChildFrameForAriaRefAsync(frame, ariaRef).ConfigureAwait(false);
             if (child == null || child.IsDetached)
             {
-                child = await ContentFrameOrNullAsync(iframeEl).ConfigureAwait(false);
-            }
+                if (!await IsCaptureReadyIframeRefAsync(frame, ariaRef).ConfigureAwait(false))
+                {
+                    return (null, null);
+                }
 
-            if (child == null || child.IsDetached)
-            {
-                child = await ChildFrameByElementIdentityAsync(frame, iframeEl).ConfigureAwait(false);
+                IElementHandle iframeEl = await FindInFrameAsync(frame, ariaRef).ConfigureAwait(false);
+                child = await ContentFrameOrNullAsync(iframeEl).ConfigureAwait(false);
+                if (child == null || child.IsDetached)
+                {
+                    child = await ChildFrameByElementIdentityAsync(frame, iframeEl).ConfigureAwait(false);
+                }
             }
 
             if (child == null || child.IsDetached)
@@ -1003,13 +1008,13 @@ namespace PlaywrightNative.Helpers
             }
             catch (PlaywrightException)
             {
-                // Fail closed: touching a lazy iframe objectId on Darwin wedges
-                // the target until the NUnit 30s kill.
-                return true;
+                // Fail open for named/loaded frames — a failed probe must not
+                // skip stitching (ShouldStitchAllFrameSnapshots).
+                return false;
             }
             catch (TimeoutException)
             {
-                return true;
+                return false;
             }
         }
 

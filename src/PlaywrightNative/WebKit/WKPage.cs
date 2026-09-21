@@ -4603,6 +4603,14 @@ namespace PlaywrightNative.WebKit
 
             foreach (WKFrame frame in _frameManager.Frames)
             {
+                // Unloaded loading=lazy iframes may appear in Frames without a
+                // usable context. WaitForFrameContextAsync wedges Darwin WebKit
+                // for the session timeout (ReturnEmptySnapshotWhenIframeIsNotLoaded).
+                if (!TryGetFrameContext(frame, out _))
+                {
+                    continue;
+                }
+
                 try
                 {
                     await EvaluateInFrameAsync<object>(frame, expression).ConfigureAwait(false);
@@ -7782,14 +7790,41 @@ namespace PlaywrightNative.WebKit
             try
             {
                 WKExecutionContext parentContext = await WaitForFrameContextAsync(parent).ConfigureAwait(false);
-                string raw = await parentContext.EvaluateAsync<string>(
-                    @"(() => {
+
+                // Anchor evaluate must not set emulateUserGesture — that flag
+                // consumes activation the following click must grant for RSA.
+                const string rectExpression = @"(() => {
   const el = document.querySelector('iframe, frame');
   if (!el) return '20,20';
   const r = el.getBoundingClientRect();
   if (!r.width || !r.height) return '20,20';
   return (r.left + (r.width / 2)) + ',' + (r.top + (r.height / 2));
-})()").ConfigureAwait(false);
+})()";
+                object rectParams = parentContext.ContextId != 0
+                    ? new
+                    {
+                        expression = rectExpression,
+                        contextId = parentContext.ContextId,
+                        returnByValue = true,
+                        emulateUserGesture = false,
+                    }
+                    : (object)new
+                    {
+                        expression = rectExpression,
+                        returnByValue = true,
+                        emulateUserGesture = false,
+                    };
+                JsonElement? rectResponse = await parentContext.Session.SendAsync("Runtime.evaluate", rectParams)
+                    .ConfigureAwait(false);
+                string raw = null;
+                if (rectResponse.HasValue
+                    && rectResponse.Value.TryGetProperty("result", out JsonElement rectResult)
+                    && rectResult.TryGetProperty("value", out JsonElement rectValue)
+                    && rectValue.ValueKind == JsonValueKind.String)
+                {
+                    raw = rectValue.GetString();
+                }
+
                 if (!string.IsNullOrEmpty(raw))
                 {
                     string[] parts = raw.Split(',');

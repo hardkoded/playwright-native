@@ -85,6 +85,7 @@ namespace PlaywrightNative.Chromium
         private string _emulatedReducedMotion = "no-preference";
         private string _emulatedForcedColors = "none";
         private string _emulatedContrast = "no-preference";
+        private CRResponse _lastCommittedNavigationResponse;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="CRPage"/> class.
@@ -521,6 +522,12 @@ namespace PlaywrightNative.Chromium
                 throw new NavigationException("Download is starting", url);
             }
 
+            string loaderId = null;
+            if (responseValue.TryGetProperty("loaderId", out JsonElement loaderIdElement))
+            {
+                loaderId = loaderIdElement.GetString();
+            }
+
             if (responseValue.TryGetProperty("errorText", out JsonElement errorTextElement))
             {
                 string errorText = errorTextElement.GetString();
@@ -528,12 +535,6 @@ namespace PlaywrightNative.Chromium
                 {
                     throw new NavigationException($"Navigation failed: {errorText}", url);
                 }
-            }
-
-            string loaderId = null;
-            if (responseValue.TryGetProperty("loaderId", out JsonElement loaderIdElement))
-            {
-                loaderId = loaderIdElement.GetString();
             }
 
             return new GotoResult(loaderId);
@@ -2596,12 +2597,33 @@ namespace PlaywrightNative.Chromium
             CRResponse captured = null;
             void OnResponse(object sender, CRResponse response)
             {
-                if (response?.Request != null
-                    && response.Request.IsNavigationRequest
-                    && response.Request.Frame == frame)
+                if (response?.Request == null)
                 {
-                    captured = response;
+                    return;
                 }
+
+                // Prefer navigation requests; also accept Document resources when
+                // IsNavigationRequest was not set (Fetch-paired paths on Windows).
+                bool navigation = response.Request.IsNavigationRequest
+                    || NetworkRequestEvents.IsDocumentNavigation(response.Request.ResourceType);
+                if (!navigation)
+                {
+                    return;
+                }
+
+                Frame responseFrame = response.Request.Frame;
+                if (responseFrame == null)
+                {
+                    return;
+                }
+
+                if (!ReferenceEquals(responseFrame, frame)
+                    && !string.Equals(responseFrame.FrameId, frame?.FrameId, StringComparison.Ordinal))
+                {
+                    return;
+                }
+
+                captured = response;
             }
 
             ResponseReceived += OnResponse;
@@ -2611,9 +2633,17 @@ namespace PlaywrightNative.Chromium
                 {
                     await GoToFrameAsync(frame, url, waitUntil, timeout, referrer).ConfigureAwait(false);
                 }
-                catch (NavigationException ex) when (ShouldReturnCapturedNavigation(ex, captured))
+                catch (NavigationException ex) when (
+                    IsHttpResponseCodeFailure(ex)
+                    && TryRecoverNavigationResponse(frame, url, captured, out CRResponse recoveredCode))
                 {
-                    return captured;
+                    return recoveredCode;
+                }
+                catch (NavigationException ex) when (
+                    IsAbortedNavigation(ex)
+                    && TryRecoverNavigationResponse(frame, url, captured, out CRResponse recoveredAbort))
+                {
+                    return recoveredAbort;
                 }
 
                 if (!string.IsNullOrEmpty(url)
@@ -2630,28 +2660,57 @@ namespace PlaywrightNative.Chromium
                 ResponseReceived -= OnResponse;
             }
 
-            static bool ShouldReturnCapturedNavigation(NavigationException ex, CRResponse response)
+            static bool IsHttpResponseCodeFailure(NavigationException ex)
+                => ex?.Message != null
+                    && ex.Message.Contains("ERR_HTTP_RESPONSE_CODE_FAILURE", StringComparison.Ordinal);
+
+            static bool IsAbortedNavigation(NavigationException ex)
+                => ex?.Message != null
+                    && ex.Message.Contains("ERR_ABORTED", StringComparison.Ordinal);
+
+            bool TryRecoverNavigationResponse(
+                Frame targetFrame,
+                string targetUrl,
+                CRResponse fromEvent,
+                out CRResponse recovered)
             {
-                if (response == null || ex?.Message == null)
+                recovered = fromEvent;
+                if (!IsUsableNavigationResponse(recovered, targetFrame, targetUrl)
+                    && IsUsableNavigationResponse(_lastCommittedNavigationResponse, targetFrame, targetUrl))
+                {
+                    recovered = _lastCommittedNavigationResponse;
+                }
+
+                return IsUsableNavigationResponse(recovered, targetFrame, targetUrl);
+            }
+
+            static bool IsUsableNavigationResponse(CRResponse response, Frame targetFrame, string targetUrl)
+            {
+                if (response == null
+                    || response.Status < 200
+                    || response.Status >= 300
+                    || response.Status == 204)
                 {
                     return false;
                 }
 
-                if (ex.Message.Contains("ERR_HTTP_RESPONSE_CODE_FAILURE", StringComparison.Ordinal))
+                Frame responseFrame = response.Request?.Frame;
+                if (responseFrame != null
+                    && targetFrame != null
+                    && !ReferenceEquals(responseFrame, targetFrame)
+                    && !string.Equals(responseFrame.FrameId, targetFrame.FrameId, StringComparison.Ordinal))
+                {
+                    return false;
+                }
+
+                if (string.IsNullOrEmpty(targetUrl) || string.IsNullOrEmpty(response.Url))
                 {
                     return true;
                 }
 
-                // A newer navigation aborts load after the document committed
-                // (ShouldReturnFromGotoIfNewNavigationIsStarted). 204 is the
-                // navigation result itself and must still throw. A replacement
-                // that never commits leaves response null.
-                if (!ex.Message.Contains("ERR_ABORTED", StringComparison.Ordinal))
-                {
-                    return false;
-                }
-
-                return response.Status >= 200 && response.Status < 300 && response.Status != 204;
+                return string.Equals(response.Url, targetUrl, StringComparison.OrdinalIgnoreCase)
+                    || response.Url.StartsWith(targetUrl, StringComparison.OrdinalIgnoreCase)
+                    || targetUrl.StartsWith(response.Url, StringComparison.OrdinalIgnoreCase);
             }
         }
 
@@ -3491,7 +3550,17 @@ namespace PlaywrightNative.Chromium
         /// Called by <see cref="CRNetworkManager"/> when a network response is received.
         /// </summary>
         /// <param name="response">The response that was received.</param>
-        internal void OnResponseReceived(CRResponse response) => ResponseReceived?.Invoke(this, response);
+        internal void OnResponseReceived(CRResponse response)
+        {
+            if (response?.Request != null
+                && response.Request.IsNavigationRequest
+                && response.Status != 204)
+            {
+                _lastCommittedNavigationResponse = response;
+            }
+
+            ResponseReceived?.Invoke(this, response);
+        }
 
         /// <summary>
         /// Invoked by <see cref="CRBrowser"/> when a new target whose <c>openerId</c>
