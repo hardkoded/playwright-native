@@ -4003,9 +4003,23 @@ namespace PlaywrightNative.WebKit
 
                 string selectorLiteral = JsonSerializer.Serialize(selector);
                 JsonElement? handleValue = await context
-                    .EvaluateHandleAsync($"({ShadowPiercingQuery.QueryFunction})({selectorLiteral})")
+                    .EvaluateHandleAsync(
+                        "(() => { const el = (" + ShadowPiercingQuery.QueryFunction + ")(" + selectorLiteral + ");" +
+                        " window.__pwQueryTag = (el && el.tagName) ? String(el.tagName) : ''; return el; })()")
                     .ConfigureAwait(false);
-                return WrapWKHandle(context, handleValue) as IElementHandle;
+                bool initializePreview = true;
+                try
+                {
+                    string tag = await context.EvaluateAsync<string>("() => window.__pwQueryTag || ''")
+                        .ConfigureAwait(false);
+                    initializePreview = !string.Equals(tag, "IFRAME", StringComparison.OrdinalIgnoreCase)
+                        && !string.Equals(tag, "FRAME", StringComparison.OrdinalIgnoreCase);
+                }
+                catch (PlaywrightException)
+                {
+                }
+
+                return WrapWKHandle(context, handleValue, initializePreview) as IElementHandle;
             }
             catch (PlaywrightException ex) when (PlaywrightNative.Helpers.DestroyedContext.IsDestroyedContext(ex))
             {
@@ -6168,7 +6182,7 @@ namespace PlaywrightNative.WebKit
                 && nodeSubtype.ValueKind == JsonValueKind.String
                 && nodeSubtype.GetString() == "node")
             {
-                return new WKElementHandle(context, objectId, this, "JSHandle@node");
+                return new WKElementHandle(context, objectId, this, "JSHandle@node", initializePreview: true);
             }
 
             return new WKJSHandle(context, objectId, this, preview);
@@ -6794,7 +6808,7 @@ namespace PlaywrightNative.WebKit
             return WrapWKHandle(context, handleValue) as IElementHandle;
         }
 
-        private IJSHandle WrapWKHandle(WKExecutionContext context, JsonElement? handleValue)
+        private IJSHandle WrapWKHandle(WKExecutionContext context, JsonElement? handleValue, bool initializePreview = true)
         {
             if (handleValue == null)
             {
@@ -6826,7 +6840,7 @@ namespace PlaywrightNative.WebKit
                 && nodeSubtype.ValueKind == JsonValueKind.String
                 && nodeSubtype.GetString() == "node")
             {
-                return new WKElementHandle(context, objectId, this, "JSHandle@node");
+                return new WKElementHandle(context, objectId, this, "JSHandle@node", initializePreview);
             }
 
             return new WKJSHandle(context, objectId, this, preview);

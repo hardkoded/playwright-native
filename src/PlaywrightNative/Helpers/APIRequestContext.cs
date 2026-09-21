@@ -2804,36 +2804,6 @@ namespace PlaywrightNative.Helpers
             }
 
             UnregisterClient(client);
-
-            // ownsSocket: false — dispose tracked sockets when no clients remain
-            // so successful fetches do not leak FDs until context close.
-            Socket[] idle = null;
-            lock (_clientGate)
-            {
-                if (_activeClients.Count == 0 && _activeSockets.Count > 0)
-                {
-                    idle = _activeSockets.ToArray();
-                    _activeSockets.Clear();
-                }
-            }
-
-            if (idle != null)
-            {
-                for (int i = 0; i < idle.Length; i++)
-                {
-                    try
-                    {
-                        idle[i].Dispose();
-                    }
-                    catch (ObjectDisposedException)
-                    {
-                    }
-                    catch (SocketException)
-                    {
-                    }
-                }
-            }
-
             DisposeClientInBackground(client);
         }
 

@@ -75,9 +75,10 @@ namespace PlaywrightNative.Helpers
             Socket socket = await OpenSocketAsync(host, port, cancellationToken).ConfigureAwait(false);
             onSocket?.Invoke(socket);
 
-            // Abort owns the socket (Close(0) RST). HttpClient must not FIN it
-            // via NetworkStream dispose before AbortActiveClients runs.
-            return new NetworkStream(socket, ownsSocket: false);
+            // ownsSocket true so SocketsHttpHandler can finish the response.
+            // Abort still RSTs first (Close(0)) before the abort gate, so a later
+            // NetworkStream dispose cannot turn that into a graceful FIN.
+            return new NetworkStream(socket, ownsSocket: true);
         }
 
         private static async ValueTask<Stream> ConnectAsync(
@@ -99,7 +100,7 @@ namespace PlaywrightNative.Helpers
             Socket proxySocket = await OpenSocketAsync(proxyUri.IdnHost, ResolvePort(proxyUri), cancellationToken)
                 .ConfigureAwait(false);
             onSocket?.Invoke(proxySocket);
-            Stream stream = new NetworkStream(proxySocket, ownsSocket: false);
+            Stream stream = new NetworkStream(proxySocket, ownsSocket: true);
             try
             {
                 if (IsSocks(proxyUri))

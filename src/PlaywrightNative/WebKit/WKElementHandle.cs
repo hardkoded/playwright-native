@@ -37,6 +37,7 @@ namespace PlaywrightNative.WebKit
     internal sealed partial class WKElementHandle : WKJSHandle, IElementHandle
     {
         private readonly WKPage _page;
+        private readonly bool _initializePreview;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="WKElementHandle"/> class.
@@ -45,11 +46,16 @@ namespace PlaywrightNative.WebKit
         /// <param name="objectId">The WIP remote object id.</param>
         /// <param name="page">The owning page, used for pointer/keyboard input during interactions.</param>
         /// <param name="preview">Initial official preview. Defaults to <c>JSHandle@node</c>.</param>
-        public WKElementHandle(WKExecutionContext context, string objectId, WKPage page, string preview = null)
+        /// <param name="initializePreview">When false, do not callFunctionOn this object (lazy iframes).</param>
+        public WKElementHandle(WKExecutionContext context, string objectId, WKPage page, string preview = null, bool initializePreview = true)
             : base(context, objectId, page, preview ?? "JSHandle@node")
         {
             _page = page ?? throw new ArgumentNullException(nameof(page));
-            _ = InitializePreviewAsync();
+            _initializePreview = initializePreview;
+            if (initializePreview)
+            {
+                _ = InitializePreviewAsync();
+            }
         }
 
         /// <inheritdoc/>
@@ -809,18 +815,15 @@ namespace PlaywrightNative.WebKit
 
         private async Task InitializePreviewAsync()
         {
+            if (!_initializePreview)
+            {
+                return;
+            }
+
             try
             {
-                // Unloaded loading=lazy iframes wedge Darwin on callFunctionOn
-                // (ReturnEmptySnapshot WaitForSelector → construct handle → preview).
-                // describeNode is time-bounded (500ms); skip preview for iframe/frame
-                // or when describeNode times out. Fail open for other elements so
-                // ShouldHaveANicePreview still gets JSHandle@<body>.
-                if (await IsIframeOrFrameElementAsync().ConfigureAwait(false))
-                {
-                    return;
-                }
-
+                // Not used for iframe/frame — callFunctionOn and describeNode on an
+                // unloaded loading=lazy iframe wedge Darwin for the whole session.
                 string nodePreview = await EvaluateFunctionAsync<string>(RemoteObject.PreviewNodeFunction)
                     .ConfigureAwait(false);
                 if (!string.IsNullOrEmpty(nodePreview))
@@ -834,60 +837,6 @@ namespace PlaywrightNative.WebKit
             }
             catch (TimeoutException)
             {
-            }
-        }
-
-        private async Task<bool> IsIframeOrFrameElementAsync()
-        {
-            try
-            {
-                JsonElement? described = await ExecutionContext.Session
-                    .SendAsync("DOM.describeNode", new { objectId = ObjectId })
-                    .ConfigureAwait(false);
-                if (described == null)
-                {
-                    return false;
-                }
-
-                JsonElement payload = described.Value;
-                if (payload.TryGetProperty("contentFrameId", out JsonElement contentEl)
-                    && contentEl.ValueKind == JsonValueKind.String
-                    && !string.IsNullOrEmpty(contentEl.GetString()))
-                {
-                    return true;
-                }
-
-                if (payload.TryGetProperty("node", out JsonElement node))
-                {
-                    string name = null;
-                    if (node.TryGetProperty("nodeName", out JsonElement nodeName)
-                        && nodeName.ValueKind == JsonValueKind.String)
-                    {
-                        name = nodeName.GetString();
-                    }
-                    else if (node.TryGetProperty("localName", out JsonElement localName)
-                        && localName.ValueKind == JsonValueKind.String)
-                    {
-                        name = localName.GetString();
-                    }
-
-                    if (string.Equals(name, "IFRAME", StringComparison.OrdinalIgnoreCase)
-                        || string.Equals(name, "FRAME", StringComparison.OrdinalIgnoreCase))
-                    {
-                        return true;
-                    }
-                }
-
-                return false;
-            }
-            catch (TimeoutException)
-            {
-                // Unloaded lazy iframe — skip preview rather than wedge.
-                return true;
-            }
-            catch (PlaywrightException)
-            {
-                return false;
             }
         }
 
