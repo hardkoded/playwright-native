@@ -3272,6 +3272,15 @@ namespace PlaywrightNative.WebKit
                         break;
                     }
 
+                    // blank→blank often skips Page.frameNavigated / loadEventFired on
+                    // Darwin WebKit after persistent relaunch. Seed from readyState when
+                    // the navigate RPC finished but lifecycle waiters are still open.
+                    if (PopupOpenedHelper.IsBlankUrl(url))
+                    {
+                        int seedGeneration = Interlocked.Increment(ref _lifecycleSeedGeneration);
+                        _ = SeedLifecycleFromReadyStateAfterDataNavigationAsync(seedGeneration);
+                    }
+
                     Task lifecycle = await Task.WhenAny(waitTcs.Task, timeoutTask).ConfigureAwait(false);
                     if (lifecycle != waitTcs.Task)
                     {
@@ -3773,9 +3782,7 @@ namespace PlaywrightNative.WebKit
                 }
 
                 JsonElement? remote = needsUserGesture
-                    ? await context.EvaluateHandleWithUserGestureAsync(
-                        expression,
-                        () => PulseTrustedGestureOnFrameAsync(frame)).ConfigureAwait(false)
+                    ? await EvaluateRequestStorageAccessAsync(context, expression, frame).ConfigureAwait(false)
                     : await context.EvaluateHandleAsync(expression).ConfigureAwait(false);
                 if (needsUserGesture)
                 {
@@ -7763,6 +7770,36 @@ namespace PlaywrightNative.WebKit
         }
 
         /// <summary>
+        /// Runs <c>document.requestStorageAccess</c> under a trusted gesture and
+        /// WebKit permission grant (Playwright MiniBrowser auto-accepts the macOS
+        /// storage-access panel; headless builds need <c>Emulation.grantPermissions</c>).
+        /// </summary>
+        /// <param name="context">Child-frame execution context.</param>
+        /// <param name="expression">Expression containing <c>requestStorageAccess</c>.</param>
+        /// <param name="frame">The child frame being evaluated.</param>
+        /// <returns>The remote result object.</returns>
+        private async Task<JsonElement?> EvaluateRequestStorageAccessAsync(
+            WKExecutionContext context,
+            string expression,
+            WKFrame frame)
+        {
+            try
+            {
+                await GrantPermissionsAsync("*", new[] { ContextPermissions.StorageAccess })
+                    .ConfigureAwait(false);
+            }
+            catch (PlaywrightException ex)
+            {
+                _logger?.LogDebug(ex, "storageAccess grant failed before requestStorageAccess on {PageProxyId}", _pageProxyId);
+            }
+
+            return await context.EvaluateHandleWithUserGestureAsync(
+                    expression,
+                    () => PulseTrustedGestureOnFrameAsync(frame))
+                .ConfigureAwait(false);
+        }
+
+        /// <summary>
         /// Dispatches a trusted mouse click so macOS WebKit grants transient
         /// activation for <c>document.requestStorageAccess()</c>. Does not run
         /// in-page <c>window.focus()</c> (that breaks <c>document.hasFocus()</c>).
@@ -8359,8 +8396,18 @@ namespace PlaywrightNative.WebKit
                 string current = NavigationTimeout.WithoutHash(_mainFrameUrl);
                 string pending = NavigationTimeout.WithoutHash(_pendingNavigationUrl);
                 string redirect = NavigationTimeout.WithoutHash(_pendingRedirectTarget);
-                if (string.IsNullOrEmpty(current)
-                    || current.Equals("about:blank", StringComparison.OrdinalIgnoreCase))
+                if (string.IsNullOrEmpty(current))
+                {
+                    return;
+                }
+
+                // about:blank→about:blank must complete (persistent relaunch goto).
+                // Skip only when the document is still blank but the pending target
+                // is a real URL (commit has not reached the destination yet).
+                if (current.Equals("about:blank", StringComparison.OrdinalIgnoreCase)
+                    && !pending.Equals("about:blank", StringComparison.OrdinalIgnoreCase)
+                    && (string.IsNullOrEmpty(redirect)
+                        || !redirect.Equals("about:blank", StringComparison.OrdinalIgnoreCase)))
                 {
                     return;
                 }
@@ -9173,12 +9220,20 @@ namespace PlaywrightNative.WebKit
 
                 // data: navigations skip Network.* events. On some Darwin WebKit
                 // builds Page.loadEventFired can also race past waiter arming; seed
-                // load/DOMContentLoaded from readyState after commit. Do not seed
-                // about:blank — SetContent / blank→blank reuse that URL and a stale
-                // poll would resolve pending load waiters (or fire Load) too early
-                // relative to parallel waitForEvent / autowait ordering.
-                if (!string.IsNullOrEmpty(_mainFrameUrl)
-                    && _mainFrameUrl.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+                // load/DOMContentLoaded from readyState after commit. Same for
+                // about:blank→about:blank (persistent relaunch) when a NavigateAsync
+                // waiter is armed — SetContent does not arm _pendingLoadTcs.
+                bool seedBlankPending;
+                lock (_navigationLock)
+                {
+                    seedBlankPending = _pendingLoadTcs != null
+                        && PopupOpenedHelper.IsBlankUrl(_mainFrameUrl)
+                        && PopupOpenedHelper.IsBlankUrl(_pendingNavigationUrl);
+                }
+
+                if ((!string.IsNullOrEmpty(_mainFrameUrl)
+                        && _mainFrameUrl.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+                    || seedBlankPending)
                 {
                     int seedGeneration = Interlocked.Increment(ref _lifecycleSeedGeneration);
                     _ = SeedLifecycleFromReadyStateAfterDataNavigationAsync(seedGeneration);
@@ -9236,8 +9291,17 @@ namespace PlaywrightNative.WebKit
                     // navigations clear lifecycle and must not be completed by a
                     // leftover about:/data: seed task.
                     string url = _mainFrameUrl;
+                    bool allowBlankSeed;
+                    lock (_navigationLock)
+                    {
+                        allowBlankSeed = _pendingLoadTcs != null
+                            && PopupOpenedHelper.IsBlankUrl(url)
+                            && PopupOpenedHelper.IsBlankUrl(_pendingNavigationUrl);
+                    }
+
                     if (string.IsNullOrEmpty(url)
-                        || !url.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+                        || (!url.StartsWith("data:", StringComparison.OrdinalIgnoreCase)
+                            && !allowBlankSeed))
                     {
                         return;
                     }
@@ -9682,11 +9746,10 @@ namespace PlaywrightNative.WebKit
         /// </summary>
         private void ReportPopupBeforeBinding()
         {
-            if (_opener == null)
-            {
-                return;
-            }
-
+            // Do not require <see cref="_opener"/> — Darwin WebKit sometimes omits
+            // protocol openerId for window.open, and inferred siblings leave Opener
+            // null. TryMarkReportedAsNew makes this a no-op for already-reported
+            // pages (including context.newPage).
             WKBrowserContext context = _context ?? OwnerContext as WKBrowserContext;
             context?.ReportPopupAsNew(this);
         }

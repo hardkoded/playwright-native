@@ -693,10 +693,13 @@ namespace PlaywrightNative.Helpers
 
                 try
                 {
+                    // Cap per-frame prefix work so Darwin data: iframes cannot
+                    // burn the whole SnapshotForAI budget before stitch runs
+                    // (ShouldMarkIframeAsActiveWhenItContainsFocusedElement).
                     await RaceOrDefaultAsync(
                         () => PrefixForAsync(page, frame),
                         deadlineClock,
-                        budgetMs,
+                        Math.Min(250, RemainingMs(deadlineClock, budgetMs)),
                         fallback: string.Empty).ConfigureAwait(false);
                 }
                 catch (PlaywrightException)
@@ -708,46 +711,39 @@ namespace PlaywrightNative.Helpers
                     continue;
                 }
 
-                IReadOnlyList<IElementHandle> hosts;
-                try
+                // Prefer the frame tree over ContentFrame/describeNode — that
+                // path wedges unloaded lazy iframes and burns the stitch budget
+                // even when RaceOrDefaultAsync returns early.
+                IReadOnlyList<IFrame> children = frame.ChildFrames;
+                if (children != null)
                 {
-                    hosts = await RaceOrDefaultAsync(
-                        () => frame.QuerySelectorAllAsync("iframe:not([loading=lazy]), frame"),
-                        deadlineClock,
-                        budgetMs,
-                        fallback: (IReadOnlyList<IElementHandle>)Array.Empty<IElementHandle>()).ConfigureAwait(false);
-                }
-                catch (PlaywrightException)
-                {
-                    continue;
-                }
-                catch (TimeoutException)
-                {
-                    continue;
-                }
-
-                if (hosts == null)
-                {
-                    continue;
-                }
-
-                for (int i = 0; i < hosts.Count; i++)
-                {
-                    if (RemainingMs(deadlineClock, budgetMs) <= 0)
+                    for (int i = 0; i < children.Count; i++)
                     {
-                        return;
+                        IFrame child = children[i];
+                        if (child != null && !child.IsDetached)
+                        {
+                            queue.Enqueue(child);
+                        }
+                    }
+                }
+
+                IReadOnlyList<IFrame> pageFrames = page.Frames;
+                if (pageFrames == null)
+                {
+                    continue;
+                }
+
+                for (int i = 0; i < pageFrames.Count; i++)
+                {
+                    IFrame candidate = pageFrames[i];
+                    if (candidate == null
+                        || candidate.IsDetached
+                        || !ReferenceEquals(candidate.ParentFrame, frame))
+                    {
+                        continue;
                     }
 
-                    IFrame child = await RaceOrDefaultAsync(
-                        () => ContentFrameOrNullAsync(hosts[i]),
-                        deadlineClock,
-                        budgetMs,
-                        fallback: null).ConfigureAwait(false);
-
-                    if (child != null && !child.IsDetached)
-                    {
-                        queue.Enqueue(child);
-                    }
+                    queue.Enqueue(candidate);
                 }
             }
         }
@@ -789,16 +785,16 @@ namespace PlaywrightNative.Helpers
             }
             catch (PlaywrightException)
             {
-                return null;
+                return SoleChildFrameOrNull(frame);
             }
             catch (TimeoutException)
             {
-                return null;
+                return SoleChildFrameOrNull(frame);
             }
 
             if (info == null || info.Length < 3)
             {
-                return null;
+                return SoleChildFrameOrNull(frame);
             }
 
             string wantName = info[0] ?? string.Empty;
@@ -806,8 +802,11 @@ namespace PlaywrightNative.Helpers
 
             // Nested framesets parent some frames under an inner frameset, so
             // direct ChildFrames is not enough. Search descendants, not creation index.
+            // Also include page.Frames parented here — Darwin data: iframes can be
+            // missing from ChildFrames while Focus/FrameLocator still see them.
             List<IFrame> descendants = new List<IFrame>();
             CollectFrames(frame, descendants);
+            CollectPageFramesUnder(frame, descendants);
             if (!string.IsNullOrEmpty(wantName))
             {
                 for (int i = 0; i < descendants.Count; i++)
@@ -896,6 +895,67 @@ namespace PlaywrightNative.Helpers
             return null;
         }
 
+        private static IFrame SoleChildFrameOrNull(IFrame frame)
+        {
+            if (frame == null || frame.IsDetached)
+            {
+                return null;
+            }
+
+            List<IFrame> descendants = new List<IFrame>();
+            CollectFrames(frame, descendants);
+            CollectPageFramesUnder(frame, descendants);
+            int childCount = 0;
+            IFrame only = null;
+            for (int i = 0; i < descendants.Count; i++)
+            {
+                IFrame child = descendants[i];
+                if (child == null || ReferenceEquals(child, frame) || child.IsDetached)
+                {
+                    continue;
+                }
+
+                childCount++;
+                only = child;
+            }
+
+            return childCount == 1 ? only : null;
+        }
+
+        private static void CollectPageFramesUnder(IFrame parent, List<IFrame> into)
+        {
+            IPage page = parent?.Page;
+            IReadOnlyList<IFrame> frames = page?.Frames;
+            if (frames == null || into == null)
+            {
+                return;
+            }
+
+            for (int i = 0; i < frames.Count; i++)
+            {
+                IFrame candidate = frames[i];
+                if (candidate == null
+                    || candidate.IsDetached
+                    || ReferenceEquals(candidate, parent)
+                    || into.Contains(candidate))
+                {
+                    continue;
+                }
+
+                IFrame walk = candidate.ParentFrame;
+                while (walk != null)
+                {
+                    if (ReferenceEquals(walk, parent))
+                    {
+                        into.Add(candidate);
+                        break;
+                    }
+
+                    walk = walk.ParentFrame;
+                }
+            }
+        }
+
         /// <summary>
         /// Resolves the child frame whose <c>FrameElement</c> is the same DOM node
         /// as <paramref name="iframeEl"/> (srcdoc-safe, order-independent).
@@ -912,7 +972,14 @@ namespace PlaywrightNative.Helpers
             IReadOnlyList<IFrame> children = parent.ChildFrames;
             if (children == null || children.Count == 0)
             {
-                return null;
+                List<IFrame> fromPage = new List<IFrame>();
+                CollectPageFramesUnder(parent, fromPage);
+                if (fromPage.Count == 0)
+                {
+                    return null;
+                }
+
+                children = fromPage;
             }
 
             for (int i = 0; i < children.Count; i++)
