@@ -434,6 +434,10 @@ namespace PlaywrightNative.Chromium
             }
 
             _styles[styleSheetId] = record;
+            if (!_cssResetOnNavigation && !string.IsNullOrEmpty(sourceUrl))
+            {
+                _retainedStyles[sourceUrl] = record;
+            }
 
             try
             {

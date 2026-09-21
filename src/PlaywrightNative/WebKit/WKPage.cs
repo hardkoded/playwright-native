@@ -7823,19 +7823,40 @@ namespace PlaywrightNative.WebKit
             string expression,
             WKFrame frame)
         {
+            string frameOrigin = null;
+            try
+            {
+                string frameUrl = frame?.Url;
+                if (!string.IsNullOrEmpty(frameUrl)
+                    && Uri.TryCreate(frameUrl, UriKind.Absolute, out Uri parsed)
+                    && (parsed.Scheme == Uri.UriSchemeHttp || parsed.Scheme == Uri.UriSchemeHttps))
+                {
+                    frameOrigin = parsed.GetLeftPart(UriPartial.Authority);
+                }
+            }
+            catch (UriFormatException)
+            {
+            }
+
             try
             {
                 await GrantPermissionsAsync("*", new[] { ContextPermissions.StorageAccess })
                     .ConfigureAwait(false);
+                if (!string.IsNullOrEmpty(frameOrigin))
+                {
+                    await GrantPermissionsAsync(frameOrigin, new[] { ContextPermissions.StorageAccess })
+                        .ConfigureAwait(false);
+                }
             }
             catch (PlaywrightException ex)
             {
                 _logger?.LogDebug(ex, "storageAccess grant failed before requestStorageAccess on {PageProxyId}", _pageProxyId);
             }
 
+            WKTargetSession pulseSession = EnableFrameSessions ? context.Session : null;
             return await context.EvaluateHandleWithUserGestureAsync(
                     expression,
-                    () => PulseTrustedGestureOnFrameAsync(frame, context.Session))
+                    () => PulseTrustedGestureOnFrameAsync(frame, pulseSession))
                 .ConfigureAwait(false);
         }
 
@@ -7949,7 +7970,7 @@ namespace PlaywrightNative.WebKit
                     new { type = "up", button = "left", x, y, modifiers = 0, buttons = 0, clickCount = 1 })
                     .ConfigureAwait(false);
 
-                if (frameSession != null)
+                if (EnableFrameSessions && frameSession != null)
                 {
                     await frameSession.SendAsync(
                         "Input.dispatchMouseEvent",
@@ -9816,6 +9837,17 @@ namespace PlaywrightNative.WebKit
             context?.ReportPopupAsNew(this);
         }
 
+        /// <summary>
+        /// Waits for popup URL commit then raises context <c>page</c> before the
+        /// exposeFunction handler runs (<c>page|binding</c>).
+        /// </summary>
+        /// <returns>A task that completes when the page event has been raised.</returns>
+        private async Task ReportPopupBeforeBindingAsync()
+        {
+            await PrepareForPopupReportAsync().ConfigureAwait(false);
+            ReportPopupBeforeBinding();
+        }
+
         private void OnBindingCalled(JsonElement? parameters)
         {
             if (!parameters.HasValue)
@@ -9898,6 +9930,13 @@ namespace PlaywrightNative.WebKit
                 }
 
                 // Official popup.spec: context "page" precedes exposeFunction callback.
+                // Prefer async dispatch when the page event has not fired yet so we can
+                // await the first non-blank URL without blocking the transport thread.
+                if (_reportedAsNew == 0)
+                {
+                    return false;
+                }
+
                 ReportPopupBeforeBinding();
                 Task<object> invoked = CoalesceBindingInvocationAsync(contextId, argument, args, handler);
                 _ = Task.Run(() => DeliverInvokedBindingAsync(invoked, contextId, seq));
@@ -10036,7 +10075,7 @@ namespace PlaywrightNative.WebKit
                     }
 
                     // Official popup.spec: context "page" precedes exposeFunction callback.
-                    ReportPopupBeforeBinding();
+                    await ReportPopupBeforeBindingAsync().ConfigureAwait(false);
                     WKTargetSession target = _targetSession
                         ?? throw new PlaywrightException("Inner target session is not yet available.");
                     WKExecutionContext context = new WKExecutionContext(target, contextId);
@@ -10060,7 +10099,7 @@ namespace PlaywrightNative.WebKit
                 }
 
                 // Official popup.spec: context "page" precedes exposeFunction callback.
-                ReportPopupBeforeBinding();
+                await ReportPopupBeforeBindingAsync().ConfigureAwait(false);
                 object result = await handler(args).ConfigureAwait(false);
                 await DeliverBindingResultAsync(contextId, seq, result).ConfigureAwait(false);
             }

@@ -2393,26 +2393,21 @@ namespace PlaywrightNative.WebKit
             {
             }
 
-            // Match Chromium: about:blank / initial popups are reportable after
-            // init. Waiting only on ReportAsNewNavigationTask raced exposeFunction
-            // callbacks (binding|page) when Darwin delayed the first non-empty URL.
-            if (page != null
-                && (PopupOpenedHelper.IsBlankUrl(page.Url)
-                    || page.ReportAsNewNavigationTask.IsCompleted
-                    || page.ClosedTask.IsCompleted))
+            if (page == null || page.ClosedTask.IsCompleted)
             {
                 ReportAsNew(page);
                 return;
             }
 
-            try
+            // context.NewPage stays on about:blank — report after init.
+            // window.open(url) popups must wait for the first non-blank URL so
+            // BrowserContextEvent.Page observers see the committed destination
+            // (should have url / opener), not the intermediate about:blank.
+            // ReportAsNewNavigationTask alone is insufficient: about:blank itself
+            // completes that task via MarkReportAsNewNavigation.
+            if (!CreatePageIsInFlight() && PopupOpenedHelper.IsBlankUrl(page.Url))
             {
-                await Task.WhenAny(page.ReportAsNewNavigationTask, page.ClosedTask).ConfigureAwait(false);
-            }
-#pragma warning disable RCS1075
-            catch (Exception)
-#pragma warning restore RCS1075
-            {
+                await page.PrepareForPopupReportAsync().ConfigureAwait(false);
             }
 
             ReportAsNew(page);

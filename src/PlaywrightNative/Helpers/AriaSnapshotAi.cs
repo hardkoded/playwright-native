@@ -483,16 +483,26 @@ namespace PlaywrightNative.Helpers
 
             if (child == null || child.IsDetached)
             {
-                if (!await IsCaptureReadyIframeRefAsync(frame, ariaRef).ConfigureAwait(false))
+                IElementHandle iframeEl = null;
+                if (await IsCaptureReadyIframeRefAsync(frame, ariaRef).ConfigureAwait(false))
                 {
-                    return null;
+                    iframeEl = await RaceOrDefaultAsync(
+                        () => FindInFrameAsync(frame, ariaRef),
+                        deadlineClock,
+                        Math.Min(300, RemainingMs(deadlineClock, budgetMs)),
+                        fallback: null).ConfigureAwait(false);
                 }
 
-                IElementHandle iframeEl = await RaceOrDefaultAsync(
-                    () => FindInFrameAsync(frame, ariaRef),
-                    deadlineClock,
-                    Math.Min(300, RemainingMs(deadlineClock, budgetMs)),
-                    fallback: null).ConfigureAwait(false);
+                // Darwin data: iframes: ChildFrames.Url stays about:blank and
+                // aria-ref FindInFrame can miss while FrameLocator/ContentFrame work.
+                if (iframeEl == null)
+                {
+                    iframeEl = await RaceOrDefaultAsync(
+                        () => frame.QuerySelectorAsync("iframe, frame"),
+                        deadlineClock,
+                        Math.Min(250, RemainingMs(deadlineClock, budgetMs)),
+                        fallback: null).ConfigureAwait(false);
+                }
 
                 child = await ContentFrameOrNullAsync(iframeEl).ConfigureAwait(false);
                 if (child == null || child.IsDetached)
@@ -636,12 +646,24 @@ namespace PlaywrightNative.Helpers
 
             if (child == null || child.IsDetached)
             {
-                if (!await IsCaptureReadyIframeRefAsync(frame, ariaRef).ConfigureAwait(false))
+                IElementHandle iframeEl = null;
+                if (await IsCaptureReadyIframeRefAsync(frame, ariaRef).ConfigureAwait(false))
                 {
-                    return (null, null);
+                    iframeEl = await FindInFrameAsync(frame, ariaRef).ConfigureAwait(false);
                 }
 
-                IElementHandle iframeEl = await FindInFrameAsync(frame, ariaRef).ConfigureAwait(false);
+                if (iframeEl == null)
+                {
+                    try
+                    {
+                        iframeEl = await frame.QuerySelectorAsync("iframe, frame").ConfigureAwait(false);
+                    }
+                    catch (PlaywrightException)
+                    {
+                        iframeEl = null;
+                    }
+                }
+
                 child = await ContentFrameOrNullAsync(iframeEl).ConfigureAwait(false);
                 if (child == null || child.IsDetached)
                 {
