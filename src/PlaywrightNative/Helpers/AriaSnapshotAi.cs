@@ -169,17 +169,20 @@ namespace PlaywrightNative.Helpers
                 budgetMs = 3_000;
             }
 
-            await EnsurePrefixesAsync(page, deadlineClock, budgetMs).ConfigureAwait(false);
+            // Leave time to stitch iframe children. A slow tree capture was
+            // consuming the whole 3s budget, so frameset pages kept empty iframes.
+            int captureLimitMs = CaptureLimitMs(budgetMs);
+            await EnsurePrefixesAsync(page, deadlineClock, captureLimitMs).ConfigureAwait(false);
             IFrame frame = page.MainFrame;
             string prefix = await RaceOrDefaultAsync(
                 () => PrefixForAsync(page, frame),
                 deadlineClock,
-                budgetMs,
+                captureLimitMs,
                 fallback: string.Empty).ConfigureAwait(false);
             string yaml = await RaceOrDefaultAsync(
                 () => AriaSnapshotOfficialAi.CaptureYamlAsync(root, depth, boxes, prefix),
                 deadlineClock,
-                budgetMs,
+                captureLimitMs,
                 fallback: string.Empty).ConfigureAwait(false);
             if (string.IsNullOrEmpty(yaml))
             {
@@ -231,17 +234,18 @@ namespace PlaywrightNative.Helpers
                 budgetMs = 3_000;
             }
 
-            await EnsurePrefixesAsync(page, deadlineClock, budgetMs).ConfigureAwait(false);
+            int captureLimitMs = CaptureLimitMs(budgetMs);
+            await EnsurePrefixesAsync(page, deadlineClock, captureLimitMs).ConfigureAwait(false);
             IFrame frame = page.MainFrame;
             string prefix = await RaceOrDefaultAsync(
                 () => PrefixForAsync(page, frame),
                 deadlineClock,
-                budgetMs,
+                captureLimitMs,
                 fallback: string.Empty).ConfigureAwait(false);
             string json = await RaceOrDefaultAsync(
                 () => AriaSnapshotOfficialAi.CaptureJsonAsync(root, depth, boxes, prefix),
                 deadlineClock,
-                budgetMs,
+                captureLimitMs,
                 fallback: "[]").ConfigureAwait(false);
             return await StitchJsonAsync(page, frame, json, depth, boxes, deadlineClock, budgetMs).ConfigureAwait(false);
         }
@@ -798,13 +802,24 @@ namespace PlaywrightNative.Helpers
 
             string wantName = info[0] ?? string.Empty;
             string wantSrc = info[1] ?? string.Empty;
+
+            // Nested framesets parent some frames under an inner frameset, so
+            // direct ChildFrames is not enough. Search descendants, not creation index.
+            List<IFrame> descendants = new List<IFrame>();
+            CollectFrames(frame, descendants);
             if (!string.IsNullOrEmpty(wantName))
             {
-                foreach (IFrame child in frame.ChildFrames)
+                for (int i = 0; i < descendants.Count; i++)
                 {
-                    if (child != null
-                        && !child.IsDetached
-                        && string.Equals(child.Name, wantName, StringComparison.Ordinal))
+                    IFrame child = descendants[i];
+                    if (child == null
+                        || ReferenceEquals(child, frame)
+                        || child.IsDetached)
+                    {
+                        continue;
+                    }
+
+                    if (string.Equals(child.Name, wantName, StringComparison.Ordinal))
                     {
                         return child;
                     }
@@ -814,9 +829,10 @@ namespace PlaywrightNative.Helpers
             if (!string.IsNullOrEmpty(wantSrc)
                 && !wantSrc.StartsWith("about:", StringComparison.OrdinalIgnoreCase))
             {
-                foreach (IFrame child in frame.ChildFrames)
+                for (int i = 0; i < descendants.Count; i++)
                 {
-                    if (child == null || child.IsDetached)
+                    IFrame child = descendants[i];
+                    if (child == null || ReferenceEquals(child, frame) || child.IsDetached)
                     {
                         continue;
                     }
@@ -824,25 +840,55 @@ namespace PlaywrightNative.Helpers
                     string childUrl = child.Url ?? string.Empty;
                     if (childUrl.Contains(wantSrc, StringComparison.Ordinal)
                         || wantSrc.Contains(childUrl, StringComparison.Ordinal)
-                        || string.Equals(childUrl, wantSrc, StringComparison.Ordinal)
-                        || (wantSrc.StartsWith("data:", StringComparison.OrdinalIgnoreCase)
-                            && childUrl.StartsWith("data:", StringComparison.OrdinalIgnoreCase)))
+                        || string.Equals(childUrl, wantSrc, StringComparison.Ordinal))
                     {
                         return child;
                     }
                 }
             }
 
-            // Index is only used for the single-child fallback below.
-            IReadOnlyList<IFrame> children = frame.ChildFrames;
-            if (children == null || children.Count == 0)
+            if (wantSrc.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
             {
-                return null;
+                IFrame dataChild = null;
+                int dataCount = 0;
+                for (int i = 0; i < descendants.Count; i++)
+                {
+                    IFrame child = descendants[i];
+                    if (child == null || ReferenceEquals(child, frame) || child.IsDetached)
+                    {
+                        continue;
+                    }
+
+                    if ((child.Url ?? string.Empty).StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+                    {
+                        dataCount++;
+                        dataChild = child;
+                    }
+                }
+
+                if (dataCount == 1)
+                {
+                    return dataChild;
+                }
             }
 
-            if (children.Count == 1)
+            int childCount = 0;
+            IFrame only = null;
+            for (int i = 0; i < descendants.Count; i++)
             {
-                return children[0].IsDetached ? null : children[0];
+                IFrame child = descendants[i];
+                if (child == null || ReferenceEquals(child, frame) || child.IsDetached)
+                {
+                    continue;
+                }
+
+                childCount++;
+                only = child;
+            }
+
+            if (childCount == 1)
+            {
+                return only;
             }
 
             // Do not index-match when multiple children — creation order ≠ DOM order.
@@ -918,10 +964,12 @@ namespace PlaywrightNative.Helpers
                 // RaceOrDefaultAsync returns a fallback (the in-flight evaluate
                 // is not cancelled). Callers must fail-closed via parent-document
                 // lazy checks before this path; only attempt ContentFrame.
+                // Long enough for a loaded frameset frame on a slow runner.
+                // Unloaded lazy iframes never reach this path.
                 return await RaceOrDefaultAsync(
                     () => iframeEl.ContentFrameAsync(),
                     Stopwatch.StartNew(),
-                    250,
+                    1200,
                     fallback: null).ConfigureAwait(false);
             }
             catch (PlaywrightException)
@@ -1017,6 +1065,19 @@ namespace PlaywrightNative.Helpers
             {
                 return false;
             }
+        }
+
+        private static int CaptureLimitMs(int budgetMs)
+        {
+            if (budgetMs <= 0 || budgetMs == int.MaxValue || budgetMs == Timeout.Infinite)
+            {
+                return budgetMs;
+            }
+
+            // Keep at least half the budget (max 1.5s) for iframe stitching.
+            int reserve = Math.Min(1500, budgetMs / 2);
+            int limit = budgetMs - reserve;
+            return limit <= 0 ? budgetMs : limit;
         }
 
         private static int RemainingMs(Stopwatch clock, int budgetMs)

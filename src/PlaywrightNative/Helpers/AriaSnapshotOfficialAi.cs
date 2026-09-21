@@ -97,6 +97,9 @@ namespace PlaywrightNative.Helpers
     return (t === 'IFRAME' || t === 'FRAME') && String(e.getAttribute('loading') || '').toLowerCase() === 'lazy';
   };
   const styleOf = (e, pseudo) => {
+    // getComputedStyle on an unloaded loading=lazy iframe wedges Darwin
+    // for the whole command timeout (ReturnEmptySnapshotWhenIframeIsNotLoaded).
+    if (isUnloadedLazyFrame(e)) return null;
     try { return e.ownerDocument.defaultView.getComputedStyle(e, pseudo || null); } catch (err) { return null; }
   };
   const hiddenForAria = (e) => {
@@ -130,6 +133,7 @@ namespace PlaywrightNative.Helpers
   };
   const isElementVisible = (e) => {
     if (!e || e.nodeType !== 1) return false;
+    if (isUnloadedLazyFrame(e)) return !!(e.isConnected);
     const st = styleOf(e);
     if (!st) return true;
     if (typeof e.checkVisibility === 'function') {
@@ -140,6 +144,7 @@ namespace PlaywrightNative.Helpers
     return r.width > 0 && r.height > 0;
   };
   const computeBox = (e) => {
+    if (isUnloadedLazyFrame(e)) return { visible: true, inline: false };
     const st = styleOf(e);
     const r = e.getBoundingClientRect();
     return { visible: !!(r.width > 0 && r.height > 0 && (!st || st.visibility !== 'hidden')), inline: !!(st && st.display === 'inline') };
@@ -584,7 +589,7 @@ namespace PlaywrightNative.Helpers
     if (node.active) key += ' [active]';
     if (node.ref) key += ' [ref=' + node.ref + ']';
     if (renderCursor && node.ref && hasPointerCursor(node)) key += ' [cursor=pointer]';
-    if (renderBoxes && node.el) {
+    if (renderBoxes && node.el && !isUnloadedLazyFrame(node.el)) {
       const r = node.el.getBoundingClientRect();
       key += ' [box=' + Math.round(r.x) + ',' + Math.round(r.y) + ',' + Math.round(r.width) + ',' + Math.round(r.height) + ']';
     }
@@ -646,7 +651,7 @@ namespace PlaywrightNative.Helpers
       out.ref = node.ref;
       if (renderCursor && hasPointerCursor(node)) out.cursor = 'pointer';
     }
-    if (renderBoxes && node.el) {
+    if (renderBoxes && node.el && !isUnloadedLazyFrame(node.el)) {
       const r = node.el.getBoundingClientRect();
       out.box = { x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.width), height: Math.round(r.height) };
     }

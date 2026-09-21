@@ -7695,25 +7695,55 @@ namespace PlaywrightNative.WebKit
                 return;
             }
 
+            // Do not call Emulation.setActiveAndFocused here. It clears
+            // transient activation, and macOS requestStorageAccess then
+            // rejects before callFunctionOn's gesture flag is applied.
+            //
+            // SendEvaluate does not invoke a bare function, so an arrow that
+            // returns [x, y] comes back as a function object and JsonException
+            // aborts the click. Use an IIFE that returns a string, and still
+            // dispatch the click when the rect cannot be read.
+            double x = 20;
+            double y = 20;
             try
             {
-                // Do not call Emulation.setActiveAndFocused here. It clears
-                // transient activation, and macOS requestStorageAccess then
-                // rejects before callFunctionOn's gesture flag is applied.
-                //
-                // Cheap single querySelector for iframe center — page-proxy Input
-                // only (no frame-session; EnableFrameSessions is off on 2276).
                 WKExecutionContext parentContext = await WaitForFrameContextAsync(parent).ConfigureAwait(false);
-                double[] point = await parentContext.EvaluateAsync<double[]>(
-                    @"() => {
-  const el = document.querySelector('iframe');
-  if (!el) return null;
+                string raw = await parentContext.EvaluateAsync<string>(
+                    @"(() => {
+  const el = document.querySelector('iframe, frame');
+  if (!el) return '20,20';
   const r = el.getBoundingClientRect();
-  if (!r.width || !r.height) return null;
-  return [r.left + (r.width / 2), r.top + (r.height / 2)];
-}").ConfigureAwait(false);
-                double x = point != null && point.Length >= 2 ? point[0] : 20;
-                double y = point != null && point.Length >= 2 ? point[1] : 20;
+  if (!r.width || !r.height) return '20,20';
+  return (r.left + (r.width / 2)) + ',' + (r.top + (r.height / 2));
+})()").ConfigureAwait(false);
+                if (!string.IsNullOrEmpty(raw))
+                {
+                    string[] parts = raw.Split(',');
+                    if (parts.Length >= 2
+                        && double.TryParse(parts[0], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double parsedX)
+                        && double.TryParse(parts[1], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double parsedY))
+                    {
+                        x = parsedX;
+                        y = parsedY;
+                    }
+                }
+            }
+            catch (PlaywrightException ex)
+            {
+                _logger?.LogDebug(ex, "Trusted gesture rect failed for requestStorageAccess on {PageProxyId}", _pageProxyId);
+            }
+            catch (JsonException ex)
+            {
+                _logger?.LogDebug(ex, "Trusted gesture rect failed for requestStorageAccess on {PageProxyId}", _pageProxyId);
+            }
+            catch (TimeoutException ex)
+            {
+                _logger?.LogDebug(ex, "Trusted gesture rect failed for requestStorageAccess on {PageProxyId}", _pageProxyId);
+            }
+
+            try
+            {
+                // Page-proxy Input only (no frame-session; EnableFrameSessions is off on 2276).
                 await _session.SendAsync(
                     "Input.dispatchMouseEvent",
                     new { type = "move", button = "none", x, y, modifiers = 0, buttons = 0 })
