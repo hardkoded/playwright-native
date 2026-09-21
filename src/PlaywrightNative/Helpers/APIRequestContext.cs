@@ -429,17 +429,12 @@ namespace PlaywrightNative.Helpers
             if (_disposed)
             {
                 // Still tear down clients if a prior MarkOwnerClosed left them.
-                AbortActiveClients();
+                BeginAbort();
                 return;
             }
 
             _disposed = true;
-
-            // RST before abort-gate (same ordering as MarkOwnerClosed).
-            AbortActiveClients();
-
-            _abortGate.TrySetResult(null);
-            RejectInFlightAborts();
+            BeginAbort();
             if (!_lifetime.IsCancellationRequested)
             {
                 await _lifetime.CancelAsync().ConfigureAwait(false);
@@ -2627,14 +2622,12 @@ namespace PlaywrightNative.Helpers
 
             _disposed = true;
 
-            // RST sockets before completing abort gates. Completing the gate first
-            // lets fetch finally → ReleaseClient → NetworkStream(ownsSocket) dispose
-            // race AbortSocket, so hang-route servers never see RequestAborted
-            // (Windows ShouldAbortRequestsWhenBrowserContextCloses).
-            AbortActiveClients();
-
-            _abortGate.TrySetResult(null);
-            RejectInFlightAborts();
+            // Arm linger and publish the abort gate before Close(0). Close on the
+            // caller thread deadlocks Windows SendAsync (context-close abort
+            // hits the 30s kill). Publishing the gate only after Close let a
+            // cancelled hang-route's empty 200 win WhenAny
+            // (ShouldAbortRequestsWhenContextIsDisposed).
+            BeginAbort();
             try
             {
                 if (!_lifetime.IsCancellationRequested)
@@ -2826,7 +2819,7 @@ namespace PlaywrightNative.Helpers
             }
         }
 
-        private void AbortActiveClients()
+        private void BeginAbort()
         {
             HttpClient[] clients;
             Socket[] sockets;
@@ -2838,11 +2831,15 @@ namespace PlaywrightNative.Helpers
                 _activeSockets.Clear();
             }
 
-            // RST first so hang-route servers observe RequestAborted (Node agent.destroy).
+            // Linger 0 makes a later NetworkStream dispose send RST, not FIN,
+            // even if it races Close(0). setsockopt does not wait for the read.
             for (int i = 0; i < sockets.Length; i++)
             {
-                AbortSocket(sockets[i]);
+                ArmAbortiveLinger(sockets[i]);
             }
+
+            _abortGate.TrySetResult(null);
+            RejectInFlightAborts();
 
             foreach (HttpClient client in clients)
             {
@@ -2853,14 +2850,29 @@ namespace PlaywrightNative.Helpers
                 catch (ObjectDisposedException)
                 {
                 }
-
-                // Do not dispose synchronously here: HttpClient.Dispose can wait for
-                // in-flight SendAsync, while SendAsync waits for the hang-route server
-                // — a Windows CloseAsync deadlock that starves RequestAborted
-                // (ShouldAbortRequestsWhenBrowserContextCloses). Cancel + socket RST
-                // fail the send; dispose on a background thread.
-                DisposeClientInBackground(client);
             }
+
+            // Close(0) on this thread can deadlock the in-flight read on Windows.
+            // The gate is already set, so fetch throws; RST follows off-thread.
+            _ = Task.Run(async () =>
+            {
+                for (int i = 0; i < sockets.Length; i++)
+                {
+                    AbortSocket(sockets[i]);
+                }
+
+                await Task.Delay(15).ConfigureAwait(false);
+                for (int i = 0; i < clients.Length; i++)
+                {
+                    try
+                    {
+                        clients[i].Dispose();
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                    }
+                }
+            });
         }
 
         private void DisposeClientInBackground(HttpClient client)
@@ -2880,6 +2892,25 @@ namespace PlaywrightNative.Helpers
             });
         }
 
+        private void ArmAbortiveLinger(Socket socket)
+        {
+            if (socket == null)
+            {
+                return;
+            }
+
+            try
+            {
+                socket.LingerState = new LingerOption(true, 0);
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+            catch (SocketException)
+            {
+            }
+        }
+
         private void AbortSocket(Socket socket)
         {
             if (socket == null)
@@ -2892,6 +2923,7 @@ namespace PlaywrightNative.Helpers
                 // Linger timeout 0 + Close sends RST (Node agent.destroy). Do not
                 // Shutdown first — that begins a graceful FIN and leaves Windows
                 // hang-route servers without RequestAborted (Abort tests time out).
+                ArmAbortiveLinger(socket);
                 socket.Close(0);
             }
             catch (ObjectDisposedException)

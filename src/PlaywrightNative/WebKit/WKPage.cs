@@ -4175,11 +4175,14 @@ namespace PlaywrightNative.WebKit
 
             // Darwin WebKit does not fire load while an unloaded loading=lazy
             // iframe is in the document, so setContent waits until the NUnit kill
-            // (ReturnEmptySnapshotWhenIframeIsNotLoaded). The load event must not
-            // wait for those frames.
-            if (frame.ParentFrame == null && waitUntil != WaitUntilState.Commit)
+            // (ReturnEmptySnapshotWhenIframeIsNotLoaded). Probing those frames
+            // with Runtime.evaluate wedges the session, so decide from the HTML.
+            if (frame.ParentFrame == null
+                && waitUntil != WaitUntilState.Commit
+                && OnlyLazyFrames(html))
             {
-                await SeedLoadIfOnlyLazyFramesAsync(frame).ConfigureAwait(false);
+                RecordLifecycleFromDocumentSeed("DOMContentLoaded");
+                RecordLifecycleFromDocumentSeed("load");
             }
 
             // document.open/write/close wipes document-level listeners from init
@@ -4204,6 +4207,68 @@ namespace PlaywrightNative.WebKit
                 _ => LoadState.Load,
             };
             await WaitForFrameLoadStateAsync(frame, state, resolvedTimeout).ConfigureAwait(false);
+
+            static bool OnlyLazyFrames(string markup)
+            {
+                if (string.IsNullOrEmpty(markup))
+                {
+                    return false;
+                }
+
+                bool any = false;
+                int index = 0;
+                while (index < markup.Length)
+                {
+                    int iframeAt = markup.IndexOf("<iframe", index, StringComparison.OrdinalIgnoreCase);
+                    int frameAt = markup.IndexOf("<frame", index, StringComparison.OrdinalIgnoreCase);
+                    int found;
+                    bool iframe;
+                    if (iframeAt >= 0 && (frameAt < 0 || iframeAt <= frameAt))
+                    {
+                        found = iframeAt;
+                        iframe = true;
+                    }
+                    else if (frameAt >= 0)
+                    {
+                        found = frameAt;
+                        iframe = false;
+                    }
+                    else
+                    {
+                        break;
+                    }
+
+                    int nameAt = found + (iframe ? 7 : 6);
+                    if (!iframe)
+                    {
+                        char boundary = nameAt < markup.Length ? markup[nameAt] : '\0';
+                        bool frameTag = boundary == '>' || boundary == '/' || char.IsWhiteSpace(boundary);
+                        if (!frameTag)
+                        {
+                            index = nameAt;
+                            continue;
+                        }
+                    }
+
+                    int end = markup.IndexOf('>', found);
+                    if (end < 0)
+                    {
+                        return false;
+                    }
+
+                    any = true;
+                    string tag = markup.Substring(found, end - found);
+                    if (tag.IndexOf("loading", StringComparison.OrdinalIgnoreCase) < 0
+                        || tag.IndexOf("lazy", StringComparison.OrdinalIgnoreCase) < 0)
+                    {
+                        return false;
+                    }
+
+                    index = end + 1;
+                }
+
+                return any;
+            }
         }
 
         /// <summary>
@@ -6750,46 +6815,6 @@ namespace PlaywrightNative.WebKit
             }
 
             LifecycleChanged?.Invoke(name);
-        }
-
-        /// <summary>
-        /// Seeds DOMContentLoaded and load when the document's only frames are
-        /// <c>loading=lazy</c>. Darwin never delivers <c>Page.loadEventFired</c>
-        /// for that page, so <c>setContent</c> would wait out the test timeout.
-        /// </summary>
-        /// <param name="frame">The frame that was just rewritten.</param>
-        /// <returns>A task that completes when the probe finishes.</returns>
-        private async Task SeedLoadIfOnlyLazyFramesAsync(WKFrame frame)
-        {
-            bool seed;
-            try
-            {
-                const string probe = @"(() => {
-  const nodes = document.querySelectorAll('iframe, frame');
-  if (!nodes.length) return false;
-  for (let i = 0; i < nodes.length; i++) {
-    if ((nodes[i].getAttribute('loading') || '').toLowerCase() !== 'lazy') return false;
-  }
-  return !!(document.body || document.querySelector('frameset'));
-})()";
-                seed = await EvaluateInFrameAsync<bool>(frame, probe).ConfigureAwait(false);
-            }
-            catch (PlaywrightException)
-            {
-                return;
-            }
-            catch (TimeoutException)
-            {
-                return;
-            }
-
-            if (!seed)
-            {
-                return;
-            }
-
-            RecordLifecycleFromDocumentSeed("DOMContentLoaded");
-            RecordLifecycleFromDocumentSeed("load");
         }
 
         /// <summary>

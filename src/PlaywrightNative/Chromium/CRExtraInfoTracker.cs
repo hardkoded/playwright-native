@@ -18,6 +18,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Text.Json;
+using System.Threading.Tasks;
 using PlaywrightNative.Helpers;
 
 namespace PlaywrightNative.Chromium
@@ -138,7 +139,7 @@ namespace PlaywrightNative.Chromium
                     Hop hop = list.Hops[i];
                     hop.FlushRequest();
                     hop.FlushResponse();
-                    hop.Request?.EnsureRawRequestHeaders();
+                    SealRequestHeaders(hop);
                     if (ResponseHeadersSettled(hop))
                     {
                         hop.Response?.EnsureRawResponseHeaders();
@@ -194,11 +195,35 @@ namespace PlaywrightNative.Chromium
                 Hop hop = list.Hops[i];
                 hop.FlushRequest();
                 hop.FlushResponse();
-                hop.Request?.EnsureRawRequestHeaders();
+                SealRequestHeaders(hop);
                 hop.Response?.EnsureRawResponseHeaders();
             }
 
             _hops.TryRemove(requestId, out _);
+        }
+
+        private void SealRequestHeaders(Hop hop)
+        {
+            if (hop?.Request == null)
+            {
+                return;
+            }
+
+            // requestWillBeSent headers omit Accept* until ExtraInfo. Sealing
+            // them in loadingFinished races that event and HeadersArray returns
+            // the short list (ShouldReportRawHeaders).
+            if (hop.HasRequestExtra || hop.Request.ServedFromCache)
+            {
+                hop.Request.EnsureRawRequestHeaders();
+                return;
+            }
+
+            CRRequest pending = hop.Request;
+            _ = Task.Run(async () =>
+            {
+                await Task.Delay(750).ConfigureAwait(false);
+                pending.EnsureRawRequestHeaders();
+            });
         }
 
         private bool ResponseHeadersSettled(Hop hop)

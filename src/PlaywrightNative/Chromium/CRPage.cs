@@ -2611,10 +2611,7 @@ namespace PlaywrightNative.Chromium
                 {
                     await GoToFrameAsync(frame, url, waitUntil, timeout, referrer).ConfigureAwait(false);
                 }
-                catch (NavigationException ex) when (
-                    captured != null
-                    && ex.Message != null
-                    && ex.Message.Contains("ERR_HTTP_RESPONSE_CODE_FAILURE", StringComparison.Ordinal))
+                catch (NavigationException ex) when (ShouldReturnCapturedNavigation(ex, captured))
                 {
                     return captured;
                 }
@@ -2631,6 +2628,30 @@ namespace PlaywrightNative.Chromium
             finally
             {
                 ResponseReceived -= OnResponse;
+            }
+
+            static bool ShouldReturnCapturedNavigation(NavigationException ex, CRResponse response)
+            {
+                if (response == null || ex?.Message == null)
+                {
+                    return false;
+                }
+
+                if (ex.Message.Contains("ERR_HTTP_RESPONSE_CODE_FAILURE", StringComparison.Ordinal))
+                {
+                    return true;
+                }
+
+                // A newer navigation aborts load after the document committed
+                // (ShouldReturnFromGotoIfNewNavigationIsStarted). 204 is the
+                // navigation result itself and must still throw. A replacement
+                // that never commits leaves response null.
+                if (!ex.Message.Contains("ERR_ABORTED", StringComparison.Ordinal))
+                {
+                    return false;
+                }
+
+                return response.Status >= 200 && response.Status < 300 && response.Status != 204;
             }
         }
 
