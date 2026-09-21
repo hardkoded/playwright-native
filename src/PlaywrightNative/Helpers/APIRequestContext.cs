@@ -2869,7 +2869,7 @@ namespace PlaywrightNative.Helpers
             {
                 // Let AbortSocket RST reach the hang-route server before
                 // NetworkStream(ownsSocket:true) dispose races a FIN.
-                await Task.Delay(1).ConfigureAwait(false);
+                await Task.Delay(15).ConfigureAwait(false);
                 try
                 {
                     client.Dispose();

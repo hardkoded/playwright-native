@@ -169,20 +169,17 @@ namespace PlaywrightNative.Helpers
                 budgetMs = 3_000;
             }
 
-            // Leave time to stitch iframe children. A slow tree capture was
-            // consuming the whole 3s budget, so frameset pages kept empty iframes.
-            int captureLimitMs = CaptureLimitMs(budgetMs);
-            await EnsurePrefixesAsync(page, deadlineClock, captureLimitMs).ConfigureAwait(false);
+            await EnsurePrefixesAsync(page, deadlineClock, budgetMs).ConfigureAwait(false);
             IFrame frame = page.MainFrame;
             string prefix = await RaceOrDefaultAsync(
                 () => PrefixForAsync(page, frame),
                 deadlineClock,
-                captureLimitMs,
+                budgetMs,
                 fallback: string.Empty).ConfigureAwait(false);
             string yaml = await RaceOrDefaultAsync(
                 () => AriaSnapshotOfficialAi.CaptureYamlAsync(root, depth, boxes, prefix),
                 deadlineClock,
-                captureLimitMs,
+                budgetMs,
                 fallback: string.Empty).ConfigureAwait(false);
             if (string.IsNullOrEmpty(yaml))
             {
@@ -234,18 +231,17 @@ namespace PlaywrightNative.Helpers
                 budgetMs = 3_000;
             }
 
-            int captureLimitMs = CaptureLimitMs(budgetMs);
-            await EnsurePrefixesAsync(page, deadlineClock, captureLimitMs).ConfigureAwait(false);
+            await EnsurePrefixesAsync(page, deadlineClock, budgetMs).ConfigureAwait(false);
             IFrame frame = page.MainFrame;
             string prefix = await RaceOrDefaultAsync(
                 () => PrefixForAsync(page, frame),
                 deadlineClock,
-                captureLimitMs,
+                budgetMs,
                 fallback: string.Empty).ConfigureAwait(false);
             string json = await RaceOrDefaultAsync(
                 () => AriaSnapshotOfficialAi.CaptureJsonAsync(root, depth, boxes, prefix),
                 deadlineClock,
-                captureLimitMs,
+                budgetMs,
                 fallback: "[]").ConfigureAwait(false);
             return await StitchJsonAsync(page, frame, json, depth, boxes, deadlineClock, budgetMs).ConfigureAwait(false);
         }
@@ -1065,19 +1061,6 @@ namespace PlaywrightNative.Helpers
             {
                 return false;
             }
-        }
-
-        private static int CaptureLimitMs(int budgetMs)
-        {
-            if (budgetMs <= 0 || budgetMs == int.MaxValue || budgetMs == Timeout.Infinite)
-            {
-                return budgetMs;
-            }
-
-            // Keep at least half the budget (max 1.5s) for iframe stitching.
-            int reserve = Math.Min(1500, budgetMs / 2);
-            int limit = budgetMs - reserve;
-            return limit <= 0 ? budgetMs : limit;
         }
 
         private static int RemainingMs(Stopwatch clock, int budgetMs)

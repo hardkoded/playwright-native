@@ -4173,6 +4173,15 @@ namespace PlaywrightNative.WebKit
             string expression = $"(() => {{ document.open(); document.write({htmlJsLiteral}); document.close(); }})()";
             await EvaluateInFrameAsync<object>(frame, expression).ConfigureAwait(false);
 
+            // Darwin WebKit does not fire load while an unloaded loading=lazy
+            // iframe is in the document, so setContent waits until the NUnit kill
+            // (ReturnEmptySnapshotWhenIframeIsNotLoaded). The load event must not
+            // wait for those frames.
+            if (frame.ParentFrame == null && waitUntil != WaitUntilState.Commit)
+            {
+                await SeedLoadIfOnlyLazyFramesAsync(frame).ConfigureAwait(false);
+            }
+
             // document.open/write/close wipes document-level listeners from init
             // scripts (context-menu suppress). Re-run user init scripts so right-
             // click tests still get console events after SetContent.
@@ -6741,6 +6750,46 @@ namespace PlaywrightNative.WebKit
             }
 
             LifecycleChanged?.Invoke(name);
+        }
+
+        /// <summary>
+        /// Seeds DOMContentLoaded and load when the document's only frames are
+        /// <c>loading=lazy</c>. Darwin never delivers <c>Page.loadEventFired</c>
+        /// for that page, so <c>setContent</c> would wait out the test timeout.
+        /// </summary>
+        /// <param name="frame">The frame that was just rewritten.</param>
+        /// <returns>A task that completes when the probe finishes.</returns>
+        private async Task SeedLoadIfOnlyLazyFramesAsync(WKFrame frame)
+        {
+            bool seed;
+            try
+            {
+                const string probe = @"(() => {
+  const nodes = document.querySelectorAll('iframe, frame');
+  if (!nodes.length) return false;
+  for (let i = 0; i < nodes.length; i++) {
+    if ((nodes[i].getAttribute('loading') || '').toLowerCase() !== 'lazy') return false;
+  }
+  return !!(document.body || document.querySelector('frameset'));
+})()";
+                seed = await EvaluateInFrameAsync<bool>(frame, probe).ConfigureAwait(false);
+            }
+            catch (PlaywrightException)
+            {
+                return;
+            }
+            catch (TimeoutException)
+            {
+                return;
+            }
+
+            if (!seed)
+            {
+                return;
+            }
+
+            RecordLifecycleFromDocumentSeed("DOMContentLoaded");
+            RecordLifecycleFromDocumentSeed("load");
         }
 
         /// <summary>
