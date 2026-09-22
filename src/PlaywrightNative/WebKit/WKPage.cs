@@ -7873,11 +7873,11 @@ namespace PlaywrightNative.WebKit
         }
 
         /// <summary>
-        /// On macOS, delivers a one-shot page-proxy keyboard event after a successful
+        /// On macOS, delivers a one-shot page-proxy Input click after a successful
         /// http(s) main-frame navigation so Resource Load Statistics records
         /// first-party user interaction for that host. Required for a subsequent
-        /// cross-site <c>document.requestStorageAccess()</c> under ITP. Uses Shift
-        /// (not a mouse click) so navigations with content at (0,0) are not activated.
+        /// cross-site <c>document.requestStorageAccess()</c> under ITP. WebKit
+        /// counts click/tap/form entry only — modifier-only keys do not qualify.
         /// </summary>
         /// <returns>A task that completes when the gesture has been sent or skipped.</returns>
         private async Task RecordFirstPartyUserInteractionIfNeededAsync()
@@ -7907,31 +7907,20 @@ namespace PlaywrightNative.WebKit
 
             try
             {
-                // Trusted Input keyboard — JS-dispatched events do not update ITP.
-                // Shift alone does not activate links/buttons the way a (1,1) click can.
+                // Trusted Input — JS-dispatched clicks do not update ITP interaction.
+                // (1,1) is far enough from (0,0) chrome while still on empty test pages
+                // that ship no hit-target there (e.g. set-cookie.html).
                 await _session.SendAsync(
-                        "Input.dispatchKeyEvent",
-                        new
-                        {
-                            type = "keyDown",
-                            modifiers = 0,
-                            windowsVirtualKeyCode = 16,
-                            code = "ShiftLeft",
-                            key = "Shift",
-                            location = 1,
-                        })
+                        "Input.dispatchMouseEvent",
+                        new { type = "move", button = "none", x = 1, y = 1, modifiers = 0, buttons = 0 })
                     .ConfigureAwait(false);
                 await _session.SendAsync(
-                        "Input.dispatchKeyEvent",
-                        new
-                        {
-                            type = "keyUp",
-                            modifiers = 0,
-                            windowsVirtualKeyCode = 16,
-                            code = "ShiftLeft",
-                            key = "Shift",
-                            location = 1,
-                        })
+                        "Input.dispatchMouseEvent",
+                        new { type = "down", button = "left", x = 1, y = 1, modifiers = 0, buttons = 1, clickCount = 1 })
+                    .ConfigureAwait(false);
+                await _session.SendAsync(
+                        "Input.dispatchMouseEvent",
+                        new { type = "up", button = "left", x = 1, y = 1, modifiers = 0, buttons = 0, clickCount = 1 })
                     .ConfigureAwait(false);
             }
             catch (PlaywrightException ex)
