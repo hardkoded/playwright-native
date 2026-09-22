@@ -3356,12 +3356,21 @@ namespace PlaywrightNative.WebKit
                     // blank→blank often skips Page.frameNavigated / loadEventFired on
                     // Darwin WebKit after persistent relaunch. Seed from readyState when
                     // the navigate RPC finished but lifecycle waiters are still open.
-                    // Do not synchronously replay Load (that races evaluate / NewPage
-                    // bootstrap and destroys execution contexts under load).
+                    // Do not synchronously replay Load for HTTP→blank (that races evaluate
+                    // / NewPage bootstrap). blank→blank can complete waiters immediately:
+                    // the document is already loaded and readyState evaluate can hang for
+                    // tens of seconds while WaitForMainExecutionContextAsync spins.
                     if (PopupOpenedHelper.IsBlankUrl(url))
                     {
-                        int seedGeneration = Interlocked.Increment(ref _lifecycleSeedGeneration);
-                        _ = SeedLifecycleFromReadyStateAfterDataNavigationAsync(seedGeneration);
+                        if (PopupOpenedHelper.IsBlankUrl(previousUrl))
+                        {
+                            CompletePendingLifecycleWaitersFromBlankNavigation();
+                        }
+                        else
+                        {
+                            int seedGeneration = Interlocked.Increment(ref _lifecycleSeedGeneration);
+                            _ = SeedLifecycleFromReadyStateAfterDataNavigationAsync(seedGeneration);
+                        }
                     }
 
                     Task lifecycle = await Task.WhenAny(waitTcs.Task, timeoutTask).ConfigureAwait(false);
@@ -7888,6 +7897,39 @@ namespace PlaywrightNative.WebKit
         {
             _ = expression;
 
+            // Emulation.grantPermissions(storageAccess) lets Darwin RSA succeed when
+            // MiniBrowser's panel auto-accept does not fire under automation Input.
+            // Grant both wildcard and the frame origin (ITP scopes the grant).
+            string frameOrigin = null;
+            try
+            {
+                string frameUrl = frame?.Url;
+                if (!string.IsNullOrEmpty(frameUrl)
+                    && Uri.TryCreate(frameUrl, UriKind.Absolute, out Uri parsed)
+                    && (parsed.Scheme == Uri.UriSchemeHttp || parsed.Scheme == Uri.UriSchemeHttps))
+                {
+                    frameOrigin = parsed.GetLeftPart(UriPartial.Authority);
+                }
+            }
+            catch (UriFormatException)
+            {
+            }
+
+            try
+            {
+                await GrantPermissionsAsync("*", new[] { ContextPermissions.StorageAccess })
+                    .ConfigureAwait(false);
+                if (!string.IsNullOrEmpty(frameOrigin))
+                {
+                    await GrantPermissionsAsync(frameOrigin, new[] { ContextPermissions.StorageAccess })
+                        .ConfigureAwait(false);
+                }
+            }
+            catch (PlaywrightException ex)
+            {
+                _logger?.LogDebug(ex, "storageAccess grant failed before requestStorageAccess on {PageProxyId}", _pageProxyId);
+            }
+
             // Foreground without setActiveAndFocused (clears transient activation).
             WKTargetSession target = _targetSession;
             if (target != null)
@@ -9458,6 +9500,46 @@ namespace PlaywrightNative.WebKit
             }
         }
 
+        /// <summary>
+        /// Completes in-flight blank→blank navigation waiters without waiting for
+        /// <c>Page.loadEventFired</c> (often omitted on Darwin WebKit).
+        /// </summary>
+        private void CompletePendingLifecycleWaitersFromBlankNavigation()
+        {
+            TaskCompletionSource<bool> loadTcs;
+            TaskCompletionSource<bool> domTcs;
+            TaskCompletionSource<bool> commitTcs;
+            lock (_navigationLock)
+            {
+                if (_pendingLoadTcs == null
+                    && _pendingDomContentTcs == null
+                    && _pendingCommitTcs == null)
+                {
+                    return;
+                }
+
+                if (!PopupOpenedHelper.IsBlankUrl(_mainFrameUrl)
+                    || !PopupOpenedHelper.IsBlankUrl(_pendingNavigationUrl))
+                {
+                    return;
+                }
+
+                _pendingNavigationCommitted = true;
+                loadTcs = _pendingLoadTcs;
+                domTcs = _pendingDomContentTcs;
+                commitTcs = _pendingCommitTcs;
+                _pendingLoadTcs = null;
+                _pendingDomContentTcs = null;
+                _pendingCommitTcs = null;
+            }
+
+            RecordLifecycleFromDocumentSeed("DOMContentLoaded");
+            RecordLifecycleFromDocumentSeed("load");
+            commitTcs?.TrySetResult(true);
+            domTcs?.TrySetResult(true);
+            loadTcs?.TrySetResult(true);
+        }
+
         private async Task SeedLifecycleFromReadyStateAfterDataNavigationAsync(int seedGeneration)
         {
             try
@@ -9469,8 +9551,28 @@ namespace PlaywrightNative.WebKit
                         return;
                     }
 
-                    string readyState = await EvaluateExpressionAsync<string>("document.readyState")
-                        .ConfigureAwait(false);
+                    // Non-blocking context lookup — WaitForMainExecutionContextAsync
+                    // (5s × 40 attempts) hangs blank→blank GoTo past the NUnit budget
+                    // when the page target is recycling its execution context.
+                    if (!TryGetFrameContext(_frameManager.MainFrame, out WKExecutionContext seedContext)
+                        || seedContext == null)
+                    {
+                        await Task.Delay(25).ConfigureAwait(false);
+                        continue;
+                    }
+
+                    string readyState;
+                    try
+                    {
+                        readyState = await seedContext.EvaluateAsync<string>("document.readyState")
+                            .ConfigureAwait(false);
+                    }
+                    catch (PlaywrightException)
+                    {
+                        await Task.Delay(25).ConfigureAwait(false);
+                        continue;
+                    }
+
                     if (Volatile.Read(ref _lifecycleSeedGeneration) != seedGeneration)
                     {
                         return;
