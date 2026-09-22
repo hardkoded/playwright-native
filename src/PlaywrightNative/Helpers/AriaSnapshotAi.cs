@@ -424,6 +424,20 @@ namespace PlaywrightNative.Helpers
                     budgetMs,
                     fallback: null).ConfigureAwait(false);
 
+                // Darwin data: iframes after Focus: first stitch can miss while
+                // FrameLocator still resolves (ShouldSupportManyPropertiesOnIframes).
+                // Retry once with a dedicated short budget outside the spent clock.
+                if (string.IsNullOrEmpty(childYaml)
+                    && RemainingMs(deadlineClock, budgetMs) > 0
+                    && line.Contains("[active]", StringComparison.Ordinal))
+                {
+                    childYaml = await CaptureActiveDataIframeYamlAsync(
+                        page,
+                        depth,
+                        boxes,
+                        lineDepth + 1).ConfigureAwait(false);
+                }
+
                 if (string.IsNullOrEmpty(childYaml))
                 {
                     result.Append(line);
@@ -595,6 +609,69 @@ namespace PlaywrightNative.Helpers
                 .ConfigureAwait(false);
             return await StitchAsync(page, child, childYaml, depth, boxes, deadlineClock, budgetMs, startDepth)
                 .ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Last-chance stitch for an <c>iframe [active]</c> line when the primary
+        /// capture returned empty. Uses CSS <c>FrameLocator</c> (same path Focus
+        /// uses) with a fresh timeout so a spent stitch budget cannot leave
+        /// Darwin data: iframes childless after Focus.
+        /// </summary>
+        private static async Task<string> CaptureActiveDataIframeYamlAsync(
+            IPage page,
+            int? depth,
+            bool boxes,
+            int startDepth)
+        {
+            if (page == null || page.IsClosed)
+            {
+                return null;
+            }
+
+            try
+            {
+                IElementHandle enterRoot = await page.FrameLocator("iframe, frame")
+                    .Locator("body, frameset")
+                    .ElementHandleAsync(800f)
+                    .ConfigureAwait(false);
+                if (enterRoot == null)
+                {
+                    return null;
+                }
+
+                IFrame child = await enterRoot.OwnerFrameAsync().ConfigureAwait(false);
+                if (child == null || child.IsDetached)
+                {
+                    return null;
+                }
+
+                string prefix = await PrefixForAsync(page, child).ConfigureAwait(false);
+                string enterYaml = await AriaSnapshotOfficialAi
+                    .CaptureYamlAsync(enterRoot, depth, boxes, prefix, startDepth)
+                    .ConfigureAwait(false);
+                if (string.IsNullOrEmpty(enterYaml))
+                {
+                    return null;
+                }
+
+                return await StitchAsync(
+                    page,
+                    child,
+                    enterYaml,
+                    depth,
+                    boxes,
+                    Stopwatch.StartNew(),
+                    1_200,
+                    startDepth).ConfigureAwait(false);
+            }
+            catch (PlaywrightException)
+            {
+                return null;
+            }
+            catch (TimeoutException)
+            {
+                return null;
+            }
         }
 
         private static async Task<string> StitchJsonAsync(

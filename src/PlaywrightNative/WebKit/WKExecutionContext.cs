@@ -208,6 +208,83 @@ namespace PlaywrightNative.WebKit
         }
 
         /// <summary>
+        /// Awaits a Promise previously stored on <c>window[promiseProperty]</c> via
+        /// <c>Runtime.callFunctionOn</c> with <c>awaitPromise: true</c>. Used after a
+        /// page-proxy Input pulse so Darwin <c>requestStorageAccess</c> can finish under
+        /// the real gesture listener that armed the promise.
+        /// </summary>
+        /// <param name="promiseProperty">
+        /// Property name on <c>window</c> holding the Promise (e.g. <c>__pw_rsa_promise</c>).
+        /// </param>
+        /// <returns>The settled remote <c>result</c>, or <see langword="null"/>.</returns>
+        internal async Task<JsonElement?> AwaitWindowPromiseAsync(string promiseProperty)
+        {
+            if (string.IsNullOrEmpty(promiseProperty))
+            {
+                throw new ArgumentNullException(nameof(promiseProperty));
+            }
+
+            if (_destroyed.Task.IsCompleted)
+            {
+                throw ClosedOrNavigationException();
+            }
+
+            object anchorParams = _contextId.HasValue
+                ? new { expression = "window", contextId = _contextId.Value, returnByValue = false }
+                : (object)new { expression = "window", returnByValue = false };
+            JsonElement? anchorResponse = await _session.SendAsync("Runtime.evaluate", anchorParams)
+                .ConfigureAwait(false);
+            if (anchorResponse == null)
+            {
+                return null;
+            }
+
+            ThrowIfThrown(anchorResponse.Value);
+            if (!anchorResponse.Value.TryGetProperty("result", out JsonElement anchorResult))
+            {
+                return null;
+            }
+
+            string anchorId = RemoteObject.GetObjectId(anchorResult);
+            if (string.IsNullOrEmpty(anchorId))
+            {
+                return null;
+            }
+
+            string functionDeclaration =
+                "function () { return this[" + JsonSerializer.Serialize(promiseProperty) + "]; }";
+            try
+            {
+                JsonElement? response = await _session.SendAsync(
+                    "Runtime.callFunctionOn",
+                    new
+                    {
+                        objectId = anchorId,
+                        functionDeclaration,
+                        returnByValue = true,
+                        awaitPromise = true,
+                    }).ConfigureAwait(false);
+                if (response == null)
+                {
+                    return null;
+                }
+
+                ThrowIfThrown(response.Value);
+                return response.Value.TryGetProperty("result", out JsonElement result)
+                    ? result
+                    : null;
+            }
+            catch (TargetClosedException)
+            {
+                throw ClosedOrNavigationException();
+            }
+            finally
+            {
+                await ReleaseHandleAsync(anchorId).ConfigureAwait(false);
+            }
+        }
+
+        /// <summary>
         /// Evaluates a JavaScript function in this execution context with the given arguments
         /// via <c>Runtime.callFunctionOn</c>. JS handles from another world are rejected or
         /// adopted when they are DOM nodes.

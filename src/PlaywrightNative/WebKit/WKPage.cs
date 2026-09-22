@@ -7863,20 +7863,21 @@ namespace PlaywrightNative.WebKit
         }
 
         /// <summary>
-        /// Runs <c>document.requestStorageAccess</c> under UtilityScript
-        /// <c>Runtime.callFunctionOn</c> (<c>emulateUserGesture</c> +
-        /// <c>awaitPromise</c>) after a page-proxy Input click on the iframe.
-        /// Darwin cross-origin OOPIFs do not inherit parent transient activation;
-        /// WIP gesture alone was still False on 2251. MiniBrowser auto-accepts
-        /// the macOS storage-access panel. Frame-* sessions are Console-only —
-        /// never send Input there (never ACKs). Do not re-apply
-        /// <c>Emulation.setActiveAndFocused</c> here — it clears transient
-        /// activation (page-proxy init already sets it).
+        /// Runs <c>document.requestStorageAccess</c> inside a real page-proxy
+        /// Input click delivered to the OOPIF. Darwin WebKit 2251 rejects RSA
+        /// under <c>emulateUserGesture</c> alone (UtilityScript /
+        /// window-anchored <c>callFunctionOn</c> both returned False on CI);
+        /// the API requires transient activation from a trusted Input event in
+        /// the child document. MiniBrowser auto-accepts the storage-access
+        /// panel. Frame-* sessions are Console-only — never send Input there.
+        /// Do not call <c>Emulation.setActiveAndFocused</c> here (clears
+        /// activation).
         /// </summary>
         /// <param name="context">Child-frame execution context.</param>
         /// <param name="expression">
         /// Raw function expression containing <c>requestStorageAccess</c>
-        /// (not pre-invoked via <c>InvokeIfFunction</c>).
+        /// (not pre-invoked via <c>InvokeIfFunction</c>). Unused for the
+        /// click-handler path — RSA is invoked directly under the gesture.
         /// </param>
         /// <param name="frame">The child frame being evaluated.</param>
         /// <returns>The remote result object.</returns>
@@ -7885,6 +7886,8 @@ namespace PlaywrightNative.WebKit
             string expression,
             WKFrame frame)
         {
+            _ = expression;
+
             // Foreground without setActiveAndFocused (clears transient activation).
             WKTargetSession target = _targetSession;
             if (target != null)
@@ -7899,10 +7902,47 @@ namespace PlaywrightNative.WebKit
                 }
             }
 
-            return await context.EvaluateHandleWithUserGestureAsync(
-                    expression,
-                    () => PulseTrustedGestureOnFrameAsync(frame))
-                .ConfigureAwait(false);
+            // Arm a one-shot gesture listener in the child document, then deliver
+            // a page-proxy click into the iframe so RSA runs under real activation.
+            const string armExpression =
+                @"(() => {
+  if (window.__pw_rsa_promise) return true;
+  window.__pw_rsa_promise = new Promise((resolve) => {
+    const finish = (value) => {
+      cleanup();
+      resolve(value);
+    };
+    const cleanup = () => {
+      document.removeEventListener('pointerdown', onGesture, true);
+      document.removeEventListener('mousedown', onGesture, true);
+      document.removeEventListener('click', onGesture, true);
+    };
+    const onGesture = () => {
+      document.requestStorageAccess().then(() => finish(true), () => finish(false));
+    };
+    document.addEventListener('pointerdown', onGesture, true);
+    document.addEventListener('mousedown', onGesture, true);
+    document.addEventListener('click', onGesture, true);
+  });
+  return true;
+})()";
+
+            try
+            {
+                await context.EvaluateHandleAsync(armExpression).ConfigureAwait(false);
+            }
+            catch (PlaywrightException ex)
+            {
+                _logger?.LogDebug(ex, "RSA gesture arm failed on {PageProxyId}", _pageProxyId);
+                return await context.EvaluateHandleWithUserGestureAsync(
+                        "() => document.requestStorageAccess().then(() => true, e => false)",
+                        () => PulseTrustedGestureOnFrameAsync(frame))
+                    .ConfigureAwait(false);
+            }
+
+            await PulseTrustedGestureOnFrameAsync(frame).ConfigureAwait(false);
+
+            return await context.AwaitWindowPromiseAsync("__pw_rsa_promise").ConfigureAwait(false);
         }
 
         /// <summary>
