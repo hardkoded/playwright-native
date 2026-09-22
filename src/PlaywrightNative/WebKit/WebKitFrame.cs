@@ -527,6 +527,18 @@ namespace PlaywrightNative.WebKit
                 return EvaluatePreparedAsync<T>(handleFn, handleArgs);
             }
 
+            // Child-frame requestStorageAccess must keep the raw function form so
+            // callFunctionOn+emulateUserGesture can invoke it under activation
+            // (upstream utilityScript.evaluate with isFunction:true). InvokeIfFunction
+            // would start the promise before the gestured callFunctionOn runs.
+            if (arg == null
+                && _wkFrame.ParentFrame != null
+                && expression != null
+                && expression.Contains("requestStorageAccess", StringComparison.Ordinal))
+            {
+                return _page.EvaluateSerializedInFrameAsync<T>(_wkFrame, expression);
+            }
+
             string toEval = arg == null ? EvaluateWithArg.InvokeIfFunction(expression) : EvaluateWithArg.Wrap(expression, arg);
             return _page.EvaluateSerializedInFrameAsync<T>(_wkFrame, toEval);
         }

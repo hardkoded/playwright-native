@@ -126,28 +126,22 @@ namespace PlaywrightNative.WebKit
 
         /// <summary>
         /// Evaluates <paramref name="expression"/> via <c>Runtime.callFunctionOn</c> with
-        /// <c>emulateUserGesture: true</c>, returning a handle (<c>returnByValue: false</c>).
-        /// Upstream <c>page.evaluate</c> applies user gestures through callFunctionOn (utility
-        /// script); <c>Runtime.evaluate</c>'s gesture flag is not enough for APIs such as
-        /// <c>document.requestStorageAccess()</c> in cross-process iframes on macOS.
+        /// <c>emulateUserGesture: true</c> and <c>awaitPromise: true</c>.
+        /// Upstream <c>page.evaluate</c> applies user gestures through callFunctionOn
+        /// (utility script); <c>Runtime.evaluate</c>'s gesture flag is not enough for
+        /// APIs such as <c>document.requestStorageAccess()</c> in cross-process iframes
+        /// on macOS. <paramref name="expression"/> should be the raw function form
+        /// (e.g. <c>() =&gt; …</c>), matching upstream <c>isFunction: true</c>.
         /// </summary>
-        /// <param name="expression">The JavaScript expression to evaluate.</param>
-        /// <param name="pulseTrustedGestureAsync">
-        /// Optional callback invoked immediately before <c>callFunctionOn</c> so macOS
-        /// WebKit still has transient activation after the objectId anchor evaluate.
-        /// </param>
+        /// <param name="expression">The JavaScript function or expression to evaluate.</param>
         /// <returns>The raw <c>result</c> remote object, or <see langword="null"/>.</returns>
-        internal async Task<JsonElement?> EvaluateHandleWithUserGestureAsync(
-            string expression,
-            Func<Task> pulseTrustedGestureAsync = null)
+        internal async Task<JsonElement?> EvaluateHandleWithUserGestureAsync(string expression)
         {
             // WebKit WIP only accepts objectId-bound Runtime.callFunctionOn (not
             // executionContextId) — same as upstream wkExecutionContext. Match
-            // utilityScript evaluate: enter an async function under
-            // emulateUserGesture, then await inside so Darwin keeps transient
-            // activation across requestStorageAccess microtasks. A sync
-            // callFunctionOn that merely returns a Promise ends the gesture
-            // scope before RSA settles (returns false on macOS).
+            // utilityScript.evaluate: resolve the function under emulateUserGesture,
+            // invoke it, then await so Darwin keeps transient activation across
+            // requestStorageAccess microtasks.
             string functionDeclaration =
                 "async function () {" +
                 "  let __pwRet = (" + expression + ");" +
@@ -155,14 +149,11 @@ namespace PlaywrightNative.WebKit
                 "  return await __pwRet;" +
                 "}";
 
-            // Bind to window so callFunctionOn runs in the page world with
-            // a stable objectId. Prefer window over document — Darwin RSA
-            // under document-bound callFunctionOn still returned false on CI
-            // after OOPIF load even with emulateUserGesture. Anchor without
-            // emulateUserGesture — that flag would consume the activation the
-            // following callFunctionOn needs. Do not pulse before the anchor:
-            // a parent iframe hit-test is slow enough that activation expires
-            // before callFunctionOn when pulsed twice.
+            // Bind to window so callFunctionOn runs in the page world with a
+            // stable objectId. Prefer window over document — Darwin RSA under
+            // document-bound callFunctionOn still returned false on CI after
+            // OOPIF load even with emulateUserGesture. Anchor without
+            // emulateUserGesture so the flag applies only to callFunctionOn.
             object anchorParams = _contextId.HasValue
                 ? new { expression = "window", contextId = _contextId.Value, returnByValue = false, emulateUserGesture = false }
                 : (object)new { expression = "window", returnByValue = false, emulateUserGesture = false };
@@ -188,14 +179,6 @@ namespace PlaywrightNative.WebKit
 
             try
             {
-                // Pulse immediately before callFunctionOn — parent iframe click
-                // then OOPIF frame-session pulse — so Darwin still has transient
-                // activation when requestStorageAccess runs under awaitPromise.
-                if (pulseTrustedGestureAsync != null)
-                {
-                    await pulseTrustedGestureAsync().ConfigureAwait(false);
-                }
-
                 JsonElement? response = await _session.SendAsync(
                     "Runtime.callFunctionOn",
                     new

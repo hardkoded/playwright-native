@@ -3842,8 +3842,8 @@ namespace PlaywrightNative.WebKit
                 // cross-process iframe navigations that steal focus between
                 // SetContent and evaluate do not leave requestStorageAccess
                 // without an active page (macOS). Skip immediately before RSA:
-                // setActiveAndFocused clears transient user activation that the
-                // trusted mouse pulse is about to grant.
+                // setActiveAndFocused clears transient user activation that
+                // callFunctionOn+emulateUserGesture is about to grant.
                 if (frame?.ParentFrame != null && !needsUserGesture)
                 {
                     try
@@ -7863,12 +7863,19 @@ namespace PlaywrightNative.WebKit
         }
 
         /// <summary>
-        /// Runs <c>document.requestStorageAccess</c> under a trusted gesture and
-        /// WebKit permission grant (Playwright MiniBrowser auto-accepts the macOS
-        /// storage-access panel; headless builds need <c>Emulation.grantPermissions</c>).
+        /// Runs <c>document.requestStorageAccess</c> under
+        /// <c>Runtime.callFunctionOn</c> with <c>emulateUserGesture</c> +
+        /// <c>awaitPromise</c>, matching upstream <c>utilityScript.evaluate</c>.
+        /// Playwright MiniBrowser auto-accepts the macOS storage-access panel
+        /// under that gesture — no <c>Input</c> pulse (frame-* sessions are
+        /// Console-only on Darwin 2251) and no <c>storageAccess</c>
+        /// <c>grantPermissions</c> (not in upstream WebKit permission map).
         /// </summary>
         /// <param name="context">Child-frame execution context.</param>
-        /// <param name="expression">Expression containing <c>requestStorageAccess</c>.</param>
+        /// <param name="expression">
+        /// Raw function expression containing <c>requestStorageAccess</c>
+        /// (not pre-invoked via <c>InvokeIfFunction</c>).
+        /// </param>
         /// <param name="frame">The child frame being evaluated.</param>
         /// <returns>The remote result object.</returns>
         private async Task<JsonElement?> EvaluateRequestStorageAccessAsync(
@@ -7876,159 +7883,59 @@ namespace PlaywrightNative.WebKit
             string expression,
             WKFrame frame)
         {
-            string frameOrigin = null;
-            try
+            // Bring the page to the foreground without Emulation.setActiveAndFocused
+            // (that clears transient activation Darwin needs for RSA).
+            WKTargetSession target = _targetSession;
+            if (target != null)
             {
-                string frameUrl = frame?.Url;
-                if (!string.IsNullOrEmpty(frameUrl)
-                    && Uri.TryCreate(frameUrl, UriKind.Absolute, out Uri parsed)
-                    && (parsed.Scheme == Uri.UriSchemeHttp || parsed.Scheme == Uri.UriSchemeHttps))
+                try
                 {
-                    frameOrigin = parsed.GetLeftPart(UriPartial.Authority);
-                }
-            }
-            catch (UriFormatException)
-            {
-            }
-
-            try
-            {
-                await GrantPermissionsAsync("*", new[] { ContextPermissions.StorageAccess })
-                    .ConfigureAwait(false);
-                if (!string.IsNullOrEmpty(frameOrigin))
-                {
-                    await GrantPermissionsAsync(frameOrigin, new[] { ContextPermissions.StorageAccess })
+                    await _session.SendAsync("Target.activate", new { targetId = target.TargetId })
                         .ConfigureAwait(false);
                 }
-            }
-            catch (PlaywrightException ex)
-            {
-                _logger?.LogDebug(ex, "storageAccess grant failed before requestStorageAccess on {PageProxyId}", _pageProxyId);
+                catch (PlaywrightException)
+                {
+                }
             }
 
-            // Input lives on the page-proxy only (upstream wkInput). Frame-*
-            // sessions are Console-only — Input.dispatchMouseEvent never ACKs
-            // there and awaiting hangs Darwin 2251 for 20s.
-            return await context.EvaluateHandleWithUserGestureAsync(
-                    expression,
-                    () => PulseTrustedGestureOnFrameAsync(frame))
-                .ConfigureAwait(false);
-        }
-
-        /// <summary>
-        /// Dispatches a trusted mouse click so macOS WebKit grants transient
-        /// activation for <c>document.requestStorageAccess()</c>. Does not run
-        /// in-page <c>window.focus()</c> (that breaks <c>document.hasFocus()</c>).
-        /// </summary>
-        /// <param name="frame">The child frame about to evaluate.</param>
-        /// <returns>A task that completes when the gesture has been sent or skipped.</returns>
-        private async Task PulseTrustedGestureOnFrameAsync(WKFrame frame)
-        {
+            // Focus the iframe element in the parent so the OOPIF is the active
+            // document before callFunctionOn grants transient activation.
             WKFrame parent = frame?.ParentFrame;
-            if (parent == null)
+            if (parent != null)
             {
-                return;
-            }
-
-            // Do not call Emulation.setActiveAndFocused here. It clears
-            // transient activation, and macOS requestStorageAccess then
-            // rejects before callFunctionOn's gesture flag is applied.
-            //
-            // SendEvaluate does not invoke a bare function, so an arrow that
-            // returns [x, y] comes back as a function object and JsonException
-            // aborts the click. Use an IIFE that returns a string, and still
-            // dispatch the click when the rect cannot be read.
-            double x = 20;
-            double y = 20;
-            try
-            {
-                WKExecutionContext parentContext = await WaitForFrameContextAsync(parent).ConfigureAwait(false);
-
-                // Anchor evaluate must not set emulateUserGesture — that flag
-                // consumes activation the following click must grant for RSA.
-                const string rectExpression = @"(() => {
+                try
+                {
+                    WKExecutionContext parentContext = await WaitForFrameContextAsync(parent).ConfigureAwait(false);
+                    const string focusExpression = @"(() => {
   const el = document.querySelector('iframe, frame');
-  if (!el) return '20,20';
-  const r = el.getBoundingClientRect();
-  if (!r.width || !r.height) return '20,20';
-  return (r.left + (r.width / 2)) + ',' + (r.top + (r.height / 2));
+  if (el && typeof el.focus === 'function') el.focus();
+  return true;
 })()";
-                object rectParams = parentContext.ContextId != 0
-                    ? new
-                    {
-                        expression = rectExpression,
-                        contextId = parentContext.ContextId,
-                        returnByValue = true,
-                        emulateUserGesture = false,
-                    }
-                    : (object)new
-                    {
-                        expression = rectExpression,
-                        returnByValue = true,
-                        emulateUserGesture = false,
-                    };
-                JsonElement? rectResponse = await parentContext.Session.SendAsync("Runtime.evaluate", rectParams)
-                    .ConfigureAwait(false);
-                string raw = null;
-                if (rectResponse.HasValue
-                    && rectResponse.Value.TryGetProperty("result", out JsonElement rectResult)
-                    && rectResult.TryGetProperty("value", out JsonElement rectValue)
-                    && rectValue.ValueKind == JsonValueKind.String)
-                {
-                    raw = rectValue.GetString();
+                    object focusParams = parentContext.ContextId != 0
+                        ? new
+                        {
+                            expression = focusExpression,
+                            contextId = parentContext.ContextId,
+                            returnByValue = true,
+                            emulateUserGesture = false,
+                        }
+                        : (object)new
+                        {
+                            expression = focusExpression,
+                            returnByValue = true,
+                            emulateUserGesture = false,
+                        };
+                    await parentContext.Session.SendAsync("Runtime.evaluate", focusParams)
+                        .ConfigureAwait(false);
                 }
-
-                if (!string.IsNullOrEmpty(raw))
+                catch (PlaywrightException ex)
                 {
-                    string[] parts = raw.Split(',');
-                    if (parts.Length >= 2
-                        && double.TryParse(parts[0], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double parsedX)
-                        && double.TryParse(parts[1], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double parsedY))
-                    {
-                        x = parsedX;
-                        y = parsedY;
-                    }
+                    _logger?.LogDebug(ex, "iframe focus failed before requestStorageAccess on {PageProxyId}", _pageProxyId);
                 }
             }
-            catch (PlaywrightException ex)
-            {
-                _logger?.LogDebug(ex, "Trusted gesture rect failed for requestStorageAccess on {PageProxyId}", _pageProxyId);
-            }
-            catch (JsonException ex)
-            {
-                _logger?.LogDebug(ex, "Trusted gesture rect failed for requestStorageAccess on {PageProxyId}", _pageProxyId);
-            }
-            catch (TimeoutException ex)
-            {
-                _logger?.LogDebug(ex, "Trusted gesture rect failed for requestStorageAccess on {PageProxyId}", _pageProxyId);
-            }
 
-            try
-            {
-                // Page-proxy click on the iframe chrome. Downstream
-                // callFunctionOn+emulateUserGesture+awaitPromise grants RSA
-                // under that activation (upstream MiniBrowser auto-accepts).
-                await _session.SendAsync(
-                    "Input.dispatchMouseEvent",
-                    new { type = "move", button = "none", x, y, modifiers = 0, buttons = 0 })
-                    .ConfigureAwait(false);
-                await _session.SendAsync(
-                    "Input.dispatchMouseEvent",
-                    new { type = "down", button = "left", x, y, modifiers = 0, buttons = 1, clickCount = 1 })
-                    .ConfigureAwait(false);
-                await _session.SendAsync(
-                    "Input.dispatchMouseEvent",
-                    new { type = "up", button = "left", x, y, modifiers = 0, buttons = 0, clickCount = 1 })
-                    .ConfigureAwait(false);
-            }
-            catch (PlaywrightException ex)
-            {
-                _logger?.LogDebug(ex, "Trusted gesture pulse failed for requestStorageAccess on {PageProxyId}", _pageProxyId);
-            }
-            catch (TimeoutException ex)
-            {
-                _logger?.LogDebug(ex, "Trusted gesture pulse timed out for requestStorageAccess on {PageProxyId}", _pageProxyId);
-            }
+            return await context.EvaluateHandleWithUserGestureAsync(expression)
+                .ConfigureAwait(false);
         }
 
         private async Task ReplayExposedBindingsAsync()
