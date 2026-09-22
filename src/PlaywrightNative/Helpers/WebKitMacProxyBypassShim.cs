@@ -47,7 +47,13 @@ namespace PlaywrightNative.Helpers
         private readonly string _proxyAuthorization;
         private int _disposed;
 
-        private WebKitMacProxyBypassShim(string upstreamHost, int upstreamPort, string bypass, string proxyAuthorization)
+        private WebKitMacProxyBypassShim(
+            string upstreamHost,
+            int upstreamPort,
+            string bypass,
+            string proxyAuthorization,
+            string username,
+            string password)
         {
             _upstreamHost = upstreamHost;
             _upstreamPort = upstreamPort;
@@ -56,9 +62,16 @@ namespace PlaywrightNative.Helpers
             _listener = new TcpListener(IPAddress.Loopback, 0);
             _listener.Start();
             Port = ((IPEndPoint)_listener.LocalEndpoint).Port;
+
+            // Pass credentials through to WebKit so CFNetwork retries CONNECT after
+            // a 407/close with Proxy-Authorization. The shim still injects auth on
+            // the upstream hop; without Username/Password on BrowserProxy, Darwin
+            // often never reconnects (ShouldReconnectWithCredentialsAfterConnect407…).
             BrowserProxy = new Proxy
             {
                 Server = "http://127.0.0.1:" + Port.ToString(CultureInfo.InvariantCulture),
+                Username = username,
+                Password = password,
             };
             _acceptLoop = AcceptLoopAsync();
         }
@@ -171,7 +184,13 @@ namespace PlaywrightNative.Helpers
                 proxyAuthorization = "Basic " + Convert.ToBase64String(Encoding.ASCII.GetBytes(decoded));
             }
 
-            WebKitMacProxyBypassShim shim = new(upstream.Host, port, bypass, proxyAuthorization);
+            WebKitMacProxyBypassShim shim = new(
+                upstream.Host,
+                port,
+                bypass,
+                proxyAuthorization,
+                userProxy.Username,
+                userProxy.Password);
             browserProxy = shim.BrowserProxy;
             return shim;
         }
