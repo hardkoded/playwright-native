@@ -3865,7 +3865,7 @@ namespace PlaywrightNative.WebKit
                 }
 
                 JsonElement? remote = needsUserGesture
-                    ? await EvaluateRequestStorageAccessAsync(context, expression).ConfigureAwait(false)
+                    ? await EvaluateRequestStorageAccessAsync(context, expression, frame).ConfigureAwait(false)
                     : await context.EvaluateHandleAsync(expression).ConfigureAwait(false);
                 if (needsUserGesture)
                 {
@@ -7863,11 +7863,13 @@ namespace PlaywrightNative.WebKit
         }
 
         /// <summary>
-        /// Runs <c>document.requestStorageAccess</c> under
-        /// <c>Runtime.callFunctionOn</c> with <c>emulateUserGesture</c> +
-        /// <c>awaitPromise</c> bound to a UtilityScript object (upstream
-        /// <c>utilityScript.evaluate</c>). MiniBrowser auto-accepts the macOS
-        /// storage-access panel under that WIP gesture. Do not re-apply
+        /// Runs <c>document.requestStorageAccess</c> under UtilityScript
+        /// <c>Runtime.callFunctionOn</c> (<c>emulateUserGesture</c> +
+        /// <c>awaitPromise</c>) after a page-proxy Input click on the iframe.
+        /// Darwin cross-origin OOPIFs do not inherit parent transient activation;
+        /// WIP gesture alone was still False on 2251. MiniBrowser auto-accepts
+        /// the macOS storage-access panel. Frame-* sessions are Console-only —
+        /// never send Input there (never ACKs). Do not re-apply
         /// <c>Emulation.setActiveAndFocused</c> here — it clears transient
         /// activation (page-proxy init already sets it).
         /// </summary>
@@ -7876,11 +7878,148 @@ namespace PlaywrightNative.WebKit
         /// Raw function expression containing <c>requestStorageAccess</c>
         /// (not pre-invoked via <c>InvokeIfFunction</c>).
         /// </param>
+        /// <param name="frame">The child frame being evaluated.</param>
         /// <returns>The remote result object.</returns>
-        private Task<JsonElement?> EvaluateRequestStorageAccessAsync(
+        private async Task<JsonElement?> EvaluateRequestStorageAccessAsync(
             WKExecutionContext context,
-            string expression)
-            => context.EvaluateHandleWithUserGestureAsync(expression);
+            string expression,
+            WKFrame frame)
+        {
+            // Foreground without setActiveAndFocused (clears transient activation).
+            WKTargetSession target = _targetSession;
+            if (target != null)
+            {
+                try
+                {
+                    await _session.SendAsync("Target.activate", new { targetId = target.TargetId })
+                        .ConfigureAwait(false);
+                }
+                catch (PlaywrightException)
+                {
+                }
+            }
+
+            return await context.EvaluateHandleWithUserGestureAsync(
+                    expression,
+                    () => PulseTrustedGestureOnFrameAsync(frame))
+                .ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Dispatches a trusted page-proxy mouse click on the iframe element so
+        /// macOS WebKit grants transient activation inside the OOPIF for
+        /// <c>document.requestStorageAccess()</c>. Does not call in-page
+        /// <c>window.focus()</c> (that breaks <c>document.hasFocus()</c>).
+        /// </summary>
+        /// <param name="frame">The child frame about to evaluate.</param>
+        /// <returns>A task that completes when the gesture has been sent or skipped.</returns>
+        private async Task PulseTrustedGestureOnFrameAsync(WKFrame frame)
+        {
+            WKFrame parent = frame?.ParentFrame;
+            if (parent == null)
+            {
+                return;
+            }
+
+            double x = 20;
+            double y = 20;
+            try
+            {
+                WKExecutionContext parentContext = await WaitForFrameContextAsync(parent).ConfigureAwait(false);
+
+                // Focus the iframe element (no gesture flag) then read its center
+                // for the page-proxy click that arms OOPIF transient activation.
+                const string rectExpression = @"(() => {
+  const el = document.querySelector('iframe, frame');
+  if (!el) return '20,20';
+  if (typeof el.focus === 'function') el.focus();
+  const r = el.getBoundingClientRect();
+  if (!r.width || !r.height) return '20,20';
+  return (r.left + (r.width / 2)) + ',' + (r.top + (r.height / 2));
+})()";
+                object rectParams = parentContext.ContextId != 0
+                    ? new
+                    {
+                        expression = rectExpression,
+                        contextId = parentContext.ContextId,
+                        returnByValue = true,
+                        emulateUserGesture = false,
+                    }
+                    : (object)new
+                    {
+                        expression = rectExpression,
+                        returnByValue = true,
+                        emulateUserGesture = false,
+                    };
+                JsonElement? rectResponse = await parentContext.Session.SendAsync("Runtime.evaluate", rectParams)
+                    .ConfigureAwait(false);
+                string raw = null;
+                if (rectResponse.HasValue
+                    && rectResponse.Value.TryGetProperty("result", out JsonElement rectResult)
+                    && rectResult.TryGetProperty("value", out JsonElement rectValue)
+                    && rectValue.ValueKind == JsonValueKind.String)
+                {
+                    raw = rectValue.GetString();
+                }
+
+                if (!string.IsNullOrEmpty(raw))
+                {
+                    string[] parts = raw.Split(',');
+                    if (parts.Length >= 2
+                        && double.TryParse(
+                            parts[0],
+                            System.Globalization.NumberStyles.Float,
+                            System.Globalization.CultureInfo.InvariantCulture,
+                            out double parsedX)
+                        && double.TryParse(
+                            parts[1],
+                            System.Globalization.NumberStyles.Float,
+                            System.Globalization.CultureInfo.InvariantCulture,
+                            out double parsedY))
+                    {
+                        x = parsedX;
+                        y = parsedY;
+                    }
+                }
+            }
+            catch (PlaywrightException ex)
+            {
+                _logger?.LogDebug(ex, "Trusted gesture rect failed for requestStorageAccess on {PageProxyId}", _pageProxyId);
+            }
+            catch (JsonException ex)
+            {
+                _logger?.LogDebug(ex, "Trusted gesture rect failed for requestStorageAccess on {PageProxyId}", _pageProxyId);
+            }
+            catch (TimeoutException ex)
+            {
+                _logger?.LogDebug(ex, "Trusted gesture rect failed for requestStorageAccess on {PageProxyId}", _pageProxyId);
+            }
+
+            try
+            {
+                // Page-proxy only — frame-* Input never ACKs on Darwin 2251.
+                await _session.SendAsync(
+                    "Input.dispatchMouseEvent",
+                    new { type = "move", button = "none", x, y, modifiers = 0, buttons = 0 })
+                    .ConfigureAwait(false);
+                await _session.SendAsync(
+                    "Input.dispatchMouseEvent",
+                    new { type = "down", button = "left", x, y, modifiers = 0, buttons = 1, clickCount = 1 })
+                    .ConfigureAwait(false);
+                await _session.SendAsync(
+                    "Input.dispatchMouseEvent",
+                    new { type = "up", button = "left", x, y, modifiers = 0, buttons = 0, clickCount = 1 })
+                    .ConfigureAwait(false);
+            }
+            catch (PlaywrightException ex)
+            {
+                _logger?.LogDebug(ex, "Trusted gesture pulse failed for requestStorageAccess on {PageProxyId}", _pageProxyId);
+            }
+            catch (TimeoutException ex)
+            {
+                _logger?.LogDebug(ex, "Trusted gesture pulse timed out for requestStorageAccess on {PageProxyId}", _pageProxyId);
+            }
+        }
 
         private async Task ReplayExposedBindingsAsync()
         {

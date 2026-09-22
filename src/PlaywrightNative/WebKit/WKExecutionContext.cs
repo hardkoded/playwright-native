@@ -135,20 +135,35 @@ namespace PlaywrightNative.WebKit
         /// <c>emulateUserGesture: true</c> and <c>awaitPromise: true</c>, bound to a
         /// page-world UtilityScript object — the same wire shape as upstream
         /// <c>wkExecutionContext.evaluateWithArguments</c> + <c>utilityScript.evaluate</c>.
-        /// Window-anchored CFO was not enough for Darwin OOPIF
-        /// <c>document.requestStorageAccess()</c>. <paramref name="expression"/> should be
-        /// the raw function form (e.g. <c>() =&gt; …</c>), matching <c>isFunction: true</c>.
+        /// Darwin OOPIF <c>requestStorageAccess</c> also needs a page-proxy Input pulse
+        /// into the iframe (cross-origin frames do not inherit parent transient
+        /// activation); pulse after UtilityScript install and immediately before CFO
+        /// so activation is still live. <paramref name="expression"/> should be the
+        /// raw function form (e.g. <c>() =&gt; …</c>), matching <c>isFunction: true</c>.
         /// </summary>
         /// <param name="expression">The JavaScript function or expression to evaluate.</param>
+        /// <param name="pulseTrustedGestureAsync">
+        /// Optional page-proxy Input click invoked after UtilityScript install and
+        /// immediately before <c>callFunctionOn</c>.
+        /// </param>
         /// <returns>The raw <c>result</c> remote object, or <see langword="null"/>.</returns>
-        internal async Task<JsonElement?> EvaluateHandleWithUserGestureAsync(string expression)
+        internal async Task<JsonElement?> EvaluateHandleWithUserGestureAsync(
+            string expression,
+            Func<Task> pulseTrustedGestureAsync = null)
         {
             if (_destroyed.Task.IsCompleted)
             {
                 throw ClosedOrNavigationException();
             }
 
+            // Install first — Runtime.evaluate for UtilityScript is slow enough that
+            // pulsing beforehand lets Darwin transient activation expire.
             string utilityId = await EnsureUtilityScriptObjectIdAsync().ConfigureAwait(false);
+
+            if (pulseTrustedGestureAsync != null)
+            {
+                await pulseTrustedGestureAsync().ConfigureAwait(false);
+            }
 
             // Exact upstream evaluateWithArguments shape for isFunction+returnByValue.
             const string functionDeclaration =
@@ -879,13 +894,16 @@ namespace PlaywrightNative.WebKit
         private async Task<string> InstallUtilityScriptObjectIdAsync()
         {
             // Minimal UtilityScript.evaluate + native-Promise wrap for awaitPromise
-            // (upstream _promiseAwareJsonValueNoThrow). Full utilityScriptSource is
-            // not required for boolean RSA.
+            // (upstream _promiseAwareJsonValueNoThrow). Use globalThis.eval (indirect)
+            // like upstream this.global.eval so the page function closes over the
+            // frame global, not the UtilityScript method scope. Full
+            // utilityScriptSource is not required for boolean RSA.
             const string source =
                 @"(() => {
+  const global = globalThis;
   return {
     evaluate(isFunction, returnByValue, expression, argCount) {
-      let result = eval(expression);
+      let result = global.eval(expression);
       if (isFunction === true) {
         result = result();
       } else if (isFunction !== false && typeof result === 'function') {
