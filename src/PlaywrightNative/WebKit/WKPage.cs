@@ -7865,10 +7865,11 @@ namespace PlaywrightNative.WebKit
         /// <summary>
         /// Runs <c>document.requestStorageAccess</c> under
         /// <c>Runtime.callFunctionOn</c> with <c>emulateUserGesture</c> +
-        /// <c>awaitPromise</c> (upstream <c>utilityScript.evaluate</c>). MiniBrowser
-        /// auto-accepts the macOS storage-access panel under that WIP gesture —
-        /// no Input pulse and no <c>storageAccess</c> permission grant (upstream
-        /// does neither).
+        /// <c>awaitPromise</c> bound to a UtilityScript object (upstream
+        /// <c>utilityScript.evaluate</c>). MiniBrowser auto-accepts the macOS
+        /// storage-access panel under that WIP gesture. Do not re-apply
+        /// <c>Emulation.setActiveAndFocused</c> here — it clears transient
+        /// activation (page-proxy init already sets it).
         /// </summary>
         /// <param name="context">Child-frame execution context.</param>
         /// <param name="expression">
@@ -7876,38 +7877,10 @@ namespace PlaywrightNative.WebKit
         /// (not pre-invoked via <c>InvokeIfFunction</c>).
         /// </param>
         /// <returns>The remote result object.</returns>
-        private async Task<JsonElement?> EvaluateRequestStorageAccessAsync(
+        private Task<JsonElement?> EvaluateRequestStorageAccessAsync(
             WKExecutionContext context,
             string expression)
-        {
-            // Bring the page to the foreground; setActiveAndFocused immediately
-            // before CFO (no Input pulse afterward) so Darwin sees an active page
-            // without clearing the gesture flag callFunctionOn is about to apply.
-            WKTargetSession target = _targetSession;
-            if (target != null)
-            {
-                try
-                {
-                    await _session.SendAsync("Target.activate", new { targetId = target.TargetId })
-                        .ConfigureAwait(false);
-                }
-                catch (PlaywrightException)
-                {
-                }
-            }
-
-            try
-            {
-                await _session.SendAsync("Emulation.setActiveAndFocused", new { active = true })
-                    .ConfigureAwait(false);
-            }
-            catch (PlaywrightException ex)
-            {
-                _logger?.LogDebug(ex, "setActiveAndFocused failed before requestStorageAccess on {PageProxyId}", _pageProxyId);
-            }
-
-            return await context.EvaluateHandleWithUserGestureAsync(expression).ConfigureAwait(false);
-        }
+            => context.EvaluateHandleWithUserGestureAsync(expression);
 
         private async Task ReplayExposedBindingsAsync()
         {

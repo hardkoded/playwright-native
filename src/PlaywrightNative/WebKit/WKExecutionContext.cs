@@ -35,6 +35,8 @@ namespace PlaywrightNative.WebKit
         private readonly TaskCompletionSource<bool> _destroyed =
             new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
+        private Task<string> _utilityScriptObjectId;
+
         /// <summary>
         /// Initializes a new instance of the <see cref="WKExecutionContext"/> class.
         /// </summary>
@@ -76,7 +78,11 @@ namespace PlaywrightNative.WebKit
         /// Marks the context destroyed so in-flight evaluates fail with a navigation error
         /// instead of hanging on WebKit <c>Runtime.callFunctionOn</c>.
         /// </summary>
-        internal void MarkDestroyed() => _destroyed.TrySetResult(true);
+        internal void MarkDestroyed()
+        {
+            _utilityScriptObjectId = null;
+            _destroyed.TrySetResult(true);
+        }
 
         /// <summary>
         /// Evaluates a JavaScript expression and returns the raw <c>RemoteObject</c>
@@ -126,86 +132,64 @@ namespace PlaywrightNative.WebKit
 
         /// <summary>
         /// Evaluates <paramref name="expression"/> via <c>Runtime.callFunctionOn</c> with
-        /// <c>emulateUserGesture: true</c> and <c>awaitPromise: true</c>.
-        /// Matches upstream <c>utilityScript.evaluate</c> + <c>wkExecutionContext.evaluateWithArguments</c>:
-        /// sync CFO body invokes the function under the gesture flag, then returns a
-        /// native Promise for <c>awaitPromise</c> (via the same pattern as
-        /// <c>_promiseAwareJsonValueNoThrow</c>). <c>Runtime.evaluate</c>'s gesture
-        /// flag alone is not enough for <c>document.requestStorageAccess()</c> in
-        /// cross-process iframes on macOS. <paramref name="expression"/> should be the
-        /// raw function form (e.g. <c>() =&gt; …</c>), matching <c>isFunction: true</c>.
+        /// <c>emulateUserGesture: true</c> and <c>awaitPromise: true</c>, bound to a
+        /// page-world UtilityScript object — the same wire shape as upstream
+        /// <c>wkExecutionContext.evaluateWithArguments</c> + <c>utilityScript.evaluate</c>.
+        /// Window-anchored CFO was not enough for Darwin OOPIF
+        /// <c>document.requestStorageAccess()</c>. <paramref name="expression"/> should be
+        /// the raw function form (e.g. <c>() =&gt; …</c>), matching <c>isFunction: true</c>.
         /// </summary>
         /// <param name="expression">The JavaScript function or expression to evaluate.</param>
         /// <returns>The raw <c>result</c> remote object, or <see langword="null"/>.</returns>
         internal async Task<JsonElement?> EvaluateHandleWithUserGestureAsync(string expression)
         {
-            // WebKit WIP only accepts objectId-bound Runtime.callFunctionOn (not
-            // executionContextId) — same as upstream wkExecutionContext.
-            // Sync body (not async function): RSA must start under emulateUserGesture;
-            // wrapping the returned Promise in native async matches upstream
-            // _promiseAwareJsonValueNoThrow so awaitPromise can settle it.
-            string functionDeclaration =
-                "function () {" +
-                "  let __pwRet = (" + expression + ");" +
-                "  if (typeof __pwRet === 'function') __pwRet = __pwRet();" +
-                "  if (__pwRet && typeof __pwRet.then === 'function') {" +
-                "    return (async () => await __pwRet)();" +
-                "  }" +
-                "  return __pwRet;" +
-                "}";
-
-            // Bind to window so callFunctionOn runs in the page world with a
-            // stable objectId (upstream binds utilityScript; window is the
-            // closest page-world anchor without a utility-script install).
-            object anchorParams = _contextId.HasValue
-                ? new { expression = "window", contextId = _contextId.Value, returnByValue = false, emulateUserGesture = false }
-                : (object)new { expression = "window", returnByValue = false, emulateUserGesture = false };
-            JsonElement? anchorResponse = await _session.SendAsync(
-                "Runtime.evaluate",
-                anchorParams).ConfigureAwait(false);
-            if (anchorResponse == null)
+            if (_destroyed.Task.IsCompleted)
             {
-                return null;
+                throw ClosedOrNavigationException();
             }
 
-            ThrowIfThrown(anchorResponse.Value);
-            if (!anchorResponse.Value.TryGetProperty("result", out JsonElement anchorResult))
-            {
-                return null;
-            }
+            string utilityId = await EnsureUtilityScriptObjectIdAsync().ConfigureAwait(false);
 
-            string anchorId = RemoteObject.GetObjectId(anchorResult);
-            if (string.IsNullOrEmpty(anchorId))
-            {
-                return null;
-            }
+            // Exact upstream evaluateWithArguments shape for isFunction+returnByValue.
+            const string functionDeclaration =
+                "(utilityScript, ...args) => utilityScript.evaluate(...args)";
 
+            JsonElement? response;
             try
             {
-                JsonElement? response = await _session.SendAsync(
+                response = await _session.SendAsync(
                     "Runtime.callFunctionOn",
                     new
                     {
-                        objectId = anchorId,
+                        objectId = utilityId,
                         functionDeclaration,
+                        arguments = new object[]
+                        {
+                            new { objectId = utilityId },
+                            new { value = true },
+                            new { value = true },
+                            new { value = expression },
+                            new { value = 0 },
+                        },
                         returnByValue = true,
                         emulateUserGesture = true,
                         awaitPromise = true,
                     }).ConfigureAwait(false);
-                if (response == null)
-                {
-                    return null;
-                }
-
-                ThrowIfThrown(response.Value);
-                return response.Value.TryGetProperty("result", out JsonElement result)
-                    ? result
-                    : null;
             }
-            finally
+            catch (TargetClosedException)
             {
-                await ReleaseHandleAsync(anchorId).ConfigureAwait(false);
+                throw ClosedOrNavigationException();
             }
+
+            if (response == null)
+            {
+                return null;
+            }
+
+            ThrowIfThrown(response.Value);
+            return response.Value.TryGetProperty("result", out JsonElement result)
+                ? result
+                : null;
         }
 
         /// <summary>
@@ -880,6 +864,65 @@ namespace PlaywrightNative.WebKit
                 returnByValue,
                 emulateUserGesture = true,
             };
+        }
+
+        private Task<string> EnsureUtilityScriptObjectIdAsync()
+        {
+            if (_utilityScriptObjectId == null)
+            {
+                _utilityScriptObjectId = InstallUtilityScriptObjectIdAsync();
+            }
+
+            return _utilityScriptObjectId;
+        }
+
+        private async Task<string> InstallUtilityScriptObjectIdAsync()
+        {
+            // Minimal UtilityScript.evaluate + native-Promise wrap for awaitPromise
+            // (upstream _promiseAwareJsonValueNoThrow). Full utilityScriptSource is
+            // not required for boolean RSA.
+            const string source =
+                @"(() => {
+  return {
+    evaluate(isFunction, returnByValue, expression, argCount) {
+      let result = eval(expression);
+      if (isFunction === true) {
+        result = result();
+      } else if (isFunction !== false && typeof result === 'function') {
+        result = result();
+      }
+      if (returnByValue && result && typeof result.then === 'function') {
+        return (async () => await result)();
+      }
+      return result;
+    }
+  };
+})()";
+
+            object evalParams = _contextId.HasValue
+                ? new { expression = source, contextId = _contextId.Value, returnByValue = false, emulateUserGesture = false }
+                : (object)new { expression = source, returnByValue = false, emulateUserGesture = false };
+
+            JsonElement? response = await _session.SendAsync("Runtime.evaluate", evalParams)
+                .ConfigureAwait(false);
+            if (response == null)
+            {
+                throw new PlaywrightException("Failed to install UtilityScript");
+            }
+
+            ThrowIfThrown(response.Value);
+            if (!response.Value.TryGetProperty("result", out JsonElement result))
+            {
+                throw new PlaywrightException("Failed to install UtilityScript");
+            }
+
+            string objectId = RemoteObject.GetObjectId(result);
+            if (string.IsNullOrEmpty(objectId))
+            {
+                throw new PlaywrightException("Failed to install UtilityScript");
+            }
+
+            return objectId;
         }
 
         private async Task<JsonElement?> SendEvaluateAsync(string expression)

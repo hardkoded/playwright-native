@@ -473,14 +473,15 @@ namespace PlaywrightNative.Helpers
             // (ShouldStitchAllFrameSnapshots on Windows).
             IFrame child = await ChildFrameForAriaRefAsync(frame, ariaRef).ConfigureAwait(false);
 
-            // Darwin data: Url stays about:blank forever — force enter-frame even
-            // when body.children is non-zero. Chromium HTTP: Url briefly blank
-            // while body already has content — keep ChildFrames (nested stitch).
+            // Only abandon blank ChildFrames when the document is empty. Darwin
+            // data: iframes keep Url at about:blank forever; rejecting those that
+            // already have body children forced enter-frame, which can miss after
+            // Focus and leave `iframe [active]` with no nested snapshot
+            // (ShouldSupportManyPropertiesOnIframes).
             if (child != null
                 && !child.IsDetached
                 && PopupOpenedHelper.IsBlankUrl(child.Url)
-                && (await IframeRefSrcIsDataAsync(frame, ariaRef, deadlineClock, budgetMs).ConfigureAwait(false)
-                    || !await FrameBodyHasChildrenAsync(child, deadlineClock, budgetMs).ConfigureAwait(false)))
+                && !await FrameBodyHasChildrenAsync(child, deadlineClock, budgetMs).ConfigureAwait(false))
             {
                 child = null;
             }
@@ -497,6 +498,20 @@ namespace PlaywrightNative.Helpers
                     deadlineClock,
                     Math.Min(900, RemainingMs(deadlineClock, budgetMs)),
                     fallback: null).ConfigureAwait(false);
+
+                // Darwin: aria-ref enter-frame can miss after FocusAsync while CSS
+                // FrameLocator still resolves (ShouldSupportManyPropertiesOnIframes).
+                if (enterRoot == null
+                    && await IframeRefSrcIsDataAsync(frame, ariaRef, deadlineClock, budgetMs).ConfigureAwait(false))
+                {
+                    enterRoot = await RaceOrDefaultAsync(
+                        () => page.FrameLocator("iframe, frame").Locator("body, frameset")
+                            .ElementHandleAsync(Math.Min(800f, RemainingMs(deadlineClock, budgetMs))),
+                        deadlineClock,
+                        Math.Min(900, RemainingMs(deadlineClock, budgetMs)),
+                        fallback: null).ConfigureAwait(false);
+                }
+
                 if (enterRoot != null)
                 {
                     child = await enterRoot.OwnerFrameAsync().ConfigureAwait(false);
@@ -684,8 +699,7 @@ namespace PlaywrightNative.Helpers
             if (child != null
                 && !child.IsDetached
                 && PopupOpenedHelper.IsBlankUrl(child.Url)
-                && (await IframeRefSrcIsDataAsync(frame, ariaRef, Stopwatch.StartNew(), 500).ConfigureAwait(false)
-                    || !await FrameBodyHasChildrenAsync(child, Stopwatch.StartNew(), 500).ConfigureAwait(false)))
+                && !await FrameBodyHasChildrenAsync(child, Stopwatch.StartNew(), 500).ConfigureAwait(false))
             {
                 child = null;
             }
@@ -696,6 +710,13 @@ namespace PlaywrightNative.Helpers
                 try
                 {
                     IElementHandle enterRoot = await frame.Locator(enterSel).ElementHandleAsync(800).ConfigureAwait(false);
+                    if (enterRoot == null
+                        && await IframeRefSrcIsDataAsync(frame, ariaRef, Stopwatch.StartNew(), 500).ConfigureAwait(false))
+                    {
+                        enterRoot = await page.FrameLocator("iframe, frame").Locator("body, frameset")
+                            .ElementHandleAsync(800).ConfigureAwait(false);
+                    }
+
                     if (enterRoot != null)
                     {
                         child = await enterRoot.OwnerFrameAsync().ConfigureAwait(false);
@@ -1015,15 +1036,9 @@ namespace PlaywrightNative.Helpers
             if (childCount == 1)
             {
                 // Darwin WebKit often leaves ChildFrames.Url at about:blank for data:
-                // documents after load. Returning it yields an empty body capture and
-                // skips ContentFrame (FocusAsync / FrameLocator path), so AI snapshots
-                // show `iframe [active]` with no nested children.
-                if (wantSrc.StartsWith("data:", StringComparison.OrdinalIgnoreCase)
-                    && PopupOpenedHelper.IsBlankUrl(only.Url))
-                {
-                    return null;
-                }
-
+                // documents after load. Still return it — CaptureChildYaml keeps
+                // blank frames that already have body children and only abandons
+                // empty blanks (ShouldSupportManyPropertiesOnIframes).
                 return only;
             }
 
