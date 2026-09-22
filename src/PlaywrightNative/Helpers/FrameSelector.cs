@@ -369,8 +369,11 @@ namespace PlaywrightNative.Helpers
                 || PlaywrightNative.Helpers.DestroyedContext.IsDestroyedContext(ex as PlaywrightException)
                 || (ex.Message != null && (
                     ex.Message.Contains("Missing injected script", StringComparison.OrdinalIgnoreCase)
-                    || ex.Message.Contains("Execution context", StringComparison.OrdinalIgnoreCase))))
+                    || ex.Message.Contains("Execution context", StringComparison.OrdinalIgnoreCase)
+                    || ex.Message.Contains("Frame was detached", StringComparison.OrdinalIgnoreCase))))
             {
+                // Child-frame detach during enter-frame queries is transient for
+                // page-scoped locators (click should survive frame reattach).
                 return Array.Empty<IElementHandle>();
             }
         }

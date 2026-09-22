@@ -304,6 +304,16 @@ namespace PlaywrightNative.Helpers
                 timeout,
                 sw,
                 sawDocumentRequest).ConfigureAwait(false);
+
+            // Speculative WebKit willCheck retains without a document request
+            // must not block non-navigating clicks (scroll=none 2s budgets).
+            if (!expectNavigation
+                && barrier != null
+                && (sawDocumentRequest == null || !sawDocumentRequest()))
+            {
+                barrier.DropOrphanedPolicyNavigations();
+            }
+
             await barrier.WaitForAsync(timeout).ConfigureAwait(false);
 
             // Navigable WebKit clicks: wait for a non-blank main-frame navigation

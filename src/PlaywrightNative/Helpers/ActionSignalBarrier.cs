@@ -130,6 +130,26 @@ namespace PlaywrightNative.Helpers
         }
 
         /// <summary>
+        /// Drops orphaned policy-check retains when a non-navigating action saw
+        /// speculative <c>willCheck</c> but no document request. Leaving those
+        /// armed hangs <see cref="WaitForAsync"/> under tight timeouts
+        /// (Darwin <c>scroll=none</c> in-viewport button clicks).
+        /// Document-request retains are preserved.
+        /// </summary>
+        internal void DropOrphanedPolicyNavigations()
+        {
+            lock (_lock)
+            {
+                int pending = _pendingPolicyNavigations;
+                _pendingPolicyNavigations = 0;
+                for (int i = 0; i < pending; i++)
+                {
+                    ReleaseUnderLock();
+                }
+            }
+        }
+
+        /// <summary>
         /// Releases a single document-request retain when that navigation fails.
         /// </summary>
         internal void OnDocumentNavigationAborted()

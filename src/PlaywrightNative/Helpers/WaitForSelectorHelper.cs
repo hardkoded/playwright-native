@@ -255,13 +255,16 @@ namespace PlaywrightNative.Helpers
                         }
                     }
                 }
-                catch (PlaywrightException ex) when (IsFrameDetachedError(ex) || (isDetached != null && isDetached()))
+                catch (PlaywrightException ex) when (
+                    IsFrameDetachedError(ex)
+                    || PlaywrightNative.Helpers.DestroyedContext.IsDestroyedContext(ex)
+                    || IsMissingInjectedScript(ex)
+                    || (isDetached != null && isDetached()))
                 {
-                    throw new PlaywrightException(apiName + ": Frame was detached", ex);
-                }
-                catch (PlaywrightException ex) when (PlaywrightNative.Helpers.DestroyedContext.IsDestroyedContext(ex) || IsMissingInjectedScript(ex))
-                {
-                    if (isDetached != null && isDetached())
+                    // Frame-scoped waits (isDetached set) fail hard on detach.
+                    // Page-scoped waits treat child-frame detach as transient so
+                    // locator.click can survive iframe remove+reattach.
+                    if (isDetached != null)
                     {
                         throw new PlaywrightException(apiName + ": Frame was detached", ex);
                     }
@@ -279,9 +282,10 @@ namespace PlaywrightNative.Helpers
                         handle = null;
                     }
 
-                    // A mid-probe DestroyedContext is not a reliable "element gone"
-                    // signal — the page may already have replaced the node (Hidden
-                    // log test remove+add). Re-query next loop instead of succeeding
+                    // A mid-probe DestroyedContext / child-frame detach is not a
+                    // reliable "element gone" signal — the page may already have
+                    // replaced the node (Hidden log test remove+add, or iframe
+                    // reattach). Re-query next loop instead of succeeding
                     // Hidden/Detached from this stale observation.
                     destroyedMidProbe = true;
                     attached = false;

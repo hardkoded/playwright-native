@@ -1491,7 +1491,8 @@ namespace PlaywrightNative.Helpers
                 || message.Contains(NotAttachedMessage, StringComparison.Ordinal)
                 || message.Contains(HitMissedMessage, StringComparison.Ordinal)
                 || message.Contains("not attached", StringComparison.OrdinalIgnoreCase)
-                || message.Contains("Node is detached", StringComparison.Ordinal);
+                || message.Contains("Node is detached", StringComparison.Ordinal)
+                || message.Contains("Frame was detached", StringComparison.OrdinalIgnoreCase);
         }
 
         /// <summary>

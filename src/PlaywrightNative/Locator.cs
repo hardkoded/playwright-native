@@ -2100,6 +2100,7 @@ namespace PlaywrightNative
             return ex is TimeoutException
                 || message.Contains("Missing injected script", StringComparison.OrdinalIgnoreCase)
                 || message.Contains("Execution context", StringComparison.OrdinalIgnoreCase)
+                || message.Contains("Frame was detached", StringComparison.OrdinalIgnoreCase)
                 || message.Contains("Target page, context or browser has been closed", StringComparison.OrdinalIgnoreCase);
         }
 
