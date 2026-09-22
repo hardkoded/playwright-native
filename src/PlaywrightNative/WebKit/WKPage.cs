@@ -7909,10 +7909,46 @@ namespace PlaywrightNative.WebKit
 
             try
             {
+                // Frameset documents have no body; a (1,1) click focuses a child
+                // frame and permanently skews aria [active]. RSA first-party visits
+                // use ordinary documents (set-cookie.html), so skip framesets and
+                // leave the host unmarked for a later non-frameset navigation.
+                WKTargetSession target = _targetSession;
+                if (target != null)
+                {
+                    try
+                    {
+                        JsonElement? tagResponse = await target.SendAsync(
+                                "Runtime.evaluate",
+                                new
+                                {
+                                    expression =
+                                        "(() => (document.documentElement && document.documentElement.tagName) || '')()",
+                                    returnByValue = true,
+                                })
+                            .ConfigureAwait(false);
+                        if (tagResponse != null
+                            && tagResponse.Value.TryGetProperty("result", out JsonElement tagResult)
+                            && tagResult.TryGetProperty("value", out JsonElement tagValue)
+                            && tagValue.ValueKind == JsonValueKind.String
+                            && string.Equals(tagValue.GetString(), "FRAMESET", StringComparison.OrdinalIgnoreCase))
+                        {
+                            lock (_firstPartyInteractionHosts)
+                            {
+                                _firstPartyInteractionHosts.Remove(host);
+                            }
+
+                            return;
+                        }
+                    }
+                    catch (PlaywrightException)
+                    {
+                    }
+                }
+
                 // Trusted Input — JS-dispatched clicks do not update ITP interaction.
                 // Save/restore activeElement so pages that focus on load (keyboard.html)
-                // and framesets keep their intended focus for aria [active] / key events.
-                WKTargetSession target = _targetSession;
+                // keep their intended focus for key events.
                 if (target != null)
                 {
                     try
