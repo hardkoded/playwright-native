@@ -972,12 +972,14 @@ namespace PlaywrightNative.WebKit
 
         private async Task<string> InstallUtilityScriptObjectIdAsync()
         {
-            // Minimal UtilityScript.evaluate matching upstream javascript.ts
-            // evaluateExpression values: (isFunction, returnByValue, serialize,
-            // expression, argCount, ...args). Use globalThis.eval so the page
-            // function closes over the frame global. When returnByValue, serialize
-            // booleans/primitives like utilityScriptSerializers so ParseRemote
-            // sees { b: true } rather than a raw CDP boolean.
+            // Minimal UtilityScript.evaluate matching upstream injected/utilityScript.ts
+            // + javascript.ts evaluateExpression values:
+            // [isFunction, returnByValue, serialize, expression, argCount, ...args].
+            // Use globalThis.eval so the page function closes over the frame global.
+            // When returnByValue, serialize booleans/primitives like
+            // utilityScriptSerializers so ParseRemote sees { b: true }.
+            // Promise results use an async IIFE so WebKit's awaitPromise sees a
+            // native Promise (upstream _promiseAwareJsonValueNoThrow).
             const string source =
                 @"(() => {
   const global = globalThis;
@@ -990,18 +992,25 @@ namespace PlaywrightNative.WebKit
     if (type === 'string') return { s: v };
     return v;
   };
+  const promiseAware = (value, returnByValue) => {
+    const wrap = (v) => returnByValue ? serialize(v) : v;
+    if (value && typeof value === 'object' && typeof value.then === 'function') {
+      return (async () => wrap(await value))();
+    }
+    return wrap(value);
+  };
   return {
-    evaluate(isFunction, returnByValue, _serialize, expression, argCount) {
+    evaluate(isFunction, returnByValue, _serialize, expression, argCount, ...argsAndHandles) {
+      const args = argsAndHandles.slice(0, argCount || 0);
       let result = global.eval(expression);
       if (isFunction === true) {
-        result = result();
-      } else if (isFunction !== false && typeof result === 'function') {
-        result = result();
+        result = result(...args);
+      } else if (isFunction === false) {
+        result = result;
+      } else if (typeof result === 'function') {
+        result = result(...args);
       }
-      if (result && typeof result.then === 'function') {
-        return result.then((value) => returnByValue ? serialize(value) : value);
-      }
-      return returnByValue ? serialize(result) : result;
+      return promiseAware(result, returnByValue);
     }
   };
 })()";

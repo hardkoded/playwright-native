@@ -19,6 +19,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using System.Net;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -94,6 +95,7 @@ namespace PlaywrightNative.WebKit
         private readonly Input.Keyboard _keyboard;
         private readonly Input.Mouse _mouse;
         private readonly Input.Touchscreen _touchscreen;
+        private readonly HashSet<string> _firstPartyInteractionHosts = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private Task _bindingReady;
         private IKeyboard _directKeyboard;
         private IMouse _directMouse;
@@ -3444,6 +3446,12 @@ namespace PlaywrightNative.WebKit
             {
                 ApplyRequestedNavigationUrl(NavigationTimeout.PreserveUserInfo(url, _mainFrameUrl));
             }
+
+            // Darwin ITP requires first-party user interaction with an origin before
+            // a later cross-site iframe requestStorageAccess can reach MiniBrowser's
+            // auto-accept panel. Record it here so GoTo(set-cookie) satisfies the
+            // requirement before the test navigates away (WebKit blog How-To #1).
+            await RecordFirstPartyUserInteractionIfNeededAsync().ConfigureAwait(false);
 
             return result;
         }
@@ -7865,14 +7873,82 @@ namespace PlaywrightNative.WebKit
         }
 
         /// <summary>
+        /// On macOS, delivers a one-shot page-proxy Input click after a successful
+        /// http(s) main-frame navigation so Resource Load Statistics records
+        /// first-party user interaction for that host. Required for a subsequent
+        /// cross-site <c>document.requestStorageAccess()</c> under ITP.
+        /// </summary>
+        /// <returns>A task that completes when the gesture has been sent or skipped.</returns>
+        private async Task RecordFirstPartyUserInteractionIfNeededAsync()
+        {
+            if (!RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+            {
+                return;
+            }
+
+            string url = _mainFrameUrl;
+            if (string.IsNullOrEmpty(url)
+                || !Uri.TryCreate(url, UriKind.Absolute, out Uri uri)
+                || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps)
+                || string.IsNullOrEmpty(uri.Host))
+            {
+                return;
+            }
+
+            string host = uri.Host;
+            lock (_firstPartyInteractionHosts)
+            {
+                if (!_firstPartyInteractionHosts.Add(host))
+                {
+                    return;
+                }
+            }
+
+            try
+            {
+                // Trusted Input — JS-dispatched clicks do not update ITP interaction.
+                await _session.SendAsync(
+                        "Input.dispatchMouseEvent",
+                        new { type = "move", button = "none", x = 1, y = 1, modifiers = 0, buttons = 0 })
+                    .ConfigureAwait(false);
+                await _session.SendAsync(
+                        "Input.dispatchMouseEvent",
+                        new { type = "down", button = "left", x = 1, y = 1, modifiers = 0, buttons = 1, clickCount = 1 })
+                    .ConfigureAwait(false);
+                await _session.SendAsync(
+                        "Input.dispatchMouseEvent",
+                        new { type = "up", button = "left", x = 1, y = 1, modifiers = 0, buttons = 0, clickCount = 1 })
+                    .ConfigureAwait(false);
+            }
+            catch (PlaywrightException ex)
+            {
+                _logger?.LogDebug(ex, "First-party ITP interaction pulse failed for {Host}", host);
+                lock (_firstPartyInteractionHosts)
+                {
+                    _firstPartyInteractionHosts.Remove(host);
+                }
+            }
+            catch (TimeoutException ex)
+            {
+                _logger?.LogDebug(ex, "First-party ITP interaction pulse timed out for {Host}", host);
+                lock (_firstPartyInteractionHosts)
+                {
+                    _firstPartyInteractionHosts.Remove(host);
+                }
+            }
+        }
+
+        /// <summary>
         /// Runs <c>document.requestStorageAccess</c> via UtilityScript
         /// <c>callFunctionOn</c> + <c>emulateUserGesture</c>, with a page-proxy
         /// Input pulse immediately before CFO so Darwin OOPIF transient
-        /// activation is live. Do not grant <c>storageAccess</c> (Chromium-only
-        /// in upstream) and do not invoke RSA from a click-handler first (burns
-        /// Darwin's one-shot panel). Frame-* sessions are Console-only — never
-        /// send Input there. Do not call <c>Emulation.setActiveAndFocused</c>
-        /// here (clears activation).
+        /// activation is live. First-party ITP interaction for the embedee host
+        /// is recorded on main-frame <see cref="GoToAsync(string, WaitUntilState, float?, string)"/>
+        /// (see <see cref="RecordFirstPartyUserInteractionIfNeededAsync"/>). Do not
+        /// grant <c>storageAccess</c> (Chromium-only in upstream) and do not invoke
+        /// RSA from a click-handler first (burns Darwin's one-shot panel). Frame-*
+        /// sessions are Console-only — never send Input there. Do not call
+        /// <c>Emulation.setActiveAndFocused</c> here (clears activation).
         /// </summary>
         /// <param name="context">Child-frame execution context.</param>
         /// <param name="expression">
