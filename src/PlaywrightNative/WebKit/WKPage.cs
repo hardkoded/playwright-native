@@ -6857,6 +6857,11 @@ namespace PlaywrightNative.WebKit
                     throw PageClosedException();
                 }
 
+                if (frame != null && frame.IsDetached)
+                {
+                    throw new PlaywrightException("Frame was detached");
+                }
+
                 if (TryGetFrameContext(frame, out WKExecutionContext context))
                 {
                     return context;
@@ -6868,6 +6873,11 @@ namespace PlaywrightNative.WebKit
             if (_closed || _closing)
             {
                 throw PageClosedException();
+            }
+
+            if (frame != null && frame.IsDetached)
+            {
+                throw new PlaywrightException("Frame was detached");
             }
 
             throw new PlaywrightException("Execution context is not yet available — the frame has not finished initializing.");
@@ -8020,12 +8030,12 @@ namespace PlaywrightNative.WebKit
                     new { type = "up", button = "left", x, y, modifiers = 0, buttons = 0, clickCount = 1 })
                     .ConfigureAwait(false);
 
+                // Fire-and-forget OOPIF Input: Darwin frame-* sessions often never
+                // ACK, and awaiting them (even 1.5s) lets page-proxy transient
+                // activation expire before callFunctionOn+emulateUserGesture.
                 if (frameSession != null)
                 {
-                    // Darwin WebKit 2251 frame-* sessions often never ACK Input.*;
-                    // do not burn the 20s protocol timeout — page-proxy pulse above
-                    // plus emulateUserGesture on evaluate remains the grant path.
-                    await PulseFrameSessionInputAsync(frameSession).ConfigureAwait(false);
+                    _ = PulseFrameSessionInputCoreAsync(frameSession);
                 }
             }
             catch (PlaywrightException ex)
@@ -8038,21 +8048,22 @@ namespace PlaywrightNative.WebKit
             }
         }
 
-        private async Task PulseFrameSessionInputAsync(WKTargetSession frameSession)
+        private async Task PulseFrameSessionInputCoreAsync(WKTargetSession frameSession)
         {
             try
             {
-                Task pulse = PulseFrameSessionInputCoreAsync(frameSession);
-                Task winner = await Task.WhenAny(pulse, Task.Delay(1_500)).ConfigureAwait(false);
-                if (winner != pulse)
-                {
-                    _logger?.LogDebug(
-                        "Trusted gesture frame-session Input timed out after 1500ms on {PageProxyId}",
-                        _pageProxyId);
-                    return;
-                }
-
-                await pulse.ConfigureAwait(false);
+                await frameSession.SendAsync(
+                    "Input.dispatchMouseEvent",
+                    new { type = "move", button = "none", x = 8.0, y = 8.0, modifiers = 0, buttons = 0 })
+                    .ConfigureAwait(false);
+                await frameSession.SendAsync(
+                    "Input.dispatchMouseEvent",
+                    new { type = "down", button = "left", x = 8.0, y = 8.0, modifiers = 0, buttons = 1, clickCount = 1 })
+                    .ConfigureAwait(false);
+                await frameSession.SendAsync(
+                    "Input.dispatchMouseEvent",
+                    new { type = "up", button = "left", x = 8.0, y = 8.0, modifiers = 0, buttons = 0, clickCount = 1 })
+                    .ConfigureAwait(false);
             }
             catch (PlaywrightException ex)
             {
@@ -8062,22 +8073,6 @@ namespace PlaywrightNative.WebKit
             {
                 _logger?.LogDebug(ex, "Trusted gesture frame-session pulse timed out on {PageProxyId}", _pageProxyId);
             }
-        }
-
-        private async Task PulseFrameSessionInputCoreAsync(WKTargetSession frameSession)
-        {
-            await frameSession.SendAsync(
-                "Input.dispatchMouseEvent",
-                new { type = "move", button = "none", x = 8.0, y = 8.0, modifiers = 0, buttons = 0 })
-                .ConfigureAwait(false);
-            await frameSession.SendAsync(
-                "Input.dispatchMouseEvent",
-                new { type = "down", button = "left", x = 8.0, y = 8.0, modifiers = 0, buttons = 1, clickCount = 1 })
-                .ConfigureAwait(false);
-            await frameSession.SendAsync(
-                "Input.dispatchMouseEvent",
-                new { type = "up", button = "left", x = 8.0, y = 8.0, modifiers = 0, buttons = 0, clickCount = 1 })
-                .ConfigureAwait(false);
         }
 
         private async Task ReplayExposedBindingsAsync()

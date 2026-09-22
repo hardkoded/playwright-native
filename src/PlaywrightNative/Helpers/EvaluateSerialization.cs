@@ -353,7 +353,9 @@ namespace PlaywrightNative.Helpers
 
             if (message.Contains("Execution context was destroyed", StringComparison.Ordinal)
                 || message.Contains("Frame was detached", StringComparison.Ordinal)
-                || message.Contains("Missing injected script", StringComparison.Ordinal))
+                || message.Contains("Missing injected script", StringComparison.Ordinal)
+                || (frameEvaluate
+                    && message.Contains("Execution context is not yet available", StringComparison.Ordinal)))
             {
                 if (!frameEvaluate)
                 {
@@ -361,6 +363,7 @@ namespace PlaywrightNative.Helpers
                 }
 
                 string detail = message.Contains("Frame was detached", StringComparison.Ordinal)
+                    || message.Contains("Execution context is not yet available", StringComparison.Ordinal)
                     ? "Frame was detached"
                     : "Execution context was destroyed";
                 return "frame.evaluate: " + detail;

@@ -472,12 +472,15 @@ namespace PlaywrightNative.Helpers
             // avoids IsCaptureReady false-negatives when refs live in another world
             // (ShouldStitchAllFrameSnapshots on Windows).
             IFrame child = await ChildFrameForAriaRefAsync(frame, ariaRef).ConfigureAwait(false);
+
+            // Only discard blank ChildFrames with an empty body. Unconditional
+            // blank→null broke Chromium HTTP nested-frame stitch when Url was
+            // briefly "" / about:blank while the ChildFrames entry was valid.
             if (child != null
                 && !child.IsDetached
-                && PopupOpenedHelper.IsBlankUrl(child.Url))
+                && PopupOpenedHelper.IsBlankUrl(child.Url)
+                && !await FrameBodyHasChildrenAsync(child, deadlineClock, budgetMs).ConfigureAwait(false))
             {
-                // Darwin data: iframes often keep ChildFrames.Url at about:blank
-                // after load — fall through to ContentFrame (same as FocusAsync).
                 child = null;
             }
 
@@ -679,7 +682,8 @@ namespace PlaywrightNative.Helpers
             IFrame child = await ChildFrameForAriaRefAsync(frame, ariaRef).ConfigureAwait(false);
             if (child != null
                 && !child.IsDetached
-                && PopupOpenedHelper.IsBlankUrl(child.Url))
+                && PopupOpenedHelper.IsBlankUrl(child.Url)
+                && !await FrameBodyHasChildrenAsync(child, Stopwatch.StartNew(), 500).ConfigureAwait(false))
             {
                 child = null;
             }
