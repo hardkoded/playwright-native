@@ -7865,21 +7865,20 @@ namespace PlaywrightNative.WebKit
         }
 
         /// <summary>
-        /// Runs <c>document.requestStorageAccess</c> inside a real page-proxy
-        /// Input click delivered to the OOPIF. Darwin WebKit 2251 rejects RSA
-        /// under <c>emulateUserGesture</c> alone (UtilityScript /
-        /// window-anchored <c>callFunctionOn</c> both returned False on CI);
-        /// the API requires transient activation from a trusted Input event in
-        /// the child document. MiniBrowser auto-accepts the storage-access
-        /// panel. Frame-* sessions are Console-only — never send Input there.
-        /// Do not call <c>Emulation.setActiveAndFocused</c> here (clears
-        /// activation).
+        /// Runs <c>document.requestStorageAccess</c> via UtilityScript
+        /// <c>callFunctionOn</c> + <c>emulateUserGesture</c>, with a page-proxy
+        /// Input pulse immediately before CFO so Darwin OOPIF transient
+        /// activation is live. Do not invoke RSA from a click-handler first —
+        /// that burns Darwin's one-shot storage-access panel and leaves the
+        /// UtilityScript path with expired activation (tip 495d8c0 CI returned
+        /// False in ~850ms). Frame-* sessions are Console-only — never send
+        /// Input there. Do not call <c>Emulation.setActiveAndFocused</c> here
+        /// (clears activation).
         /// </summary>
         /// <param name="context">Child-frame execution context.</param>
         /// <param name="expression">
         /// Raw function expression containing <c>requestStorageAccess</c>
-        /// (not pre-invoked via <c>InvokeIfFunction</c>). Unused for the
-        /// click-handler path — RSA is invoked directly under the gesture.
+        /// (not pre-invoked via <c>InvokeIfFunction</c>).
         /// </param>
         /// <param name="frame">The child frame being evaluated.</param>
         /// <returns>The remote result object.</returns>
@@ -7888,11 +7887,9 @@ namespace PlaywrightNative.WebKit
             string expression,
             WKFrame frame)
         {
-            _ = expression;
-
-            // Emulation.grantPermissions(storageAccess) lets Darwin RSA succeed when
-            // MiniBrowser's panel auto-accept does not fire under automation Input.
-            // Grant both wildcard and the frame origin (ITP scopes the grant).
+            // Emulation.grantPermissions(storageAccess) helps when MiniBrowser's
+            // panel auto-accept does not fire. Grant wildcard and frame origin
+            // (ITP scopes the grant).
             string frameOrigin = null;
             try
             {
@@ -7937,78 +7934,16 @@ namespace PlaywrightNative.WebKit
                 }
             }
 
-            // Arm a one-shot gesture listener in the child document, then deliver
-            // a page-proxy click into the iframe so RSA runs under real activation.
-            // Always replace any prior promise (fresh page.evaluate call). A short
-            // timeout prevents hanging the NUnit budget if Input never reaches the
-            // OOPIF document.
-            const string armExpression =
-                @"(() => {
-  window.__pw_rsa_promise = new Promise((resolve) => {
-    let settled = false;
-    const finish = (value) => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      resolve(value);
-    };
-    const cleanup = () => {
-      document.removeEventListener('pointerdown', onGesture, true);
-      document.removeEventListener('mousedown', onGesture, true);
-      document.removeEventListener('click', onGesture, true);
-    };
-    const onGesture = () => {
-      document.requestStorageAccess().then(() => finish(true), () => finish(false));
-    };
-    document.addEventListener('pointerdown', onGesture, true);
-    document.addEventListener('mousedown', onGesture, true);
-    document.addEventListener('click', onGesture, true);
-    setTimeout(() => finish(false), 2500);
-  });
-  return true;
-})()";
+            string rsaExpression = !string.IsNullOrEmpty(expression)
+                    && expression.Contains("requestStorageAccess", StringComparison.Ordinal)
+                ? expression
+                : "() => document.requestStorageAccess().then(() => true, e => false)";
 
-            try
-            {
-                await context.EvaluateHandleAsync(armExpression).ConfigureAwait(false);
-            }
-            catch (PlaywrightException ex)
-            {
-                _logger?.LogDebug(ex, "RSA gesture arm failed on {PageProxyId}", _pageProxyId);
-                return await context.EvaluateHandleWithUserGestureAsync(
-                        "() => document.requestStorageAccess().then(() => true, e => false)",
-                        () => PulseTrustedGestureOnFrameAsync(frame))
-                    .ConfigureAwait(false);
-            }
-
-            await PulseTrustedGestureOnFrameAsync(frame).ConfigureAwait(false);
-
-            JsonElement? clicked = await context.AwaitWindowPromiseAsync("__pw_rsa_promise")
-                .ConfigureAwait(false);
-            bool clickGranted = false;
-            if (clicked.HasValue)
-            {
-                JsonElement el = clicked.Value;
-                if (el.TryGetProperty("value", out JsonElement value))
-                {
-                    clickGranted = value.ValueKind == JsonValueKind.True;
-                }
-                else
-                {
-                    clickGranted = el.ValueKind == JsonValueKind.True;
-                }
-            }
-
-            if (clickGranted)
-            {
-                return clicked;
-            }
-
-            // Click missed the OOPIF or RSA still rejected — last try under
-            // UtilityScript callFunctionOn + emulateUserGesture (upstream shape).
+            // Pulse immediately before CFO (inside EvaluateHandleWithUserGestureAsync)
+            // so Darwin activation is still live when RSA runs.
             return await context.EvaluateHandleWithUserGestureAsync(
-                    "() => document.requestStorageAccess().then(() => true, e => false)",
-                    pulseTrustedGestureAsync: null)
+                    rsaExpression,
+                    () => PulseTrustedGestureOnFrameAsync(frame))
                 .ConfigureAwait(false);
         }
 
