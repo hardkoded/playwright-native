@@ -2403,11 +2403,10 @@ namespace PlaywrightNative.WebKit
             // window.open(url) popups must wait for the first non-blank URL so
             // BrowserContextEvent.Page observers see the committed destination
             // (should have url / opener), not the intermediate about:blank.
-            // ReportAsNewNavigationTask alone is insufficient: about:blank itself
-            // completes that task via MarkReportAsNewNavigation.
-            if (!CreatePageIsInFlight() && PopupOpenedHelper.IsBlankUrl(page.Url))
+            if (!CreatePageIsInFlight())
             {
-                await page.PrepareForPopupReportAsync().ConfigureAwait(false);
+                await page.PrepareAndReportPopupAsync().ConfigureAwait(false);
+                return;
             }
 
             ReportAsNew(page);

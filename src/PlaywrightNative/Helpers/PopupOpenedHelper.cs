@@ -213,7 +213,7 @@ namespace PlaywrightNative.Helpers
                         CancellationToken.None,
                         TaskContinuationOptions.ExecuteSynchronously,
                         TaskScheduler.Default);
-                    await Task.WhenAny(ready, closed.Task, Task.Delay(3_000)).ConfigureAwait(false);
+                    await Task.WhenAny(ready, closed.Task, Task.Delay(6_000)).ConfigureAwait(false);
                 }
             }
             finally

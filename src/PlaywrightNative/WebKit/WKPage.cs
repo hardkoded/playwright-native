@@ -62,6 +62,7 @@ namespace PlaywrightNative.WebKit
         private readonly TaskCompletionSource<bool> _closedTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly TaskCompletionSource<bool> _initializedTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly TaskCompletionSource<bool> _firstNonInitialNavigationTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<bool> _firstNonBlankNavigationTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly TaskCompletionSource<bool> _reportAsNewNavigationTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly object _reportAsNewLock = new object();
         private readonly TaskCompletionSource<bool> _reportedAsNewTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -2030,7 +2031,10 @@ namespace PlaywrightNative.WebKit
         /// </summary>
         /// <param name="popup">The new page.</param>
         internal void FirePopupOpened(WKPage popup)
-            => PopupOpenedHelper.EmitWhenReady(popup, popup.PrepareForPopupReportAsync(), ready => Popup?.Invoke(this, ready));
+            => PopupOpenedHelper.EmitWhenReady(
+                popup,
+                popup.PrepareAndReportPopupAsync(),
+                ready => Popup?.Invoke(this, ready));
 
         /// <summary>
         /// Marks this page as reported on the context <c>page</c> event.
@@ -2071,7 +2075,8 @@ namespace PlaywrightNative.WebKit
 
         /// <summary>
         /// Official <c>reportAsNew</c> for popups: wait until init finishes, and if
-        /// the main frame is still empty wait for the first real URL.
+        /// the main frame is still the initial empty document wait for the first
+        /// non-initial URL (including <c>about:blank</c>, matching Chromium).
         /// </summary>
         /// <returns>A task that completes when the popup can be reported.</returns>
         internal async Task PrepareForPopupReportAsync()
@@ -2088,7 +2093,7 @@ namespace PlaywrightNative.WebKit
                 return;
             }
 
-            if (_closed || !PopupOpenedHelper.IsBlankUrl(_mainFrameUrl))
+            if (_closed || !PopupOpenedHelper.IsInitialEmptyDocumentUrl(_mainFrameUrl))
             {
                 return;
             }
@@ -2098,6 +2103,47 @@ namespace PlaywrightNative.WebKit
                     _closedTcs.Task,
                     Task.Delay(5_000))
                 .ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// After the first non-initial commit, wait briefly for <c>window.open(url)</c>
+        /// to replace <c>about:blank</c> with the destination URL.
+        /// </summary>
+        /// <returns>A task that completes when the URL is ready or the wait ends.</returns>
+        internal async Task WaitForNonBlankPopupUrlAsync()
+        {
+            if (_closed || !PopupOpenedHelper.IsBlankUrl(_mainFrameUrl))
+            {
+                return;
+            }
+
+            await Task.WhenAny(
+                    _firstNonBlankNavigationTcs.Task,
+                    _closedTcs.Task,
+                    Task.Delay(2_000))
+                .ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Prepares popup URL state then raises context <c>page</c> (Video attach)
+        /// before opener <c>popup</c> observers run.
+        /// </summary>
+        /// <returns>A task that completes when the page is ready to emit.</returns>
+        internal async Task PrepareAndReportPopupAsync()
+        {
+            await PrepareForPopupReportAsync().ConfigureAwait(false);
+            if (_closed)
+            {
+                return;
+            }
+
+            await WaitForNonBlankPopupUrlAsync().ConfigureAwait(false);
+            if (_closed)
+            {
+                return;
+            }
+
+            ReportPopupAsNewOnce();
         }
 
         /// <summary>
@@ -7853,7 +7899,14 @@ namespace PlaywrightNative.WebKit
                 _logger?.LogDebug(ex, "storageAccess grant failed before requestStorageAccess on {PageProxyId}", _pageProxyId);
             }
 
-            WKTargetSession pulseSession = EnableFrameSessions ? context.Session : null;
+            WKTargetSession pulseSession = context.Session;
+            if (frame != null
+                && !string.IsNullOrEmpty(frame.FrameId)
+                && _frameSessions.TryGetValue("frame-" + frame.FrameId, out WKFrameSession frameSession))
+            {
+                pulseSession = frameSession.Session;
+            }
+
             return await context.EvaluateHandleWithUserGestureAsync(
                     expression,
                     () => PulseTrustedGestureOnFrameAsync(frame, pulseSession))
@@ -7970,7 +8023,7 @@ namespace PlaywrightNative.WebKit
                     new { type = "up", button = "left", x, y, modifiers = 0, buttons = 0, clickCount = 1 })
                     .ConfigureAwait(false);
 
-                if (EnableFrameSessions && frameSession != null)
+                if (frameSession != null)
                 {
                     await frameSession.SendAsync(
                         "Input.dispatchMouseEvent",
@@ -9294,9 +9347,14 @@ namespace PlaywrightNative.WebKit
                 }
 
                 commitTcs?.TrySetResult(true);
-                if (!PopupOpenedHelper.IsBlankUrl(_mainFrameUrl))
+                if (!PopupOpenedHelper.IsInitialEmptyDocumentUrl(_mainFrameUrl))
                 {
                     _firstNonInitialNavigationTcs.TrySetResult(true);
+                }
+
+                if (!PopupOpenedHelper.IsBlankUrl(_mainFrameUrl))
+                {
+                    _firstNonBlankNavigationTcs.TrySetResult(true);
                 }
 
                 MarkReportAsNewNavigation(_mainFrameUrl);
@@ -9827,7 +9885,7 @@ namespace PlaywrightNative.WebKit
         /// Fires context <c>page</c> for a popup before an exposeFunction / binding
         /// callback so official ordering stays <c>page|binding</c>.
         /// </summary>
-        private void ReportPopupBeforeBinding()
+        private void ReportPopupAsNewOnce()
         {
             // Do not require <see cref="_opener"/> — Darwin WebKit sometimes omits
             // protocol openerId for window.open, and inferred siblings leave Opener
@@ -9838,14 +9896,20 @@ namespace PlaywrightNative.WebKit
         }
 
         /// <summary>
-        /// Waits for popup URL commit then raises context <c>page</c> before the
-        /// exposeFunction handler runs (<c>page|binding</c>).
+        /// Fires context <c>page</c> for a popup before an exposeFunction / binding
+        /// callback so official ordering stays <c>page|binding</c>.
         /// </summary>
-        /// <returns>A task that completes when the page event has been raised.</returns>
+        private void ReportPopupBeforeBinding() => ReportPopupAsNewOnce();
+
+        /// <summary>
+        /// Waits for popup URL commit then raises context <c>page</c> before the
+        /// exposeFunction handler runs (<c>page|binding</c>). Returns without
+        /// reporting when the popup closed before it was ready (do not dispatch).
+        /// </summary>
+        /// <returns>A task that completes when the page event has been raised or skipped.</returns>
         private async Task ReportPopupBeforeBindingAsync()
         {
-            await PrepareForPopupReportAsync().ConfigureAwait(false);
-            ReportPopupBeforeBinding();
+            await PrepareAndReportPopupAsync().ConfigureAwait(false);
         }
 
         private void OnBindingCalled(JsonElement? parameters)
@@ -10076,6 +10140,11 @@ namespace PlaywrightNative.WebKit
 
                     // Official popup.spec: context "page" precedes exposeFunction callback.
                     await ReportPopupBeforeBindingAsync().ConfigureAwait(false);
+                    if (_closed)
+                    {
+                        return;
+                    }
+
                     WKTargetSession target = _targetSession
                         ?? throw new PlaywrightException("Inner target session is not yet available.");
                     WKExecutionContext context = new WKExecutionContext(target, contextId);
@@ -10100,6 +10169,11 @@ namespace PlaywrightNative.WebKit
 
                 // Official popup.spec: context "page" precedes exposeFunction callback.
                 await ReportPopupBeforeBindingAsync().ConfigureAwait(false);
+                if (_closed)
+                {
+                    return;
+                }
+
                 object result = await handler(args).ConfigureAwait(false);
                 await DeliverBindingResultAsync(contextId, seq, result).ConfigureAwait(false);
             }
