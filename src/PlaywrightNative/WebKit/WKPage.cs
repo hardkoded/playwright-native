@@ -7909,42 +7909,20 @@ namespace PlaywrightNative.WebKit
 
             try
             {
-                // Frameset documents have no body; a (1,1) click focuses a child
-                // frame and permanently skews aria [active]. RSA first-party visits
-                // use ordinary documents (set-cookie.html), so skip framesets and
-                // leave the host unmarked for a later non-frameset navigation.
-                // Evaluate in the main-frame context — a default Runtime.evaluate on
-                // the target session can land in a child frame (tagName HTML).
+                // Frameset documents fill the viewport with child frames; a (1,1)
+                // click focuses a child and permanently skews aria [active].
+                // Evaluating documentElement.tagName is unreliable on Darwin
+                // (context can still resolve to a child / HTML), so detect
+                // structurally: after GoTo load, framesets always have children.
+                // RSA first-party visits (set-cookie.html) have none, so they
+                // still receive the pulse. Leave the host unmarked so a later
+                // non-framed navigation can record ITP.
                 WKFrame mainFrame = _frameManager.MainFrame;
                 if (mainFrame != null)
                 {
-                    try
+                    foreach (WKFrame frame in _frameManager.Frames)
                     {
-                        WKExecutionContext mainContext = await WaitForFrameContextAsync(mainFrame)
-                            .ConfigureAwait(false);
-                        object tagParams = mainContext.ContextId != 0
-                            ? (object)new
-                            {
-                                expression =
-                                    "(() => (document.documentElement && document.documentElement.tagName) || '')()",
-                                contextId = mainContext.ContextId,
-                                returnByValue = true,
-                            }
-                            : new
-                            {
-                                expression =
-                                    "(() => (document.documentElement && document.documentElement.tagName) || '')()",
-                                returnByValue = true,
-                            };
-                        JsonElement? tagResponse = await mainContext.Session.SendAsync(
-                                "Runtime.evaluate",
-                                tagParams)
-                            .ConfigureAwait(false);
-                        if (tagResponse != null
-                            && tagResponse.Value.TryGetProperty("result", out JsonElement tagResult)
-                            && tagResult.TryGetProperty("value", out JsonElement tagValue)
-                            && tagValue.ValueKind == JsonValueKind.String
-                            && string.Equals(tagValue.GetString(), "FRAMESET", StringComparison.OrdinalIgnoreCase))
+                        if (ReferenceEquals(frame.ParentFrame, mainFrame))
                         {
                             lock (_firstPartyInteractionHosts)
                             {
@@ -7953,9 +7931,6 @@ namespace PlaywrightNative.WebKit
 
                             return;
                         }
-                    }
-                    catch (PlaywrightException)
-                    {
                     }
                 }
 
