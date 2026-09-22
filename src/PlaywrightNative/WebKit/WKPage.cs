@@ -7904,11 +7904,16 @@ namespace PlaywrightNative.WebKit
 
             // Arm a one-shot gesture listener in the child document, then deliver
             // a page-proxy click into the iframe so RSA runs under real activation.
+            // Always replace any prior promise (fresh page.evaluate call). A short
+            // timeout prevents hanging the NUnit budget if Input never reaches the
+            // OOPIF document.
             const string armExpression =
                 @"(() => {
-  if (window.__pw_rsa_promise) return true;
   window.__pw_rsa_promise = new Promise((resolve) => {
+    let settled = false;
     const finish = (value) => {
+      if (settled) return;
+      settled = true;
       cleanup();
       resolve(value);
     };
@@ -7923,6 +7928,7 @@ namespace PlaywrightNative.WebKit
     document.addEventListener('pointerdown', onGesture, true);
     document.addEventListener('mousedown', onGesture, true);
     document.addEventListener('click', onGesture, true);
+    setTimeout(() => finish(false), 2500);
   });
   return true;
 })()";
@@ -7942,7 +7948,33 @@ namespace PlaywrightNative.WebKit
 
             await PulseTrustedGestureOnFrameAsync(frame).ConfigureAwait(false);
 
-            return await context.AwaitWindowPromiseAsync("__pw_rsa_promise").ConfigureAwait(false);
+            JsonElement? clicked = await context.AwaitWindowPromiseAsync("__pw_rsa_promise")
+                .ConfigureAwait(false);
+            bool clickGranted = false;
+            if (clicked.HasValue)
+            {
+                JsonElement el = clicked.Value;
+                if (el.TryGetProperty("value", out JsonElement value))
+                {
+                    clickGranted = value.ValueKind == JsonValueKind.True;
+                }
+                else
+                {
+                    clickGranted = el.ValueKind == JsonValueKind.True;
+                }
+            }
+
+            if (clickGranted)
+            {
+                return clicked;
+            }
+
+            // Click missed the OOPIF or RSA still rejected — last try under
+            // UtilityScript callFunctionOn + emulateUserGesture (upstream shape).
+            return await context.EvaluateHandleWithUserGestureAsync(
+                    "() => document.requestStorageAccess().then(() => true, e => false)",
+                    pulseTrustedGestureAsync: null)
+                .ConfigureAwait(false);
         }
 
         /// <summary>
