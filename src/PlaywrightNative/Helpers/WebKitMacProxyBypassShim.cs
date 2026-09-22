@@ -534,8 +534,15 @@ namespace PlaywrightNative.Helpers
             return Latin1.GetBytes(rebuilt.ToString());
         }
 
-        private static Task WriteAsciiAsync(NetworkStream stream, string text)
-            => stream.WriteAsync(Latin1.GetBytes(text)).AsTask();
+        private static async Task WriteAsciiAsync(NetworkStream stream, string text)
+        {
+            await stream.WriteAsync(Latin1.GetBytes(text)).ConfigureAwait(false);
+
+            // Flush before the accept-loop disposes the client socket. Darwin
+            // CFNetwork otherwise intermittently misses a proxied 407 and never
+            // reconnects with credentials (ShouldReconnectWithCredentialsAfterConnect407…).
+            await stream.FlushAsync().ConfigureAwait(false);
+        }
 
         /// <summary>
         /// Copies a single framed HTTP response (upstream → client). Must not
@@ -562,23 +569,24 @@ namespace PlaywrightNative.Helpers
                 || headerText.Contains("Transfer-Encoding:chunked", StringComparison.OrdinalIgnoreCase))
             {
                 await CopyChunkedBodyAsync(body, client, token).ConfigureAwait(false);
-                return;
             }
-
-            int contentLength = ParseContentLength(headerText);
-            if (contentLength < 0)
+            else
             {
-                // No length and not chunked — read until upstream closes.
-                await body.CopyToAsync(client, token).ConfigureAwait(false);
-                return;
+                int contentLength = ParseContentLength(headerText);
+                if (contentLength < 0)
+                {
+                    // No length and not chunked — read until upstream closes.
+                    await body.CopyToAsync(client, token).ConfigureAwait(false);
+                }
+                else if (contentLength > 0)
+                {
+                    await CopyExactAsync(body, client, contentLength, token).ConfigureAwait(false);
+                }
             }
 
-            if (contentLength == 0)
-            {
-                return;
-            }
-
-            await CopyExactAsync(body, client, contentLength, token).ConfigureAwait(false);
+            // Ensure the framed response reaches WebKit before HandleClientAsync
+            // disposes the socket (empty-title flakes on proxied navigations).
+            await client.FlushAsync(token).ConfigureAwait(false);
         }
 
         private static int ParseContentLength(string headerText)
@@ -833,6 +841,13 @@ namespace PlaywrightNative.Helpers
                     || status.StartsWith("HTTP/1.0 200", StringComparison.Ordinal))
                 {
                     await PipeBidirectionalAsync(clientStream, upStream).ConfigureAwait(false);
+                }
+                else
+                {
+                    // Non-200 (typically 407) must reach WebKit before this socket
+                    // is closed by HandleClientAsync — otherwise CFNetwork may not
+                    // retry CONNECT with Proxy-Authorization.
+                    await clientStream.FlushAsync().ConfigureAwait(false);
                 }
             }
             finally
