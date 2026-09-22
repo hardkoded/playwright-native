@@ -9590,6 +9590,43 @@ namespace PlaywrightNative.WebKit
 
                     await Task.Delay(25).ConfigureAwait(false);
                 }
+
+                // blank→blank: if readyState polling never saw a usable context,
+                // still complete waiters after the settle window so GoTo cannot
+                // hang for the full navigation timeout / NUnit budget. Delayed
+                // (~1s) — unlike sync-complete-on-RPC which raced the document swap.
+                if (Volatile.Read(ref _lifecycleSeedGeneration) != seedGeneration)
+                {
+                    return;
+                }
+
+                TaskCompletionSource<bool> exhaustedLoad;
+                TaskCompletionSource<bool> exhaustedDom;
+                TaskCompletionSource<bool> exhaustedCommit;
+                lock (_navigationLock)
+                {
+                    bool allowBlankSeed = _pendingLoadTcs != null
+                        && PopupOpenedHelper.IsBlankUrl(_mainFrameUrl)
+                        && PopupOpenedHelper.IsBlankUrl(_pendingNavigationUrl);
+                    if (!allowBlankSeed)
+                    {
+                        return;
+                    }
+
+                    _pendingNavigationCommitted = true;
+                    exhaustedLoad = _pendingLoadTcs;
+                    exhaustedDom = _pendingDomContentTcs;
+                    exhaustedCommit = _pendingCommitTcs;
+                    _pendingLoadTcs = null;
+                    _pendingDomContentTcs = null;
+                    _pendingCommitTcs = null;
+                }
+
+                RecordLifecycleFromDocumentSeed("DOMContentLoaded");
+                RecordLifecycleFromDocumentSeed("load");
+                exhaustedCommit?.TrySetResult(true);
+                exhaustedDom?.TrySetResult(true);
+                exhaustedLoad?.TrySetResult(true);
             }
             catch (PlaywrightException)
             {
