@@ -63,6 +63,8 @@ namespace PlaywrightNative.Chromium
         private readonly object _initScriptSync = new();
         private readonly Queue<string[]> _windowOpenFeatures = new();
         private readonly string _utilityWorldName;
+        private readonly List<CRResponse> _recentNavigationResponses = new();
+        private readonly object _navigationResponseGate = new();
         private string _userAgentOverride;
         private string _acceptLanguageOverride;
         private bool _userAgentIsMobile;
@@ -2698,6 +2700,27 @@ namespace PlaywrightNative.Chromium
                     recovered = _lastCommittedNavigationResponse;
                 }
 
+                // A superseding goto overwrites _lastCommitted before the aborted
+                // goto's catch runs (ShouldReturnFromGotoIfNewNavigationIsStarted).
+                // Search recent commits so the first navigation can still recover.
+                if (!IsUsableNavigationResponse(recovered, targetFrame, targetUrl))
+                {
+                    CRResponse[] recent;
+                    lock (_navigationResponseGate)
+                    {
+                        recent = _recentNavigationResponses.ToArray();
+                    }
+
+                    for (int i = recent.Length - 1; i >= 0; i--)
+                    {
+                        if (IsUsableNavigationResponse(recent[i], targetFrame, targetUrl))
+                        {
+                            recovered = recent[i];
+                            break;
+                        }
+                    }
+                }
+
                 return IsUsableNavigationResponse(recovered, targetFrame, targetUrl);
             }
 
@@ -3570,10 +3593,19 @@ namespace PlaywrightNative.Chromium
         internal void OnResponseReceived(CRResponse response)
         {
             if (response?.Request != null
-                && response.Request.IsNavigationRequest
-                && response.Status != 204)
+                && response.Status != 204
+                && (response.Request.IsNavigationRequest
+                    || NetworkRequestEvents.IsDocumentNavigation(response.Request.ResourceType)))
             {
                 _lastCommittedNavigationResponse = response;
+                lock (_navigationResponseGate)
+                {
+                    _recentNavigationResponses.Add(response);
+                    while (_recentNavigationResponses.Count > 16)
+                    {
+                        _recentNavigationResponses.RemoveAt(0);
+                    }
+                }
             }
 
             ResponseReceived?.Invoke(this, response);

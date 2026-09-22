@@ -1096,6 +1096,20 @@ namespace PlaywrightNative.Helpers
                 }
             }
 
+            // Multi-srcdoc (and empty-src) iframes share about:blank URLs — name/src
+            // matching cannot disambiguate. Use the DOM querySelectorAll index from
+            // the aria-ref evaluate and resolve by element identity (creation order
+            // of ChildFrames is not DOM order; ShouldPersistIframeReferences).
+            if (int.TryParse(info[2], NumberStyles.Integer, CultureInfo.InvariantCulture, out int domIndex)
+                && domIndex >= 0)
+            {
+                IFrame byDom = await ChildFrameByDomIndexAsync(frame, domIndex).ConfigureAwait(false);
+                if (byDom != null)
+                {
+                    return byDom;
+                }
+            }
+
             int childCount = 0;
             IFrame only = null;
             for (int i = 0; i < descendants.Count; i++)
@@ -1119,8 +1133,41 @@ namespace PlaywrightNative.Helpers
                 return only;
             }
 
-            // Do not index-match when multiple children — creation order ≠ DOM order.
+            // Do not index-match ChildFrames when multiple — creation order ≠ DOM order.
             return null;
+        }
+
+        /// <summary>
+        /// Resolves the child frame for the <paramref name="domIndex"/>-th
+        /// <c>iframe</c>/<c>frame</c> in document order (srcdoc-safe).
+        /// </summary>
+        private static async Task<IFrame> ChildFrameByDomIndexAsync(IFrame frame, int domIndex)
+        {
+            if (frame == null || frame.IsDetached || domIndex < 0)
+            {
+                return null;
+            }
+
+            IReadOnlyList<IElementHandle> hosts;
+            try
+            {
+                hosts = await frame.QuerySelectorAllAsync("iframe, frame").ConfigureAwait(false);
+            }
+            catch (PlaywrightException)
+            {
+                return null;
+            }
+            catch (TimeoutException)
+            {
+                return null;
+            }
+
+            if (hosts == null || domIndex >= hosts.Count)
+            {
+                return null;
+            }
+
+            return await ChildFrameByElementIdentityAsync(frame, hosts[domIndex]).ConfigureAwait(false);
         }
 
         private static IFrame SoleChildFrameOrNull(IFrame frame)
@@ -1198,22 +1245,25 @@ namespace PlaywrightNative.Helpers
             }
 
             IReadOnlyList<IFrame> children = parent.ChildFrames;
-            if (children == null || children.Count == 0)
+            List<IFrame> candidates = new List<IFrame>();
+            if (children != null)
             {
-                List<IFrame> fromPage = new List<IFrame>();
-                CollectPageFramesUnder(parent, fromPage);
-                if (fromPage.Count == 0)
+                for (int i = 0; i < children.Count; i++)
                 {
-                    return null;
+                    if (children[i] != null && !candidates.Contains(children[i]))
+                    {
+                        candidates.Add(children[i]);
+                    }
                 }
-
-                children = fromPage;
             }
 
-            for (int i = 0; i < children.Count; i++)
+            CollectFrames(parent, candidates);
+            CollectPageFramesUnder(parent, candidates);
+
+            for (int i = 0; i < candidates.Count; i++)
             {
-                IFrame child = children[i];
-                if (child == null || child.IsDetached)
+                IFrame child = candidates[i];
+                if (child == null || child.IsDetached || ReferenceEquals(child, parent))
                 {
                     continue;
                 }
