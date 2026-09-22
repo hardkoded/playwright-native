@@ -3603,12 +3603,32 @@ namespace PlaywrightNative.Chromium
                 return;
             }
 
-            if (PopupOpenedHelper.IsBlankUrl(_frameManager.MainFrame?.Url))
+            // Wait for the first non-initial commit (about:blank counts). Then give
+            // window.open(url) a short grace to replace blank with the destination.
+            // Do not wait 5s on a committed about:blank — that is a valid final URL
+            // (PopupPageShouldBeUsable / OpenerAsync use a 5s CTS).
+            string url = _frameManager.MainFrame?.Url;
+            if (PopupOpenedHelper.IsInitialEmptyDocumentUrl(url))
+            {
+                await Task.WhenAny(
+                        _firstNonInitialNavigationTcs.Task,
+                        _closedTcs.Task,
+                        Task.Delay(5_000))
+                    .ConfigureAwait(false);
+            }
+
+            if (_closedTcs.Task.IsCompleted)
+            {
+                return;
+            }
+
+            if (PopupOpenedHelper.IsBlankUrl(_frameManager.MainFrame?.Url)
+                && !_firstNonBlankNavigationTcs.Task.IsCompleted)
             {
                 await Task.WhenAny(
                         _firstNonBlankNavigationTcs.Task,
                         _closedTcs.Task,
-                        Task.Delay(5_000))
+                        Task.Delay(500))
                     .ConfigureAwait(false);
             }
 

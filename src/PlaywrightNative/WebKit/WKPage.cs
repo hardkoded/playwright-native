@@ -2126,23 +2126,20 @@ namespace PlaywrightNative.WebKit
 
         /// <summary>
         /// Prepares popup URL state then raises context <c>page</c> (Video attach)
-        /// before opener <c>popup</c> observers run.
+        /// before opener <c>popup</c> observers run. Always reports, including when
+        /// the popup closed during prepare (javascript: + immediate close).
         /// </summary>
         /// <returns>A task that completes when the page is ready to emit.</returns>
         internal async Task PrepareAndReportPopupAsync()
         {
             await PrepareForPopupReportAsync().ConfigureAwait(false);
-            if (_closed)
+            if (!_closed)
             {
-                return;
+                await WaitForNonBlankPopupUrlAsync().ConfigureAwait(false);
             }
 
-            await WaitForNonBlankPopupUrlAsync().ConfigureAwait(false);
-            if (_closed)
-            {
-                return;
-            }
-
+            // Closed popups must still raise BrowserContext.Page — otherwise
+            // WaitForPageAsync hangs (ConsoleEventShouldWorkInPopup2).
             ReportPopupAsNewOnce();
         }
 
@@ -8025,24 +8022,62 @@ namespace PlaywrightNative.WebKit
 
                 if (frameSession != null)
                 {
-                    await frameSession.SendAsync(
-                        "Input.dispatchMouseEvent",
-                        new { type = "move", button = "none", x = 8.0, y = 8.0, modifiers = 0, buttons = 0 })
-                        .ConfigureAwait(false);
-                    await frameSession.SendAsync(
-                        "Input.dispatchMouseEvent",
-                        new { type = "down", button = "left", x = 8.0, y = 8.0, modifiers = 0, buttons = 1, clickCount = 1 })
-                        .ConfigureAwait(false);
-                    await frameSession.SendAsync(
-                        "Input.dispatchMouseEvent",
-                        new { type = "up", button = "left", x = 8.0, y = 8.0, modifiers = 0, buttons = 0, clickCount = 1 })
-                        .ConfigureAwait(false);
+                    // Darwin WebKit 2251 frame-* sessions often never ACK Input.*;
+                    // do not burn the 20s protocol timeout — page-proxy pulse above
+                    // plus emulateUserGesture on evaluate remains the grant path.
+                    await PulseFrameSessionInputAsync(frameSession).ConfigureAwait(false);
                 }
             }
             catch (PlaywrightException ex)
             {
                 _logger?.LogDebug(ex, "Trusted gesture pulse failed for requestStorageAccess on {PageProxyId}", _pageProxyId);
             }
+            catch (TimeoutException ex)
+            {
+                _logger?.LogDebug(ex, "Trusted gesture pulse timed out for requestStorageAccess on {PageProxyId}", _pageProxyId);
+            }
+        }
+
+        private async Task PulseFrameSessionInputAsync(WKTargetSession frameSession)
+        {
+            try
+            {
+                Task pulse = PulseFrameSessionInputCoreAsync(frameSession);
+                Task winner = await Task.WhenAny(pulse, Task.Delay(1_500)).ConfigureAwait(false);
+                if (winner != pulse)
+                {
+                    _logger?.LogDebug(
+                        "Trusted gesture frame-session Input timed out after 1500ms on {PageProxyId}",
+                        _pageProxyId);
+                    return;
+                }
+
+                await pulse.ConfigureAwait(false);
+            }
+            catch (PlaywrightException ex)
+            {
+                _logger?.LogDebug(ex, "Trusted gesture frame-session pulse failed on {PageProxyId}", _pageProxyId);
+            }
+            catch (TimeoutException ex)
+            {
+                _logger?.LogDebug(ex, "Trusted gesture frame-session pulse timed out on {PageProxyId}", _pageProxyId);
+            }
+        }
+
+        private async Task PulseFrameSessionInputCoreAsync(WKTargetSession frameSession)
+        {
+            await frameSession.SendAsync(
+                "Input.dispatchMouseEvent",
+                new { type = "move", button = "none", x = 8.0, y = 8.0, modifiers = 0, buttons = 0 })
+                .ConfigureAwait(false);
+            await frameSession.SendAsync(
+                "Input.dispatchMouseEvent",
+                new { type = "down", button = "left", x = 8.0, y = 8.0, modifiers = 0, buttons = 1, clickCount = 1 })
+                .ConfigureAwait(false);
+            await frameSession.SendAsync(
+                "Input.dispatchMouseEvent",
+                new { type = "up", button = "left", x = 8.0, y = 8.0, modifiers = 0, buttons = 0, clickCount = 1 })
+                .ConfigureAwait(false);
         }
 
         private async Task ReplayExposedBindingsAsync()

@@ -213,7 +213,11 @@ namespace PlaywrightNative.Helpers
                         CancellationToken.None,
                         TaskContinuationOptions.ExecuteSynchronously,
                         TaskScheduler.Default);
-                    await Task.WhenAny(ready, closed.Task, Task.Delay(6_000)).ConfigureAwait(false);
+
+                    // Cap well under typical 5s popup CTS waits used in tests, but
+                    // long enough for Video attach / context Page reporting on WebKit.
+                    await Task.WhenAny(ready, closed.Task, Task.Delay(4_000))
+                        .ConfigureAwait(false);
                 }
             }
             finally
