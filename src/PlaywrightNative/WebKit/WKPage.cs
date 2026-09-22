@@ -7922,6 +7922,29 @@ namespace PlaywrightNative.WebKit
                         "Input.dispatchMouseEvent",
                         new { type = "up", button = "left", x = 1, y = 1, modifiers = 0, buttons = 0, clickCount = 1 })
                     .ConfigureAwait(false);
+
+                // Neutralize lasting focus so aria [active] matches a fresh navigation
+                // (framesets otherwise leave the hit iframe [active] after the pulse).
+                // RLS hadUserInteraction is already recorded; blur does not clear it.
+                WKTargetSession target = _targetSession;
+                if (target != null)
+                {
+                    try
+                    {
+                        await target.SendAsync(
+                                "Runtime.evaluate",
+                                new
+                                {
+                                    expression =
+                                        "(() => { try { const ae = document.activeElement; if (ae && ae !== document.body && ae !== document.documentElement && typeof ae.blur === 'function') ae.blur(); } catch (_) {} return true; })()",
+                                    returnByValue = true,
+                                })
+                            .ConfigureAwait(false);
+                    }
+                    catch (PlaywrightException)
+                    {
+                    }
+                }
             }
             catch (PlaywrightException ex)
             {
