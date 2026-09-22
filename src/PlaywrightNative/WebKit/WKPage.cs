@@ -7939,9 +7939,11 @@ namespace PlaywrightNative.WebKit
 
                 WKTargetSession target = _targetSession;
 
-                // Trusted Input — JS-dispatched clicks do not update ITP interaction.
-                // Save/restore activeElement so pages that focus on load (keyboard.html)
-                // keep their intended focus for key events.
+                // Trusted Input form entry — JS-only input does not update ITP
+                // interaction. Prefer typing over a (1,1) mouse click: clicks fire
+                // document 'click' listeners (view-scale mobile tests count them).
+                // Save/restore activeElement so pages that focus on load
+                // (keyboard.html) keep their intended focus for key events.
                 if (target != null)
                 {
                     try
@@ -7951,7 +7953,15 @@ namespace PlaywrightNative.WebKit
                                 new
                                 {
                                     expression =
-                                        "(() => { try { window.__pwItpPrevActive = document.activeElement; } catch (_) {} return true; })()",
+                                        "(() => { try {" +
+                                        " window.__pwItpPrevActive = document.activeElement;" +
+                                        " const i = document.createElement('input');" +
+                                        " i.id = '__pw_itp_pulse';" +
+                                        " i.setAttribute('aria-hidden', 'true');" +
+                                        " i.style.cssText = 'position:fixed;left:-9999px;top:0;width:1px;height:1px;opacity:0;pointer-events:none';" +
+                                        " document.documentElement.appendChild(i);" +
+                                        " i.focus({ preventScroll: true });" +
+                                        "} catch (_) {} return true; })()",
                                     returnByValue = true,
                                 })
                             .ConfigureAwait(false);
@@ -7961,17 +7971,42 @@ namespace PlaywrightNative.WebKit
                     }
                 }
 
+                // Page-proxy keyDown with text + target insertText — same trusted
+                // path as WKRawKeyboard for form entry (ITP How-To #1).
                 await _session.SendAsync(
-                        "Input.dispatchMouseEvent",
-                        new { type = "move", button = "none", x = 1, y = 1, modifiers = 0, buttons = 0 })
+                        "Input.dispatchKeyEvent",
+                        new
+                        {
+                            type = "keyDown",
+                            modifiers = 0,
+                            windowsVirtualKeyCode = 32,
+                            code = "Space",
+                            key = " ",
+                            text = " ",
+                            unmodifiedText = " ",
+                        })
                     .ConfigureAwait(false);
+                if (target != null)
+                {
+                    try
+                    {
+                        await target.SendAsync("Page.insertText", new { text = " " }).ConfigureAwait(false);
+                    }
+                    catch (PlaywrightException)
+                    {
+                    }
+                }
+
                 await _session.SendAsync(
-                        "Input.dispatchMouseEvent",
-                        new { type = "down", button = "left", x = 1, y = 1, modifiers = 0, buttons = 1, clickCount = 1 })
-                    .ConfigureAwait(false);
-                await _session.SendAsync(
-                        "Input.dispatchMouseEvent",
-                        new { type = "up", button = "left", x = 1, y = 1, modifiers = 0, buttons = 0, clickCount = 1 })
+                        "Input.dispatchKeyEvent",
+                        new
+                        {
+                            type = "keyUp",
+                            modifiers = 0,
+                            windowsVirtualKeyCode = 32,
+                            code = "Space",
+                            key = " ",
+                        })
                     .ConfigureAwait(false);
 
                 // RLS hadUserInteraction is already recorded; restoring focus does not clear it.
@@ -7984,7 +8019,12 @@ namespace PlaywrightNative.WebKit
                                 new
                                 {
                                     expression =
-                                        "(() => { try { const prev = window.__pwItpPrevActive; delete window.__pwItpPrevActive; if (prev && typeof prev.focus === 'function') prev.focus({ preventScroll: true }); } catch (_) {} return true; })()",
+                                        "(() => { try {" +
+                                        " document.getElementById('__pw_itp_pulse')?.remove();" +
+                                        " const prev = window.__pwItpPrevActive;" +
+                                        " delete window.__pwItpPrevActive;" +
+                                        " if (prev && typeof prev.focus === 'function') prev.focus({ preventScroll: true });" +
+                                        "} catch (_) {} return true; })()",
                                     returnByValue = true,
                                 })
                             .ConfigureAwait(false);
