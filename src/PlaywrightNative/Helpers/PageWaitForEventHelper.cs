@@ -257,13 +257,26 @@ namespace PlaywrightNative.Helpers
                         matches,
                         timeout);
                 case "Crash":
+                    // crash() then waitForEvent('crash') races: WebKit can raise Crash
+                    // before the waiter subscribes. Replay after subscribe when already
+                    // crashed (same pattern as other existingAfterSubscribe waits).
                     return WaitTypedAsync<T, IPage>(
                         page,
                         h => page.Crash += h,
                         h => page.Crash -= h,
                         matches,
                         timeout,
-                        abortOnPageCrash: false);
+                        abortOnPageCrash: false,
+                        existingAfterSubscribe: () =>
+                        {
+                            if (page is IHasPageExtras extras && extras.HasCrashed)
+                            {
+                                return Task.FromResult<IReadOnlyList<T>>(
+                                    (IReadOnlyList<T>)(object)new IPage[] { page });
+                            }
+
+                            return Task.FromResult<IReadOnlyList<T>>(Array.Empty<T>());
+                        });
                 default:
                     throw new ArgumentException($"Unknown page event '{name}'.");
             }

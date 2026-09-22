@@ -315,6 +315,9 @@ namespace PlaywrightNative.WebKit
         public ICoverage Coverage { get; } = new EmptyCoverage();
 
         /// <inheritdoc/>
+        bool IHasPageExtras.HasCrashed => _crashed;
+
+        /// <inheritdoc/>
         public IClock Clock => Context.Clock;
 
         /// <inheritdoc/>

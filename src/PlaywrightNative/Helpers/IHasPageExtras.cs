@@ -25,6 +25,13 @@ namespace PlaywrightNative.Helpers
         /// <summary>Emitted when a dialog is closed.</summary>
         event EventHandler<IDialog> DialogClosed;
 
+        /// <summary>
+        /// True after the page <c>Crash</c> event has been raised. Used by
+        /// <c>waitForEvent('crash')</c> so a crash that races ahead of the
+        /// subscription still resolves (parity with Node's async protocol gap).
+        /// </summary>
+        bool HasCrashed { get; }
+
         /// <summary>JS/CSS coverage.</summary>
         ICoverage Coverage { get; }
 

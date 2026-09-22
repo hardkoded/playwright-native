@@ -51,6 +51,7 @@ namespace PlaywrightNative
         private IKeyboard _directKeyboard;
         private ITouchscreen _directTouchscreen;
         private bool _isClosed;
+        private bool _crashed;
         private bool _virtualAuthenticatorEnabled;
         private string _virtualAuthenticatorId;
         private string _closeReason;
@@ -169,7 +170,11 @@ namespace PlaywrightNative
                 Worker?.Invoke(this, instance);
             };
             _crPage.WebSocketCreated += (_, socket) => WebSocket?.Invoke(this, socket);
-            _crPage.Crashed += (_, _) => Crash?.Invoke(this, this);
+            _crPage.Crashed += (_, _) =>
+            {
+                _crashed = true;
+                Crash?.Invoke(this, this);
+            };
         }
 
         /// <inheritdoc/>
@@ -259,6 +264,9 @@ namespace PlaywrightNative
 
         /// <inheritdoc/>
         public ICoverage Coverage { get; }
+
+        /// <inheritdoc/>
+        bool IHasPageExtras.HasCrashed => _crashed;
 
         /// <inheritdoc/>
         public IClock Clock => _context.Clock;

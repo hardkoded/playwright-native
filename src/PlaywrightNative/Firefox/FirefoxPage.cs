@@ -138,6 +138,9 @@ namespace PlaywrightNative.Firefox
         public ICoverage Coverage { get; } = new EmptyCoverage();
 
         /// <inheritdoc/>
+        bool IHasPageExtras.HasCrashed => false;
+
+        /// <inheritdoc/>
         public IClock Clock => _context.Clock;
 
         /// <inheritdoc/>
