@@ -7865,11 +7865,10 @@ namespace PlaywrightNative.WebKit
         /// <summary>
         /// Runs <c>document.requestStorageAccess</c> under
         /// <c>Runtime.callFunctionOn</c> with <c>emulateUserGesture</c> +
-        /// <c>awaitPromise</c>, matching upstream <c>utilityScript.evaluate</c>.
-        /// Playwright MiniBrowser auto-accepts the macOS storage-access panel
-        /// under that gesture — no <c>Input</c> pulse (frame-* sessions are
-        /// Console-only on Darwin 2251) and no <c>storageAccess</c>
-        /// <c>grantPermissions</c> (not in upstream WebKit permission map).
+        /// <c>awaitPromise</c> (upstream <c>utilityScript.evaluate</c>), after a
+        /// page-proxy Input click on the iframe chrome. MiniBrowser auto-accepts
+        /// the macOS storage-access panel under that gesture. Frame-* sessions are
+        /// Console-only on Darwin 2251 — never send Input there (never ACKs).
         /// </summary>
         /// <param name="context">Child-frame execution context.</param>
         /// <param name="expression">
@@ -7898,44 +7897,154 @@ namespace PlaywrightNative.WebKit
                 }
             }
 
-            // Focus the iframe element in the parent so the OOPIF is the active
-            // document before callFunctionOn grants transient activation.
-            WKFrame parent = frame?.ParentFrame;
-            if (parent != null)
+            string frameOrigin = null;
+            try
             {
-                try
+                string frameUrl = frame?.Url;
+                if (!string.IsNullOrEmpty(frameUrl)
+                    && Uri.TryCreate(frameUrl, UriKind.Absolute, out Uri parsed)
+                    && (parsed.Scheme == Uri.UriSchemeHttp || parsed.Scheme == Uri.UriSchemeHttps))
                 {
-                    WKExecutionContext parentContext = await WaitForFrameContextAsync(parent).ConfigureAwait(false);
-                    const string focusExpression = @"(() => {
-  const el = document.querySelector('iframe, frame');
-  if (el && typeof el.focus === 'function') el.focus();
-  return true;
-})()";
-                    object focusParams = parentContext.ContextId != 0
-                        ? new
-                        {
-                            expression = focusExpression,
-                            contextId = parentContext.ContextId,
-                            returnByValue = true,
-                            emulateUserGesture = false,
-                        }
-                        : (object)new
-                        {
-                            expression = focusExpression,
-                            returnByValue = true,
-                            emulateUserGesture = false,
-                        };
-                    await parentContext.Session.SendAsync("Runtime.evaluate", focusParams)
-                        .ConfigureAwait(false);
-                }
-                catch (PlaywrightException ex)
-                {
-                    _logger?.LogDebug(ex, "iframe focus failed before requestStorageAccess on {PageProxyId}", _pageProxyId);
+                    frameOrigin = parsed.GetLeftPart(UriPartial.Authority);
                 }
             }
+            catch (UriFormatException)
+            {
+            }
 
-            return await context.EvaluateHandleWithUserGestureAsync(expression)
+            // Best-effort: WebKit's grantPermissions map may ignore storageAccess
+            // (upstream does not grant it), but when accepted it removes the need
+            // for the MiniBrowser panel path under a weak gesture.
+            try
+            {
+                await GrantPermissionsAsync("*", new[] { ContextPermissions.StorageAccess })
+                    .ConfigureAwait(false);
+                if (!string.IsNullOrEmpty(frameOrigin))
+                {
+                    await GrantPermissionsAsync(frameOrigin, new[] { ContextPermissions.StorageAccess })
+                        .ConfigureAwait(false);
+                }
+            }
+            catch (PlaywrightException ex)
+            {
+                _logger?.LogDebug(ex, "storageAccess grant failed before requestStorageAccess on {PageProxyId}", _pageProxyId);
+            }
+
+            return await context.EvaluateHandleWithUserGestureAsync(
+                    expression,
+                    () => PulseTrustedGestureOnFrameAsync(frame))
                 .ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Dispatches a trusted page-proxy mouse click on the iframe element so
+        /// macOS WebKit grants transient activation for
+        /// <c>document.requestStorageAccess()</c>. Does not run in-page
+        /// <c>window.focus()</c> (that breaks <c>document.hasFocus()</c>).
+        /// </summary>
+        /// <param name="frame">The child frame about to evaluate.</param>
+        /// <returns>A task that completes when the gesture has been sent or skipped.</returns>
+        private async Task PulseTrustedGestureOnFrameAsync(WKFrame frame)
+        {
+            WKFrame parent = frame?.ParentFrame;
+            if (parent == null)
+            {
+                return;
+            }
+
+            // Do not call Emulation.setActiveAndFocused here. It clears
+            // transient activation, and macOS requestStorageAccess then
+            // rejects before callFunctionOn's gesture flag is applied.
+            double x = 20;
+            double y = 20;
+            try
+            {
+                WKExecutionContext parentContext = await WaitForFrameContextAsync(parent).ConfigureAwait(false);
+
+                // Focus the iframe (no gesture flag) then read its center for
+                // the page-proxy click that arms OOPIF transient activation.
+                const string rectExpression = @"(() => {
+  const el = document.querySelector('iframe, frame');
+  if (!el) return '20,20';
+  if (typeof el.focus === 'function') el.focus();
+  const r = el.getBoundingClientRect();
+  if (!r.width || !r.height) return '20,20';
+  return (r.left + (r.width / 2)) + ',' + (r.top + (r.height / 2));
+})()";
+                object rectParams = parentContext.ContextId != 0
+                    ? new
+                    {
+                        expression = rectExpression,
+                        contextId = parentContext.ContextId,
+                        returnByValue = true,
+                        emulateUserGesture = false,
+                    }
+                    : (object)new
+                    {
+                        expression = rectExpression,
+                        returnByValue = true,
+                        emulateUserGesture = false,
+                    };
+                JsonElement? rectResponse = await parentContext.Session.SendAsync("Runtime.evaluate", rectParams)
+                    .ConfigureAwait(false);
+                string raw = null;
+                if (rectResponse.HasValue
+                    && rectResponse.Value.TryGetProperty("result", out JsonElement rectResult)
+                    && rectResult.TryGetProperty("value", out JsonElement rectValue)
+                    && rectValue.ValueKind == JsonValueKind.String)
+                {
+                    raw = rectValue.GetString();
+                }
+
+                if (!string.IsNullOrEmpty(raw))
+                {
+                    string[] parts = raw.Split(',');
+                    if (parts.Length >= 2
+                        && double.TryParse(parts[0], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double parsedX)
+                        && double.TryParse(parts[1], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double parsedY))
+                    {
+                        x = parsedX;
+                        y = parsedY;
+                    }
+                }
+            }
+            catch (PlaywrightException ex)
+            {
+                _logger?.LogDebug(ex, "Trusted gesture rect failed for requestStorageAccess on {PageProxyId}", _pageProxyId);
+            }
+            catch (JsonException ex)
+            {
+                _logger?.LogDebug(ex, "Trusted gesture rect failed for requestStorageAccess on {PageProxyId}", _pageProxyId);
+            }
+            catch (TimeoutException ex)
+            {
+                _logger?.LogDebug(ex, "Trusted gesture rect failed for requestStorageAccess on {PageProxyId}", _pageProxyId);
+            }
+
+            try
+            {
+                // Page-proxy only — frame-* Input never ACKs on Darwin 2251.
+                await _session.SendAsync(
+                    "Input.dispatchMouseEvent",
+                    new { type = "move", button = "none", x, y, modifiers = 0, buttons = 0 })
+                    .ConfigureAwait(false);
+                await _session.SendAsync(
+                    "Input.dispatchMouseEvent",
+                    new { type = "down", button = "left", x, y, modifiers = 0, buttons = 1, clickCount = 1 })
+                    .ConfigureAwait(false);
+                await _session.SendAsync(
+                    "Input.dispatchMouseEvent",
+                    new { type = "up", button = "left", x, y, modifiers = 0, buttons = 0, clickCount = 1 })
+                    .ConfigureAwait(false);
+            }
+            catch (PlaywrightException ex)
+            {
+                _logger?.LogDebug(ex, "Trusted gesture pulse failed for requestStorageAccess on {PageProxyId}", _pageProxyId);
+            }
+            catch (TimeoutException ex)
+            {
+                _logger?.LogDebug(ex, "Trusted gesture pulse timed out for requestStorageAccess on {PageProxyId}", _pageProxyId);
+            }
         }
 
         private async Task ReplayExposedBindingsAsync()

@@ -134,8 +134,15 @@ namespace PlaywrightNative.WebKit
         /// (e.g. <c>() =&gt; …</c>), matching upstream <c>isFunction: true</c>.
         /// </summary>
         /// <param name="expression">The JavaScript function or expression to evaluate.</param>
+        /// <param name="pulseTrustedGestureAsync">
+        /// Optional page-proxy Input click invoked after the window anchor and
+        /// immediately before <c>callFunctionOn</c> so Darwin still has transient
+        /// activation when RSA runs under <c>awaitPromise</c>.
+        /// </param>
         /// <returns>The raw <c>result</c> remote object, or <see langword="null"/>.</returns>
-        internal async Task<JsonElement?> EvaluateHandleWithUserGestureAsync(string expression)
+        internal async Task<JsonElement?> EvaluateHandleWithUserGestureAsync(
+            string expression,
+            Func<Task> pulseTrustedGestureAsync = null)
         {
             // WebKit WIP only accepts objectId-bound Runtime.callFunctionOn (not
             // executionContextId) — same as upstream wkExecutionContext. Match
@@ -154,6 +161,8 @@ namespace PlaywrightNative.WebKit
             // document-bound callFunctionOn still returned false on CI after
             // OOPIF load even with emulateUserGesture. Anchor without
             // emulateUserGesture so the flag applies only to callFunctionOn.
+            // Do not pulse before the anchor: a parent iframe hit-test is slow
+            // enough that activation expires before callFunctionOn.
             object anchorParams = _contextId.HasValue
                 ? new { expression = "window", contextId = _contextId.Value, returnByValue = false, emulateUserGesture = false }
                 : (object)new { expression = "window", returnByValue = false, emulateUserGesture = false };
@@ -179,6 +188,11 @@ namespace PlaywrightNative.WebKit
 
             try
             {
+                if (pulseTrustedGestureAsync != null)
+                {
+                    await pulseTrustedGestureAsync().ConfigureAwait(false);
+                }
+
                 JsonElement? response = await _session.SendAsync(
                     "Runtime.callFunctionOn",
                     new
