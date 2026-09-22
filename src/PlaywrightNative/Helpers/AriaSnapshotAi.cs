@@ -607,15 +607,25 @@ namespace PlaywrightNative.Helpers
             string childYaml = await AriaSnapshotOfficialAi
                 .CaptureYamlAsync(childRoot, depth, boxes, childPrefix, startDepth)
                 .ConfigureAwait(false);
+
+            // Darwin data: ContentFrame can resolve before the AX tree has
+            // nodes (ShouldMarkIframeAsActiveWhenItContainsFocusedElement).
+            // Empty YAML must miss so the [active] retry can use Focus's frame.
+            if (string.IsNullOrEmpty(childYaml))
+            {
+                return null;
+            }
+
             return await StitchAsync(page, child, childYaml, depth, boxes, deadlineClock, budgetMs, startDepth)
                 .ConfigureAwait(false);
         }
 
         /// <summary>
         /// Last-chance stitch for an <c>iframe [active]</c> line when the primary
-        /// capture returned empty. Uses CSS <c>FrameLocator</c> (same path Focus
-        /// uses) with a fresh timeout so a spent stitch budget cannot leave
-        /// Darwin data: iframes childless after Focus.
+        /// capture returned empty. Prefers the child frame that currently has
+        /// focus (Darwin data: after FocusAsync), then CSS <c>FrameLocator</c>,
+        /// with a fresh timeout so a spent stitch budget cannot leave the
+        /// iframe childless.
         /// </summary>
         private static async Task<string> CaptureActiveDataIframeYamlAsync(
             IPage page,
@@ -630,19 +640,31 @@ namespace PlaywrightNative.Helpers
 
             try
             {
+                string focused = await CaptureYamlFromFocusedChildFrameAsync(
+                    page,
+                    depth,
+                    boxes,
+                    startDepth).ConfigureAwait(false);
+                if (!string.IsNullOrEmpty(focused))
+                {
+                    return focused;
+                }
+
                 IElementHandle enterRoot = await page.FrameLocator("iframe, frame")
                     .Locator("body, frameset")
-                    .ElementHandleAsync(800f)
+                    .ElementHandleAsync(2_000f)
                     .ConfigureAwait(false);
                 if (enterRoot == null)
                 {
-                    return null;
+                    return await CaptureYamlFromAnyChildFrameAsync(page, depth, boxes, startDepth)
+                        .ConfigureAwait(false);
                 }
 
                 IFrame child = await enterRoot.OwnerFrameAsync().ConfigureAwait(false);
                 if (child == null || child.IsDetached)
                 {
-                    return null;
+                    return await CaptureYamlFromAnyChildFrameAsync(page, depth, boxes, startDepth)
+                        .ConfigureAwait(false);
                 }
 
                 string prefix = await PrefixForAsync(page, child).ConfigureAwait(false);
@@ -651,7 +673,8 @@ namespace PlaywrightNative.Helpers
                     .ConfigureAwait(false);
                 if (string.IsNullOrEmpty(enterYaml))
                 {
-                    return null;
+                    return await CaptureYamlFromAnyChildFrameAsync(page, depth, boxes, startDepth)
+                        .ConfigureAwait(false);
                 }
 
                 return await StitchAsync(
@@ -661,7 +684,159 @@ namespace PlaywrightNative.Helpers
                     depth,
                     boxes,
                     Stopwatch.StartNew(),
-                    1_200,
+                    1_500,
+                    startDepth).ConfigureAwait(false);
+            }
+            catch (PlaywrightException)
+            {
+                return null;
+            }
+            catch (TimeoutException)
+            {
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Captures AI YAML from a non-main frame whose document currently has
+        /// focus — the Darwin path after focusing an input inside a data: iframe.
+        /// </summary>
+        private static async Task<string> CaptureYamlFromFocusedChildFrameAsync(
+            IPage page,
+            int? depth,
+            bool boxes,
+            int startDepth)
+        {
+            IReadOnlyList<IFrame> frames = page.Frames;
+            if (frames == null || frames.Count == 0)
+            {
+                return null;
+            }
+
+            IFrame main = page.MainFrame;
+            for (int i = 0; i < frames.Count; i++)
+            {
+                IFrame frame = frames[i];
+                if (frame == null
+                    || frame.IsDetached
+                    || ReferenceEquals(frame, main))
+                {
+                    continue;
+                }
+
+                bool hasFocus;
+                try
+                {
+                    hasFocus = await frame.EvaluateAsync<bool>(
+                            "() => { try { return !!document.hasFocus(); } catch (e) { return false; } }")
+                        .ConfigureAwait(false);
+                }
+                catch (PlaywrightException)
+                {
+                    continue;
+                }
+                catch (TimeoutException)
+                {
+                    continue;
+                }
+
+                if (!hasFocus)
+                {
+                    continue;
+                }
+
+                string yaml = await CaptureYamlFromFrameBodyAsync(page, frame, depth, boxes, startDepth)
+                    .ConfigureAwait(false);
+                if (!string.IsNullOrEmpty(yaml))
+                {
+                    return yaml;
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Last resort: snapshot the first non-main frame that already has a
+        /// populated body (single data: iframe pages after Focus).
+        /// </summary>
+        private static async Task<string> CaptureYamlFromAnyChildFrameAsync(
+            IPage page,
+            int? depth,
+            bool boxes,
+            int startDepth)
+        {
+            IReadOnlyList<IFrame> frames = page.Frames;
+            if (frames == null || frames.Count == 0)
+            {
+                return null;
+            }
+
+            IFrame main = page.MainFrame;
+            for (int i = 0; i < frames.Count; i++)
+            {
+                IFrame frame = frames[i];
+                if (frame == null
+                    || frame.IsDetached
+                    || ReferenceEquals(frame, main))
+                {
+                    continue;
+                }
+
+                if (!await FrameBodyHasChildrenAsync(frame, Stopwatch.StartNew(), 400)
+                    .ConfigureAwait(false))
+                {
+                    continue;
+                }
+
+                string yaml = await CaptureYamlFromFrameBodyAsync(page, frame, depth, boxes, startDepth)
+                    .ConfigureAwait(false);
+                if (!string.IsNullOrEmpty(yaml))
+                {
+                    return yaml;
+                }
+            }
+
+            return null;
+        }
+
+        private static async Task<string> CaptureYamlFromFrameBodyAsync(
+            IPage page,
+            IFrame frame,
+            int? depth,
+            bool boxes,
+            int startDepth)
+        {
+            if (frame == null || frame.IsDetached)
+            {
+                return null;
+            }
+
+            try
+            {
+                IElementHandle root = await frame.QuerySelectorAsync("body, frameset").ConfigureAwait(false);
+                if (root == null)
+                {
+                    return null;
+                }
+
+                string prefix = await PrefixForAsync(page, frame).ConfigureAwait(false);
+                string yaml = await AriaSnapshotOfficialAi
+                    .CaptureYamlAsync(root, depth, boxes, prefix, startDepth)
+                    .ConfigureAwait(false);
+                if (string.IsNullOrEmpty(yaml))
+                {
+                    return null;
+                }
+
+                return await StitchAsync(
+                    page,
+                    frame,
+                    yaml,
+                    depth,
+                    boxes,
+                    Stopwatch.StartNew(),
+                    1_500,
                     startDepth).ConfigureAwait(false);
             }
             catch (PlaywrightException)
