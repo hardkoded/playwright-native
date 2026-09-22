@@ -165,7 +165,8 @@ namespace PlaywrightNative.WebKit
                 await pulseTrustedGestureAsync().ConfigureAwait(false);
             }
 
-            // Exact upstream evaluateWithArguments shape for isFunction+returnByValue.
+            // Exact upstream evaluateExpression → utilityScriptValues shape:
+            // [isFunction, returnByValue, serialize, expression, argCount, ...args]
             const string functionDeclaration =
                 "(utilityScript, ...args) => utilityScript.evaluate(...args)";
 
@@ -183,6 +184,7 @@ namespace PlaywrightNative.WebKit
                             new { objectId = utilityId },
                             new { value = true },
                             new { value = true },
+                            new { value = (object)null },
                             new { value = expression },
                             new { value = 0 },
                         },
@@ -970,26 +972,36 @@ namespace PlaywrightNative.WebKit
 
         private async Task<string> InstallUtilityScriptObjectIdAsync()
         {
-            // Minimal UtilityScript.evaluate + native-Promise wrap for awaitPromise
-            // (upstream _promiseAwareJsonValueNoThrow). Use globalThis.eval (indirect)
-            // like upstream this.global.eval so the page function closes over the
-            // frame global, not the UtilityScript method scope. Full
-            // utilityScriptSource is not required for boolean RSA.
+            // Minimal UtilityScript.evaluate matching upstream javascript.ts
+            // evaluateExpression values: (isFunction, returnByValue, serialize,
+            // expression, argCount, ...args). Use globalThis.eval so the page
+            // function closes over the frame global. When returnByValue, serialize
+            // booleans/primitives like utilityScriptSerializers so ParseRemote
+            // sees { b: true } rather than a raw CDP boolean.
             const string source =
                 @"(() => {
   const global = globalThis;
+  const serialize = (v) => {
+    if (Object.is(v, undefined)) return { v: 'undefined' };
+    if (Object.is(v, null)) return { v: 'null' };
+    const type = typeof v;
+    if (type === 'boolean') return { b: v };
+    if (type === 'number') return { n: v };
+    if (type === 'string') return { s: v };
+    return v;
+  };
   return {
-    evaluate(isFunction, returnByValue, expression, argCount) {
+    evaluate(isFunction, returnByValue, _serialize, expression, argCount) {
       let result = global.eval(expression);
       if (isFunction === true) {
         result = result();
       } else if (isFunction !== false && typeof result === 'function') {
         result = result();
       }
-      if (returnByValue && result && typeof result.then === 'function') {
-        return (async () => await result)();
+      if (result && typeof result.then === 'function') {
+        return result.then((value) => returnByValue ? serialize(value) : value);
       }
-      return result;
+      return returnByValue ? serialize(result) : result;
     }
   };
 })()";

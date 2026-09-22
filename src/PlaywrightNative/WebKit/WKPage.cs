@@ -7868,12 +7868,11 @@ namespace PlaywrightNative.WebKit
         /// Runs <c>document.requestStorageAccess</c> via UtilityScript
         /// <c>callFunctionOn</c> + <c>emulateUserGesture</c>, with a page-proxy
         /// Input pulse immediately before CFO so Darwin OOPIF transient
-        /// activation is live. Do not invoke RSA from a click-handler first —
-        /// that burns Darwin's one-shot storage-access panel and leaves the
-        /// UtilityScript path with expired activation (tip 495d8c0 CI returned
-        /// False in ~850ms). Frame-* sessions are Console-only — never send
-        /// Input there. Do not call <c>Emulation.setActiveAndFocused</c> here
-        /// (clears activation).
+        /// activation is live. Do not grant <c>storageAccess</c> (Chromium-only
+        /// in upstream) and do not invoke RSA from a click-handler first (burns
+        /// Darwin's one-shot panel). Frame-* sessions are Console-only — never
+        /// send Input there. Do not call <c>Emulation.setActiveAndFocused</c>
+        /// here (clears activation).
         /// </summary>
         /// <param name="context">Child-frame execution context.</param>
         /// <param name="expression">
@@ -7887,38 +7886,9 @@ namespace PlaywrightNative.WebKit
             string expression,
             WKFrame frame)
         {
-            // Emulation.grantPermissions(storageAccess) helps when MiniBrowser's
-            // panel auto-accept does not fire. Grant wildcard and frame origin
-            // (ITP scopes the grant).
-            string frameOrigin = null;
-            try
-            {
-                string frameUrl = frame?.Url;
-                if (!string.IsNullOrEmpty(frameUrl)
-                    && Uri.TryCreate(frameUrl, UriKind.Absolute, out Uri parsed)
-                    && (parsed.Scheme == Uri.UriSchemeHttp || parsed.Scheme == Uri.UriSchemeHttps))
-                {
-                    frameOrigin = parsed.GetLeftPart(UriPartial.Authority);
-                }
-            }
-            catch (UriFormatException)
-            {
-            }
-
-            try
-            {
-                await GrantPermissionsAsync("*", new[] { ContextPermissions.StorageAccess })
-                    .ConfigureAwait(false);
-                if (!string.IsNullOrEmpty(frameOrigin))
-                {
-                    await GrantPermissionsAsync(frameOrigin, new[] { ContextPermissions.StorageAccess })
-                        .ConfigureAwait(false);
-                }
-            }
-            catch (PlaywrightException ex)
-            {
-                _logger?.LogDebug(ex, "storageAccess grant failed before requestStorageAccess on {PageProxyId}", _pageProxyId);
-            }
+            // Upstream WebKit permission map does not include storageAccess —
+            // MiniBrowser auto-accepts the panel under emulateUserGesture. Do not
+            // grantPermissions(storageAccess); that is Chromium-only.
 
             // Foreground without setActiveAndFocused (clears transient activation).
             WKTargetSession target = _targetSession;
@@ -7940,7 +7910,7 @@ namespace PlaywrightNative.WebKit
                 : "() => document.requestStorageAccess().then(() => true, e => false)";
 
             // Pulse immediately before CFO (inside EvaluateHandleWithUserGestureAsync)
-            // so Darwin activation is still live when RSA runs.
+            // so Darwin OOPIF activation is live when RSA runs under emulateUserGesture.
             return await context.EvaluateHandleWithUserGestureAsync(
                     rsaExpression,
                     () => PulseTrustedGestureOnFrameAsync(frame))
