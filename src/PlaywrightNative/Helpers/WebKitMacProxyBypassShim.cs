@@ -64,9 +64,8 @@ namespace PlaywrightNative.Helpers
             Port = ((IPEndPoint)_listener.LocalEndpoint).Port;
 
             // Pass credentials through to WebKit so CFNetwork retries CONNECT after
-            // a 407/close with Proxy-Authorization. The shim still injects auth on
-            // the upstream hop; without Username/Password on BrowserProxy, Darwin
-            // often never reconnects (ShouldReconnectWithCredentialsAfterConnect407…).
+            // a 407/close with Proxy-Authorization. CONNECT hops forward WebKit's
+            // auth header (do not always inject — that skips the 407 challenge).
             BrowserProxy = new Proxy
             {
                 Server = "http://127.0.0.1:" + Port.ToString(CultureInfo.InvariantCulture),
@@ -476,6 +475,30 @@ namespace PlaywrightNative.Helpers
         }
 
         /// <summary>
+        /// Reads <c>Proxy-Authorization</c> from WebKit's CONNECT headers, if any.
+        /// </summary>
+        private static string ExtractProxyAuthorization(byte[] headerBytes)
+        {
+            if (headerBytes == null || headerBytes.Length == 0)
+            {
+                return null;
+            }
+
+            string text = Latin1.GetString(headerBytes);
+            string[] lines = text.Split(HeaderLineSeparators, StringSplitOptions.None);
+            for (int i = 0; i < lines.Length; i++)
+            {
+                string line = lines[i];
+                if (line.StartsWith("Proxy-Authorization:", StringComparison.OrdinalIgnoreCase))
+                {
+                    return line.Substring("Proxy-Authorization:".Length).Trim();
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>
         /// Returns whether <paramref name="headerBytes"/> is a WebSocket upgrade
         /// handshake (absolute-form or origin-form).
         /// </summary>
@@ -769,7 +792,7 @@ namespace PlaywrightNative.Helpers
                     string target = parts[1];
                     if (string.Equals(method, "CONNECT", StringComparison.OrdinalIgnoreCase))
                     {
-                        await HandleConnectAsync(clientStream, target).ConfigureAwait(false);
+                        await HandleConnectAsync(clientStream, target, headerBytes).ConfigureAwait(false);
                         return;
                     }
 
@@ -784,7 +807,7 @@ namespace PlaywrightNative.Helpers
             }
         }
 
-        private async Task HandleConnectAsync(NetworkStream clientStream, string target)
+        private async Task HandleConnectAsync(NetworkStream clientStream, string target, byte[] clientHeaders)
         {
             if (!TryParseHostPort(target, 443, out string host, out int port))
             {
@@ -808,11 +831,25 @@ namespace PlaywrightNative.Helpers
 
                 await ConnectWithTimeoutAsync(upstream, _upstreamHost, _upstreamPort).ConfigureAwait(false);
                 NetworkStream upStream = upstream.GetStream();
+
+                // Forward only the Proxy-Authorization WebKit sent. Always injecting
+                // stored credentials makes the first CONNECT look authenticated to
+                // the upstream proxy; CFNetwork then often skips the 407 retry
+                // (ShouldReconnectWithCredentialsAfterConnect407… count stays 1).
+                // BrowserProxy Username/Password drive WebKit's challenge response.
+                string clientAuth = ExtractProxyAuthorization(clientHeaders);
                 string connectRequest = "CONNECT " + host + ":" + port.ToString(CultureInfo.InvariantCulture)
                     + " HTTP/1.1\r\nHost: " + host + ":" + port.ToString(CultureInfo.InvariantCulture)
                     + "\r\n";
-                if (!string.IsNullOrEmpty(_proxyAuthorization))
+                if (!string.IsNullOrEmpty(clientAuth))
                 {
+                    connectRequest += "Proxy-Authorization: " + clientAuth + "\r\n";
+                }
+                else if (!string.IsNullOrEmpty(_proxyAuthorization)
+                    && string.IsNullOrEmpty(BrowserProxy.Username))
+                {
+                    // Credentials lived only in the proxy URL (no Username field) —
+                    // WebKit will not challenge-reply; inject on every hop.
                     connectRequest += "Proxy-Authorization: " + _proxyAuthorization + "\r\n";
                 }
 
@@ -848,6 +885,13 @@ namespace PlaywrightNative.Helpers
                     // is closed by HandleClientAsync — otherwise CFNetwork may not
                     // retry CONNECT with Proxy-Authorization.
                     await clientStream.FlushAsync().ConfigureAwait(false);
+                    try
+                    {
+                        await Task.Delay(150).ConfigureAwait(false);
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                    }
                 }
             }
             finally
