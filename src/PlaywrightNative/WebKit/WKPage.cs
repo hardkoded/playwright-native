@@ -7878,6 +7878,8 @@ namespace PlaywrightNative.WebKit
         /// first-party user interaction for that host. Required for a subsequent
         /// cross-site <c>document.requestStorageAccess()</c> under ITP. WebKit
         /// counts click/tap/form entry only — modifier-only keys do not qualify.
+        /// Focus is saved and restored so load-time focus (e.g. keyboard.html) and
+        /// frameset aria <c>[active]</c> are not permanently altered.
         /// </summary>
         /// <returns>A task that completes when the gesture has been sent or skipped.</returns>
         private async Task RecordFirstPartyUserInteractionIfNeededAsync()
@@ -7908,8 +7910,28 @@ namespace PlaywrightNative.WebKit
             try
             {
                 // Trusted Input — JS-dispatched clicks do not update ITP interaction.
-                // (1,1) is far enough from (0,0) chrome while still on empty test pages
-                // that ship no hit-target there (e.g. set-cookie.html).
+                // Save/restore activeElement so pages that focus on load (keyboard.html)
+                // and framesets keep their intended focus for aria [active] / key events.
+                WKTargetSession target = _targetSession;
+                if (target != null)
+                {
+                    try
+                    {
+                        await target.SendAsync(
+                                "Runtime.evaluate",
+                                new
+                                {
+                                    expression =
+                                        "(() => { try { window.__pwItpPrevActive = document.activeElement; } catch (_) {} return true; })()",
+                                    returnByValue = true,
+                                })
+                            .ConfigureAwait(false);
+                    }
+                    catch (PlaywrightException)
+                    {
+                    }
+                }
+
                 await _session.SendAsync(
                         "Input.dispatchMouseEvent",
                         new { type = "move", button = "none", x = 1, y = 1, modifiers = 0, buttons = 0 })
@@ -7923,10 +7945,7 @@ namespace PlaywrightNative.WebKit
                         new { type = "up", button = "left", x = 1, y = 1, modifiers = 0, buttons = 0, clickCount = 1 })
                     .ConfigureAwait(false);
 
-                // Neutralize lasting focus so aria [active] matches a fresh navigation
-                // (framesets otherwise leave the hit iframe [active] after the pulse).
-                // RLS hadUserInteraction is already recorded; blur does not clear it.
-                WKTargetSession target = _targetSession;
+                // RLS hadUserInteraction is already recorded; restoring focus does not clear it.
                 if (target != null)
                 {
                     try
@@ -7936,7 +7955,7 @@ namespace PlaywrightNative.WebKit
                                 new
                                 {
                                     expression =
-                                        "(() => { try { const ae = document.activeElement; if (ae && ae !== document.body && ae !== document.documentElement && typeof ae.blur === 'function') ae.blur(); } catch (_) {} return true; })()",
+                                        "(() => { try { const prev = window.__pwItpPrevActive; delete window.__pwItpPrevActive; if (prev && typeof prev.focus === 'function') prev.focus({ preventScroll: true }); } catch (_) {} return true; })()",
                                     returnByValue = true,
                                 })
                             .ConfigureAwait(false);
