@@ -492,8 +492,25 @@ namespace PlaywrightNative.Chromium
                 return;
             }
 
-            await _browser.Connection.RootSession
-                .SendAsync("Target.closeTarget", new { targetId = _targetId }).ConfigureAwait(false);
+            if (_closedTcs.Task.IsCompleted)
+            {
+                return;
+            }
+
+            try
+            {
+                await _browser.Connection.RootSession
+                    .SendAsync("Target.closeTarget", new { targetId = _targetId }).ConfigureAwait(false);
+            }
+            catch (PlaywrightException ex) when (
+                ClosedTarget.IsClosed(ex)
+                || ex.Message.Contains("No target with given id", StringComparison.OrdinalIgnoreCase))
+            {
+            }
+
+            // Wait for Target.detachedFromTarget → DidClose so context.Pages is
+            // updated before callers continue (CRBrowserConnectionTests close).
+            await ClosedTask.ConfigureAwait(false);
         }
 
         /// <inheritdoc/>
