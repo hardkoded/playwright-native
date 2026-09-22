@@ -7913,19 +7913,32 @@ namespace PlaywrightNative.WebKit
                 // frame and permanently skews aria [active]. RSA first-party visits
                 // use ordinary documents (set-cookie.html), so skip framesets and
                 // leave the host unmarked for a later non-frameset navigation.
-                WKTargetSession target = _targetSession;
-                if (target != null)
+                // Evaluate in the main-frame context — a default Runtime.evaluate on
+                // the target session can land in a child frame (tagName HTML).
+                WKFrame mainFrame = _frameManager.MainFrame;
+                if (mainFrame != null)
                 {
                     try
                     {
-                        JsonElement? tagResponse = await target.SendAsync(
+                        WKExecutionContext mainContext = await WaitForFrameContextAsync(mainFrame)
+                            .ConfigureAwait(false);
+                        object tagParams = mainContext.ContextId != 0
+                            ? (object)new
+                            {
+                                expression =
+                                    "(() => (document.documentElement && document.documentElement.tagName) || '')()",
+                                contextId = mainContext.ContextId,
+                                returnByValue = true,
+                            }
+                            : new
+                            {
+                                expression =
+                                    "(() => (document.documentElement && document.documentElement.tagName) || '')()",
+                                returnByValue = true,
+                            };
+                        JsonElement? tagResponse = await mainContext.Session.SendAsync(
                                 "Runtime.evaluate",
-                                new
-                                {
-                                    expression =
-                                        "(() => (document.documentElement && document.documentElement.tagName) || '')()",
-                                    returnByValue = true,
-                                })
+                                tagParams)
                             .ConfigureAwait(false);
                         if (tagResponse != null
                             && tagResponse.Value.TryGetProperty("result", out JsonElement tagResult)
@@ -7945,6 +7958,8 @@ namespace PlaywrightNative.WebKit
                     {
                     }
                 }
+
+                WKTargetSession target = _targetSession;
 
                 // Trusted Input — JS-dispatched clicks do not update ITP interaction.
                 // Save/restore activeElement so pages that focus on load (keyboard.html)
