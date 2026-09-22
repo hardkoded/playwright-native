@@ -7906,17 +7906,12 @@ namespace PlaywrightNative.WebKit
                 _logger?.LogDebug(ex, "storageAccess grant failed before requestStorageAccess on {PageProxyId}", _pageProxyId);
             }
 
-            WKTargetSession pulseSession = context.Session;
-            if (frame != null
-                && !string.IsNullOrEmpty(frame.FrameId)
-                && _frameSessions.TryGetValue("frame-" + frame.FrameId, out WKFrameSession frameSession))
-            {
-                pulseSession = frameSession.Session;
-            }
-
+            // Input lives on the page-proxy only (upstream wkInput). Frame-*
+            // sessions are Console-only — Input.dispatchMouseEvent never ACKs
+            // there and awaiting hangs Darwin 2251 for 20s.
             return await context.EvaluateHandleWithUserGestureAsync(
                     expression,
-                    () => PulseTrustedGestureOnFrameAsync(frame, pulseSession))
+                    () => PulseTrustedGestureOnFrameAsync(frame))
                 .ConfigureAwait(false);
         }
 
@@ -7926,12 +7921,8 @@ namespace PlaywrightNative.WebKit
         /// in-page <c>window.focus()</c> (that breaks <c>document.hasFocus()</c>).
         /// </summary>
         /// <param name="frame">The child frame about to evaluate.</param>
-        /// <param name="frameSession">
-        /// Child-frame target session for a second Input pulse (macOS WebKit 2251
-        /// OOPIF activation). May be <see langword="null"/>.
-        /// </param>
         /// <returns>A task that completes when the gesture has been sent or skipped.</returns>
-        private async Task PulseTrustedGestureOnFrameAsync(WKFrame frame, WKTargetSession frameSession = null)
+        private async Task PulseTrustedGestureOnFrameAsync(WKFrame frame)
         {
             WKFrame parent = frame?.ParentFrame;
             if (parent == null)
@@ -8014,9 +8005,9 @@ namespace PlaywrightNative.WebKit
 
             try
             {
-                // Page-proxy click on the iframe chrome, then target-session pulse
-                // inside the OOPIF (macOS WebKit 2251). Page-proxy alone does not
-                // arm child-frame transient activation for requestStorageAccess.
+                // Page-proxy click on the iframe chrome. Downstream
+                // callFunctionOn+emulateUserGesture+awaitPromise grants RSA
+                // under that activation (upstream MiniBrowser auto-accepts).
                 await _session.SendAsync(
                     "Input.dispatchMouseEvent",
                     new { type = "move", button = "none", x, y, modifiers = 0, buttons = 0 })
@@ -8029,14 +8020,6 @@ namespace PlaywrightNative.WebKit
                     "Input.dispatchMouseEvent",
                     new { type = "up", button = "left", x, y, modifiers = 0, buttons = 0, clickCount = 1 })
                     .ConfigureAwait(false);
-
-                // Fire-and-forget OOPIF Input: Darwin frame-* sessions often never
-                // ACK, and awaiting them (even 1.5s) lets page-proxy transient
-                // activation expire before callFunctionOn+emulateUserGesture.
-                if (frameSession != null)
-                {
-                    _ = PulseFrameSessionInputCoreAsync(frameSession);
-                }
             }
             catch (PlaywrightException ex)
             {
@@ -8045,33 +8028,6 @@ namespace PlaywrightNative.WebKit
             catch (TimeoutException ex)
             {
                 _logger?.LogDebug(ex, "Trusted gesture pulse timed out for requestStorageAccess on {PageProxyId}", _pageProxyId);
-            }
-        }
-
-        private async Task PulseFrameSessionInputCoreAsync(WKTargetSession frameSession)
-        {
-            try
-            {
-                await frameSession.SendAsync(
-                    "Input.dispatchMouseEvent",
-                    new { type = "move", button = "none", x = 8.0, y = 8.0, modifiers = 0, buttons = 0 })
-                    .ConfigureAwait(false);
-                await frameSession.SendAsync(
-                    "Input.dispatchMouseEvent",
-                    new { type = "down", button = "left", x = 8.0, y = 8.0, modifiers = 0, buttons = 1, clickCount = 1 })
-                    .ConfigureAwait(false);
-                await frameSession.SendAsync(
-                    "Input.dispatchMouseEvent",
-                    new { type = "up", button = "left", x = 8.0, y = 8.0, modifiers = 0, buttons = 0, clickCount = 1 })
-                    .ConfigureAwait(false);
-            }
-            catch (PlaywrightException ex)
-            {
-                _logger?.LogDebug(ex, "Trusted gesture frame-session pulse failed on {PageProxyId}", _pageProxyId);
-            }
-            catch (TimeoutException ex)
-            {
-                _logger?.LogDebug(ex, "Trusted gesture frame-session pulse timed out on {PageProxyId}", _pageProxyId);
             }
         }
 

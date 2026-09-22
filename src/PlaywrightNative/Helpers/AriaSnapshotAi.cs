@@ -473,13 +473,14 @@ namespace PlaywrightNative.Helpers
             // (ShouldStitchAllFrameSnapshots on Windows).
             IFrame child = await ChildFrameForAriaRefAsync(frame, ariaRef).ConfigureAwait(false);
 
-            // Only discard blank ChildFrames with an empty body. Unconditional
-            // blank→null broke Chromium HTTP nested-frame stitch when Url was
-            // briefly "" / about:blank while the ChildFrames entry was valid.
+            // Darwin data: Url stays about:blank forever — force enter-frame even
+            // when body.children is non-zero. Chromium HTTP: Url briefly blank
+            // while body already has content — keep ChildFrames (nested stitch).
             if (child != null
                 && !child.IsDetached
                 && PopupOpenedHelper.IsBlankUrl(child.Url)
-                && !await FrameBodyHasChildrenAsync(child, deadlineClock, budgetMs).ConfigureAwait(false))
+                && (await IframeRefSrcIsDataAsync(frame, ariaRef, deadlineClock, budgetMs).ConfigureAwait(false)
+                    || !await FrameBodyHasChildrenAsync(child, deadlineClock, budgetMs).ConfigureAwait(false)))
             {
                 child = null;
             }
@@ -683,7 +684,8 @@ namespace PlaywrightNative.Helpers
             if (child != null
                 && !child.IsDetached
                 && PopupOpenedHelper.IsBlankUrl(child.Url)
-                && !await FrameBodyHasChildrenAsync(child, Stopwatch.StartNew(), 500).ConfigureAwait(false))
+                && (await IframeRefSrcIsDataAsync(frame, ariaRef, Stopwatch.StartNew(), 500).ConfigureAwait(false)
+                    || !await FrameBodyHasChildrenAsync(child, Stopwatch.StartNew(), 500).ConfigureAwait(false)))
             {
                 child = null;
             }
@@ -1149,6 +1151,41 @@ namespace PlaywrightNative.Helpers
             }
 
             return null;
+        }
+
+        private static async Task<bool> IframeRefSrcIsDataAsync(
+            IFrame frame,
+            string ariaRef,
+            Stopwatch deadlineClock,
+            int budgetMs)
+        {
+            if (frame == null || string.IsNullOrEmpty(ariaRef))
+            {
+                return false;
+            }
+
+            return await RaceOrDefaultAsync(
+                () => frame.EvaluateAsync<bool>(
+                    @"(ref) => {
+  const want = String(ref || '');
+  const frames = document.querySelectorAll('iframe, frame');
+  for (let i = 0; i < frames.length; i++) {
+    const aria = frames[i]._ariaRef;
+    if (aria && aria.ref === want) {
+      const src = frames[i].getAttribute('src') || frames[i].src || '';
+      return String(src).startsWith('data:');
+    }
+  }
+  if (frames.length === 1) {
+    const src = frames[0].getAttribute('src') || frames[0].src || '';
+    return String(src).startsWith('data:');
+  }
+  return false;
+}",
+                    ariaRef),
+                deadlineClock,
+                Math.Min(200, RemainingMs(deadlineClock, budgetMs)),
+                fallback: false).ConfigureAwait(false);
         }
 
         private static async Task<bool> FrameBodyHasChildrenAsync(
