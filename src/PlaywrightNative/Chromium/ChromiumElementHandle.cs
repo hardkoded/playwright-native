@@ -98,6 +98,45 @@ namespace PlaywrightNative.Chromium
                     },
                     async () =>
                     {
+                        // Match WebKit: form submit / link clicks keep navigation
+                        // retains armed so auto-wait does not resolve before the
+                        // document request (ShouldAwaitFormGetOnClick).
+                        bool expectNavigation = false;
+                        if (noWaitAfter != true && force != true)
+                        {
+                            try
+                            {
+                                expectNavigation = await _crElement.EvaluateFunctionAsync<bool>(
+                                    @"el => {
+                                      const tag = (el.tagName || '').toUpperCase();
+                                      if (tag === 'A' || tag === 'AREA') {
+                                        const href = el.href || el.getAttribute('href') || '';
+                                        return !!href && !/^javascript:/i.test(String(href));
+                                      }
+                                      if (tag === 'INPUT') {
+                                        const type = String(el.type || el.getAttribute('type') || 'text').toLowerCase();
+                                        return type === 'submit' || type === 'image';
+                                      }
+                                      if (tag === 'BUTTON') {
+                                        const type = String(el.type || 'submit').toLowerCase();
+                                        return type === 'submit' && !!el.form;
+                                      }
+                                      const link = typeof el.closest === 'function'
+                                        ? el.closest('a[href], area[href]')
+                                        : null;
+                                      if (link) {
+                                        const href = link.href || link.getAttribute('href') || '';
+                                        return !!href && !/^javascript:/i.test(String(href));
+                                      }
+                                      return false;
+                                    }").ConfigureAwait(false);
+                            }
+                            catch (PlaywrightException)
+                            {
+                                expectNavigation = true;
+                            }
+                        }
+
                         await _crElement.Page.RunWithSignalsAsync(
                             noWaitAfter != true && force != true,
                             timeout,
@@ -120,7 +159,8 @@ namespace PlaywrightNative.Chromium
 
                                         await _crElement.Page.Mouse.UpAsync(inputButton, i).ConfigureAwait(false);
                                     }
-                                })).ConfigureAwait(false);
+                                }),
+                            expectNavigation).ConfigureAwait(false);
                     }).ConfigureAwait(false);
             }).ConfigureAwait(false);
         }

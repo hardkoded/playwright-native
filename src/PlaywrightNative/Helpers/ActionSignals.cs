@@ -260,10 +260,13 @@ namespace PlaywrightNative.Helpers
                 }
             }
 
-            // Chromium: 16×16ms. WebKit buttons: 8×16ms ≈ 128ms. WebKit
-            // submit/link/form: 64×16ms ≈ 1s for late Network-only form GETs
-            // under CI load (ShouldWorkWithGotoFollowingClick).
-            int pollLimit = chromiumPage ? 16 : (expectNavigation ? 64 : 8);
+            // Chromium: 16×16ms default; form/link expectNavigation gets the longer
+            // WebKit-style ceiling so late document requests under Windows suite load
+            // still arm the barrier before DropOrphanedPolicyNavigations.
+            // WebKit buttons: 8×16ms ≈ 128ms. WebKit submit/link/form: 64×16ms ≈ 1s.
+            int pollLimit = chromiumPage
+                ? (expectNavigation ? 64 : 16)
+                : (expectNavigation ? 64 : 8);
             int timeoutMs = TimeoutSettings.TimeoutMs(timeout);
             bool sawNavigationSignal = false;
             for (int i = 0; i < pollLimit; i++)

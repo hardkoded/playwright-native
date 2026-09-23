@@ -3713,8 +3713,13 @@ namespace PlaywrightNative.Chromium
         /// <param name="waitAfter">When <see langword="false"/>, skip the wait.</param>
         /// <param name="timeout">Click timeout in milliseconds.</param>
         /// <param name="action">The pointer action.</param>
+        /// <param name="expectNavigation">
+        /// When <see langword="true"/>, keep speculative navigation retains armed for
+        /// form/link clicks so auto-wait does not return before the document request
+        /// (ShouldAwaitFormGetOnClick under Windows suite load).
+        /// </param>
         /// <returns>A task that completes when the action and wait finish.</returns>
-        internal Task RunWithSignalsAsync(bool waitAfter, float? timeout, Func<Task> action)
+        internal Task RunWithSignalsAsync(bool waitAfter, float? timeout, Func<Task> action, bool expectNavigation = false)
             => ActionSignals.RunAsync(
                 _frameManager.Signals,
                 InputActionEpilogueAsync,
@@ -3722,7 +3727,8 @@ namespace PlaywrightNative.Chromium
                 timeout,
                 action,
                 PublicPage,
-                CommitLiveSameDocumentUrl);
+                CommitLiveSameDocumentUrl,
+                expectNavigation);
 
         private void CommitLiveSameDocumentUrl(string url)
         {
