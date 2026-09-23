@@ -3218,6 +3218,23 @@ namespace PlaywrightNative.WebKit
 
             JsonElement? result = null;
 
+            // blank→blank: Darwin WebKit can wedge Playwright.navigate so the
+            // post-RPC readyState seed never runs. Race a settle delay in the
+            // WhenAny loop and seed only if navigate is still open (immediate
+            // seed races the document swap). Track the seed task so CA2025 is
+            // satisfied before NavigateAsync returns.
+            bool blankToBlank = PopupOpenedHelper.IsBlankUrl(url)
+                && PopupOpenedHelper.IsBlankUrl(previousUrl);
+            CancellationTokenSource blankWedgeProbeCts = null;
+            Task blankWedgeProbe = new TaskCompletionSource<bool>(
+                TaskCreationOptions.RunContinuationsAsynchronously).Task;
+            Task blankWedgeSeedTask = Task.CompletedTask;
+            if (blankToBlank)
+            {
+                blankWedgeProbeCts = new CancellationTokenSource();
+                blankWedgeProbe = Task.Delay(2_000, blankWedgeProbeCts.Token);
+            }
+
             using CancellationTokenSource cts = timeoutMs == Timeout.Infinite
                 ? new CancellationTokenSource()
                 : new CancellationTokenSource(timeoutMs);
@@ -3227,7 +3244,22 @@ namespace PlaywrightNative.WebKit
             {
                 while (true)
                 {
-                    Task completed = await Task.WhenAny(sendTask, waitTcs.Task, timeoutTask).ConfigureAwait(false);
+                    Task completed = await Task.WhenAny(sendTask, waitTcs.Task, timeoutTask, blankWedgeProbe)
+                        .ConfigureAwait(false);
+                    if (blankToBlank && completed == blankWedgeProbe)
+                    {
+                        blankWedgeProbe = new TaskCompletionSource<bool>(
+                            TaskCreationOptions.RunContinuationsAsynchronously).Task;
+                        if (!sendTask.IsCompleted && !waitTcs.Task.IsCompleted)
+                        {
+                            int wedgeSeedGeneration = Interlocked.Increment(ref _lifecycleSeedGeneration);
+                            blankWedgeSeedTask = SeedLifecycleFromReadyStateAfterDataNavigationAsync(
+                                wedgeSeedGeneration);
+                        }
+
+                        continue;
+                    }
+
                     if (completed == timeoutTask)
                     {
                         throw NavigationTimeout.Exceeded(
@@ -3427,6 +3459,35 @@ namespace PlaywrightNative.WebKit
                     || !ex.Message.Contains("Download is starting", StringComparison.Ordinal)))
             {
                 throw new NavigationException("Download is starting", url, ex);
+            }
+            finally
+            {
+                if (blankWedgeProbeCts != null)
+                {
+                    try
+                    {
+                        await blankWedgeProbeCts.CancelAsync().ConfigureAwait(false);
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                    }
+
+                    blankWedgeProbeCts.Dispose();
+                }
+
+                try
+                {
+                    await blankWedgeSeedTask.ConfigureAwait(false);
+                }
+                catch (PlaywrightException)
+                {
+                }
+                catch (ObjectDisposedException)
+                {
+                }
+                catch (OperationCanceledException)
+                {
+                }
             }
 
             if (waitUntil == WaitUntilState.NetworkIdle)
@@ -9650,6 +9711,7 @@ namespace PlaywrightNative.WebKit
                     {
                         RecordLifecycleFromDocumentSeed("DOMContentLoaded");
                         TaskCompletionSource<bool> domTcs;
+                        TaskCompletionSource<bool> commitTcs = null;
                         lock (_navigationLock)
                         {
                             if (Volatile.Read(ref _lifecycleSeedGeneration) != seedGeneration)
@@ -9657,10 +9719,23 @@ namespace PlaywrightNative.WebKit
                                 return;
                             }
 
+                            // blank→blank with a wedged Playwright.navigate must mark
+                            // committed + complete commit waiters so NavigateAsync can
+                            // leave WhenAny without awaiting the stuck send.
+                            if (_pendingDomContentTcs != null
+                                && PopupOpenedHelper.IsBlankUrl(_mainFrameUrl)
+                                && PopupOpenedHelper.IsBlankUrl(_pendingNavigationUrl))
+                            {
+                                _pendingNavigationCommitted = true;
+                                commitTcs = _pendingCommitTcs;
+                                _pendingCommitTcs = null;
+                            }
+
                             domTcs = _pendingDomContentTcs;
                             _pendingDomContentTcs = null;
                         }
 
+                        commitTcs?.TrySetResult(true);
                         domTcs?.TrySetResult(true);
                     }
 
@@ -9668,6 +9743,7 @@ namespace PlaywrightNative.WebKit
                     {
                         RecordLifecycleFromDocumentSeed("load");
                         TaskCompletionSource<bool> loadTcs;
+                        TaskCompletionSource<bool> commitTcs = null;
                         lock (_navigationLock)
                         {
                             if (Volatile.Read(ref _lifecycleSeedGeneration) != seedGeneration)
@@ -9675,10 +9751,20 @@ namespace PlaywrightNative.WebKit
                                 return;
                             }
 
+                            if (_pendingLoadTcs != null
+                                && PopupOpenedHelper.IsBlankUrl(_mainFrameUrl)
+                                && PopupOpenedHelper.IsBlankUrl(_pendingNavigationUrl))
+                            {
+                                _pendingNavigationCommitted = true;
+                                commitTcs = _pendingCommitTcs;
+                                _pendingCommitTcs = null;
+                            }
+
                             loadTcs = _pendingLoadTcs;
                             _pendingLoadTcs = null;
                         }
 
+                        commitTcs?.TrySetResult(true);
                         loadTcs?.TrySetResult(true);
                         return;
                     }
