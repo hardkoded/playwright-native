@@ -107,9 +107,6 @@ namespace PlaywrightNative.WebKit
         private int _lastConsoleRepeatCount;
         private string _lastPageErrorText;
         private long _lastPageErrorTicks;
-        private string _lastConsoleDedupeText;
-        private string _lastConsoleDedupeType;
-        private long _lastConsoleDedupeTicks;
 
         private WKTargetSession _targetSession;
         private WKTargetSession _provisionalSession;
@@ -9411,24 +9408,6 @@ namespace PlaywrightNative.WebKit
             if (message == null)
             {
                 return;
-            }
-
-            // Dual-path (frame Console.messageAdded + page Runtime.consoleAPICalled) can
-            // deliver the same warn twice within a few ms on Darwin frame-session builds.
-            if (EnableFrameSessions)
-            {
-                long now = Environment.TickCount64;
-                if (!string.IsNullOrEmpty(message.Text)
-                    && string.Equals(message.Text, _lastConsoleDedupeText, StringComparison.Ordinal)
-                    && string.Equals(message.Type, _lastConsoleDedupeType, StringComparison.Ordinal)
-                    && now - _lastConsoleDedupeTicks < 250)
-                {
-                    return;
-                }
-
-                _lastConsoleDedupeText = message.Text;
-                _lastConsoleDedupeType = message.Type;
-                _lastConsoleDedupeTicks = now;
             }
 
             _consoleLog.Add(message);
