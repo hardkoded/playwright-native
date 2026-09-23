@@ -7188,7 +7188,7 @@ namespace PlaywrightNative.WebKit
             {
                 if (EnableFrameSessions)
                 {
-                    await AdoptFrameSessionAsync(targetId, info.IsPaused).ConfigureAwait(false);
+                    await AdoptFrameSessionAsync(targetId).ConfigureAwait(false);
                 }
                 else
                 {
@@ -7423,10 +7423,10 @@ namespace PlaywrightNative.WebKit
 
         private void AdoptFrameSession(string targetId)
         {
-            _ = AdoptFrameSessionAsync(targetId, isPaused: false);
+            _ = AdoptFrameSessionAsync(targetId);
         }
 
-        private async Task AdoptFrameSessionAsync(string targetId, bool isPaused)
+        private async Task AdoptFrameSessionAsync(string targetId)
         {
             if (string.IsNullOrEmpty(targetId))
             {
@@ -7452,7 +7452,9 @@ namespace PlaywrightNative.WebKit
             }
 
             // Upstream awaits initialize and swallows errors; frame targets can appear
-            // before the page session finishes getResourceTree.
+            // before the page session finishes getResourceTree. Do not Target.resume
+            // frame sessions here — upstream only resumes page/provisional targets, and
+            // enable-then-resume deadlocks when Console.enable needs an unpaused target.
             try
             {
                 await frameSession.InitializeAsync().ConfigureAwait(false);
@@ -7460,21 +7462,6 @@ namespace PlaywrightNative.WebKit
             catch (Exception ex)
             {
                 _logger?.LogDebug(ex, "Frame Console.enable failed for {TargetId}", targetId);
-            }
-
-            // Upstream TODO notes child-frame Console.init is racy without pause; when the
-            // frame target is paused, resume only after Console.enable so buffered warns
-            // (service-worker block) flush to messageAdded.
-            if (isPaused)
-            {
-                try
-                {
-                    await _session.SendAsync("Target.resume", new { targetId }).ConfigureAwait(false);
-                }
-                catch (Exception ex)
-                {
-                    _logger?.LogDebug(ex, "Target.resume failed for frame {TargetId}", targetId);
-                }
             }
         }
 
