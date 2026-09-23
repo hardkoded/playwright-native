@@ -1720,14 +1720,16 @@ namespace PlaywrightNative.Helpers
                 }
             }
 
+            // Cross-document navigation clears window.__pwAriaFramePrefix; the next
+            // main-frame assign must mint fN so refs re-number (upstream
+            // "should re-number refs across navigations…"). First assign stays "".
+            // Only flip UsedEmptyMainPrefix after a successful write — EnsurePrefixes
+            // RaceOrDefault can abandon mid-call; marking earlier let a retry mint
+            // f1 on the first snapshot (ShouldShowVisibleChildren → f1e1 vs e1).
             string prefix;
-            if (frame.ParentFrame == null)
+            if (frame.ParentFrame == null && !state.UsedEmptyMainPrefix)
             {
-                // Main frame always uses the empty prefix. UsedEmptyMainPrefix may
-                // already be true after EnsurePrefixes raced away mid-write — never
-                // assign fN (ShouldShowVisibleChildrenOfHiddenElements → f1e1).
                 prefix = string.Empty;
-                state.UsedEmptyMainPrefix = true;
             }
             else
             {
@@ -1738,6 +1740,10 @@ namespace PlaywrightNative.Helpers
             try
             {
                 await frame.EvaluateAsync<object>(WritePrefixFunction, prefix).ConfigureAwait(false);
+                if (prefix.Length == 0)
+                {
+                    state.UsedEmptyMainPrefix = true;
+                }
             }
             catch (PlaywrightException)
             {
