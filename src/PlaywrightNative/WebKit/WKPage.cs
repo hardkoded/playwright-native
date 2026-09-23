@@ -3698,8 +3698,8 @@ namespace PlaywrightNative.WebKit
 
         /// <summary>
         /// Waits until <paramref name="frame"/> has reached <paramref name="state"/>.
-        /// The main frame uses page lifecycle; child frames poll
-        /// <c>document.readyState</c> in that frame's world.
+        /// The main frame uses page lifecycle; child frames use per-frame lifecycle
+        /// events from <c>Page.loadEventFired</c> / <c>Page.domContentEventFired</c>.
         /// </summary>
         /// <param name="frame">The frame to wait on.</param>
         /// <param name="state">The load state to wait for.</param>
@@ -3712,21 +3712,7 @@ namespace PlaywrightNative.WebKit
                 return WaitForLoadStateAsync(state, timeout);
             }
 
-            if (state == LoadState.NetworkIdle)
-            {
-                return frame.WaitForLoadStateAsync(state, timeout, "frame.waitForLoadState");
-            }
-
-            WaitUntilState waitUntil = state == LoadState.DOMContentLoaded
-                ? WaitUntilState.DOMContentLoaded
-                : WaitUntilState.Load;
-            int timeoutMs = TimeoutSettings.TimeoutMs(timeout);
-            if (timeoutMs == System.Threading.Timeout.Infinite)
-            {
-                timeoutMs = int.MaxValue;
-            }
-
-            return WaitForChildFrameReadyAsync(frame, frame.Url, waitUntil, timeoutMs);
+            return frame.WaitForLoadStateAsync(state, timeout, "frame.waitForLoadState");
         }
 
         /// <summary>
@@ -3769,7 +3755,14 @@ namespace PlaywrightNative.WebKit
             try
             {
                 await NavigateChildFrameAsync(frame, url, waitUntil, timeout, referer).ConfigureAwait(false);
-                return captured;
+                if (captured != null)
+                {
+                    return captured;
+                }
+
+                // Response can race past the handler under concurrent subframe gotos
+                // (matching-responses hang-then-release). Fall back to the request map.
+                return FindNavigationResponseForFrame(publicFrame, url);
             }
             finally
             {
@@ -6815,34 +6808,30 @@ namespace PlaywrightNative.WebKit
             string frameId = frame.FrameId
                 ?? throw new PlaywrightException("Cannot navigate a frame without a protocol id.");
 
-            if (!string.IsNullOrEmpty(frameId))
+            int timeoutMs = (int)(timeout ?? _defaultNavigationTimeout);
+            if (timeoutMs <= 0)
             {
-                _frameContexts.TryRemove(frameId, out _);
+                timeoutMs = Timeout.Infinite;
             }
 
-            object parameters = string.IsNullOrEmpty(referer)
-                ? (object)new { url, pageProxyId = _pageProxyId, frameId }
-                : new { url, pageProxyId = _pageProxyId, frameId, referrer = referer };
-
-            await _browser.Session.SendAsync("Playwright.navigate", parameters).ConfigureAwait(false);
-
-            int timeoutMs = (int)(timeout ?? _defaultNavigationTimeout);
             WaitUntilState childWait = waitUntil == WaitUntilState.NetworkIdle
                 ? WaitUntilState.Load
                 : waitUntil;
-            await WaitForChildFrameReadyAsync(frame, url, childWait, timeoutMs).ConfigureAwait(false);
-            if (waitUntil == WaitUntilState.NetworkIdle)
-            {
-                await frame.WaitForLoadStateAsync(LoadState.NetworkIdle, timeoutMs, "frame.goto").ConfigureAwait(false);
-            }
-        }
+            string targetLifecycle = WaitUntilMapping.ToLifecycleEvent(childWait);
 
-        private async Task WaitForChildFrameReadyAsync(
-            WKFrame frame,
-            string url,
-            WaitUntilState waitUntil,
-            int timeoutMs)
-        {
+            static bool HasLifecycle(WKFrame targetFrame, string name)
+            {
+                foreach (string fired in targetFrame.LifecycleEvents)
+                {
+                    if (string.Equals(fired, name, StringComparison.Ordinal))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            }
+
             static bool UrlMatches(string current, string target)
             {
                 if (string.IsNullOrEmpty(current) || string.IsNullOrEmpty(target))
@@ -6850,58 +6839,197 @@ namespace PlaywrightNative.WebKit
                     return false;
                 }
 
-                return current.Contains(target, StringComparison.Ordinal)
-                    || target.Contains(current, StringComparison.Ordinal)
-                    || string.Equals(current, target, StringComparison.OrdinalIgnoreCase);
+                string currentUrl = NavigationTimeout.WithoutHash(current);
+                string targetUrl = NavigationTimeout.WithoutHash(target);
+                return string.Equals(currentUrl, targetUrl, StringComparison.OrdinalIgnoreCase);
             }
 
-            using System.Threading.CancellationTokenSource cts = new(timeoutMs);
-            while (!cts.IsCancellationRequested)
+            TaskCompletionSource<bool> lifecycleTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            bool navigationSettled = false;
+            bool sawTargetLifecycle = false;
+
+            void OnLifecycle(string name)
             {
+                if (name != targetLifecycle)
+                {
+                    return;
+                }
+
+                if (!navigationSettled)
+                {
+                    // Lifecycle can fire while Playwright.navigate is still awaiting.
+                    sawTargetLifecycle = true;
+                    return;
+                }
+
+                if (UrlMatches(frame.Url, url)
+                    || string.Equals(targetLifecycle, "commit", StringComparison.Ordinal))
+                {
+                    lifecycleTcs.TrySetResult(true);
+                }
+            }
+
+            void OnDetached(WKFrame detached)
+            {
+                if (ReferenceEquals(detached, frame))
+                {
+                    lifecycleTcs.TrySetException(new PlaywrightException("frame was detached"));
+                }
+            }
+
+            void OnNavigated(WKFrame navigated)
+            {
+                if (!ReferenceEquals(navigated, frame) || !navigationSettled)
+                {
+                    return;
+                }
+
+                if (string.Equals(targetLifecycle, "commit", StringComparison.Ordinal)
+                    && UrlMatches(frame.Url, url))
+                {
+                    lifecycleTcs.TrySetResult(true);
+                    return;
+                }
+
+                // Keep waiting on the latest document after a client redirect.
+                if (HasLifecycle(frame, targetLifecycle) && UrlMatches(frame.Url, url))
+                {
+                    lifecycleTcs.TrySetResult(true);
+                }
+            }
+
+            // Subscribe before Playwright.navigate so load between navigate return
+            // and the wait starting cannot be lost (Chromium GoToFrameAsync pattern).
+            frame.LifecycleChanged += OnLifecycle;
+            _frameManager.FrameDetached += OnDetached;
+            _frameManager.FrameNavigated += OnNavigated;
+
+            try
+            {
+                if (!string.IsNullOrEmpty(frameId))
+                {
+                    _frameContexts.TryRemove(frameId, out _);
+                }
+
+                object parameters = string.IsNullOrEmpty(referer)
+                    ? (object)new { url, pageProxyId = _pageProxyId, frameId }
+                    : new { url, pageProxyId = _pageProxyId, frameId, referrer = referer };
+                Task<JsonElement?> navigateTask = _browser.Session.SendAsync("Playwright.navigate", parameters);
+
+                // Race Playwright.navigate with the navigation timeout. A hanging
+                // server can keep the command outstanding; official progress.race
+                // aborts the whole goto, not just the lifecycle wait.
+                if (timeoutMs != Timeout.Infinite)
+                {
+                    try
+                    {
+                        await navigateTask.WaitAsync(TimeSpan.FromMilliseconds(timeoutMs)).ConfigureAwait(false);
+                    }
+                    catch (TimeoutException)
+                    {
+                        throw NavigationTimeout.Exceeded(
+                            "frame.goto",
+                            url,
+                            NavigationTimeout.WaitUntilName(waitUntil),
+                            timeoutMs);
+                    }
+                }
+                else
+                {
+                    await navigateTask.ConfigureAwait(false);
+                }
+
+                navigationSettled = true;
+
                 if (frame.IsDetached)
                 {
                     throw new PlaywrightException("frame was detached");
                 }
 
-                if (UrlMatches(frame.Url, url))
+                bool lifecycleReady =
+                    (sawTargetLifecycle || HasLifecycle(frame, targetLifecycle))
+                    && (string.Equals(targetLifecycle, "commit", StringComparison.Ordinal)
+                        || UrlMatches(frame.Url, url));
+
+                if (!lifecycleReady)
                 {
-                    try
+                    if (timeoutMs != Timeout.Infinite)
                     {
-                        string readyState = await EvaluateInFrameAsync<string>(frame, "document.readyState").ConfigureAwait(false);
-                        bool reached = waitUntil == WaitUntilState.DOMContentLoaded
-                            ? readyState == "interactive" || readyState == "complete"
-                            : readyState == "complete";
-                        if (reached)
-                        {
-                            return;
-                        }
+                        using CancellationTokenSource cts = new(timeoutMs);
+                        cts.Token.Register(
+                            () => lifecycleTcs.TrySetException(
+                                NavigationTimeout.Exceeded(
+                                    "frame.goto",
+                                    url,
+                                    NavigationTimeout.WaitUntilName(waitUntil),
+                                    timeoutMs)));
+                        await lifecycleTcs.Task.ConfigureAwait(false);
                     }
-                    catch (PlaywrightException)
+                    else
                     {
-                        // New document context is not ready yet.
+                        await lifecycleTcs.Task.ConfigureAwait(false);
                     }
                 }
 
-                try
+                if (waitUntil == WaitUntilState.NetworkIdle)
                 {
-                    await Task.Delay(50, cts.Token).ConfigureAwait(false);
-                }
-                catch (TaskCanceledException)
-                {
-                    break;
+                    float? networkIdleTimeout = timeoutMs == Timeout.Infinite
+                        ? 0
+                        : timeoutMs;
+                    await frame.WaitForLoadStateAsync(
+                        LoadState.NetworkIdle,
+                        networkIdleTimeout,
+                        "frame.goto").ConfigureAwait(false);
                 }
             }
-
-            if (frame.IsDetached)
+            finally
             {
-                throw new PlaywrightException("frame was detached");
+                frame.LifecycleChanged -= OnLifecycle;
+                _frameManager.FrameDetached -= OnDetached;
+                _frameManager.FrameNavigated -= OnNavigated;
+            }
+        }
+
+        private IResponse FindNavigationResponseForFrame(IFrame frame, string url)
+        {
+            if (frame == null || string.IsNullOrEmpty(url))
+            {
+                return null;
             }
 
-            throw NavigationTimeout.Exceeded(
-                "frame.goto",
-                url,
-                NavigationTimeout.WaitUntilName(waitUntil),
-                timeoutMs);
+            IResponse exact = null;
+            foreach (IRequest request in _requests.Snapshot())
+            {
+                if (request == null
+                    || (!request.IsNavigationRequest
+                        && !NetworkRequestEvents.IsDocumentNavigation(request.ResourceType)))
+                {
+                    continue;
+                }
+
+                if (!ReferenceEquals(request.Frame, frame))
+                {
+                    continue;
+                }
+
+                IResponse response = request.ExistingResponse;
+                if (response == null)
+                {
+                    continue;
+                }
+
+                if (string.Equals(response.Url, url, StringComparison.Ordinal)
+                    || string.Equals(request.Url, url, StringComparison.Ordinal)
+                    || string.Equals(
+                        NavigationTimeout.WithoutHash(response.Url),
+                        NavigationTimeout.WithoutHash(url),
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    exact = response;
+                }
+            }
+
+            return exact;
         }
 
         private Task<WKExecutionContext> WaitForMainExecutionContextAsync()
@@ -9120,7 +9248,7 @@ namespace PlaywrightNative.WebKit
                     OnLoadEventFired(parameters);
                     break;
                 case "Page.domContentEventFired":
-                    OnDomContentEventFired();
+                    OnDomContentEventFired(parameters);
                     break;
                 case "Runtime.executionContextCreated":
                     OnExecutionContextCreated(parameters);
@@ -10047,13 +10175,26 @@ namespace PlaywrightNative.WebKit
                 frameId = frameIdEl.GetString();
             }
 
-            // WebKit fires Page.loadEventFired for every frame. IPage.Load is
-            // main-frame only (page-event-load.spec.ts / playwright#15086).
-            if (!string.IsNullOrEmpty(frameId)
-                && frameId != _mainFrameId
-                && frameId != _frameManager.MainFrame.FrameId)
+            // Upstream wkPage.ts: Page.loadEventFired → frameLifecycleEvent(frameId, 'load')
+            // for every frame. IPage.Load stays main-frame only (playwright#15086).
+            bool isMainFrame = string.IsNullOrEmpty(frameId)
+                || string.Equals(frameId, _mainFrameId, StringComparison.Ordinal)
+                || string.Equals(frameId, _frameManager.MainFrame?.FrameId, StringComparison.Ordinal);
+            if (!isMainFrame)
             {
+                WKFrame child = _frameManager.FrameById(frameId);
+                child?.OnLifecycleEvent("load");
                 return;
+            }
+
+            if (!string.IsNullOrEmpty(frameId))
+            {
+                WKFrame main = _frameManager.FrameById(frameId) ?? _frameManager.MainFrame;
+                main?.OnLifecycleEvent("load");
+            }
+            else
+            {
+                _frameManager.MainFrame?.OnLifecycleEvent("load");
             }
 
             TaskCompletionSource<bool> tcs;
@@ -10140,8 +10281,38 @@ namespace PlaywrightNative.WebKit
             });
         }
 
-        private void OnDomContentEventFired()
+        private void OnDomContentEventFired(JsonElement? parameters)
         {
+            string frameId = null;
+            if (parameters.HasValue
+                && parameters.Value.TryGetProperty("frameId", out JsonElement frameIdEl)
+                && frameIdEl.ValueKind == JsonValueKind.String)
+            {
+                frameId = frameIdEl.GetString();
+            }
+
+            // Upstream: Page.domContentEventFired → frameLifecycleEvent(frameId,
+            // 'domcontentloaded') for every frame. Page DOMContentLoaded is main only.
+            bool isMainFrame = string.IsNullOrEmpty(frameId)
+                || string.Equals(frameId, _mainFrameId, StringComparison.Ordinal)
+                || string.Equals(frameId, _frameManager.MainFrame?.FrameId, StringComparison.Ordinal);
+            if (!isMainFrame)
+            {
+                WKFrame child = _frameManager.FrameById(frameId);
+                child?.OnLifecycleEvent("DOMContentLoaded");
+                return;
+            }
+
+            if (!string.IsNullOrEmpty(frameId))
+            {
+                WKFrame main = _frameManager.FrameById(frameId) ?? _frameManager.MainFrame;
+                main?.OnLifecycleEvent("DOMContentLoaded");
+            }
+            else
+            {
+                _frameManager.MainFrame?.OnLifecycleEvent("DOMContentLoaded");
+            }
+
             TaskCompletionSource<bool> tcs;
             lock (_navigationLock)
             {

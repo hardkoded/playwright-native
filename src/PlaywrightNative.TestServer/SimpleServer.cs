@@ -29,6 +29,7 @@ namespace PlaywrightNative.TestServer
 
         private readonly IDictionary<string, Action<HttpContext>> _subscribers;
         private readonly IDictionary<string, Action<HttpContext>> _requestWaits;
+        private readonly ConcurrentDictionary<string, int> _arrivedRequestCounts;
         private readonly IDictionary<string, RequestDelegate> _routes;
         private readonly IDictionary<string, (string username, string password)> _auths;
         private readonly IDictionary<string, string> _csp;
@@ -58,6 +59,7 @@ namespace PlaywrightNative.TestServer
         {
             _subscribers = new ConcurrentDictionary<string, Action<HttpContext>>();
             _requestWaits = new ConcurrentDictionary<string, Action<HttpContext>>();
+            _arrivedRequestCounts = new ConcurrentDictionary<string, int>(StringComparer.Ordinal);
             _routes = new ConcurrentDictionary<string, RequestDelegate>();
             _auths = new ConcurrentDictionary<string, (string username, string password)>();
             _csp = new ConcurrentDictionary<string, string>();
@@ -187,6 +189,12 @@ namespace PlaywrightNative.TestServer
                             }
 
                             requestWait(context);
+                        }
+                        else
+                        {
+                            // No waiter yet — buffer so a racing WaitForRequest after
+                            // frame.GoToAsync still observes this arrival.
+                            RecordArrivedRequest(context);
                         }
                         string routeKey = (context.Request.Path.Value ?? string.Empty)
                             + (context.Request.QueryString.HasValue ? context.Request.QueryString.Value : string.Empty);
@@ -421,6 +429,7 @@ namespace PlaywrightNative.TestServer
             _csp.Clear();
             _subscribers.Clear();
             _requestWaits.Clear();
+            _arrivedRequestCounts.Clear();
             GzipRoutes.Clear();
             _onceWebSocket = null;
             _onceWebSocketAsync = null;
@@ -643,7 +652,7 @@ namespace PlaywrightNative.TestServer
 
         public async Task<T> WaitForRequest<T>(string path, Func<HttpRequest, T> selector)
         {
-            var taskCompletion = new TaskCompletionSource<T>();
+            var taskCompletion = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
             _requestWaits[path] = context =>
             {
                 T result = selector(context.Request);
@@ -657,16 +666,76 @@ namespace PlaywrightNative.TestServer
                     result = (T)(object)new HeaderDictionary(new Dictionary<string, StringValues>(headers));
                 }
 
-                taskCompletion.SetResult(result);
+                taskCompletion.TrySetResult(result);
             };
 
-            var request = await taskCompletion.Task;
+            var request = await taskCompletion.Task.ConfigureAwait(false);
             _requestWaits.Remove(path);
 
             return request;
         }
 
-        public Task WaitForRequest(string path) => WaitForRequest(path, _ => true);
+        public Task WaitForRequest(string path)
+        {
+            // WebKit can deliver the document request after frame.GoToAsync starts
+            // but before this waiter is registered (frame-goto matching-responses).
+            // Consume a buffered arrival so the test does not hang forever.
+            if (TryConsumeArrivedRequest(path))
+            {
+                return Task.CompletedTask;
+            }
+
+            TaskCompletionSource<bool> taskCompletion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            _requestWaits[path] = _ => taskCompletion.TrySetResult(true);
+
+            if (TryConsumeArrivedRequest(path))
+            {
+                _requestWaits.Remove(path);
+                return Task.CompletedTask;
+            }
+
+            return AwaitAndClearWaitAsync(path, taskCompletion.Task);
+        }
+
+        private async Task AwaitAndClearWaitAsync(string path, Task waitTask)
+        {
+            try
+            {
+                await waitTask.ConfigureAwait(false);
+            }
+            finally
+            {
+                _requestWaits.Remove(path);
+            }
+        }
+
+        private bool TryConsumeArrivedRequest(string path)
+        {
+            while (true)
+            {
+                if (!_arrivedRequestCounts.TryGetValue(path, out int count) || count <= 0)
+                {
+                    return false;
+                }
+
+                if (_arrivedRequestCounts.TryUpdate(path, count - 1, count))
+                {
+                    return true;
+                }
+            }
+        }
+
+        private void RecordArrivedRequest(HttpContext context)
+        {
+            string path = context.Request.Path.Value ?? string.Empty;
+            string pathAndQuery = path
+                + (context.Request.QueryString.HasValue ? context.Request.QueryString.Value.ToString() : string.Empty);
+            _arrivedRequestCounts.AddOrUpdate(pathAndQuery, 1, static (_, n) => n + 1);
+            if (!string.Equals(pathAndQuery, path, StringComparison.Ordinal))
+            {
+                _arrivedRequestCounts.AddOrUpdate(path, 1, static (_, n) => n + 1);
+            }
+        }
 
         /// <summary>
         /// Official <c>server.waitForWebSocketConnectionRequest()</c>.

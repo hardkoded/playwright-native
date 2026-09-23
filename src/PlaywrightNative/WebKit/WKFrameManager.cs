@@ -171,6 +171,11 @@ namespace PlaywrightNative.WebKit
             frame.Name = name ?? string.Empty;
             frame.ClearLifecycleEvents();
 
+            // Match upstream frameLifecycleEvent("commit") so child frame.goto /
+            // waitForLoadState(Commit) can observe the new document without
+            // polling document.readyState (which races concurrent hung navigations).
+            frame.OnLifecycleEvent("commit");
+
             if (fireEvent)
             {
                 FrameNavigated?.Invoke(frame);
