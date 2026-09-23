@@ -1721,8 +1721,11 @@ namespace PlaywrightNative.Helpers
             }
 
             string prefix;
-            if (frame.ParentFrame == null && !state.UsedEmptyMainPrefix)
+            if (frame.ParentFrame == null)
             {
+                // Main frame always uses the empty prefix. UsedEmptyMainPrefix may
+                // already be true after EnsurePrefixes raced away mid-write — never
+                // assign fN (ShouldShowVisibleChildrenOfHiddenElements → f1e1).
                 prefix = string.Empty;
                 state.UsedEmptyMainPrefix = true;
             }
