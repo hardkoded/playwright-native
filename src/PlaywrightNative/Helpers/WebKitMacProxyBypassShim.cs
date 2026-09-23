@@ -885,25 +885,21 @@ namespace PlaywrightNative.Helpers
                 // (OfficialTestProxy CONNECT 407) close after a challenge and
                 // expect a fresh CONNECT with Proxy-Authorization. CFNetwork
                 // behind ExtraHTTPHeaders often completes the page with a single
-                // shim hop, so the shim itself must perform that reconnect —
-                // otherwise upstream records only one CONNECT
-                // (ShouldReconnectWithCredentialsAfterConnect407…).
+                // shim hop, so on upstream 407 the shim reconnects with
+                // credentials (ShouldReconnectWithCredentialsAfterConnect407…).
+                // Always offer credentials on the first hop when known — probing
+                // without auth first made credential-pickup tests observe a null
+                // Proxy-Authorization on the initial CONNECT.
                 string clientAuth = ExtractProxyAuthorization(clientHeaders);
-                string retryAuth = ResolveUpstreamProxyAuthorization(
+                string upstreamAuth = ResolveUpstreamProxyAuthorization(
                     clientAuth,
                     _proxyAuthorization,
                     BrowserProxy.Username,
                     BrowserProxy.Password);
-                bool probeWithoutAuth = !string.IsNullOrEmpty(retryAuth);
 
                 await ConnectWithTimeoutAsync(upstream, _upstreamHost, _upstreamPort).ConfigureAwait(false);
                 NetworkStream upStream = upstream.GetStream();
-                string firstAuth = probeWithoutAuth
-                    ? null
-                    : (!string.IsNullOrEmpty(clientAuth)
-                        ? clientAuth
-                        : (!string.IsNullOrEmpty(_proxyAuthorization) ? _proxyAuthorization : null));
-                await WriteAsciiAsync(upStream, BuildConnectRequest(host, port, firstAuth)).ConfigureAwait(false);
+                await WriteAsciiAsync(upStream, BuildConnectRequest(host, port, upstreamAuth)).ConfigureAwait(false);
                 (byte[] responseHeaders, byte[] leftover) = await ReadHeadersAsync(upStream, _cts.Token)
                     .ConfigureAwait(false);
                 if (responseHeaders == null)
@@ -915,15 +911,16 @@ namespace PlaywrightNative.Helpers
 
                 string status = Latin1.GetString(responseHeaders);
                 bool established = IsConnectEstablished(status);
-                bool challenge = IsProxyAuthRequired(status);
 
-                if (!established && challenge && probeWithoutAuth)
+                if (!established
+                    && IsProxyAuthRequired(status)
+                    && !string.IsNullOrEmpty(upstreamAuth))
                 {
                     upstream.Dispose();
                     upstream = new TcpClient { NoDelay = true };
                     await ConnectWithTimeoutAsync(upstream, _upstreamHost, _upstreamPort).ConfigureAwait(false);
                     upStream = upstream.GetStream();
-                    await WriteAsciiAsync(upStream, BuildConnectRequest(host, port, retryAuth))
+                    await WriteAsciiAsync(upStream, BuildConnectRequest(host, port, upstreamAuth))
                         .ConfigureAwait(false);
                     (responseHeaders, leftover) = await ReadHeadersAsync(upStream, _cts.Token)
                         .ConfigureAwait(false);
