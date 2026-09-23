@@ -635,7 +635,15 @@ namespace PlaywrightNative.WebKit
         internal async Task<WKBrowserContext> NewWKContextAsync(Proxy proxy = null)
         {
             JsonElement? response;
-            string proxyServer = ProxySettings.FormatServer(proxy, includeCredentials: true);
+
+            // Match upstream normalizeProxySettings on Darwin: never put userinfo
+            // in the proxy URL MiniBrowser/CFNetwork sees. Credentials live on
+            // Proxy.Username/Password and ExtraHTTPHeaders so CONNECT gets a real
+            // 407 challenge + retry (ShouldReconnectWithCredentialsAfterConnect407…).
+            // Linux libsoup needs URL userinfo for CONNECT auth (ExtraHTTPHeaders
+            // alone are not applied to CONNECT).
+            bool embedCredentials = !RuntimeInformation.IsOSPlatform(OSPlatform.OSX);
+            string proxyServer = ProxySettings.FormatServer(proxy, includeCredentials: embedCredentials);
             string proxyBypassList = ProxySettings.NormalizeBypass(proxy?.Bypass);
             if (!string.IsNullOrEmpty(proxyServer) && !string.IsNullOrEmpty(proxyBypassList))
             {

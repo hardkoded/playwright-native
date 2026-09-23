@@ -157,7 +157,12 @@ namespace PlaywrightNative.WebKit
 
             List<string> launchArgs = GetDefaultArgs(headless, args, userDataDir);
             WebKitMacProxyBypassShim macBypassShim = WebKitMacProxyBypassShim.TryStart(proxy, out Proxy effectiveProxy);
-            string proxyServer = ProxySettings.FormatServer(effectiveProxy, includeCredentials: true);
+
+            // Darwin: no URL userinfo (CFNetwork 407-challenges via ExtraHTTPHeaders).
+            // Linux/Windows: embed credentials — libsoup/curl apply CONNECT auth
+            // from the proxy URL, not from ExtraHTTPHeaders alone.
+            bool embedCredentials = !RuntimeInformation.IsOSPlatform(OSPlatform.OSX);
+            string proxyServer = ProxySettings.FormatServer(effectiveProxy, includeCredentials: embedCredentials);
             if (!string.IsNullOrEmpty(proxyServer))
             {
                 // Official webkit.ts launch args: macOS --proxy-bypass-list,
