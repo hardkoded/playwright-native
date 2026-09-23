@@ -66,6 +66,20 @@ namespace PlaywrightNative.WebKit
         /// </summary>
         internal WKTargetSession Session => _session;
 
+        /// <summary>
+        /// Gets a value indicating whether <c>Console.enable</c> has finished for this frame.
+        /// </summary>
+        internal bool IsInitialized
+        {
+            get
+            {
+                lock (_initGate)
+                {
+                    return _initializeTask != null && _initializeTask.IsCompleted;
+                }
+            }
+        }
+
         /// <inheritdoc/>
         public void Dispose()
         {

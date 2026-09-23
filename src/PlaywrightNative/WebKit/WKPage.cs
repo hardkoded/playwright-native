@@ -7401,6 +7401,29 @@ namespace PlaywrightNative.WebKit
             _frameSessions.Clear();
         }
 
+        /// <summary>
+        /// Returns <see langword="true"/> when every adopted frame session has finished
+        /// <c>Console.enable</c>. Empty means not ready yet (initial page create).
+        /// </summary>
+        /// <returns>Whether frame console domains are ready.</returns>
+        private bool FrameConsolesReady()
+        {
+            if (_frameSessions.IsEmpty)
+            {
+                return false;
+            }
+
+            foreach (System.Collections.Generic.KeyValuePair<string, WKFrameSession> entry in _frameSessions)
+            {
+                if (!entry.Value.IsInitialized)
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
         private void AdoptFrameSession(string targetId)
         {
             _ = AdoptFrameSessionAsync(targetId, isPaused: false);
@@ -9128,12 +9151,13 @@ namespace PlaywrightNative.WebKit
                     OnConsoleRepeatCountUpdated(parameters);
                     break;
                 case "Runtime.consoleAPICalled":
-                    // Frame-session Darwin builds deliver console primarily via
-                    // Console.messageAdded on WKFrameSession. Runtime.consoleAPICalled on
-                    // the page session is a race fallback when Console.enable has not yet
-                    // completed for a new frame target (BlocksServiceWorkerRegistration).
-                    // RaiseConsole dedups near-duplicate dual delivery.
-                    if (EnableFrameSessions)
+                    // Frame-session Darwin builds deliver console via Console.messageAdded on
+                    // WKFrameSession once enable completes. While any frame Console.enable is
+                    // still in flight (or no frame session exists yet), Runtime.consoleAPICalled
+                    // on the page session is a fallback so sync warns are not lost
+                    // (BlocksServiceWorkerRegistration). Skip once frames are ready to avoid
+                    // duplicate PageEventConsole deliveries.
+                    if (EnableFrameSessions && !FrameConsolesReady())
                     {
                         OnRuntimeConsoleApiCalled(parameters);
                     }
