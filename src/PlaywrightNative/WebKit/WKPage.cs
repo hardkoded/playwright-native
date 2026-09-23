@@ -6335,19 +6335,22 @@ namespace PlaywrightNative.WebKit
 
         private async Task SyncBootstrapScriptAsync()
         {
-            // NewPage applies context init scripts as soon as the page object
-            // exists. On Darwin the inner target can lag Target.created; throwing
-            // here fails the next aria test's SetUp after a slow snapshot.
-            DateTime deadline = DateTime.UtcNow.AddSeconds(2);
+            // NewPage applies context init scripts after InitializedTask. Darwin can
+            // recycle the initial target in that gap (same race as SetEmulatedViewportAsync),
+            // leaving _targetSession null while InitializedTask is already completed.
+            // Keep polling for a session — do not break early on init success.
+            DateTime deadline = DateTime.UtcNow.AddSeconds(5);
             while (_targetSession == null && DateTime.UtcNow < deadline && !_closed)
             {
                 Task init = _initializedTcs.Task;
-                if (init.IsCompleted)
+                if (init.IsFaulted || init.IsCanceled)
                 {
                     break;
                 }
 
-                await Task.WhenAny(init, Task.Delay(50)).ConfigureAwait(false);
+                // Always delay: once InitializedTask has succeeded, WhenAny(init, …)
+                // would spin without yielding.
+                await Task.Delay(50).ConfigureAwait(false);
             }
 
             WKTargetSession target = _targetSession
