@@ -9176,12 +9176,18 @@ namespace PlaywrightNative.WebKit
                 return;
             }
 
+            // Prefer WebKit's joined message.text. Overwriting with parameter
+            // previews can replace a clear warn string with JSHandle@ placeholders
+            // when args are object-id handles (BlocksServiceWorkerRegistration
+            // waits on the exact "Service Worker registration blocked…" text).
             string text = message.TryGetProperty("text", out JsonElement textEl) ? textEl.GetString() : string.Empty;
-            if (message.TryGetProperty("parameters", out JsonElement previewParams)
+            if (string.IsNullOrEmpty(text)
+                && message.TryGetProperty("parameters", out JsonElement previewParams)
                 && previewParams.ValueKind == JsonValueKind.Array)
             {
                 string fromParams = RemoteObject.JoinConsoleArgs(previewParams);
-                if (!string.IsNullOrEmpty(fromParams))
+                if (!string.IsNullOrEmpty(fromParams)
+                    && !fromParams.StartsWith("JSHandle@", StringComparison.Ordinal))
                 {
                     text = fromParams;
                 }
