@@ -107,6 +107,9 @@ namespace PlaywrightNative.WebKit
         private int _lastConsoleRepeatCount;
         private string _lastPageErrorText;
         private long _lastPageErrorTicks;
+        private string _lastConsoleDedupeText;
+        private string _lastConsoleDedupeType;
+        private long _lastConsoleDedupeTicks;
 
         private WKTargetSession _targetSession;
         private WKTargetSession _provisionalSession;
@@ -7141,7 +7144,11 @@ namespace PlaywrightNative.WebKit
             switch (method)
             {
                 case "Target.targetCreated":
-                    OnTargetCreated(parameters?.Deserialize<WKTargetCreatedPayload>());
+                    // Upstream awaits frame Console.enable inside async _onTargetCreated so
+                    // Darwin frame-session builds do not race console.warn (service-worker
+                    // block) past enable. Fire-and-forget the async handler; page/provisional
+                    // targets still initialize via InitializeAndMaybeResumeAsync.
+                    _ = OnTargetCreatedAsync(parameters?.Deserialize<WKTargetCreatedPayload>());
                     break;
                 case "Target.dispatchMessageFromTarget":
                     OnDispatchMessageFromTarget(parameters);
@@ -7164,7 +7171,7 @@ namespace PlaywrightNative.WebKit
             }
         }
 
-        private void OnTargetCreated(WKTargetCreatedPayload payload)
+        private async Task OnTargetCreatedAsync(WKTargetCreatedPayload payload)
         {
             WKTargetInfo info = payload?.TargetInfo;
             if (info == null || string.IsNullOrEmpty(info.TargetId))
@@ -7179,12 +7186,12 @@ namespace PlaywrightNative.WebKit
             // "frame-*" target the macOS-14 build emits) must not fall through to the page
             // path — that would dispose the live main session and orphan in-flight commands.
             // On enableFrameSessions builds, adopt them as Console-only WKFrameSession
-            // (upstream wkPage._onTargetCreated + WKFrame).
+            // (upstream wkPage._onTargetCreated + WKFrame) and await Console.enable.
             if (string.Equals(info.Type, "frame", StringComparison.Ordinal))
             {
                 if (EnableFrameSessions)
                 {
-                    AdoptFrameSession(targetId);
+                    await AdoptFrameSessionAsync(targetId, info.IsPaused).ConfigureAwait(false);
                 }
                 else
                 {
@@ -7194,6 +7201,11 @@ namespace PlaywrightNative.WebKit
                 return;
             }
 
+            OnPageOrProvisionalTargetCreated(info, targetId);
+        }
+
+        private void OnPageOrProvisionalTargetCreated(WKTargetInfo info, string targetId)
+        {
             // Upstream wkPage asserts only page targets under the page proxy; dedicated
             // workers are owned by the Worker domain (Worker.workerCreated), not Target.
             // Handling Target worker targets (including Target.resume) races
@@ -7391,26 +7403,59 @@ namespace PlaywrightNative.WebKit
 
         private void AdoptFrameSession(string targetId)
         {
-            if (string.IsNullOrEmpty(targetId) || _frameSessions.ContainsKey(targetId))
+            _ = AdoptFrameSessionAsync(targetId, isPaused: false);
+        }
+
+        private async Task AdoptFrameSessionAsync(string targetId, bool isPaused)
+        {
+            if (string.IsNullOrEmpty(targetId))
             {
                 return;
             }
 
-            WKTargetSession session = new(_session, _browser.Connection, targetId);
-            WKFrameSession frameSession = new(
-                session,
-                _logger,
-                OnConsoleMessageAdded,
-                OnConsoleRepeatCountUpdated);
-            if (!_frameSessions.TryAdd(targetId, frameSession))
+            if (!_frameSessions.TryGetValue(targetId, out WKFrameSession frameSession))
             {
-                frameSession.Dispose();
-                return;
+                WKTargetSession session = new(_session, _browser.Connection, targetId);
+                frameSession = new(
+                    session,
+                    _logger,
+                    OnConsoleMessageAdded,
+                    OnConsoleRepeatCountUpdated);
+                if (!_frameSessions.TryAdd(targetId, frameSession))
+                {
+                    frameSession.Dispose();
+                    if (!_frameSessions.TryGetValue(targetId, out frameSession))
+                    {
+                        return;
+                    }
+                }
             }
 
             // Upstream awaits initialize and swallows errors; frame targets can appear
             // before the page session finishes getResourceTree.
-            _ = frameSession.InitializeAsync();
+            try
+            {
+                await frameSession.InitializeAsync().ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogDebug(ex, "Frame Console.enable failed for {TargetId}", targetId);
+            }
+
+            // Upstream TODO notes child-frame Console.init is racy without pause; when the
+            // frame target is paused, resume only after Console.enable so buffered warns
+            // (service-worker block) flush to messageAdded.
+            if (isPaused)
+            {
+                try
+                {
+                    await _session.SendAsync("Target.resume", new { targetId }).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    _logger?.LogDebug(ex, "Target.resume failed for frame {TargetId}", targetId);
+                }
+            }
         }
 
         private async Task InitializeFrameSessionsAsync(JsonElement? tree)
@@ -9083,10 +9128,16 @@ namespace PlaywrightNative.WebKit
                     OnConsoleRepeatCountUpdated(parameters);
                     break;
                 case "Runtime.consoleAPICalled":
-                    // Frame-session builds deliver console via Console.messageAdded on
-                    // WKFrameSession (upstream). Non-frame-session builds use Console on
-                    // the page target. Do not also raise from Runtime.consoleAPICalled —
-                    // that would duplicate messages once frame Console is enabled.
+                    // Frame-session Darwin builds deliver console primarily via
+                    // Console.messageAdded on WKFrameSession. Runtime.consoleAPICalled on
+                    // the page session is a race fallback when Console.enable has not yet
+                    // completed for a new frame target (BlocksServiceWorkerRegistration).
+                    // RaiseConsole dedups near-duplicate dual delivery.
+                    if (EnableFrameSessions)
+                    {
+                        OnRuntimeConsoleApiCalled(parameters);
+                    }
+
                     break;
                 case "Runtime.exceptionThrown":
                     OnExceptionThrown(parameters);
@@ -9176,16 +9227,16 @@ namespace PlaywrightNative.WebKit
                 return;
             }
 
-            // Prefer WebKit's joined message.text. Overwriting with parameter
-            // previews can replace a clear warn string with JSHandle@ placeholders
-            // when args are object-id handles (BlocksServiceWorkerRegistration
-            // waits on the exact "Service Worker registration blocked…" text).
             string text = message.TryGetProperty("text", out JsonElement textEl) ? textEl.GetString() : string.Empty;
-            if (string.IsNullOrEmpty(text)
-                && message.TryGetProperty("parameters", out JsonElement previewParams)
+            if (message.TryGetProperty("parameters", out JsonElement previewParams)
                 && previewParams.ValueKind == JsonValueKind.Array)
             {
                 string fromParams = RemoteObject.JoinConsoleArgs(previewParams);
+
+                // Prefer parameter previews (PageEventConsole object/window text). When
+                // Darwin only exposes object-id handles, JoinConsoleArgs can yield
+                // JSHandle@ placeholders — keep protocol message.text instead so exact
+                // waits like BlocksServiceWorkerRegistration still match.
                 if (!string.IsNullOrEmpty(fromParams)
                     && !fromParams.StartsWith("JSHandle@", StringComparison.Ordinal))
                 {
@@ -9333,8 +9384,61 @@ namespace PlaywrightNative.WebKit
 
         private void RaiseConsole(IConsoleMessage message)
         {
+            if (message == null)
+            {
+                return;
+            }
+
+            // Dual-path (frame Console.messageAdded + page Runtime.consoleAPICalled) can
+            // deliver the same warn twice within a few ms on Darwin frame-session builds.
+            if (EnableFrameSessions)
+            {
+                long now = Environment.TickCount64;
+                if (!string.IsNullOrEmpty(message.Text)
+                    && string.Equals(message.Text, _lastConsoleDedupeText, StringComparison.Ordinal)
+                    && string.Equals(message.Type, _lastConsoleDedupeType, StringComparison.Ordinal)
+                    && now - _lastConsoleDedupeTicks < 250)
+                {
+                    return;
+                }
+
+                _lastConsoleDedupeText = message.Text;
+                _lastConsoleDedupeType = message.Type;
+                _lastConsoleDedupeTicks = now;
+            }
+
             _consoleLog.Add(message);
             _pageListeners.Console.Emit(this, message);
+        }
+
+        private void OnRuntimeConsoleApiCalled(JsonElement? parameters)
+        {
+            if (!parameters.HasValue)
+            {
+                return;
+            }
+
+            ConsoleMessage message = WorkerConsole.Parse(
+                parameters.Value,
+                remote =>
+                {
+                    string objectId = RemoteObject.GetObjectId(remote);
+                    if (string.IsNullOrEmpty(objectId) || _executionContext == null)
+                    {
+                        return null;
+                    }
+
+                    return WrapRemoteObject(_executionContext, remote);
+                },
+                this);
+            if (message == null || string.IsNullOrEmpty(message.Text))
+            {
+                return;
+            }
+
+            _lastConsoleMessage = message;
+            _lastConsoleRepeatCount = 1;
+            RaiseConsole(message);
         }
 
         private void RaisePageError(PageErrorEventArgs error, WebErrorLocation location = null)
