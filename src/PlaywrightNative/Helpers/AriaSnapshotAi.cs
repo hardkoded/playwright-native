@@ -267,10 +267,12 @@ namespace PlaywrightNative.Helpers
                 throw new PlaywrightException("Cannot take an aria snapshot of a detached element.");
             }
 
-            await EnsurePrefixesAsync(page, Stopwatch.StartNew(), 2000).ConfigureAwait(false);
+            // Windows Chromium under suite load needs headroom for srcdoc iframe
+            // ContentFrame + AX capture (AiModeShouldIncludeIframeContents).
+            await EnsurePrefixesAsync(page, Stopwatch.StartNew(), 3_000).ConfigureAwait(false);
             string prefix = await PrefixForAsync(page, owner).ConfigureAwait(false);
             string yaml = await AriaSnapshotOfficialAi.CaptureYamlAsync(root, depth, boxes, prefix).ConfigureAwait(false);
-            return await StitchAsync(page, owner, yaml, depth, boxes, Stopwatch.StartNew(), 2000).ConfigureAwait(false);
+            return await StitchAsync(page, owner, yaml, depth, boxes, Stopwatch.StartNew(), 3_500).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -294,10 +296,10 @@ namespace PlaywrightNative.Helpers
                 throw new PlaywrightException("Cannot take an aria snapshot of a detached element.");
             }
 
-            await EnsurePrefixesAsync(page, Stopwatch.StartNew(), 2000).ConfigureAwait(false);
+            await EnsurePrefixesAsync(page, Stopwatch.StartNew(), 3_000).ConfigureAwait(false);
             string prefix = await PrefixForAsync(page, owner).ConfigureAwait(false);
             string json = await AriaSnapshotOfficialAi.CaptureJsonAsync(root, depth, boxes, prefix).ConfigureAwait(false);
-            return await StitchJsonAsync(page, owner, json, depth, boxes, Stopwatch.StartNew(), 2000).ConfigureAwait(false);
+            return await StitchJsonAsync(page, owner, json, depth, boxes, Stopwatch.StartNew(), 3_500).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -418,18 +420,28 @@ namespace PlaywrightNative.Helpers
                 }
 
                 string ariaRef = match.Groups[2].Value;
-                string childYaml = await RaceOrDefaultAsync(
-                    () => CaptureChildYamlAsync(page, frame, ariaRef, depth, boxes, deadlineClock, budgetMs, lineDepth + 1),
+
+                // Do not wrap CaptureChildYaml in RaceOrDefaultAsync: nested
+                // ContentFrame/AX waits under Windows suite load often exceed the
+                // outer whenAny and abandon a still-successful capture
+                // (AiModeShouldIncludeIframeContents → empty iframe line).
+                string childYaml = await CaptureChildYamlAsync(
+                    page,
+                    frame,
+                    ariaRef,
+                    depth,
+                    boxes,
                     deadlineClock,
                     budgetMs,
-                    fallback: null).ConfigureAwait(false);
+                    lineDepth + 1).ConfigureAwait(false);
 
-                // Darwin data: iframes after Focus: first stitch can miss while
-                // FrameLocator still resolves (ShouldSupportManyPropertiesOnIframes).
-                // Retry once with a dedicated short budget outside the spent clock.
+                // Retry with FrameLocator / focused child when the primary path
+                // misses. Use for [active] (Darwin Focus) and for a sole iframe
+                // (srcdoc AiMode) — never for multi-iframe pages (wrong child).
                 if (string.IsNullOrEmpty(childYaml)
-                    && RemainingMs(deadlineClock, budgetMs) > 0
-                    && line.Contains("[active]", StringComparison.Ordinal))
+                    && !await IsLazyIframeRefAsync(frame, ariaRef).ConfigureAwait(false)
+                    && (line.Contains("[active]", StringComparison.Ordinal)
+                        || SoleChildFrameOrNull(frame) != null))
                 {
                     childYaml = await CaptureActiveDataIframeYamlAsync(
                         page,
