@@ -864,7 +864,17 @@ namespace PlaywrightNative.Helpers
                     return;
                 }
 
-                await clientStream.WriteAsync(responseHeaders).ConfigureAwait(false);
+                string status = Latin1.GetString(responseHeaders);
+                bool established = status.StartsWith("HTTP/1.1 200", StringComparison.Ordinal)
+                    || status.StartsWith("HTTP/1.0 200", StringComparison.Ordinal);
+
+                // Non-200 (typically 407): force Connection: close so CFNetwork
+                // treats the challenge as terminal for this socket and retries
+                // CONNECT with Proxy-Authorization on a fresh connection.
+                byte[] clientResponse = established
+                    ? responseHeaders
+                    : ForceConnectionClose(responseHeaders);
+                await clientStream.WriteAsync(clientResponse).ConfigureAwait(false);
                 if (leftover.Length > 0)
                 {
                     // Bytes that arrived with the CONNECT response (TLS ClientHello
@@ -873,21 +883,29 @@ namespace PlaywrightNative.Helpers
                     await clientStream.WriteAsync(leftover).ConfigureAwait(false);
                 }
 
-                string status = Latin1.GetString(responseHeaders);
-                if (status.StartsWith("HTTP/1.1 200", StringComparison.Ordinal)
-                    || status.StartsWith("HTTP/1.0 200", StringComparison.Ordinal))
+                if (established)
                 {
                     await PipeBidirectionalAsync(clientStream, upStream).ConfigureAwait(false);
                 }
                 else
                 {
-                    // Non-200 (typically 407) must reach WebKit before this socket
-                    // is closed by HandleClientAsync — otherwise CFNetwork may not
-                    // retry CONNECT with Proxy-Authorization.
+                    // 407 must reach WebKit before HandleClientAsync disposes the
+                    // socket — otherwise CFNetwork may miss the challenge.
                     await clientStream.FlushAsync().ConfigureAwait(false);
                     try
                     {
-                        await Task.Delay(150).ConfigureAwait(false);
+                        clientStream.Socket?.Shutdown(SocketShutdown.Send);
+                    }
+                    catch (SocketException)
+                    {
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                    }
+
+                    try
+                    {
+                        await Task.Delay(500).ConfigureAwait(false);
                     }
                     catch (ObjectDisposedException)
                     {

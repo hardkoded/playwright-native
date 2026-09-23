@@ -89,10 +89,22 @@ namespace PlaywrightNative.Helpers
 
             while (true)
             {
+                if (timeoutMs != Timeout.Infinite && sw.ElapsedMilliseconds >= timeoutMs)
+                {
+                    throw new TimeoutException($"element.waitForElementState({wanted}): Timeout {timeoutMs}ms exceeded.");
+                }
+
                 bool done = false;
                 try
                 {
-                    bool attached = await IsAttachedAsync(handle).ConfigureAwait(false);
+                    // Bound each probe so a wedged evaluate cannot outlive the
+                    // action timeout (Darwin WebKit FillAsyncSetsInputValue).
+                    int probeMs = timeoutMs == Timeout.Infinite
+                        ? Timeout.Infinite
+                        : Math.Max(1, timeoutMs - (int)sw.ElapsedMilliseconds);
+                    bool attached = await RaceProbeAsync(
+                        () => IsAttachedAsync(handle),
+                        probeMs).ConfigureAwait(false);
                     if (!attached)
                     {
                         if (wanted == ElementState.Hidden)
@@ -105,13 +117,29 @@ namespace PlaywrightNative.Helpers
 
                     done = wanted switch
                     {
-                        ElementState.Hidden => await handle.IsHiddenAsync().ConfigureAwait(false),
-                        ElementState.Enabled => await IsAriaEnabledAsync(handle).ConfigureAwait(false),
-                        ElementState.Disabled => !await IsAriaEnabledAsync(handle).ConfigureAwait(false),
-                        ElementState.Editable => await handle.IsEditableAsync().ConfigureAwait(false),
-                        ElementState.Stable => await IsStableAsync(handle).ConfigureAwait(false),
-                        _ => await handle.IsVisibleAsync().ConfigureAwait(false),
+                        ElementState.Hidden => await RaceProbeAsync(
+                            () => handle.IsHiddenAsync(),
+                            probeMs).ConfigureAwait(false),
+                        ElementState.Enabled => await RaceProbeAsync(
+                            () => IsAriaEnabledAsync(handle),
+                            probeMs).ConfigureAwait(false),
+                        ElementState.Disabled => !await RaceProbeAsync(
+                            () => IsAriaEnabledAsync(handle),
+                            probeMs).ConfigureAwait(false),
+                        ElementState.Editable => await RaceProbeAsync(
+                            () => handle.IsEditableAsync(),
+                            probeMs).ConfigureAwait(false),
+                        ElementState.Stable => await RaceProbeAsync(
+                            () => IsStableAsync(handle),
+                            probeMs).ConfigureAwait(false),
+                        _ => await RaceProbeAsync(
+                            () => handle.IsVisibleAsync(),
+                            probeMs).ConfigureAwait(false),
                     };
+                }
+                catch (TimeoutException)
+                {
+                    throw new TimeoutException($"element.waitForElementState({wanted}): Timeout {timeoutMs}ms exceeded.");
                 }
                 catch (PlaywrightException ex) when (!IsNotAttached(ex))
                 {
@@ -156,6 +184,23 @@ namespace PlaywrightNative.Helpers
         private static bool IsNotAttached(PlaywrightException ex)
             => ex != null && !string.IsNullOrEmpty(ex.Message)
                 && ex.Message.Contains(ClickAction.NotAttachedMessage, StringComparison.Ordinal);
+
+        private static async Task<T> RaceProbeAsync<T>(Func<Task<T>> probeAsync, int probeMs)
+        {
+            if (probeMs == Timeout.Infinite)
+            {
+                return await probeAsync().ConfigureAwait(false);
+            }
+
+            Task<T> probe = probeAsync();
+            Task delay = Task.Delay(probeMs);
+            if (await Task.WhenAny(probe, delay).ConfigureAwait(false) != probe)
+            {
+                throw new TimeoutException();
+            }
+
+            return await probe.ConfigureAwait(false);
+        }
 
         private static async Task<bool> IsAttachedAsync(IElementHandle handle)
         {
