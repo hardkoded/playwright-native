@@ -616,9 +616,23 @@ namespace PlaywrightNative.Helpers
             }
 
             string childPrefix = await PrefixForAsync(page, child).ConfigureAwait(false);
-            string childYaml = await AriaSnapshotOfficialAi
-                .CaptureYamlAsync(childRoot, depth, boxes, childPrefix, startDepth)
-                .ConfigureAwait(false);
+            string childYaml;
+            try
+            {
+                childYaml = await AriaSnapshotOfficialAi
+                    .CaptureYamlAsync(childRoot, depth, boxes, childPrefix, startDepth)
+                    .ConfigureAwait(false);
+            }
+            catch (PlaywrightException)
+            {
+                // Navigating/detached child frames must miss so the caller can
+                // fall back to an iframe stub (ShouldGracefullyFallbackWhenChildFrameCantBeCaptured).
+                return null;
+            }
+            catch (TimeoutException)
+            {
+                return null;
+            }
 
             // Darwin data: ContentFrame can resolve before the AX tree has
             // nodes (ShouldMarkIframeAsActiveWhenItContainsFocusedElement).

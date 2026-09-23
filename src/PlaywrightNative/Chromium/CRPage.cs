@@ -552,18 +552,11 @@ namespace PlaywrightNative.Chromium
                 string errorText = errorTextElement.GetString();
                 if (!string.IsNullOrEmpty(errorText))
                 {
-                    // Concurrent GoTo: Chrome may return ERR_ABORTED on Page.navigate
-                    // after the document request already started. Carry loaderId like a
-                    // successful navigate so lifecycle wait / response capture can still
-                    // resolve (ShouldReturnFromGotoIfNewNavigationIsStarted).
-                    if (!string.IsNullOrEmpty(loaderId)
-                        && errorText.Contains("ERR_ABORTED", StringComparison.Ordinal))
-                    {
-                        return new GotoResult(loaderId);
-                    }
-
                     // Preserve loaderId so GoToFrameCapturingResponseAsync can await
-                    // the document response when we still throw for other aborts.
+                    // the document response after concurrent GoTo aborts Page.navigate
+                    // (ShouldReturnFromGotoIfNewNavigationIsStarted under Windows load).
+                    // Still throw: cancel/replace/204 navigations must surface ERR_ABORTED
+                    // (ShouldFailWhenCanceledByAnotherNavigation / …Returns204).
                     throw new NavigationException($"Navigation failed: {errorText}", url, loaderId);
                 }
             }
