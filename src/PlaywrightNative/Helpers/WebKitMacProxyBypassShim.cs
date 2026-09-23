@@ -499,6 +499,58 @@ namespace PlaywrightNative.Helpers
         }
 
         /// <summary>
+        /// Builds a CONNECT request for the upstream proxy hop.
+        /// </summary>
+        private static string BuildConnectRequest(string host, int port, string proxyAuthorization)
+        {
+            string authority = host + ":" + port.ToString(CultureInfo.InvariantCulture);
+            string connectRequest = "CONNECT " + authority + " HTTP/1.1\r\nHost: " + authority + "\r\n";
+            if (!string.IsNullOrEmpty(proxyAuthorization))
+            {
+                connectRequest += "Proxy-Authorization: " + proxyAuthorization + "\r\n";
+            }
+
+            return connectRequest + "\r\n";
+        }
+
+        /// <summary>
+        /// Credentials to send on a post-407 upstream CONNECT reconnect.
+        /// </summary>
+        private static string ResolveUpstreamProxyAuthorization(
+            string clientAuth,
+            string storedAuthorization,
+            string username,
+            string password)
+        {
+            if (!string.IsNullOrEmpty(clientAuth))
+            {
+                return clientAuth;
+            }
+
+            if (!string.IsNullOrEmpty(storedAuthorization))
+            {
+                return storedAuthorization;
+            }
+
+            if (string.IsNullOrEmpty(username))
+            {
+                return null;
+            }
+
+            string token = Convert.ToBase64String(
+                Encoding.ASCII.GetBytes(username + ":" + (password ?? string.Empty)));
+            return "Basic " + token;
+        }
+
+        private static bool IsConnectEstablished(string status)
+            => status.StartsWith("HTTP/1.1 200", StringComparison.Ordinal)
+                || status.StartsWith("HTTP/1.0 200", StringComparison.Ordinal);
+
+        private static bool IsProxyAuthRequired(string status)
+            => status.StartsWith("HTTP/1.1 407", StringComparison.Ordinal)
+                || status.StartsWith("HTTP/1.0 407", StringComparison.Ordinal);
+
+        /// <summary>
         /// Returns whether <paramref name="headerBytes"/> is a WebSocket upgrade
         /// handshake (absolute-form or origin-form).
         /// </summary>
@@ -829,32 +881,29 @@ namespace PlaywrightNative.Helpers
                     return;
                 }
 
+                // This shim is the TCP client of the real proxy. Some proxies
+                // (OfficialTestProxy CONNECT 407) close after a challenge and
+                // expect a fresh CONNECT with Proxy-Authorization. CFNetwork
+                // behind ExtraHTTPHeaders often completes the page with a single
+                // shim hop, so the shim itself must perform that reconnect —
+                // otherwise upstream records only one CONNECT
+                // (ShouldReconnectWithCredentialsAfterConnect407…).
+                string clientAuth = ExtractProxyAuthorization(clientHeaders);
+                string retryAuth = ResolveUpstreamProxyAuthorization(
+                    clientAuth,
+                    _proxyAuthorization,
+                    BrowserProxy.Username,
+                    BrowserProxy.Password);
+                bool probeWithoutAuth = !string.IsNullOrEmpty(retryAuth);
+
                 await ConnectWithTimeoutAsync(upstream, _upstreamHost, _upstreamPort).ConfigureAwait(false);
                 NetworkStream upStream = upstream.GetStream();
-
-                // Forward only the Proxy-Authorization WebKit sent. Always injecting
-                // stored credentials makes the first CONNECT look authenticated to
-                // the upstream proxy; CFNetwork then often skips the 407 retry
-                // (ShouldReconnectWithCredentialsAfterConnect407… count stays 1).
-                // BrowserProxy Username/Password drive WebKit's challenge response.
-                string clientAuth = ExtractProxyAuthorization(clientHeaders);
-                string connectRequest = "CONNECT " + host + ":" + port.ToString(CultureInfo.InvariantCulture)
-                    + " HTTP/1.1\r\nHost: " + host + ":" + port.ToString(CultureInfo.InvariantCulture)
-                    + "\r\n";
-                if (!string.IsNullOrEmpty(clientAuth))
-                {
-                    connectRequest += "Proxy-Authorization: " + clientAuth + "\r\n";
-                }
-                else if (!string.IsNullOrEmpty(_proxyAuthorization)
-                    && string.IsNullOrEmpty(BrowserProxy.Username))
-                {
-                    // Credentials lived only in the proxy URL (no Username field) —
-                    // WebKit will not challenge-reply; inject on every hop.
-                    connectRequest += "Proxy-Authorization: " + _proxyAuthorization + "\r\n";
-                }
-
-                connectRequest += "\r\n";
-                await WriteAsciiAsync(upStream, connectRequest).ConfigureAwait(false);
+                string firstAuth = probeWithoutAuth
+                    ? null
+                    : (!string.IsNullOrEmpty(clientAuth)
+                        ? clientAuth
+                        : (!string.IsNullOrEmpty(_proxyAuthorization) ? _proxyAuthorization : null));
+                await WriteAsciiAsync(upStream, BuildConnectRequest(host, port, firstAuth)).ConfigureAwait(false);
                 (byte[] responseHeaders, byte[] leftover) = await ReadHeadersAsync(upStream, _cts.Token)
                     .ConfigureAwait(false);
                 if (responseHeaders == null)
@@ -865,8 +914,29 @@ namespace PlaywrightNative.Helpers
                 }
 
                 string status = Latin1.GetString(responseHeaders);
-                bool established = status.StartsWith("HTTP/1.1 200", StringComparison.Ordinal)
-                    || status.StartsWith("HTTP/1.0 200", StringComparison.Ordinal);
+                bool established = IsConnectEstablished(status);
+                bool challenge = IsProxyAuthRequired(status);
+
+                if (!established && challenge && probeWithoutAuth)
+                {
+                    upstream.Dispose();
+                    upstream = new TcpClient { NoDelay = true };
+                    await ConnectWithTimeoutAsync(upstream, _upstreamHost, _upstreamPort).ConfigureAwait(false);
+                    upStream = upstream.GetStream();
+                    await WriteAsciiAsync(upStream, BuildConnectRequest(host, port, retryAuth))
+                        .ConfigureAwait(false);
+                    (responseHeaders, leftover) = await ReadHeadersAsync(upStream, _cts.Token)
+                        .ConfigureAwait(false);
+                    if (responseHeaders == null)
+                    {
+                        await WriteAsciiAsync(clientStream, "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n")
+                            .ConfigureAwait(false);
+                        return;
+                    }
+
+                    status = Latin1.GetString(responseHeaders);
+                    established = IsConnectEstablished(status);
+                }
 
                 // Non-200 (typically 407): force Connection: close so CFNetwork
                 // treats the challenge as terminal for this socket and retries
