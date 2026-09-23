@@ -503,6 +503,8 @@ namespace PlaywrightNative.TestServer
             {
                 TaskCompletionSource<HttpRequest> requestWaiter = _webSocketRequestWait;
                 _webSocketRequestWait = null;
+                // Keep the live request: the upgrade holds the connection open
+                // until the test finishes reading headers (WS handshake).
                 requestWaiter?.TrySetResult(context.Request);
                 waiting = _webSocketWait != null;
                 once = _onceWebSocket;
@@ -656,14 +658,17 @@ namespace PlaywrightNative.TestServer
             _requestWaits[path] = context =>
             {
                 T result = selector(context.Request);
-
-                // Kestrel pools and resets the header dictionary once the
-                // connection serves its next request, so a live reference
-                // captured here would read back empty/wrong values by the
-                // time the caller awaits this task. Snapshot it now.
+                // Kestrel pools and resets (and may dispose) the request once
+                // the connection finishes, so a live reference captured here
+                // can throw ObjectDisposedException or read empty/wrong values
+                // by the time the caller awaits this task. Snapshot now.
                 if (result is IHeaderDictionary headers)
                 {
-                    result = (T)(object)new HeaderDictionary(new Dictionary<string, StringValues>(headers));
+                    result = (T)(object)SnapshotHeaders(headers);
+                }
+                else if (result is HttpRequest liveRequest)
+                {
+                    result = (T)(object)new SnapshotHttpRequest(liveRequest);
                 }
 
                 taskCompletion.TrySetResult(result);
@@ -995,6 +1000,158 @@ namespace PlaywrightNative.TestServer
                 }
 
                 _done.TrySetResult(true);
+            }
+        }
+
+        private static HeaderDictionary SnapshotHeaders(IHeaderDictionary headers)
+        {
+            // Must stay case-insensitive: callers look up "user-agent" while the
+            // wire name is often "User-Agent". A default Dictionary comparer
+            // would make HeaderDictionary indexer miss and return empty.
+            Dictionary<string, StringValues> copy = new Dictionary<string, StringValues>(StringComparer.OrdinalIgnoreCase);
+            foreach (KeyValuePair<string, StringValues> pair in headers)
+            {
+                copy[pair.Key] = pair.Value;
+            }
+
+            return new HeaderDictionary(copy);
+        }
+
+        /// <summary>
+        /// Immutable view of an <see cref="HttpRequest"/> taken while the
+        /// Kestrel feature collection is still alive. Callers that retain a
+        /// request from <see cref="WaitForRequest{T}"/> or
+        /// <see cref="WaitForWebSocketConnectionRequest"/> must not touch the
+        /// live ASP.NET request after the response completes.
+        /// </summary>
+        private sealed class SnapshotHttpRequest : HttpRequest
+        {
+            private readonly HeaderDictionary _headers;
+            private readonly string _method;
+            private readonly PathString _path;
+            private readonly PathString _pathBase;
+            private readonly QueryString _queryString;
+            private readonly string _scheme;
+            private readonly string _protocol;
+            private readonly HostString _host;
+            private readonly bool _isHttps;
+            private readonly string _contentType;
+            private readonly long? _contentLength;
+            private readonly QueryCollection _query;
+
+            public SnapshotHttpRequest(HttpRequest source)
+            {
+                _headers = SnapshotHeaders(source.Headers);
+                _method = source.Method;
+                _path = source.Path;
+                _pathBase = source.PathBase;
+                _queryString = source.QueryString;
+                _scheme = source.Scheme;
+                _protocol = source.Protocol;
+                _host = source.Host;
+                _isHttps = source.IsHttps;
+                _contentType = source.ContentType;
+                _contentLength = source.ContentLength;
+                Dictionary<string, StringValues> queryCopy = new Dictionary<string, StringValues>(StringComparer.OrdinalIgnoreCase);
+                foreach (KeyValuePair<string, StringValues> pair in source.Query)
+                {
+                    queryCopy[pair.Key] = pair.Value;
+                }
+
+                _query = new QueryCollection(queryCopy);
+            }
+
+            public override HttpContext HttpContext => throw new NotSupportedException();
+
+            public override string Method
+            {
+                get => _method;
+                set => throw new NotSupportedException();
+            }
+
+            public override string Scheme
+            {
+                get => _scheme;
+                set => throw new NotSupportedException();
+            }
+
+            public override bool IsHttps
+            {
+                get => _isHttps;
+                set => throw new NotSupportedException();
+            }
+
+            public override HostString Host
+            {
+                get => _host;
+                set => throw new NotSupportedException();
+            }
+
+            public override PathString PathBase
+            {
+                get => _pathBase;
+                set => throw new NotSupportedException();
+            }
+
+            public override PathString Path
+            {
+                get => _path;
+                set => throw new NotSupportedException();
+            }
+
+            public override QueryString QueryString
+            {
+                get => _queryString;
+                set => throw new NotSupportedException();
+            }
+
+            public override IQueryCollection Query
+            {
+                get => _query;
+                set => throw new NotSupportedException();
+            }
+
+            public override string Protocol
+            {
+                get => _protocol;
+                set => throw new NotSupportedException();
+            }
+
+            public override IHeaderDictionary Headers => _headers;
+
+            public override IRequestCookieCollection Cookies
+            {
+                get => throw new NotSupportedException();
+                set => throw new NotSupportedException();
+            }
+
+            public override long? ContentLength
+            {
+                get => _contentLength;
+                set => throw new NotSupportedException();
+            }
+
+            public override string ContentType
+            {
+                get => _contentType;
+                set => throw new NotSupportedException();
+            }
+
+            public override Stream Body
+            {
+                get => Stream.Null;
+                set => throw new NotSupportedException();
+            }
+
+            public override bool HasFormContentType => false;
+
+            public override Task<IFormCollection> ReadFormAsync(CancellationToken cancellationToken = default)
+                => Task.FromResult<IFormCollection>(FormCollection.Empty);
+
+            public override IFormCollection Form
+            {
+                get => FormCollection.Empty;
+                set => throw new NotSupportedException();
             }
         }
     }
