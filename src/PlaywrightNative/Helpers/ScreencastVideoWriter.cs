@@ -373,44 +373,53 @@ namespace PlaywrightNative.Helpers
 
             try
             {
-                using Process process = new() { StartInfo = startInfo };
-                if (!process.Start())
-                {
-                    return false;
-                }
-
-                Task drain = DrainErrorAsync(process);
+                Process process = new() { StartInfo = startInfo };
                 try
                 {
-                    // ~1s at 25fps. Pad/crop expands the tiny white JPEG to size.
-                    for (int i = 0; i < 25; i++)
+                    if (!process.Start())
                     {
-                        await process.StandardInput.BaseStream.WriteAsync(WhiteJpegFrame).ConfigureAwait(false);
+                        return false;
                     }
 
-                    await process.StandardInput.BaseStream.FlushAsync().ConfigureAwait(false);
-                    process.StandardInput.Close();
-                }
-                catch (IOException)
-                {
-                }
-                catch (ObjectDisposedException)
-                {
-                }
-
-                if (!await Task.Run(() => process.WaitForExit(15_000)).ConfigureAwait(false))
-                {
+#pragma warning disable CA2025 // Drain completes before Dispose below.
+                    Task drain = DrainErrorAsync(process);
+#pragma warning restore CA2025
                     try
                     {
-                        process.Kill();
+                        // ~1s at 25fps. Pad/crop expands the tiny white JPEG to size.
+                        for (int i = 0; i < 25; i++)
+                        {
+                            await process.StandardInput.BaseStream.WriteAsync(WhiteJpegFrame).ConfigureAwait(false);
+                        }
+
+                        await process.StandardInput.BaseStream.FlushAsync().ConfigureAwait(false);
+                        process.StandardInput.Close();
                     }
-                    catch (InvalidOperationException)
+                    catch (IOException)
                     {
                     }
-                }
+                    catch (ObjectDisposedException)
+                    {
+                    }
 
-                await drain.ConfigureAwait(false);
-                return process.ExitCode == 0 && File.Exists(_path) && new FileInfo(_path).Length > 0;
+                    if (!await Task.Run(() => process.WaitForExit(15_000)).ConfigureAwait(false))
+                    {
+                        try
+                        {
+                            process.Kill();
+                        }
+                        catch (InvalidOperationException)
+                        {
+                        }
+                    }
+
+                    await drain.ConfigureAwait(false);
+                    return process.ExitCode == 0 && File.Exists(_path) && new FileInfo(_path).Length > 0;
+                }
+                finally
+                {
+                    process.Dispose();
+                }
             }
             catch (InvalidOperationException)
             {
