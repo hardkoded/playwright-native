@@ -28,6 +28,25 @@ namespace PlaywrightNative.Helpers
     /// </summary>
     internal sealed class ScreencastVideoWriter
     {
+        // 16x16 white JPEG; ffmpeg pad/crop expands to the recording size.
+        private static readonly byte[] WhiteJpegFrame =
+        {
+            0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00, 0x01, 0x02, 0x00, 0x00, 0x01,
+            0x00, 0x01, 0x00, 0x00, 0xFF, 0xFE, 0x00, 0x10, 0x4C, 0x61, 0x76, 0x63, 0x36, 0x30, 0x2E, 0x33,
+            0x31, 0x2E, 0x31, 0x30, 0x32, 0x00, 0xFF, 0xDB, 0x00, 0x43, 0x00, 0x08, 0x04, 0x04, 0x04, 0x04,
+            0x04, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x06, 0x06, 0x06, 0x06, 0x06, 0x06, 0x06, 0x06, 0x06,
+            0x06, 0x06, 0x06, 0x06, 0x07, 0x07, 0x07, 0x08, 0x08, 0x08, 0x07, 0x07, 0x07, 0x06, 0x06, 0x07,
+            0x07, 0x08, 0x08, 0x08, 0x08, 0x09, 0x09, 0x09, 0x08, 0x08, 0x08, 0x08, 0x09, 0x09, 0x0A, 0x0A,
+            0x0A, 0x0C, 0x0C, 0x0B, 0x0B, 0x0E, 0x0E, 0x0E, 0x11, 0x11, 0x14, 0xFF, 0xC4, 0x00, 0x4B, 0x00,
+            0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x07, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x10, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x11, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xC0, 0x00, 0x11, 0x08, 0x00, 0x10, 0x00,
+            0x10, 0x03, 0x01, 0x22, 0x00, 0x02, 0x11, 0x00, 0x03, 0x11, 0x00, 0xFF, 0xDA, 0x00, 0x0C, 0x03,
+            0x01, 0x00, 0x02, 0x11, 0x03, 0x11, 0x00, 0x3F, 0x00, 0xBF, 0x80, 0x0F, 0xFF, 0xD9,
+        };
+
         private readonly string _path;
         private readonly int _width;
         private readonly int _height;
@@ -251,10 +270,15 @@ namespace PlaywrightNative.Helpers
 
         private async Task WriteWhiteVideoAsync()
         {
-            // Playwright's bundled screencast ffmpeg is built with most demuxers
-            // disabled (no lavfi color source). Prefer a full system ffmpeg —
-            // the same one ResolveForWebp selects on CI (brew/apt/choco) — so
-            // empty-video still produces a white 1s WebM.
+            // Bundled screencast ffmpeg often lacks lavfi. Prefer the same
+            // image2pipe path as live frames (pad/crop to size) so empty
+            // recordings still leave a .webm (ShouldCloseFfmpegEvenIfThereWereNoFrames).
+            if (await WriteWhiteVideoViaImagePipeAsync().ConfigureAwait(false))
+            {
+                return;
+            }
+
+            // Optional system-ffmpeg lavfi fallback when image2pipe is unavailable.
             string[] candidates =
             {
                 FfmpegLocator.ResolveForWebp(),
@@ -321,6 +345,84 @@ namespace PlaywrightNative.Helpers
                 {
                     // Try the next ffmpeg candidate.
                 }
+            }
+        }
+
+        private async Task<bool> WriteWhiteVideoViaImagePipeAsync()
+        {
+            string ffmpegPath = FfmpegLocator.Resolve();
+            if (string.IsNullOrEmpty(ffmpegPath))
+            {
+                return false;
+            }
+
+            ProcessStartInfo startInfo = new()
+            {
+                FileName = ffmpegPath,
+                Arguments = string.Format(
+                    CultureInfo.InvariantCulture,
+                    "-y -f image2pipe -vcodec mjpeg -i pipe:0 -an -r 25 -c:v libvpx -qmin 0 -qmax 50 -crf 8 -deadline realtime -speed 8 -b:v 1M -threads 1 -vf pad={0}:{1}:0:0:white,crop={0}:{1}:0:0 \"{2}\"",
+                    _width,
+                    _height,
+                    _path),
+                RedirectStandardInput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            };
+
+            try
+            {
+                using Process process = new() { StartInfo = startInfo };
+                if (!process.Start())
+                {
+                    return false;
+                }
+
+                Task drain = DrainErrorAsync(process);
+                try
+                {
+                    // ~1s at 25fps. Pad/crop expands the tiny white JPEG to size.
+                    for (int i = 0; i < 25; i++)
+                    {
+                        await process.StandardInput.BaseStream.WriteAsync(WhiteJpegFrame).ConfigureAwait(false);
+                    }
+
+                    await process.StandardInput.BaseStream.FlushAsync().ConfigureAwait(false);
+                    process.StandardInput.Close();
+                }
+                catch (IOException)
+                {
+                }
+                catch (ObjectDisposedException)
+                {
+                }
+
+                if (!await Task.Run(() => process.WaitForExit(15_000)).ConfigureAwait(false))
+                {
+                    try
+                    {
+                        process.Kill();
+                    }
+                    catch (InvalidOperationException)
+                    {
+                    }
+                }
+
+                await drain.ConfigureAwait(false);
+                return process.ExitCode == 0 && File.Exists(_path) && new FileInfo(_path).Length > 0;
+            }
+            catch (InvalidOperationException)
+            {
+                return false;
+            }
+            catch (System.ComponentModel.Win32Exception)
+            {
+                return false;
+            }
+            catch (IOException)
+            {
+                return false;
             }
         }
     }

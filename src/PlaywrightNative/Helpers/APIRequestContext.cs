@@ -2859,10 +2859,18 @@ namespace PlaywrightNative.Helpers
                     }
                 },
                 null);
-            rstDone.Wait(TimeSpan.FromMilliseconds(250));
+            rstDone.Wait(TimeSpan.FromMilliseconds(1_000));
 
             _abortGate.TrySetResult(null);
             RejectInFlightAborts();
+
+            // Second RST pass after the gate: CancelPendingRequests can race
+            // NetworkStream dispose; linger-0 Close again if the first pass
+            // lost to ThreadPool starvation under Windows suite load.
+            for (int i = 0; i < sockets.Length; i++)
+            {
+                AbortSocket(sockets[i]);
+            }
 
             foreach (HttpClient client in clients)
             {
