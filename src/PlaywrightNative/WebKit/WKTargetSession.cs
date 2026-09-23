@@ -171,12 +171,35 @@ namespace PlaywrightNative.WebKit
             });
             _ = tcs.Task.ContinueWith(_ => timeoutCts.Dispose(), TaskScheduler.Default);
 
-            // Fire-and-forget the outer wrap. We never await the parent's ack — if the wrap
-            // fails (e.g. unknown targetId), the inner TCS will be drained by the connection
-            // close handler. Mirrors upstream which uses send() without awaiting.
+            // Deliver via the page-proxy wrap. Do not await the wrap for success —
+            // the inner response arrives on dispatchMessageFromTarget. But if the wrap
+            // itself faults (unknown / recycled targetId on Darwin), fail the inner
+            // waiter immediately instead of hanging until CommandTimeoutMs. Under suite
+            // load that 20s zombie wait consumed the NUnit 30s budget (init script /
+            // evaluate). Upstream session.send surfaces the same delivery error.
             _ = _parentSession.SendAsync(
-                "Target.sendMessageToTarget",
-                new { targetId = _targetId, message = innerJson });
+                    "Target.sendMessageToTarget",
+                    new { targetId = _targetId, message = innerJson })
+                .ContinueWith(
+                    wrap =>
+                    {
+                        if (!wrap.IsFaulted && !wrap.IsCanceled)
+                        {
+                            return;
+                        }
+
+                        if (!_callbacks.TryRemove(id, out TaskCompletionSource<JsonElement?> pending))
+                        {
+                            return;
+                        }
+
+                        Exception delivery = wrap.Exception?.GetBaseException()
+                            ?? ClosedSessionException();
+                        pending.TrySetException(delivery);
+                    },
+                    CancellationToken.None,
+                    TaskContinuationOptions.ExecuteSynchronously,
+                    TaskScheduler.Default);
 
             return tcs.Task;
         }

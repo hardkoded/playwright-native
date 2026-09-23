@@ -6330,10 +6330,15 @@ namespace PlaywrightNative.WebKit
         {
             // NewPage applies context init scripts after InitializedTask. Darwin can
             // recycle the initial target in that gap (same race as SetEmulatedViewportAsync),
-            // leaving _targetSession null while InitializedTask is already completed.
-            // Keep polling for a session — do not break early on init success.
+            // leaving _targetSession null while InitializedTask is already completed —
+            // or swapping the session under a live setBootstrapScript (zombie target →
+            // lost response until the 20s command timeout, which eats the NUnit 30s
+            // budget on AddInitScriptAsyncShouldPassArg). Keep polling / retrying, and
+            // bound each attempt to the remaining poll window so a zombie cannot burn
+            // the full command timeout.
             DateTime deadline = DateTime.UtcNow.AddSeconds(5);
-            while (_targetSession == null && DateTime.UtcNow < deadline && !_closed)
+            Exception lastError = null;
+            while (DateTime.UtcNow < deadline && !_closed)
             {
                 Task init = _initializedTcs.Task;
                 if (init.IsFaulted || init.IsCanceled)
@@ -6341,14 +6346,83 @@ namespace PlaywrightNative.WebKit
                     break;
                 }
 
-                // Always delay: once InitializedTask has succeeded, WhenAny(init, …)
-                // would spin without yielding.
+                WKTargetSession target = _targetSession;
+                if (target == null || target.IsDisposed)
+                {
+                    // Always delay: once InitializedTask has succeeded, WhenAny(init, …)
+                    // would spin without yielding.
+                    await Task.Delay(50).ConfigureAwait(false);
+                    continue;
+                }
+
+                TimeSpan remaining = deadline - DateTime.UtcNow;
+                if (remaining <= TimeSpan.Zero)
+                {
+                    break;
+                }
+
+                // Cap a single zombie attempt so we can retry on a replacement session
+                // inside the 5s window. Live targets normally ack in milliseconds.
+                TimeSpan attemptBudget = remaining > TimeSpan.FromSeconds(1.5)
+                    ? TimeSpan.FromSeconds(1.5)
+                    : remaining;
+                Task send = SyncBootstrapScriptOnAsync(target);
+                Task finished = await Task.WhenAny(send, Task.Delay(attemptBudget)).ConfigureAwait(false);
+                if (finished == send)
+                {
+                    try
+                    {
+                        await send.ConfigureAwait(false);
+                        return;
+                    }
+                    catch (TimeoutException ex)
+                    {
+                        lastError = ex;
+                    }
+                    catch (TargetClosedException ex)
+                    {
+                        lastError = ex;
+                    }
+                    catch (PlaywrightException ex) when (
+                        ex.Message != null
+                        && (ex.Message.Contains("Target closed", StringComparison.OrdinalIgnoreCase)
+                            || ex.Message.Contains("Session closed", StringComparison.OrdinalIgnoreCase)
+                            || ex.Message.Contains("browser has been closed", StringComparison.OrdinalIgnoreCase)
+                            || ex.Message.Contains("context or browser has been closed", StringComparison.OrdinalIgnoreCase)))
+                    {
+                        lastError = ex;
+                    }
+                }
+                else
+                {
+                    lastError = new TimeoutException(
+                        "Page.setBootstrapScript did not respond before the bootstrap sync deadline.");
+
+                    // Observe the abandoned attempt so a late TimeoutException is not
+                    // an unobserved task failure; a replacement target may succeed next.
+                    _ = send.ContinueWith(
+                        static t => _ = t.Exception,
+                        CancellationToken.None,
+                        TaskContinuationOptions.OnlyOnFaulted,
+                        TaskScheduler.Default);
+                }
+
                 await Task.Delay(50).ConfigureAwait(false);
             }
 
-            WKTargetSession target = _targetSession
-                ?? throw new PlaywrightException("Inner target session is not yet available — the page has not finished initializing.");
-            await SyncBootstrapScriptOnAsync(target).ConfigureAwait(false);
+            if (_closed)
+            {
+                throw PageClosedException();
+            }
+
+            if (lastError != null)
+            {
+                throw new PlaywrightException(
+                    "Inner target session became unavailable while updating Page.setBootstrapScript.",
+                    lastError);
+            }
+
+            throw new PlaywrightException("Inner target session is not yet available — the page has not finished initializing.");
         }
 
         private Task SyncBootstrapScriptOnAsync(WKTargetSession target)
@@ -10003,10 +10077,12 @@ namespace PlaywrightNative.WebKit
                     await Task.Delay(25).ConfigureAwait(false);
                 }
 
-                // blank→blank: if readyState polling never saw a usable context,
-                // still complete waiters after the settle window so GoTo cannot
-                // hang for the full navigation timeout / NUnit budget. Delayed
-                // (~1s) — unlike sync-complete-on-RPC which raced the document swap.
+                // blank→blank / data:: if readyState polling never saw a usable
+                // context (Darwin target recycle under suite load), still complete
+                // waiters after the settle window so GoTo cannot hang for the full
+                // navigation timeout / NUnit budget. Delayed (~1s) — unlike
+                // sync-complete-on-RPC which raced the document swap. data: was
+                // previously excluded and hung TouchscreenTapFiresEvent on macOS CI.
                 if (Volatile.Read(ref _lifecycleSeedGeneration) != seedGeneration)
                 {
                     return;
@@ -10020,7 +10096,12 @@ namespace PlaywrightNative.WebKit
                     bool allowBlankSeed = _pendingLoadTcs != null
                         && PopupOpenedHelper.IsBlankUrl(_mainFrameUrl)
                         && PopupOpenedHelper.IsBlankUrl(_pendingNavigationUrl);
-                    if (!allowBlankSeed)
+                    bool allowDataSeed = _pendingLoadTcs != null
+                        && ((!string.IsNullOrEmpty(_mainFrameUrl)
+                                && _mainFrameUrl.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+                            || (!string.IsNullOrEmpty(_pendingNavigationUrl)
+                                && _pendingNavigationUrl.StartsWith("data:", StringComparison.OrdinalIgnoreCase)));
+                    if (!allowBlankSeed && !allowDataSeed)
                     {
                         return;
                     }
