@@ -2838,6 +2838,29 @@ namespace PlaywrightNative.Helpers
                 ArmAbortiveLinger(sockets[i]);
             }
 
+            // Close(0) on the CloseAsync/SendAsync thread deadlocks Windows reads.
+            // Still RST before publishing the abort gate so fetch finally cannot
+            // dispose NetworkStream(ownsSocket:true) before the hang-route server
+            // sees RequestAborted (ShouldAbortRequestsWhenBrowserContextCloses).
+            using ManualResetEventSlim rstDone = new ManualResetEventSlim(false);
+            ThreadPool.UnsafeQueueUserWorkItem(
+                _ =>
+                {
+                    try
+                    {
+                        for (int i = 0; i < sockets.Length; i++)
+                        {
+                            AbortSocket(sockets[i]);
+                        }
+                    }
+                    finally
+                    {
+                        rstDone.Set();
+                    }
+                },
+                null);
+            rstDone.Wait(TimeSpan.FromMilliseconds(250));
+
             _abortGate.TrySetResult(null);
             RejectInFlightAborts();
 
@@ -2852,15 +2875,8 @@ namespace PlaywrightNative.Helpers
                 }
             }
 
-            // Close(0) on this thread can deadlock the in-flight read on Windows.
-            // The gate is already set, so fetch throws; RST follows off-thread.
             _ = Task.Run(async () =>
             {
-                for (int i = 0; i < sockets.Length; i++)
-                {
-                    AbortSocket(sockets[i]);
-                }
-
                 await Task.Delay(15).ConfigureAwait(false);
                 for (int i = 0; i < clients.Length; i++)
                 {

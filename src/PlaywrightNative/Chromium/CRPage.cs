@@ -552,7 +552,10 @@ namespace PlaywrightNative.Chromium
                 string errorText = errorTextElement.GetString();
                 if (!string.IsNullOrEmpty(errorText))
                 {
-                    throw new NavigationException($"Navigation failed: {errorText}", url);
+                    // Preserve loaderId so GoToFrameCapturingResponseAsync can await
+                    // the document response after concurrent GoTo aborts Page.navigate
+                    // (ShouldReturnFromGotoIfNewNavigationIsStarted under Windows load).
+                    throw new NavigationException($"Navigation failed: {errorText}", url, loaderId);
                 }
             }
 
@@ -2664,6 +2667,20 @@ namespace PlaywrightNative.Chromium
                 {
                     return recoveredAbort;
                 }
+                catch (NavigationException ex) when (IsAbortedNavigation(ex))
+                {
+                    CRResponse delayed = await RecoverAbortedNavigationResponseAsync(
+                        frame,
+                        url,
+                        ex.DocumentId,
+                        captured).ConfigureAwait(false);
+                    if (delayed != null)
+                    {
+                        return delayed;
+                    }
+
+                    throw;
+                }
 
                 if (!string.IsNullOrEmpty(url)
                     && (url.StartsWith("data:", StringComparison.OrdinalIgnoreCase)
@@ -2686,6 +2703,60 @@ namespace PlaywrightNative.Chromium
             static bool IsAbortedNavigation(NavigationException ex)
                 => ex?.Message != null
                     && ex.Message.Contains("ERR_ABORTED", StringComparison.Ordinal);
+
+            async Task<CRResponse> RecoverAbortedNavigationResponseAsync(
+                Frame targetFrame,
+                string targetUrl,
+                string documentId,
+                CRResponse fromEvent)
+            {
+                if (TryRecoverNavigationResponse(targetFrame, targetUrl, fromEvent, out CRResponse recovered)
+                    && recovered != null)
+                {
+                    return recovered;
+                }
+
+                // Page.navigate ERR_ABORTED can beat Network.responseReceived under
+                // Windows suite load. Resolve by loaderId and await the response.
+                if (_networkManager.TryFindNavigationRequest(documentId, targetFrame, targetUrl, out CRRequest request)
+                    && request != null)
+                {
+                    if (request.Response is CRResponse ready
+                        && IsUsableNavigationResponse(ready, targetFrame, targetUrl))
+                    {
+                        return ready;
+                    }
+
+                    try
+                    {
+                        Task<CRResponse> wait = request.WaitForResponseAsync();
+                        Task finished = await Task.WhenAny(wait, Task.Delay(2_000)).ConfigureAwait(false);
+                        if (finished == wait)
+                        {
+                            CRResponse awaited = await wait.ConfigureAwait(false);
+                            if (IsUsableNavigationResponse(awaited, targetFrame, targetUrl))
+                            {
+                                return awaited;
+                            }
+                        }
+                    }
+                    catch (PlaywrightException)
+                    {
+                    }
+                    catch (TimeoutException)
+                    {
+                    }
+                }
+
+                // Late ResponseReceived may have landed while we waited.
+                if (TryRecoverNavigationResponse(targetFrame, targetUrl, fromEvent, out recovered)
+                    && recovered != null)
+                {
+                    return recovered;
+                }
+
+                return null;
+            }
 
             bool TryRecoverNavigationResponse(
                 Frame targetFrame,

@@ -230,6 +230,67 @@ namespace PlaywrightNative.Chromium
         }
 
         /// <summary>
+        /// Finds an in-flight or recent navigation request by CDP loader id and/or URL.
+        /// Used when <c>Page.navigate</c> returns <c>ERR_ABORTED</c> before
+        /// <c>Network.responseReceived</c> lands in the goto capture handler.
+        /// </summary>
+        /// <param name="documentId">CDP <c>loaderId</c>, or <see langword="null"/>.</param>
+        /// <param name="frame">Expected frame, or <see langword="null"/>.</param>
+        /// <param name="url">Target navigation URL, or <see langword="null"/>.</param>
+        /// <param name="request">The matching request when found.</param>
+        /// <returns><see langword="true"/> when a navigation request was found.</returns>
+        internal bool TryFindNavigationRequest(string documentId, Frame frame, string url, out CRRequest request)
+        {
+            request = null;
+            CRRequest byDocument = null;
+            CRRequest byUrl = null;
+            foreach (KeyValuePair<string, CRRequest> pair in _requestsById)
+            {
+                CRRequest candidate = pair.Value;
+                if (candidate == null)
+                {
+                    continue;
+                }
+
+                bool navigation = candidate.IsNavigationRequest
+                    || NetworkRequestEvents.IsDocumentNavigation(candidate.ResourceType);
+                if (!navigation)
+                {
+                    continue;
+                }
+
+                if (frame != null
+                    && candidate.Frame != null
+                    && !ReferenceEquals(candidate.Frame, frame)
+                    && !string.Equals(candidate.Frame.FrameId, frame.FrameId, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                if (!string.IsNullOrEmpty(documentId)
+                    && (string.Equals(candidate.DocumentId, documentId, StringComparison.Ordinal)
+                        || string.Equals(candidate.ProtocolRequestId, documentId, StringComparison.Ordinal)))
+                {
+                    byDocument = candidate;
+                    break;
+                }
+
+                if (byUrl == null
+                    && !string.IsNullOrEmpty(url)
+                    && !string.IsNullOrEmpty(candidate.Url)
+                    && (string.Equals(candidate.Url, url, StringComparison.OrdinalIgnoreCase)
+                        || candidate.Url.StartsWith(url, StringComparison.OrdinalIgnoreCase)
+                        || url.StartsWith(candidate.Url, StringComparison.OrdinalIgnoreCase)))
+                {
+                    byUrl = candidate;
+                }
+            }
+
+            request = byDocument ?? byUrl;
+            return request != null;
+        }
+
+        /// <summary>
         /// Official OOPIF document bodies live on the child session. Try the
         /// current session, then every extra Network session.
         /// </summary>
