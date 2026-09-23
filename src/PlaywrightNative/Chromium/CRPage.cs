@@ -552,9 +552,18 @@ namespace PlaywrightNative.Chromium
                 string errorText = errorTextElement.GetString();
                 if (!string.IsNullOrEmpty(errorText))
                 {
+                    // Concurrent GoTo: Chrome may return ERR_ABORTED on Page.navigate
+                    // after the document request already started. Carry loaderId like a
+                    // successful navigate so lifecycle wait / response capture can still
+                    // resolve (ShouldReturnFromGotoIfNewNavigationIsStarted).
+                    if (!string.IsNullOrEmpty(loaderId)
+                        && errorText.Contains("ERR_ABORTED", StringComparison.Ordinal))
+                    {
+                        return new GotoResult(loaderId);
+                    }
+
                     // Preserve loaderId so GoToFrameCapturingResponseAsync can await
-                    // the document response after concurrent GoTo aborts Page.navigate
-                    // (ShouldReturnFromGotoIfNewNavigationIsStarted under Windows load).
+                    // the document response when we still throw for other aborts.
                     throw new NavigationException($"Navigation failed: {errorText}", url, loaderId);
                 }
             }
@@ -2669,11 +2678,14 @@ namespace PlaywrightNative.Chromium
                 }
                 catch (NavigationException ex) when (IsAbortedNavigation(ex))
                 {
+                    // Pass a getter so late ResponseReceived updates to `captured`
+                    // are visible while we poll (concurrent GoTo overwrites the
+                    // parameter snapshot under Windows suite load).
                     CRResponse delayed = await RecoverAbortedNavigationResponseAsync(
                         frame,
                         url,
                         ex.DocumentId,
-                        captured).ConfigureAwait(false);
+                        () => captured).ConfigureAwait(false);
                     if (delayed != null)
                     {
                         return delayed;
@@ -2687,6 +2699,15 @@ namespace PlaywrightNative.Chromium
                         || url.StartsWith("about:", StringComparison.OrdinalIgnoreCase)))
                 {
                     return null;
+                }
+
+                // Prefer a response that still matches the original goto URL. A
+                // superseding navigation may have overwritten `captured` while
+                // ERR_ABORTED-with-loaderId was treated as a successful navigate.
+                if (TryRecoverNavigationResponse(frame, url, captured, out CRResponse preferred)
+                    && preferred != null)
+                {
+                    return preferred;
                 }
 
                 return captured;
@@ -2708,9 +2729,9 @@ namespace PlaywrightNative.Chromium
                 Frame targetFrame,
                 string targetUrl,
                 string documentId,
-                CRResponse fromEvent)
+                Func<CRResponse> fromEvent)
             {
-                if (TryRecoverNavigationResponse(targetFrame, targetUrl, fromEvent, out CRResponse recovered)
+                if (TryRecoverNavigationResponse(targetFrame, targetUrl, fromEvent?.Invoke(), out CRResponse recovered, documentId)
                     && recovered != null)
                 {
                     return recovered;
@@ -2722,7 +2743,7 @@ namespace PlaywrightNative.Chromium
                     && request != null)
                 {
                     if (request.Response is CRResponse ready
-                        && IsUsableNavigationResponse(ready, targetFrame, targetUrl))
+                        && IsUsableNavigationResponse(ready, targetFrame, targetUrl, documentId))
                     {
                         return ready;
                     }
@@ -2730,11 +2751,11 @@ namespace PlaywrightNative.Chromium
                     try
                     {
                         Task<CRResponse> wait = request.WaitForResponseAsync();
-                        Task finished = await Task.WhenAny(wait, Task.Delay(2_000)).ConfigureAwait(false);
+                        Task finished = await Task.WhenAny(wait, Task.Delay(5_000)).ConfigureAwait(false);
                         if (finished == wait)
                         {
                             CRResponse awaited = await wait.ConfigureAwait(false);
-                            if (IsUsableNavigationResponse(awaited, targetFrame, targetUrl))
+                            if (IsUsableNavigationResponse(awaited, targetFrame, targetUrl, documentId))
                             {
                                 return awaited;
                             }
@@ -2748,8 +2769,21 @@ namespace PlaywrightNative.Chromium
                     }
                 }
 
-                // Late ResponseReceived may have landed while we waited.
-                if (TryRecoverNavigationResponse(targetFrame, targetUrl, fromEvent, out recovered)
+                // Poll recent commits + live capture: the document response often
+                // lands after ERR_ABORTED while a superseding goto is in flight.
+                System.Diagnostics.Stopwatch clock = System.Diagnostics.Stopwatch.StartNew();
+                while (clock.ElapsedMilliseconds < 5_000)
+                {
+                    if (TryRecoverNavigationResponse(targetFrame, targetUrl, fromEvent?.Invoke(), out recovered, documentId)
+                        && recovered != null)
+                    {
+                        return recovered;
+                    }
+
+                    await Task.Delay(25).ConfigureAwait(false);
+                }
+
+                if (TryRecoverNavigationResponse(targetFrame, targetUrl, fromEvent?.Invoke(), out recovered, documentId)
                     && recovered != null)
                 {
                     return recovered;
@@ -2762,11 +2796,12 @@ namespace PlaywrightNative.Chromium
                 Frame targetFrame,
                 string targetUrl,
                 CRResponse fromEvent,
-                out CRResponse recovered)
+                out CRResponse recovered,
+                string documentId = null)
             {
                 recovered = fromEvent;
-                if (!IsUsableNavigationResponse(recovered, targetFrame, targetUrl)
-                    && IsUsableNavigationResponse(_lastCommittedNavigationResponse, targetFrame, targetUrl))
+                if (!IsUsableNavigationResponse(recovered, targetFrame, targetUrl, documentId)
+                    && IsUsableNavigationResponse(_lastCommittedNavigationResponse, targetFrame, targetUrl, documentId))
                 {
                     recovered = _lastCommittedNavigationResponse;
                 }
@@ -2774,7 +2809,7 @@ namespace PlaywrightNative.Chromium
                 // A superseding goto overwrites _lastCommitted before the aborted
                 // goto's catch runs (ShouldReturnFromGotoIfNewNavigationIsStarted).
                 // Search recent commits so the first navigation can still recover.
-                if (!IsUsableNavigationResponse(recovered, targetFrame, targetUrl))
+                if (!IsUsableNavigationResponse(recovered, targetFrame, targetUrl, documentId))
                 {
                     CRResponse[] recent;
                     lock (_navigationResponseGate)
@@ -2784,7 +2819,7 @@ namespace PlaywrightNative.Chromium
 
                     for (int i = recent.Length - 1; i >= 0; i--)
                     {
-                        if (IsUsableNavigationResponse(recent[i], targetFrame, targetUrl))
+                        if (IsUsableNavigationResponse(recent[i], targetFrame, targetUrl, documentId))
                         {
                             recovered = recent[i];
                             break;
@@ -2792,10 +2827,14 @@ namespace PlaywrightNative.Chromium
                     }
                 }
 
-                return IsUsableNavigationResponse(recovered, targetFrame, targetUrl);
+                return IsUsableNavigationResponse(recovered, targetFrame, targetUrl, documentId);
             }
 
-            static bool IsUsableNavigationResponse(CRResponse response, Frame targetFrame, string targetUrl)
+            static bool IsUsableNavigationResponse(
+                CRResponse response,
+                Frame targetFrame,
+                string targetUrl,
+                string documentId = null)
             {
                 if (response == null
                     || response.Status < 200
@@ -2816,6 +2855,15 @@ namespace PlaywrightNative.Chromium
 
                 if (string.IsNullOrEmpty(targetUrl) || string.IsNullOrEmpty(response.Url))
                 {
+                    // When URL is unavailable, accept a loaderId match if present.
+                    if (!string.IsNullOrEmpty(documentId)
+                        && response.Request != null
+                        && !string.IsNullOrEmpty(response.Request.DocumentId))
+                    {
+                        return string.Equals(response.Request.DocumentId, documentId, StringComparison.Ordinal)
+                            || string.Equals(response.Request.ProtocolRequestId, documentId, StringComparison.Ordinal);
+                    }
+
                     return true;
                 }
 

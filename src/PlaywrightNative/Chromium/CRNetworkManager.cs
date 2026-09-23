@@ -36,6 +36,8 @@ namespace PlaywrightNative.Chromium
         private readonly CRSession _session;
         private readonly CRPage _page;
         private readonly ConcurrentDictionary<string, CRRequest> _requestsById = new();
+        private readonly List<CRRequest> _recentNavigationRequests = new();
+        private readonly object _recentNavigationRequestsGate = new();
         private readonly ConcurrentDictionary<string, CRWebSocket> _webSockets = new();
         private readonly List<CRRouteEntry> _routes = new();
         private readonly ConcurrentDictionary<string, BufferedFetch> _networkIdToFetchRequestPaused = new();
@@ -246,17 +248,56 @@ namespace PlaywrightNative.Chromium
             CRRequest byUrl = null;
             foreach (KeyValuePair<string, CRRequest> pair in _requestsById)
             {
-                CRRequest candidate = pair.Value;
-                if (candidate == null)
+                if (!Match(pair.Value))
                 {
                     continue;
+                }
+
+                if (byDocument != null)
+                {
+                    break;
+                }
+            }
+
+            // Requests may already be removed from _requestsById after abort /
+            // finish under Windows suite load — also scan the recent ring.
+            if (byDocument == null)
+            {
+                CRRequest[] recent;
+                lock (_recentNavigationRequestsGate)
+                {
+                    recent = _recentNavigationRequests.ToArray();
+                }
+
+                for (int i = recent.Length - 1; i >= 0; i--)
+                {
+                    if (!Match(recent[i]))
+                    {
+                        continue;
+                    }
+
+                    if (byDocument != null)
+                    {
+                        break;
+                    }
+                }
+            }
+
+            request = byDocument ?? byUrl;
+            return request != null;
+
+            bool Match(CRRequest candidate)
+            {
+                if (candidate == null)
+                {
+                    return false;
                 }
 
                 bool navigation = candidate.IsNavigationRequest
                     || NetworkRequestEvents.IsDocumentNavigation(candidate.ResourceType);
                 if (!navigation)
                 {
-                    continue;
+                    return false;
                 }
 
                 if (frame != null
@@ -264,7 +305,7 @@ namespace PlaywrightNative.Chromium
                     && !ReferenceEquals(candidate.Frame, frame)
                     && !string.Equals(candidate.Frame.FrameId, frame.FrameId, StringComparison.Ordinal))
                 {
-                    continue;
+                    return false;
                 }
 
                 if (!string.IsNullOrEmpty(documentId)
@@ -272,7 +313,7 @@ namespace PlaywrightNative.Chromium
                         || string.Equals(candidate.ProtocolRequestId, documentId, StringComparison.Ordinal)))
                 {
                     byDocument = candidate;
-                    break;
+                    return true;
                 }
 
                 if (byUrl == null
@@ -284,10 +325,9 @@ namespace PlaywrightNative.Chromium
                 {
                     byUrl = candidate;
                 }
-            }
 
-            request = byDocument ?? byUrl;
-            return request != null;
+                return true;
+            }
         }
 
         /// <summary>
@@ -1151,6 +1191,18 @@ namespace PlaywrightNative.Chromium
 
             _requestsById[requestId] = request;
             _requestsByRawId[rawId] = request;
+            if (isNavigationRequest || NetworkRequestEvents.IsDocumentNavigation(type ?? string.Empty))
+            {
+                lock (_recentNavigationRequestsGate)
+                {
+                    _recentNavigationRequests.Add(request);
+                    while (_recentNavigationRequests.Count > 32)
+                    {
+                        _recentNavigationRequests.RemoveAt(0);
+                    }
+                }
+            }
+
             RaiseRequestCreated(request);
             frame?.OnInflightRequestStarted(
                 requestId,
