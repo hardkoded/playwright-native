@@ -2779,6 +2779,24 @@ namespace PlaywrightNative.Chromium
                         return recovered;
                     }
 
+                    // Under Windows suite load Page.navigate's loaderId can disagree
+                    // with Network's document id after a superseding goto aborts the
+                    // first navigation. Retry URL-only against the recent ring so
+                    // ShouldReturnFromGotoIfNewNavigationIsStarted still recovers
+                    // the committed main-document response.
+                    if (!string.IsNullOrEmpty(documentId)
+                        && TryRecoverNavigationResponse(
+                            targetFrame,
+                            targetUrl,
+                            fromEvent?.Invoke(),
+                            out recovered,
+                            documentId: null)
+                        && recovered != null
+                        && ResponseUrlMatchesTarget(recovered, targetUrl))
+                    {
+                        return recovered;
+                    }
+
                     await Task.Delay(25).ConfigureAwait(false);
                 }
 
@@ -2788,7 +2806,32 @@ namespace PlaywrightNative.Chromium
                     return recovered;
                 }
 
+                if (!string.IsNullOrEmpty(documentId)
+                    && TryRecoverNavigationResponse(
+                        targetFrame,
+                        targetUrl,
+                        fromEvent?.Invoke(),
+                        out recovered,
+                        documentId: null)
+                    && recovered != null
+                    && ResponseUrlMatchesTarget(recovered, targetUrl))
+                {
+                    return recovered;
+                }
+
                 return null;
+            }
+
+            static bool ResponseUrlMatchesTarget(CRResponse response, string targetUrl)
+            {
+                if (response == null || string.IsNullOrEmpty(targetUrl) || string.IsNullOrEmpty(response.Url))
+                {
+                    return false;
+                }
+
+                return string.Equals(response.Url, targetUrl, StringComparison.OrdinalIgnoreCase)
+                    || response.Url.StartsWith(targetUrl, StringComparison.OrdinalIgnoreCase)
+                    || targetUrl.StartsWith(response.Url, StringComparison.OrdinalIgnoreCase);
             }
 
             bool TryRecoverNavigationResponse(

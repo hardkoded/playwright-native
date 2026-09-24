@@ -166,7 +166,12 @@ namespace PlaywrightNative.WebKit
                             }
                             catch (PlaywrightException)
                             {
-                                expectNavigation = true;
+                                // Do not assume navigation: a transient evaluate
+                                // failure on an in-viewport <button onclick> with
+                                // scroll:"none" previously armed navigable waits
+                                // and burned the 2s click budget
+                                // (ShouldClickInViewportElementWhenScrollIsNone).
+                                expectNavigation = false;
                             }
                         }
 

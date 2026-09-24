@@ -134,12 +134,13 @@ namespace PlaywrightNative.Helpers
                 // _crHasCrossSiteAncestor so CDP overwrites the same CHIPS row.
                 // Use the store's path string as-is so WebKit replaces the same
                 // row (trailing-slash variants are matched above).
+                string storePath = string.IsNullOrEmpty(cookie.Path) ? "/" : cookie.Path;
                 Cookie expired = new Cookie
                 {
                     Name = cookie.Name,
                     Value = string.Empty,
                     Domain = cookie.Domain,
-                    Path = string.IsNullOrEmpty(cookie.Path) ? "/" : cookie.Path,
+                    Path = storePath,
                     Expires = 0,
                     HttpOnly = cookie.HttpOnly,
                     Secure = cookie.Secure,
@@ -150,6 +151,36 @@ namespace PlaywrightNative.Helpers
                     expired,
                     BrowserContextCookiesResultExtras.GetHasCrossSiteAncestor(cookie));
                 toExpire.Add(expired);
+
+                // WebKit/soup may store directory paths with a trailing slash
+                // while getAllCookies reports the trimmed form (or the reverse).
+                // Expire both so ShouldRemoveCookiesByPath does not leave the
+                // live document.cookie row behind under Linux suite load.
+                if (storePath.Length > 1)
+                {
+                    string altPath = storePath.EndsWith('/')
+                        ? storePath.TrimEnd('/')
+                        : storePath + "/";
+                    if (!string.Equals(altPath, storePath, StringComparison.Ordinal))
+                    {
+                        Cookie alt = new Cookie
+                        {
+                            Name = expired.Name,
+                            Value = string.Empty,
+                            Domain = expired.Domain,
+                            Path = altPath,
+                            Expires = 0,
+                            HttpOnly = expired.HttpOnly,
+                            Secure = expired.Secure,
+                            SameSite = expired.SameSite,
+                            PartitionKey = expired.PartitionKey,
+                        };
+                        CookieExtras.SetHasCrossSiteAncestor(
+                            alt,
+                            BrowserContextCookiesResultExtras.GetHasCrossSiteAncestor(cookie));
+                        toExpire.Add(alt);
+                    }
+                }
             }
 
             if (toExpire.Count > 0)

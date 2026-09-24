@@ -133,7 +133,10 @@ namespace PlaywrightNative.Chromium
                             }
                             catch (PlaywrightException)
                             {
-                                expectNavigation = true;
+                                // Do not assume navigation on a transient evaluate
+                                // failure — that arms navigable waits and can burn
+                                // short click budgets on non-navigating controls.
+                                expectNavigation = false;
                             }
                         }
 

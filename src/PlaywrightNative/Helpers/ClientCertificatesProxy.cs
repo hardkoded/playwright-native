@@ -1373,10 +1373,26 @@ namespace PlaywrightNative.Helpers
                     ? 1080
                     : 80)
                 : proxyUri.Port;
-            TcpClient via = new() { NoDelay = true };
+
+            // Same IPv4 force as the direct hop: Windows "localhost" → ::1 while
+            // OfficialTestProxy / env HTTPS_PROXY listeners are IPv4-only, which
+            // surfaces as net::ERR_PROXY_CONNECTION_FAILED after SOCKS success
+            // (BrowserShouldPassWithMatchingCertificates…FromConfigButEnvIsThere).
+            string proxyHost = proxyUri.IdnHost;
+            TcpClient via = IsIpv4LoopbackConnectHost(proxyHost)
+                ? new TcpClient(AddressFamily.InterNetwork) { NoDelay = true }
+                : new TcpClient() { NoDelay = true };
             try
             {
-                await via.ConnectAsync(proxyUri.IdnHost, proxyPort, token).ConfigureAwait(false);
+                if (IsIpv4LoopbackConnectHost(proxyHost))
+                {
+                    await via.ConnectAsync(IPAddress.Loopback, proxyPort, token).ConfigureAwait(false);
+                }
+                else
+                {
+                    await via.ConnectAsync(proxyHost, proxyPort, token).ConfigureAwait(false);
+                }
+
                 NetworkStream stream = via.GetStream();
                 if (string.Equals(proxyUri.Scheme, "socks5", StringComparison.OrdinalIgnoreCase)
                     || string.Equals(proxyUri.Scheme, "socks5h", StringComparison.OrdinalIgnoreCase))

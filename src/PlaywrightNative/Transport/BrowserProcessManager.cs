@@ -166,6 +166,31 @@ namespace PlaywrightNative.Transport
                 }
             }
 
+            // Official processLauncher strips proxy env from the browser process so
+            // Chromium/WebKit do not inherit HTTPS_PROXY from the test host when a
+            // context Proxy / client-cert MITM is configured. Callers can still
+            // pass explicit values via the environment dictionary above.
+            // ClientCertificatesProxy still reads HTTPS_PROXY from the host process
+            // for outbound hops (FromEnv / FromConfigButEnvIsThere).
+            string[] inheritedProxyKeys =
+            {
+                "HTTP_PROXY",
+                "HTTPS_PROXY",
+                "ALL_PROXY",
+                "http_proxy",
+                "https_proxy",
+                "all_proxy",
+            };
+            foreach (string key in inheritedProxyKeys)
+            {
+                if (environment != null && environment.ContainsKey(key))
+                {
+                    continue;
+                }
+
+                Process.StartInfo.Environment.Remove(key);
+            }
+
             if (_handleSIGINT)
             {
                 Console.CancelKeyPress += _cancelKeyPressHandler;
