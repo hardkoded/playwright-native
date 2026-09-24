@@ -1663,6 +1663,15 @@ namespace PlaywrightNative.WebKit
                 }
 
                 await _initScripts.ApplyAllAsync(page).ConfigureAwait(false);
+
+                // If this path won a race with ApplyInitScriptsBeforeResumeAsync
+                // (InitializedTask used to complete before before-resume), mark the
+                // page so BeforeResume does not add the same string scripts again.
+                if (page is WKPage installed)
+                {
+                    installed.MarkContextInitScriptsInstalledBeforeResume();
+                }
+
                 if (!_javaScriptDisabled)
                 {
                     await _initScripts.EvaluateOnCurrentAsync(page).ConfigureAwait(false);

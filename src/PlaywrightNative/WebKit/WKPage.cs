@@ -7996,6 +7996,13 @@ namespace PlaywrightNative.WebKit
 
             await InitializeTargetAsync(target, isMain).ConfigureAwait(false);
 
+            // If session init already faulted InitializedTask, do not overwrite it
+            // after before-resume / resume.
+            if (_initializedTcs.Task.IsFaulted || _initializedTcs.Task.IsCanceled)
+            {
+                return;
+            }
+
             WKBrowserContext owner = OwnerContext as WKBrowserContext ?? _context;
             if (owner != null)
             {
@@ -8027,6 +8034,7 @@ namespace PlaywrightNative.WebKit
                 // Re-assert focus after init so requestStorageAccess sees an
                 // active/focused document (macOS WebKit rejects otherwise).
                 await EnsureActiveAndFocusedAsync().ConfigureAwait(false);
+                CompleteInitializedIfCurrentMain(target);
                 return;
             }
 
@@ -8056,6 +8064,7 @@ namespace PlaywrightNative.WebKit
             }
 
             await EnsureActiveAndFocusedAsync().ConfigureAwait(false);
+            CompleteInitializedIfCurrentMain(target);
         }
 
         /// <summary>
@@ -8779,15 +8788,12 @@ namespace PlaywrightNative.WebKit
                 AdoptContextMedia();
                 await ApplyEmulatedMediaToSessionAsync(target).ConfigureAwait(false);
 
-                // Only signal the page-level InitializedTask if THIS target is still the
-                // active main session. WebKit can recycle the initial target before our
-                // init sequence finishes (observed on macOS-14 CI), in which case a fresh
-                // OnTargetCreated has already disposed us and started a new init that will
-                // complete InitializedTask itself.
-                if (isMain && ReferenceEquals(_targetSession, target))
-                {
-                    _initializedTcs.TrySetResult(true);
-                }
+                // Do not complete InitializedTask here. NewPage awaits it then runs
+                // ApplyInitScriptsAsync; if that races ahead of
+                // ApplyInitScriptsBeforeResumeAsync, string scripts are installed twice
+                // into Page.setBootstrapScript (ShouldBeCallableFromInsideAddInitScript
+                // sees "context,context,page" on reload). InitializedTask is signaled
+                // at the end of InitializeAndMaybeResumeAsync after before-resume.
             }
             catch (Exception ex)
             {
@@ -8800,6 +8806,19 @@ namespace PlaywrightNative.WebKit
                 {
                     _initializedTcs.TrySetException(ex);
                 }
+            }
+        }
+
+        /// <summary>
+        /// Completes <see cref="InitializedTask"/> after before-resume init scripts
+        /// so NewPage cannot race a second string-script install into bootstrap.
+        /// </summary>
+        /// <param name="target">The main target that finished init.</param>
+        private void CompleteInitializedIfCurrentMain(WKTargetSession target)
+        {
+            if (ReferenceEquals(_targetSession, target))
+            {
+                _initializedTcs.TrySetResult(true);
             }
         }
 
