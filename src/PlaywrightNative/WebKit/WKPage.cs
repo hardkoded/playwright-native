@@ -147,6 +147,7 @@ namespace PlaywrightNative.WebKit
         private PageViewportSizeResult _viewportSize;
         private float _emulatedDeviceScaleFactor = 1;
         private bool _emulatedIsMobile;
+        private bool _emulatedOffline;
         private ScreenSize _independentScreen;
         private float _defaultTimeout = 30_000;
         private float _defaultNavigationTimeout = 30_000;
@@ -2696,15 +2697,55 @@ namespace PlaywrightNative.WebKit
 
         /// <summary>
         /// Emulates offline network conditions via <c>Network.setEmulateOfflineState</c>.
+        /// Mirrors upstream <c>wkPage._updateState</c>: push to the live target and
+        /// any provisional session so about:blank / data: / COOP navigations keep
+        /// <c>navigator.onLine</c> (ShouldEmulateNavigatorOnLineAcrossNavigations).
         /// </summary>
         /// <param name="offline">Whether the page should appear offline.</param>
         /// <returns>A task that completes when the emulation has been applied.</returns>
-        internal Task SetOfflineAsync(bool offline)
+        internal async Task SetOfflineAsync(bool offline)
         {
-            WKTargetSession target = _targetSession
-                ?? throw new PlaywrightException("Cannot emulate offline: the page has no active target session.");
+            _emulatedOffline = offline;
+            WKTargetSession target = _targetSession;
+            WKTargetSession provisional = _provisionalSession;
+            if (target == null && provisional == null)
+            {
+                throw new PlaywrightException("Cannot emulate offline: the page has no active target session.");
+            }
 
-            return target.SendAsync("Network.setEmulateOfflineState", new { offline });
+            bool applied = false;
+            PlaywrightException lastError = null;
+            if (target != null)
+            {
+                try
+                {
+                    await target.SendAsync("Network.setEmulateOfflineState", new { offline }).ConfigureAwait(false);
+                    applied = true;
+                }
+                catch (PlaywrightException ex)
+                {
+                    lastError = ex;
+                }
+            }
+
+            if (provisional != null && !ReferenceEquals(provisional, target))
+            {
+                try
+                {
+                    await provisional.SendAsync("Network.setEmulateOfflineState", new { offline })
+                        .ConfigureAwait(false);
+                    applied = true;
+                }
+                catch (PlaywrightException ex)
+                {
+                    lastError = ex;
+                }
+            }
+
+            if (!applied && lastError != null)
+            {
+                throw lastError;
+            }
         }
 
         /// <summary>
@@ -8625,6 +8666,22 @@ namespace PlaywrightNative.WebKit
             }
         }
 
+        /// <summary>
+        /// Whether this page should report <c>navigator.onLine === false</c>.
+        /// Combines page-level SetOffline with the owning context option.
+        /// </summary>
+        /// <returns><see langword="true"/> when offline emulation is active.</returns>
+        private bool ShouldEmulateOffline()
+        {
+            if (_emulatedOffline)
+            {
+                return true;
+            }
+
+            WKBrowserContext owner = OwnerContext as WKBrowserContext ?? _context as WKBrowserContext;
+            return owner != null && owner.IsOffline;
+        }
+
         private async Task InitializeProvisionalTargetAsync(WKTargetSession target)
         {
             try
@@ -8672,6 +8729,20 @@ namespace PlaywrightNative.WebKit
                 if (enabledManager != null)
                 {
                     await enabledManager.UpdateInterceptionAsync().ConfigureAwait(false);
+                }
+
+                // Upstream _initializeSessionMayThrow applies offline on provisional
+                // sessions so about:blank / data: / COOP swaps keep navigator.onLine.
+                if (ShouldEmulateOffline())
+                {
+                    try
+                    {
+                        await target.SendAsync("Network.setEmulateOfflineState", new { offline = true })
+                            .ConfigureAwait(false);
+                    }
+                    catch (PlaywrightException)
+                    {
+                    }
                 }
 
                 // Upstream provisional init runs full _initializeSession, including Worker.enable
@@ -8784,6 +8855,20 @@ namespace PlaywrightNative.WebKit
                 if (enabledManager != null)
                 {
                     await enabledManager.UpdateInterceptionAsync().ConfigureAwait(false);
+                }
+
+                // Upstream _initializeSessionMayThrow: offline must land on the session
+                // that will become current (main or after process-swap).
+                if (ShouldEmulateOffline())
+                {
+                    try
+                    {
+                        await target.SendAsync("Network.setEmulateOfflineState", new { offline = true })
+                            .ConfigureAwait(false);
+                    }
+                    catch (PlaywrightException)
+                    {
+                    }
                 }
 
                 await ApplyExtraHttpHeadersOnAsync(target).ConfigureAwait(false);

@@ -326,6 +326,11 @@ namespace PlaywrightNative.WebKit
         internal bool IsMobile => _isMobile;
 
         /// <summary>
+        /// Gets a value indicating whether this context emulates offline mode.
+        /// </summary>
+        internal bool IsOffline => _offline;
+
+        /// <summary>
         /// Whether <c>javaScriptEnabled: false</c> was set on this context.
         /// </summary>
         internal bool IsJavaScriptDisabled => _javaScriptDisabled;
