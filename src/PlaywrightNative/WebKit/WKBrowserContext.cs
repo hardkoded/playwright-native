@@ -1069,8 +1069,19 @@ namespace PlaywrightNative.WebKit
                     _screenSize).ConfigureAwait(false);
             }
 
-            // Expose + init scripts: InitializeAndMaybeResumeAsync calls
-            // ApplyInitScriptsBeforeResumeAsync after this method returns.
+            // Expose + init scripts for protocol popups (Opener set): install before
+            // Target.resume so bootstrap runs on the first about:blank. NewPage and
+            // inferred opener-less siblings use ApplyInitScriptsBeforeResumeAsync.
+            foreach (Func<IPage, Task> install in _exposed.Installers)
+            {
+                await install(page).ConfigureAwait(false);
+            }
+
+            await _initScripts.ApplyAllAsync(page).ConfigureAwait(false);
+            if (page is WKPage popupPage)
+            {
+                popupPage.MarkContextInitScriptsInstalledBeforeResume();
+            }
         }
 
         /// <summary>
@@ -1640,21 +1651,29 @@ namespace PlaywrightNative.WebKit
             {
                 foreach (Func<IPage, Task> install in _exposed.Installers)
                 {
-                    await install(page).ConfigureAwait(false);
+                    try
+                    {
+                        await install(page).ConfigureAwait(false);
+                    }
+                    catch (PlaywrightException ex) when (
+                        ex.Message != null
+                        && ex.Message.Contains("already registered", StringComparison.OrdinalIgnoreCase))
+                    {
+                    }
                 }
 
                 await _initScripts.ApplyAllAsync(page).ConfigureAwait(false);
+                if (!_javaScriptDisabled)
+                {
+                    await _initScripts.EvaluateOnCurrentAsync(page).ConfigureAwait(false);
+                }
             }
             else
             {
-                // exposeFunctions callback entries need an execution context;
-                // install them after resume (Chromium ApplyCallbackInitScripts).
+                // exposeFunctions callbacks after resume when only string scripts
+                // were installed before resume (NewPage path). Protocol popups
+                // already applied callbacks in ApplyEmulationToPageAsync.
                 await _initScripts.ApplyAllAsync(page, callbacks: true).ConfigureAwait(false);
-            }
-
-            if (!_javaScriptDisabled)
-            {
-                await _initScripts.EvaluateOnCurrentAsync(page).ConfigureAwait(false);
             }
 
             // about:blank is created before addScriptToEvaluateOnNewDocument runs.

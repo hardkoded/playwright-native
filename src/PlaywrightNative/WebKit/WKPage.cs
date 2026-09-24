@@ -8007,17 +8007,18 @@ namespace PlaywrightNative.WebKit
                 {
                 }
 
-                // Upstream wkPage._initializeSession includes browserContext.initScripts
-                // in Page.setBootstrapScript before Target.resume. NewPage used to
-                // install context scripts only in ApplyContextChrome after resume;
-                // Darwin about:blank→about:blank often does not re-run bootstrap, so
-                // a failed EvaluateOnCurrentAsync left window.__fromContext unset.
-                try
+                // NewPage / inferred popups (Opener == null): install context string
+                // init scripts before Target.resume. Protocol popups already installed
+                // them in ApplyEmulationToPageAsync above.
+                if (_opener == null)
                 {
-                    await owner.ApplyInitScriptsBeforeResumeAsync(this).ConfigureAwait(false);
-                }
-                catch (PlaywrightException)
-                {
+                    try
+                    {
+                        await owner.ApplyInitScriptsBeforeResumeAsync(this).ConfigureAwait(false);
+                    }
+                    catch (PlaywrightException)
+                    {
+                    }
                 }
             }
 
