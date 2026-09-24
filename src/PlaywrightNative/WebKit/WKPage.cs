@@ -9732,14 +9732,26 @@ namespace PlaywrightNative.WebKit
             string defaultValue = payload.TryGetProperty("defaultPrompt", out JsonElement defEl) ? defEl.GetString() : string.Empty;
             WKDialog inner = new(_session, type, message, defaultValue, this);
             IDialog dialog = _dialogTracker.Wrap(inner, EmitDialogClosed);
-            PageDialogTracker.ScheduleOpen(() =>
+            IDialogHost host = (_ownerContext ?? (IBrowserContext)_context) as IDialogHost;
+            EventHandler<IDialog> pageDialog = Dialog;
+            bool contextHasListeners = host != null && host.HasDialogListeners();
+
+            // Listeners already attached: raise immediately (DialogAccept under
+            // Windows suite load starved Task.Run while Click waited on alert).
+            if (pageDialog != null || contextHasListeners)
             {
-                IDialogHost host = (_ownerContext ?? (IBrowserContext)_context) as IDialogHost;
-                EventHandler<IDialog> pageDialog = Dialog;
-                bool contextHasListeners = host != null && host.HasDialogListeners();
                 pageDialog?.Invoke(this, dialog);
                 host?.RaiseDialog(dialog);
-                PageDialogTracker.AutoDismissIfNeeded(dialog, pageDialog, contextHasListeners);
+                return;
+            }
+
+            PageDialogTracker.ScheduleOpen(() =>
+            {
+                EventHandler<IDialog> deferredPageDialog = Dialog;
+                bool deferredContextHasListeners = host != null && host.HasDialogListeners();
+                deferredPageDialog?.Invoke(this, dialog);
+                host?.RaiseDialog(dialog);
+                PageDialogTracker.AutoDismissIfNeeded(dialog, deferredPageDialog, deferredContextHasListeners);
             });
         }
 

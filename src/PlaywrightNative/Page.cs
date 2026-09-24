@@ -2132,14 +2132,29 @@ namespace PlaywrightNative
         private void OnDialogOpening(CRDialog crDialog)
         {
             IDialog dialog = _dialogTracker.Wrap(new ChromiumDialog(crDialog, this), EmitDialogClosed);
-            PageDialogTracker.ScheduleOpen(() =>
+            IDialogHost host = _context as IDialogHost;
+            EventHandler<IDialog> pageDialog = Dialog;
+            bool contextHasListeners = host != null && host.HasDialogListeners();
+
+            // Listeners already attached: raise immediately. Deferring via Task.Run
+            // can starve under Windows suite load while Click is blocked on the
+            // alert (DialogAcceptShouldWork 30s timeout).
+            if (pageDialog != null || contextHasListeners)
             {
-                IDialogHost host = _context as IDialogHost;
-                EventHandler<IDialog> pageDialog = Dialog;
-                bool contextHasListeners = host != null && host.HasDialogListeners();
                 pageDialog?.Invoke(this, dialog);
                 host?.RaiseDialog(dialog);
-                PageDialogTracker.AutoDismissIfNeeded(dialog, pageDialog, contextHasListeners);
+                return;
+            }
+
+            // No listeners yet — defer one turn so Click+WaitForDialog can
+            // subscribe before auto-dismiss (browsercontext-events popup).
+            PageDialogTracker.ScheduleOpen(() =>
+            {
+                EventHandler<IDialog> deferredPageDialog = Dialog;
+                bool deferredContextHasListeners = host != null && host.HasDialogListeners();
+                deferredPageDialog?.Invoke(this, dialog);
+                host?.RaiseDialog(dialog);
+                PageDialogTracker.AutoDismissIfNeeded(dialog, deferredPageDialog, deferredContextHasListeners);
             });
         }
 

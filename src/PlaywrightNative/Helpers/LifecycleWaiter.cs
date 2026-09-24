@@ -139,8 +139,15 @@ namespace PlaywrightNative.Helpers
         /// before <c>waitForLoadState</c> returns.
         /// </summary>
         /// <returns>A task that completes after a short scheduler drain.</returns>
-        private static Task DrainPublicLifecycleContinuationsAsync()
-            => Task.Delay(1);
+        private static async Task DrainPublicLifecycleContinuationsAsync()
+        {
+            // Under Windows suite load a single Task.Delay(1) can complete before
+            // Page.Load RCA continuations, so clickload is recorded first
+            // (ShouldWorkWithWaitForLoadStateLoad → route|clickload|load).
+            await Task.Yield();
+            await Task.Yield();
+            await Task.Delay(16).ConfigureAwait(false);
+        }
 
         private static bool Contains(IReadOnlyCollection<string> events, string name)
         {
