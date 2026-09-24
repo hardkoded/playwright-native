@@ -9846,7 +9846,9 @@ namespace PlaywrightNative.WebKit
 
             JsonElement payload = parameters.Value;
             string frameId = payload.TryGetProperty("frameId", out JsonElement idEl) ? idEl.GetString() : null;
-            string parentFrameId = payload.TryGetProperty("parentFrameId", out JsonElement parentEl) ? parentEl.GetString() : null;
+            string parentFrameId = payload.TryGetProperty("parentFrameId", out JsonElement parentEl)
+                ? parentEl.GetString()
+                : (payload.TryGetProperty("parentId", out JsonElement parentIdEl) ? parentIdEl.GetString() : null);
             _frameManager.FrameAttachedToTarget(frameId, parentFrameId);
         }
 

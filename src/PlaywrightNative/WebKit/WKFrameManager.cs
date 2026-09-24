@@ -113,7 +113,22 @@ namespace PlaywrightNative.WebKit
             WKFrame parentFrame = FrameById(parentFrameId);
             if (parentFrame == null)
             {
-                return;
+                if (string.IsNullOrEmpty(parentFrameId))
+                {
+                    // Upstream frames.frameAttached: no parent → rebind main frame id
+                    // (cross-process navigation keeps frame identity).
+                    UpdateMainFrameId(frameId);
+                    return;
+                }
+
+                // Parent id not yet tracked (Darwin race after main-frame id swap).
+                // Attach under the live main frame so iframe FrameAttached is not dropped
+                // — ContextFrameAttachedShouldFireOnIframe hung for the full NUnit timeout.
+                parentFrame = MainFrame;
+                if (parentFrame == null)
+                {
+                    return;
+                }
             }
 
             WKFrame frame = new(frameId, parentFrame);
