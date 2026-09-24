@@ -1036,6 +1036,11 @@ namespace PlaywrightNative.WebKit
                 await page.SetTimezoneAsync(_timezoneId).ConfigureAwait(false);
             }
 
+            // NewPage (Opener == null): string init scripts are installed via
+            // ApplyInitScriptsBeforeResumeAsync in InitializeAndMaybeResumeAsync
+            // so Page.setBootstrapScript lands before Target.resume. Popup chrome
+            // below still needs headers / viewport before that same before-resume
+            // call (InitializeAndMaybeResumeAsync runs ApplyEmulation first).
             if (page.Opener == null)
             {
                 return;
@@ -1064,12 +1069,8 @@ namespace PlaywrightNative.WebKit
                     _screenSize).ConfigureAwait(false);
             }
 
-            foreach (Func<IPage, Task> install in _exposed.Installers)
-            {
-                await install(page).ConfigureAwait(false);
-            }
-
-            await _initScripts.ApplyAllAsync(page).ConfigureAwait(false);
+            // Expose + init scripts: InitializeAndMaybeResumeAsync calls
+            // ApplyInitScriptsBeforeResumeAsync after this method returns.
         }
 
         /// <summary>
@@ -1580,20 +1581,77 @@ namespace PlaywrightNative.WebKit
         }
 
         /// <summary>
-        /// Installs context bindings then init scripts on a newly created page,
-        /// including popups. Bindings must be present so an init script can call
-        /// <c>exposeFunction</c> names.
+        /// Installs context bindings and string init scripts before
+        /// <c>Target.resume</c> so the first <c>about:blank</c> runs
+        /// <c>Page.setBootstrapScript</c> (upstream <c>allInitScripts</c> /
+        /// Chromium <c>ApplyInitScriptsBeforeResumeAsync</c>). Without this,
+        /// NewPage applies scripts only after resume; Darwin
+        /// <c>about:blank</c>→<c>about:blank</c> is often same-document and
+        /// never re-runs bootstrap, so a failed
+        /// <see cref="ContextInitScriptSet.EvaluateOnCurrentAsync"/> leaves
+        /// markers like <c>window.__fromContext</c> unset.
         /// </summary>
         /// <param name="page">The new page.</param>
-        /// <returns>A task that completes when every script has been installed.</returns>
-        internal async Task ApplyInitScriptsAsync(IPage page)
+        /// <returns>A task that completes when scripts have been installed.</returns>
+        internal async Task ApplyInitScriptsBeforeResumeAsync(IPage page)
         {
+            if (page == null)
+            {
+                return;
+            }
+
+            // Target recycle re-enters InitializeAndMaybeResumeAsync. String scripts
+            // are already in WKPage._initScripts and SyncBootstrapScriptOnAsync during
+            // InitializeTargetAsync re-sends them — do not ApplyAll again (duplicates
+            // bootstrap entries and double-fires init scripts on later navigations).
+            if (page is WKPage existing && existing.ContextInitScriptsInstalledBeforeResume)
+            {
+                return;
+            }
+
             foreach (Func<IPage, Task> install in _exposed.Installers)
             {
                 await install(page).ConfigureAwait(false);
             }
 
-            await _initScripts.ApplyAllAsync(page).ConfigureAwait(false);
+            await _initScripts.ApplyAllAsync(page, callbacks: false).ConfigureAwait(false);
+            if (page is WKPage wkPage)
+            {
+                wkPage.MarkContextInitScriptsInstalledBeforeResume();
+            }
+        }
+
+        /// <summary>
+        /// Installs context bindings then init scripts on a newly created page,
+        /// including popups. Bindings must be present so an init script can call
+        /// <c>exposeFunction</c> names. String scripts are usually already on the
+        /// page from <see cref="ApplyInitScriptsBeforeResumeAsync"/>; this path
+        /// still installs <c>exposeFunctions</c> callbacks and replays on the
+        /// current document.
+        /// </summary>
+        /// <param name="page">The new page.</param>
+        /// <returns>A task that completes when every script has been installed.</returns>
+        internal async Task ApplyInitScriptsAsync(IPage page)
+        {
+            bool stringScriptsAlreadyInstalled = page is WKPage wk
+                && wk.ContextInitScriptsInstalledBeforeResume;
+
+            if (!stringScriptsAlreadyInstalled)
+            {
+                foreach (Func<IPage, Task> install in _exposed.Installers)
+                {
+                    await install(page).ConfigureAwait(false);
+                }
+
+                await _initScripts.ApplyAllAsync(page).ConfigureAwait(false);
+            }
+            else
+            {
+                // exposeFunctions callback entries need an execution context;
+                // install them after resume (Chromium ApplyCallbackInitScripts).
+                await _initScripts.ApplyAllAsync(page, callbacks: true).ConfigureAwait(false);
+            }
+
             if (!_javaScriptDisabled)
             {
                 await _initScripts.EvaluateOnCurrentAsync(page).ConfigureAwait(false);
