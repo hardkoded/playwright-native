@@ -290,27 +290,51 @@ namespace PlaywrightNative.Helpers
             string markerJson = JsonSerializer.Serialize(marker);
 
             // Fire-and-forget: schedule the (possibly async) controller call,
-            // then return undefined synchronously so WebKit does not hold
-            // awaitPromise across embedder.setTimeout yields.
+            // then return synchronously so WebKit does not hold awaitPromise
+            // across embedder.setTimeout yields.
+            //
+            // Critically, avoid the substrings Promise. / .then( / await / async
+            // in this source. WKPage.CanWrapExpression treats those as thenables
+            // and forces EvaluateHandle + SerializeAwaitedJs (awaitPromise),
+            // which deadlocks Darwin WebKit when the deferred work itself waits
+            // on embedder timers — PauseAtShouldJumpAndStayFrozen flake.
+            // Use queueMicrotask (or builtins.setTimeout after install fakes
+            // global timers) and bracket-access thenables instead.
             string kickoff =
                 "(() => {" +
                 "  const __pwK = " + markerJson + ";" +
                 "  try { delete globalThis[__pwK]; } catch (e) {}" +
-                "  Promise.resolve().then(async () => {" +
+                "  const __pwDone = (ok, err) => {" +
+                "    globalThis[__pwK] = ok ? 'ok' : ('err:' + String(err && (err.stack || err)));" +
+                "  };" +
+                "  const __pwGo = () => {" +
                 "    try {" +
                 "      const __pwR = (" + script + ");" +
-                "      if (__pwR && typeof __pwR.then === 'function') await __pwR;" +
-                "      globalThis[__pwK] = 'ok';" +
+                "      const __pwThen = __pwR && __pwR['then'];" +
+                "      if (typeof __pwThen === 'function') {" +
+                "        __pwThen.call(__pwR, () => __pwDone(true), (e) => __pwDone(false, e));" +
+                "      } else {" +
+                "        __pwDone(true);" +
+                "      }" +
                 "    } catch (e) {" +
-                "      globalThis[__pwK] = 'err:' + String(e && (e.stack || e));" +
+                "      __pwDone(false, e);" +
                 "    }" +
-                "  });" +
-                "  return undefined;" +
+                "  };" +
+                "  if (typeof queueMicrotask === 'function') {" +
+                "    queueMicrotask(__pwGo);" +
+                "  } else {" +
+                "    const __pwEmbed = (globalThis.__pwClock && globalThis.__pwClock.builtins)" +
+                "      ? globalThis.__pwClock.builtins.setTimeout" +
+                "      : globalThis.setTimeout;" +
+                "    __pwEmbed(__pwGo, 0);" +
+                "  }" +
+                "  return 0;" +
                 "})()";
 
             await evaluateAsync(kickoff).ConfigureAwait(false);
 
-            string poll = "globalThis[" + markerJson + "]";
+            // Parenthesize so CanWrapExpression takes the sync returnByValue path.
+            string poll = "(globalThis[" + markerJson + "])";
             Stopwatch sw = Stopwatch.StartNew();
             while (sw.ElapsedMilliseconds < 60_000)
             {
@@ -325,7 +349,9 @@ namespace PlaywrightNative.Helpers
                     return;
                 }
 
-                await Task.Delay(5).ConfigureAwait(false);
+                // Give Darwin WebKit time to drain embedder timers between polls;
+                // a 5ms hammer can starve setTimeout while pauseAt/_runTo awaits it.
+                await Task.Delay(20).ConfigureAwait(false);
             }
 
             throw new PlaywrightException("clock: timed out waiting for controller command");
