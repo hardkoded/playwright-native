@@ -1251,10 +1251,15 @@ namespace PlaywrightNative.Helpers
 
                     // Darwin HTTP CONNECT can deliver a truncated ClientHello prefix
                     // that blocks AuthenticateAsServer — read a full TLS record there.
-                    // Linux SOCKS keeps a single buffered read so SslStream can pull
-                    // any remainder (HTTP/2 ClientHellos hung under ReadExact).
+                    // When client certificates will MITM, SOCKS needs the same full
+                    // record: a single partial Read leaves AuthenticateAsServer unable
+                    // to finish the error-page handshake on Windows
+                    // (net::ERR_CONNECTION_ABORTED). Plain SOCKS tunnels keep a single
+                    // buffered read so SslStream can pull any remainder (HTTP/2
+                    // ClientHellos hung under ReadExact without MITM).
                     byte[] hello;
-                    if (request.Kind == BrowserProxyKind.HttpsConnect)
+                    bool willMitm = TryGetClientCert(request.Host, request.Port, out X509Certificate2 mitmCert);
+                    if (request.Kind == BrowserProxyKind.HttpsConnect || willMitm)
                     {
                         hello = await ReadTlsClientHelloAsync(browser, _cts.Token).ConfigureAwait(false);
                     }
@@ -1277,11 +1282,10 @@ namespace PlaywrightNative.Helpers
                         return;
                     }
 
-                    if (hello[0] == 0x16
-                        && TryGetClientCert(request.Host, request.Port, out X509Certificate2 clientCert))
+                    if (hello[0] == 0x16 && willMitm)
                     {
                         await EstablishTlsTunnelAsync(
-                            browser, origin, hello, request.Host, request.Port, clientCert, client)
+                            browser, origin, hello, request.Host, request.Port, mitmCert, client)
                             .ConfigureAwait(false);
                     }
                     else
