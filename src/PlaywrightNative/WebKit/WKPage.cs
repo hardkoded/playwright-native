@@ -6498,7 +6498,11 @@ namespace PlaywrightNative.WebKit
         {
             WKExecutionContext context = RequireExecutionContext();
             JsonElement? handleValue = await context.EvaluateHandleAsync(expression).ConfigureAwait(false);
-            return WrapRemoteObject(context, handleValue) as IElementHandle;
+
+            // Skip fire-and-forget InitializePreviewAsync (callFunctionOn + awaitPromise).
+            // AddStyleTag content handles + caller EvaluateAsync have wedged Darwin the
+            // same way AddScriptTag / loading=lazy iframes do (mac shard2 30s hangs).
+            return WrapWKHandle(context, handleValue, initializePreview: false) as IElementHandle;
         }
 
         private async Task<IElementHandle> EvaluateElementHandleInFrameAsync(WKFrame frame, string expression)
@@ -6641,20 +6645,29 @@ namespace PlaywrightNative.WebKit
         {
             try
             {
-                // Yield so callers can subscribe to page events (waitForEvent)
-                // before the evaluate is sent — Node's event loop does this
-                // automatically between `page.evaluate(...)` and `await waitForEvent`.
-                await Task.Yield();
                 WKExecutionContext context = await WaitForMainExecutionContextAsync().ConfigureAwait(false);
                 if (EvaluateSerialization.CanWrapExpression(expression))
                 {
+                    // Yield so callers can subscribe to page events (waitForEvent)
+                    // before the evaluate is sent — Node's event loop does this
+                    // automatically between `page.evaluate(...)` and `await waitForEvent`.
+                    await Task.Yield();
                     JsonElement? wrapped = await context
                         .EvaluateSerializedRemoteAsync(EvaluateSerialization.WithSerializedResult(expression))
                         .ConfigureAwait(false);
                     return EvaluateSerialization.ParseRemote<T>(wrapped);
                 }
 
-                JsonElement? remote = await context.EvaluateHandleAsync(expression).ConfigureAwait(false);
+                // Thenables (async evaluate / Promise): start Runtime.evaluate before
+                // Yield so Clock.RunForAsync racing after `Task t = page.EvaluateAsync(...)`
+                // sees fake timers already scheduled. Materialize/awaitPromise still runs
+                // after Yield so waitForEvent can attach while the thenable is in flight —
+                // matching Node. Yield-before-send let RunFor finish with no pending
+                // timers, then evaluate scheduled setTimeout that never fired
+                // (ReplacesGlobalPerformanceNow callFunctionOn 20s on Darwin).
+                Task<JsonElement?> handleTask = context.EvaluateHandleAsync(expression);
+                await Task.Yield();
+                JsonElement? remote = await handleTask.ConfigureAwait(false);
                 return await EvaluateSerialization.MaterializeAsync<T>(
                     remote,
                     id => context.EvaluateFunctionOnHandleAsync<JsonElement>(id, EvaluateSerialization.SerializeAwaitedJs),
