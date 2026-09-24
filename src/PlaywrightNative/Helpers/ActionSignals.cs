@@ -310,14 +310,21 @@ namespace PlaywrightNative.Helpers
 
             // Speculative WebKit willCheck retains without a document request
             // must not block non-navigating clicks (scroll=none 2s budgets).
+            // Drop once before waiting, then keep dropping while WaitForAsync
+            // runs — a late willCheck after the first drop re-arms the barrier
+            // (ShouldClickInViewportElementWhenScrollIsNone under Darwin load).
             if (!expectNavigation
                 && barrier != null
                 && (sawDocumentRequest == null || !sawDocumentRequest()))
             {
                 barrier.DropOrphanedPolicyNavigations();
+                await WaitBarrierDroppingOrphansAsync(barrier, timeout, sawDocumentRequest)
+                    .ConfigureAwait(false);
             }
-
-            await barrier.WaitForAsync(timeout).ConfigureAwait(false);
+            else
+            {
+                await barrier.WaitForAsync(timeout).ConfigureAwait(false);
+            }
 
             // Navigable WebKit clicks: wait for a non-blank main-frame navigation
             // to settle (FrameNavigated + load). Returning on a provisional URL /
@@ -398,6 +405,31 @@ namespace PlaywrightNative.Helpers
 
                 await Task.Delay(16).ConfigureAwait(false);
             }
+        }
+
+        /// <summary>
+        /// Waits for the signal barrier while repeatedly dropping orphaned
+        /// WebKit <c>willCheck</c> policy retains when no document request
+        /// has been observed. A single pre-wait drop is not enough: late
+        /// policy checks reopen <see cref="ActionSignalBarrier.WaitForAsync"/>.
+        /// </summary>
+        private static async Task WaitBarrierDroppingOrphansAsync(
+            ActionSignalBarrier barrier,
+            float? timeout,
+            Func<bool> sawDocumentRequest)
+        {
+            Task wait = barrier.WaitForAsync(timeout);
+            while (!wait.IsCompleted)
+            {
+                if (sawDocumentRequest == null || !sawDocumentRequest())
+                {
+                    barrier.DropOrphanedPolicyNavigations();
+                }
+
+                await Task.WhenAny(wait, Task.Delay(16)).ConfigureAwait(false);
+            }
+
+            await wait.ConfigureAwait(false);
         }
 
         /// <summary>

@@ -1150,7 +1150,15 @@ namespace PlaywrightNative.Helpers
                 }
                 catch (SocketException)
                 {
-                    return;
+                    // Transient accept errors must not kill the MITM listener —
+                    // Chromium then reports net::ERR_PROXY_CONNECTION_FAILED for
+                    // the rest of the context lifetime.
+                    if (_cts.IsCancellationRequested || Volatile.Read(ref _disposed) != 0)
+                    {
+                        return;
+                    }
+
+                    continue;
                 }
 
                 client.NoDelay = true;
@@ -1360,7 +1368,8 @@ namespace PlaywrightNative.Helpers
                 }
             }
 
-            string server = outbound.Server;
+            string formatted = ProxySettings.FormatServer(outbound, includeCredentials: false);
+            string server = !string.IsNullOrEmpty(formatted) ? formatted : outbound.Server;
             if (server.IndexOf("://", StringComparison.Ordinal) < 0)
             {
                 server = "http://" + server;
@@ -1378,19 +1387,26 @@ namespace PlaywrightNative.Helpers
             // OfficialTestProxy / env HTTPS_PROXY listeners are IPv4-only, which
             // surfaces as net::ERR_PROXY_CONNECTION_FAILED after SOCKS success
             // (BrowserShouldPassWithMatchingCertificates…FromConfigButEnvIsThere).
+            // Bound connect like LocaleHandshakeProxy so a dead outbound proxy
+            // cannot hang the SOCKS accept path under suite load.
             string proxyHost = proxyUri.IdnHost;
             TcpClient via = IsIpv4LoopbackConnectHost(proxyHost)
                 ? new TcpClient(AddressFamily.InterNetwork) { NoDelay = true }
                 : new TcpClient() { NoDelay = true };
             try
             {
+                using CancellationTokenSource connectCts =
+                    CancellationTokenSource.CreateLinkedTokenSource(token);
+                connectCts.CancelAfter(TimeSpan.FromSeconds(2));
                 if (IsIpv4LoopbackConnectHost(proxyHost))
                 {
-                    await via.ConnectAsync(IPAddress.Loopback, proxyPort, token).ConfigureAwait(false);
+                    await via.ConnectAsync(IPAddress.Loopback, proxyPort, connectCts.Token)
+                        .ConfigureAwait(false);
                 }
                 else
                 {
-                    await via.ConnectAsync(proxyHost, proxyPort, token).ConfigureAwait(false);
+                    await via.ConnectAsync(proxyHost, proxyPort, connectCts.Token)
+                        .ConfigureAwait(false);
                 }
 
                 NetworkStream stream = via.GetStream();
