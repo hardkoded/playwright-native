@@ -1468,9 +1468,13 @@ namespace PlaywrightNative.Helpers
                     // server resets mid-TLS (SNI reject / TLS1.2 fixtures) or when
                     // certificate validation stalls. Upstream surfaces an error page
                     // instead of hanging page.goto.
+                    // Keep the origin handshake short: Chromium aborts the SOCKS
+                    // tunnel with net::ERR_CONNECTION_ABORTED when the error-page
+                    // MITM starts too late under Windows suite load
+                    // (BrowserShouldNotHangOnTlsErrorsDuringTls12Handshake).
                     using CancellationTokenSource handshakeCts =
                         CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
-                    handshakeCts.CancelAfter(TimeSpan.FromSeconds(5));
+                    handshakeCts.CancelAfter(TimeSpan.FromSeconds(2));
                     await serverTls.AuthenticateAsClientAsync(clientOptions, handshakeCts.Token)
                         .ConfigureAwait(false);
                 }

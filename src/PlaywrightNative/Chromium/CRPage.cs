@@ -2716,7 +2716,8 @@ namespace PlaywrightNative.Chromium
 
             static bool IsAbortedNavigation(NavigationException ex)
                 => ex?.Message != null
-                    && ex.Message.Contains("ERR_ABORTED", StringComparison.Ordinal);
+                    && (ex.Message.Contains("ERR_ABORTED", StringComparison.Ordinal)
+                        || ex.Message.Contains("ERR_CONNECTION_ABORTED", StringComparison.Ordinal));
 
             async Task<CRResponse> RecoverAbortedNavigationResponseAsync(
                 Frame targetFrame,
@@ -2829,9 +2830,11 @@ namespace PlaywrightNative.Chromium
                 string targetUrl,
                 string documentId = null)
             {
+                // 503 is the MITM client-certificate error page
+                // (BrowserShouldNotHangOnTlsErrorsDuringTls12Handshake).
                 if (response == null
                     || response.Status < 200
-                    || response.Status >= 300
+                    || (response.Status >= 300 && response.Status != 503)
                     || response.Status == 204)
                 {
                     return false;
@@ -4248,7 +4251,9 @@ namespace PlaywrightNative.Chromium
                 return;
             }
 
-            if (_crashed || _client.IsClosed)
+            // Page may have closed between arming and the delay (Windows headful
+            // crash probes). Never Page.crash a recycled or closed session.
+            if (_crashed || _client.IsClosed || _closedTcs.Task.IsCompleted)
             {
                 return;
             }
@@ -4273,7 +4278,7 @@ namespace PlaywrightNative.Chromium
 
             // After an explicit Page.crash, silence means the protocol dropped
             // Inspector.targetCrashed (Windows headful). Same fallback as WebKit.
-            if (!_crashed)
+            if (!_crashed && !_client.IsClosed && !_closedTcs.Task.IsCompleted)
             {
                 OnInspectorTargetCrashed();
             }

@@ -153,6 +153,7 @@ namespace PlaywrightNative.Helpers
                 await page.WaitForFunctionAsync(
                     "() => document.readyState === 'complete' || document.readyState === 'interactive'",
                     timeout: waitMs).ConfigureAwait(false);
+                await WaitForSameOriginIframeBodiesAsync(page, waitMs).ConfigureAwait(false);
             }
             catch (TimeoutException)
             {
@@ -186,7 +187,19 @@ namespace PlaywrightNative.Helpers
                 return string.Empty;
             }
 
-            return await StitchAsync(page, frame, yaml, depth, boxes, deadlineClock, budgetMs).ConfigureAwait(false);
+            // Windows suite load: EnsurePrefixes + parent AX often spend the
+            // shared 3s budget before multi-srcdoc stitch runs, leaving empty
+            // iframe lines (ShouldPersistIframeReferences).
+            Stopwatch stitchClock = deadlineClock;
+            int stitchBudget = budgetMs;
+            if (yaml.Contains("- iframe", StringComparison.Ordinal)
+                && RemainingMs(deadlineClock, budgetMs) < 2_500)
+            {
+                stitchClock = Stopwatch.StartNew();
+                stitchBudget = 3_500;
+            }
+
+            return await StitchAsync(page, frame, yaml, depth, boxes, stitchClock, stitchBudget).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -215,6 +228,7 @@ namespace PlaywrightNative.Helpers
                 await page.WaitForFunctionAsync(
                     "() => document.readyState === 'complete' || document.readyState === 'interactive'",
                     timeout: waitMs).ConfigureAwait(false);
+                await WaitForSameOriginIframeBodiesAsync(page, waitMs).ConfigureAwait(false);
             }
             catch (TimeoutException)
             {
@@ -243,7 +257,16 @@ namespace PlaywrightNative.Helpers
                 deadlineClock,
                 budgetMs,
                 fallback: "[]").ConfigureAwait(false);
-            return await StitchJsonAsync(page, frame, json, depth, boxes, deadlineClock, budgetMs).ConfigureAwait(false);
+            Stopwatch stitchClock = deadlineClock;
+            int stitchBudget = budgetMs;
+            if (json.Contains("\"role\":\"iframe\"", StringComparison.Ordinal)
+                && RemainingMs(deadlineClock, budgetMs) < 2_500)
+            {
+                stitchClock = Stopwatch.StartNew();
+                stitchBudget = 3_500;
+            }
+
+            return await StitchJsonAsync(page, frame, json, depth, boxes, stitchClock, stitchBudget).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -437,17 +460,30 @@ namespace PlaywrightNative.Helpers
 
                 // Retry with FrameLocator / focused child when the primary path
                 // misses. Use for [active] (Darwin Focus) and for a sole iframe
-                // (srcdoc AiMode) — never for multi-iframe pages (wrong child).
+                // (srcdoc AiMode). Multi-iframe pages retry by DOM index so
+                // srcdoc siblings are not swapped (ShouldPersistIframeReferences).
                 if (string.IsNullOrEmpty(childYaml)
-                    && !await IsLazyIframeRefAsync(frame, ariaRef).ConfigureAwait(false)
-                    && (line.Contains("[active]", StringComparison.Ordinal)
-                        || SoleChildFrameOrNull(frame) != null))
+                    && !await IsLazyIframeRefAsync(frame, ariaRef).ConfigureAwait(false))
                 {
-                    childYaml = await CaptureActiveDataIframeYamlAsync(
-                        page,
-                        depth,
-                        boxes,
-                        lineDepth + 1).ConfigureAwait(false);
+                    if (line.Contains("[active]", StringComparison.Ordinal)
+                        || SoleChildFrameOrNull(frame) != null)
+                    {
+                        childYaml = await CaptureActiveDataIframeYamlAsync(
+                            page,
+                            depth,
+                            boxes,
+                            lineDepth + 1).ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        childYaml = await CaptureChildYamlByDomIndexAsync(
+                            page,
+                            frame,
+                            ariaRef,
+                            depth,
+                            boxes,
+                            lineDepth + 1).ConfigureAwait(false);
+                    }
                 }
 
                 if (string.IsNullOrEmpty(childYaml))
@@ -720,6 +756,150 @@ namespace PlaywrightNative.Helpers
             catch (TimeoutException)
             {
                 return null;
+            }
+        }
+
+        /// <summary>
+        /// Retries an empty multi-iframe stitch by DOM <c>querySelectorAll</c>
+        /// index via <c>FrameLocator.Nth</c> (srcdoc-safe; creation order differs).
+        /// </summary>
+        private static async Task<string> CaptureChildYamlByDomIndexAsync(
+            IPage page,
+            IFrame frame,
+            string ariaRef,
+            int? depth,
+            bool boxes,
+            int startDepth)
+        {
+            if (page == null || page.IsClosed || frame == null || frame.IsDetached
+                || string.IsNullOrEmpty(ariaRef))
+            {
+                return null;
+            }
+
+            int? domIndex = await DomIndexForIframeRefAsync(frame, ariaRef).ConfigureAwait(false);
+            if (domIndex == null || domIndex.Value < 0)
+            {
+                return null;
+            }
+
+            try
+            {
+                IElementHandle enterRoot = await page.FrameLocator("iframe, frame")
+                    .Nth(domIndex.Value)
+                    .Locator("body, frameset")
+                    .ElementHandleAsync(2_000f)
+                    .ConfigureAwait(false);
+                if (enterRoot == null)
+                {
+                    return null;
+                }
+
+                IFrame child = await enterRoot.OwnerFrameAsync().ConfigureAwait(false);
+                if (child == null || child.IsDetached)
+                {
+                    return null;
+                }
+
+                string prefix = await PrefixForAsync(page, child).ConfigureAwait(false);
+                string enterYaml = await AriaSnapshotOfficialAi
+                    .CaptureYamlAsync(enterRoot, depth, boxes, prefix, startDepth)
+                    .ConfigureAwait(false);
+                if (string.IsNullOrEmpty(enterYaml))
+                {
+                    return null;
+                }
+
+                return await StitchAsync(
+                    page,
+                    child,
+                    enterYaml,
+                    depth,
+                    boxes,
+                    Stopwatch.StartNew(),
+                    1_500,
+                    startDepth).ConfigureAwait(false);
+            }
+            catch (PlaywrightException)
+            {
+                return null;
+            }
+            catch (TimeoutException)
+            {
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Returns the document-order index of the iframe with <paramref name="ariaRef"/>.
+        /// </summary>
+        private static async Task<int?> DomIndexForIframeRefAsync(IFrame frame, string ariaRef)
+        {
+            try
+            {
+                int index = await frame.EvaluateAsync<int>(
+                    @"(ref) => {
+  const want = String(ref || '');
+  const frames = document.querySelectorAll('iframe, frame');
+  for (let i = 0; i < frames.length; i++) {
+    const aria = frames[i]._ariaRef;
+    if (aria && aria.ref === want) {
+      return i;
+    }
+  }
+  return -1;
+}",
+                    ariaRef).ConfigureAwait(false);
+                return index >= 0 ? index : null;
+            }
+            catch (PlaywrightException)
+            {
+                return null;
+            }
+            catch (TimeoutException)
+            {
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Waits until same-origin (srcdoc/data) iframes have a body so stitch
+        /// does not race empty ChildFrames under Windows suite load.
+        /// </summary>
+        private static async Task WaitForSameOriginIframeBodiesAsync(IPage page, float waitMs)
+        {
+            if (page == null || page.IsClosed || waitMs <= 0)
+            {
+                return;
+            }
+
+            try
+            {
+                await page.WaitForFunctionAsync(
+                    @"() => {
+  const frames = document.querySelectorAll('iframe:not([loading=""lazy""]), frame:not([loading=""lazy""])');
+  if (frames.length === 0) {
+    return true;
+  }
+  for (let i = 0; i < frames.length; i++) {
+    try {
+      const doc = frames[i].contentDocument;
+      if (!doc || !doc.body) {
+        return false;
+      }
+    } catch (e) {
+      // Cross-origin — skip.
+    }
+  }
+  return true;
+}",
+                    timeout: waitMs).ConfigureAwait(false);
+            }
+            catch (TimeoutException)
+            {
+            }
+            catch (PlaywrightException)
+            {
             }
         }
 
