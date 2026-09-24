@@ -138,13 +138,36 @@ namespace PlaywrightNative.Helpers
                     continue;
                 }
 
-                try
+                // Darwin WebKit can recycle the inner target while NewPage finishes
+                // applying context init scripts. A single EvaluateAsync failure used
+                // to be swallowed, leaving window.__fromContext unset when the later
+                // about:blank goto is same-document and does not re-run bootstrap
+                // (AddInitScriptAsyncShouldApplyToNewPage flake on macOS CI).
+                DateTime deadline = DateTime.UtcNow.AddSeconds(5);
+                Exception lastError = null;
+                while (DateTime.UtcNow < deadline)
                 {
-                    await page.EvaluateAsync(entry.CurrentDocumentSource).ConfigureAwait(false);
+                    try
+                    {
+                        await page.EvaluateAsync(entry.CurrentDocumentSource).ConfigureAwait(false);
+                        lastError = null;
+                        break;
+                    }
+                    catch (PlaywrightException ex)
+                    {
+                        lastError = ex;
+                        await Task.Delay(50).ConfigureAwait(false);
+                    }
+                    catch (TimeoutException ex)
+                    {
+                        lastError = ex;
+                        await Task.Delay(50).ConfigureAwait(false);
+                    }
                 }
-                catch (PlaywrightException)
-                {
-                }
+
+                // Preserve prior soft-fail behavior after exhausting retries so a
+                // permanently closed page does not fail NewPage itself.
+                _ = lastError;
             }
         }
 
