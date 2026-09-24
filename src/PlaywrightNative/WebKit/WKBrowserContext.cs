@@ -1701,18 +1701,57 @@ namespace PlaywrightNative.WebKit
             // WebSockets are rewritten even when EvaluateOnCurrentAsync swallowed
             // an earlier init-script failure (CFNetwork otherwise fails localhost
             // through the HTTP handshake proxy with Error / 306).
+            // Bound the evaluate: a recycled/zombie target otherwise burns the
+            // full WKSession 20s command timeout and eats LaunchAsyncHandleSIGTERM
+            // FalseShouldStartAPage's NUnit 30s budget (empty-stack timeout).
             if (!_javaScriptDisabled
                 && _localeHandshake != null
                 && (RuntimeInformation.IsOSPlatform(OSPlatform.OSX)
                     || Environment.GetEnvironmentVariable("PW_FORCE_MAC_WS_SHIM") == "1"))
             {
-                try
+                await EvaluateWithShortBudgetAsync(
+                        page,
+                        WebKitMacLocaleWebSocketShim.Source,
+                        TimeSpan.FromSeconds(1.5))
+                    .ConfigureAwait(false);
+            }
+        }
+
+        /// <summary>
+        /// Runs <paramref name="expression"/> on <paramref name="page"/> but
+        /// abandons the attempt if it does not settle within <paramref name="budget"/>.
+        /// Zombie WebKit targets after Darwin recycle otherwise hang until the
+        /// 20s session command timeout.
+        /// </summary>
+        private static async Task EvaluateWithShortBudgetAsync(IPage page, string expression, TimeSpan budget)
+        {
+            if (page == null || string.IsNullOrEmpty(expression))
+            {
+                return;
+            }
+
+            try
+            {
+                Task evalTask = page.EvaluateAsync(expression);
+                Task finished = await Task.WhenAny(evalTask, Task.Delay(budget)).ConfigureAwait(false);
+                if (finished != evalTask)
                 {
-                    await page.EvaluateAsync(WebKitMacLocaleWebSocketShim.Source).ConfigureAwait(false);
+                    // Observe the abandoned attempt so a late TimeoutException is not unobserved.
+                    _ = evalTask.ContinueWith(
+                        t => _ = t.Exception,
+                        CancellationToken.None,
+                        TaskContinuationOptions.OnlyOnFaulted,
+                        TaskScheduler.Default);
+                    return;
                 }
-                catch (PlaywrightException)
-                {
-                }
+
+                await evalTask.ConfigureAwait(false);
+            }
+            catch (PlaywrightException)
+            {
+            }
+            catch (TimeoutException)
+            {
             }
         }
 
@@ -2792,14 +2831,41 @@ namespace PlaywrightNative.WebKit
             string ua = _defaultSafariUserAgent;
             if (string.IsNullOrEmpty(ua))
             {
-                for (int attempt = 0; attempt < 5; attempt++)
+                // Cap each probe: zombie targets after Darwin recycle hang until
+                // the 20s WKSession command timeout. Five unbounded retries ate
+                // LaunchAsyncHandleSIGTERMFalseShouldStartAPage's NUnit 30s budget.
+                DateTime deadline = DateTime.UtcNow.AddSeconds(2);
+                for (int attempt = 0; attempt < 5 && DateTime.UtcNow < deadline; attempt++)
                 {
                     try
                     {
-                        ua = await page.EvaluateAsync<string>("() => navigator.userAgent").ConfigureAwait(false);
-                        if (!string.IsNullOrEmpty(ua))
+                        TimeSpan remaining = deadline - DateTime.UtcNow;
+                        if (remaining <= TimeSpan.Zero)
                         {
                             break;
+                        }
+
+                        TimeSpan attemptBudget = remaining > TimeSpan.FromMilliseconds(800)
+                            ? TimeSpan.FromMilliseconds(800)
+                            : remaining;
+                        Task<string> evalTask = page.EvaluateAsync<string>("() => navigator.userAgent");
+                        Task finished = await Task.WhenAny(evalTask, Task.Delay(attemptBudget))
+                            .ConfigureAwait(false);
+                        if (finished != evalTask)
+                        {
+                            _ = evalTask.ContinueWith(
+                                t => _ = t.Exception,
+                                CancellationToken.None,
+                                TaskContinuationOptions.OnlyOnFaulted,
+                                TaskScheduler.Default);
+                        }
+                        else
+                        {
+                            ua = await evalTask.ConfigureAwait(false);
+                            if (!string.IsNullOrEmpty(ua))
+                            {
+                                break;
+                            }
                         }
                     }
 #pragma warning disable RCS1075

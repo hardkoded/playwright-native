@@ -2698,13 +2698,15 @@ namespace PlaywrightNative
                     // A 1ms timeout can expire before the first probe reads the
                     // node (ToHaveTextWithTextFailWithImpossibleTimeout). An empty
                     // first read also needs a last-chance probe so MatcherResult.Actual
-                    // is "Text content" instead of "".
+                    // is "Text content" instead of "". Cap generously: under Windows
+                    // Chromium headful suite load, 250ms still misses the already-
+                    // present node (upstream uses an unbounded one-shot Actual read).
                     if (!sawElement || lastReceived.Length == 0 || IsBlankReceived(lastReceived))
                     {
                         try
                         {
                             IReadOnlyList<IElementHandle> final =
-                                await ElementHandlesOrEmptyAsync(250).ConfigureAwait(false);
+                                await ElementHandlesOrEmptyAsync(5_000).ConfigureAwait(false);
                             if (final.Count > 0)
                             {
                                 string[] recovered = new string[final.Count];

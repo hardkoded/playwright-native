@@ -960,10 +960,11 @@ namespace PlaywrightNative.Helpers
             // Cap DNS + TCP connect. Darwin forces this MITM on every WebKit
             // context; without a bound, ConnectAsync("nonexistent.invalid") can
             // hang until the NUnit 30s budget (RequestFailed never fires for
-            // data:-page fetch hang tests). Match WebKitMacProxyBypassShim.
-            using CancellationTokenSource connectCts = CancellationTokenSource.CreateLinkedTokenSource(token);
-            connectCts.CancelAfter(TimeSpan.FromSeconds(5));
-            CancellationToken connectToken = connectCts.Token;
+            // data:-page fetch hang tests). Stay well under RequestFailedShouldFire's
+            // 5s waiter: CancelAfter(5s) raced that CTS so the test canceled first.
+            // Dispose the client on budget expiry — CancelAfter alone may not abort
+            // getaddrinfo promptly, leaving the browser socket open with no failure.
+            TimeSpan connectBudget = TimeSpan.FromSeconds(2);
 
             if (string.Equals(connectHost, "localhost", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(connectHost, "127.0.0.1", StringComparison.Ordinal))
@@ -971,7 +972,12 @@ namespace PlaywrightNative.Helpers
                 TcpClient ipv4 = new(AddressFamily.InterNetwork) { NoDelay = true };
                 try
                 {
-                    await ipv4.ConnectAsync(IPAddress.Loopback, port, connectToken).ConfigureAwait(false);
+                    await ConnectWithBudgetAsync(
+                            ipv4,
+                            (client, ct) => client.ConnectAsync(IPAddress.Loopback, port, ct).AsTask(),
+                            connectBudget,
+                            token)
+                        .ConfigureAwait(false);
                     return ipv4;
                 }
                 catch
@@ -984,13 +990,52 @@ namespace PlaywrightNative.Helpers
             TcpClient server = new() { NoDelay = true };
             try
             {
-                await server.ConnectAsync(connectHost, port, connectToken).ConfigureAwait(false);
+                await ConnectWithBudgetAsync(
+                        server,
+                        (client, ct) => client.ConnectAsync(connectHost, port, ct).AsTask(),
+                        connectBudget,
+                        token)
+                    .ConfigureAwait(false);
                 return server;
             }
             catch
             {
                 server.Dispose();
                 throw;
+            }
+        }
+
+        /// <summary>
+        /// Connects with a hard wall-clock budget. On expiry, disposes
+        /// <paramref name="client"/> so the OS aborts DNS/TCP and throws
+        /// <see cref="SocketException"/> (SOCKS failure / HTTP hang-up path).
+        /// </summary>
+        private static async Task ConnectWithBudgetAsync(
+            TcpClient client,
+            Func<TcpClient, CancellationToken, Task> connect,
+            TimeSpan budget,
+            CancellationToken token)
+        {
+            using CancellationTokenSource connectCts = CancellationTokenSource.CreateLinkedTokenSource(token);
+            connectCts.CancelAfter(budget);
+            try
+            {
+                await connect(client, connectCts.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!token.IsCancellationRequested)
+            {
+                // Connect budget elapsed (not proxy dispose). Abort the socket and
+                // surface as a connection failure so SOCKS WriteSocksFailure /
+                // HTTP close without a 502 reach WebKit as RequestFailed.
+                try
+                {
+                    client.Dispose();
+                }
+                catch (ObjectDisposedException)
+                {
+                }
+
+                throw new SocketException((int)SocketError.TimedOut);
             }
         }
 
@@ -1186,6 +1231,14 @@ namespace PlaywrightNative.Helpers
             }
             catch (SocketException)
             {
+                await WriteSocksFailureAsync(clientStream, token).ConfigureAwait(false);
+                return;
+            }
+            catch (OperationCanceledException)
+            {
+                // Connect budget / proxy dispose: tell the SOCKS client the
+                // hop failed so RequestFailed still fires (OCE alone used to
+                // close the socket with no SOCKS reply).
                 await WriteSocksFailureAsync(clientStream, token).ConfigureAwait(false);
                 return;
             }
