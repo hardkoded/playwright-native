@@ -138,6 +138,7 @@ namespace PlaywrightNative.WebKit
         private bool _closed;
         private bool _closing;
         private bool _pageResumed;
+        private bool _contextInitScriptsInstalledBeforeResume;
         private string _closeReason;
         private bool _crashed;
         private bool _crashRequested;
@@ -472,6 +473,13 @@ namespace PlaywrightNative.WebKit
         /// Network.enable, plus Console.enable on non-frame-session builds) has finished.
         /// </summary>
         internal Task InitializedTask => _initializedTcs.Task;
+
+        /// <summary>
+        /// True when context string init scripts were installed via
+        /// <c>ApplyInitScriptsBeforeResumeAsync</c> (bootstrap updated before
+        /// <c>Target.resume</c>).
+        /// </summary>
+        internal bool ContextInitScriptsInstalledBeforeResume => _contextInitScriptsInstalledBeforeResume;
 
         /// <summary>
         /// Official <c>reportAsNew</c>: true after the first non-initial navigation.
@@ -4429,6 +4437,13 @@ namespace PlaywrightNative.WebKit
         }
 
         /// <summary>
+        /// Marks that context string init scripts were synced into
+        /// <c>Page.setBootstrapScript</c> before resume.
+        /// </summary>
+        internal void MarkContextInitScriptsInstalledBeforeResume()
+            => _contextInitScriptsInstalledBeforeResume = true;
+
+        /// <summary>
         /// Registers a JavaScript source that runs on every new document this page loads,
         /// before any page scripts execute. WebKit takes a single combined bootstrap script,
         /// so each add accumulates the script and re-sends <c>Page.setBootstrapScript</c>
@@ -7987,6 +8002,19 @@ namespace PlaywrightNative.WebKit
                 try
                 {
                     await owner.ApplyEmulationToPageAsync(this).ConfigureAwait(false);
+                }
+                catch (PlaywrightException)
+                {
+                }
+
+                // Upstream wkPage._initializeSession includes browserContext.initScripts
+                // in Page.setBootstrapScript before Target.resume. NewPage used to
+                // install context scripts only in ApplyContextChrome after resume;
+                // Darwin about:blank→about:blank often does not re-run bootstrap, so
+                // a failed EvaluateOnCurrentAsync left window.__fromContext unset.
+                try
+                {
+                    await owner.ApplyInitScriptsBeforeResumeAsync(this).ConfigureAwait(false);
                 }
                 catch (PlaywrightException)
                 {
