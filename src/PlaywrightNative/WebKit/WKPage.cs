@@ -6464,7 +6464,11 @@ namespace PlaywrightNative.WebKit
         {
             WKExecutionContext context = await WaitForFrameContextAsync(frame).ConfigureAwait(false);
             JsonElement? handleValue = await context.EvaluateHandleAsync(expression).ConfigureAwait(false);
-            return WrapRemoteObject(context, handleValue) as IElementHandle;
+
+            // Skip fire-and-forget InitializePreviewAsync (callFunctionOn + awaitPromise).
+            // Concurrent preview + caller EvaluateAsync has wedged Darwin WebKit sessions
+            // the same way loading=lazy iframe handles do.
+            return WrapWKHandle(context, handleValue, initializePreview: false) as IElementHandle;
         }
 
         private Task WaitForSentinelAsync(string sentinel, string errorMessage)

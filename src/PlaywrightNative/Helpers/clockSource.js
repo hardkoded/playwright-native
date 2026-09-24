@@ -177,10 +177,17 @@ var ClockController = class {
       callAt,
       promise: void 0,
       cancel: this._embedder.setTimeout(() => {
+        // _innerPause clears _realTime and cancels without awaiting t.promise
+        // (Darwin awaitPromise deadlock). Drop late callbacks so they cannot
+        // start a concurrent _runTo alongside runFor/fastForward/pauseAt.
+        if (!this._realTime || this._currentRealTimeTimer !== realTimeTimer) {
+          return;
+        }
         this._syncRealTime();
         realTimeTimer.promise = this._runTo(this._now.ticks).catch((e) => console.error(e));
         void realTimeTimer.promise.then(() => {
-          this._currentRealTimeTimer = void 0;
+          if (this._currentRealTimeTimer === realTimeTimer)
+            this._currentRealTimeTimer = void 0;
           if (this._realTime)
             this._updateRealTimeTimer();
         });
