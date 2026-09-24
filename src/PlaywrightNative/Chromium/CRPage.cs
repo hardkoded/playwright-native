@@ -2665,7 +2665,7 @@ namespace PlaywrightNative.Chromium
                 }
                 catch (NavigationException ex) when (
                     IsAbortedNavigation(ex)
-                    && TryRecoverNavigationResponse(frame, url, captured, out CRResponse recoveredAbort))
+                    && TryRecoverNavigationResponse(frame, url, captured, out CRResponse recoveredAbort, ex.DocumentId))
                 {
                     return recoveredAbort;
                 }
@@ -2846,18 +2846,21 @@ namespace PlaywrightNative.Chromium
                     return false;
                 }
 
+                // Prefer loaderId match: Page.navigate ERR_ABORTED carries the
+                // committed document's loaderId while response.Url can disagree
+                // on slash / host form under Windows suite load
+                // (ShouldReturnFromGotoIfNewNavigationIsStarted).
+                if (!string.IsNullOrEmpty(documentId)
+                    && response.Request != null
+                    && (string.Equals(response.Request.DocumentId, documentId, StringComparison.Ordinal)
+                        || string.Equals(response.Request.ProtocolRequestId, documentId, StringComparison.Ordinal)))
+                {
+                    return true;
+                }
+
                 if (string.IsNullOrEmpty(targetUrl) || string.IsNullOrEmpty(response.Url))
                 {
-                    // When URL is unavailable, accept a loaderId match if present.
-                    if (!string.IsNullOrEmpty(documentId)
-                        && response.Request != null
-                        && !string.IsNullOrEmpty(response.Request.DocumentId))
-                    {
-                        return string.Equals(response.Request.DocumentId, documentId, StringComparison.Ordinal)
-                            || string.Equals(response.Request.ProtocolRequestId, documentId, StringComparison.Ordinal);
-                    }
-
-                    return true;
+                    return string.IsNullOrEmpty(documentId);
                 }
 
                 return string.Equals(response.Url, targetUrl, StringComparison.OrdinalIgnoreCase)

@@ -324,9 +324,12 @@ namespace PlaywrightNative.Chromium
                         || url.StartsWith(candidate.Url, StringComparison.OrdinalIgnoreCase)))
                 {
                     byUrl = candidate;
+                    return true;
                 }
 
-                return true;
+                // documentId was requested but this candidate is neither a loader
+                // nor URL match — keep scanning.
+                return false;
             }
         }
 

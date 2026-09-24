@@ -1968,6 +1968,38 @@ namespace PlaywrightNative.Helpers
                     if (_byRequest.TryGetValue(request, out PendingEntry pending))
                     {
                         pending.FailureText = request.Failure;
+                        return;
+                    }
+
+                    // Aborted connections can fire RequestFailed before Request under
+                    // Windows suite load (ShouldHaveMinusOneTransferSizeWhenItsAFailedRequest).
+                    if (IsWebSocketTraffic(request)
+                        || IsFavicon(request.Url)
+                        || IsFavicon(request.RedirectedFrom?.Url))
+                    {
+                        return;
+                    }
+
+                    string baseUrl = _context is IHasBaseUrl hasBase ? hasBase.BaseURL : null;
+                    if ((!string.IsNullOrEmpty(_urlFilter) || _urlRegex != null)
+                        && !UrlMatcher.Matches(request.Url, _urlFilter, _urlRegex, null, baseUrl))
+                    {
+                        return;
+                    }
+
+                    TrackPage(PageOf(request));
+                    pending = new PendingEntry
+                    {
+                        Request = request,
+                        Started = StartedAt(request),
+                        FailureText = request.Failure,
+                    };
+                    _entries.Add(pending);
+                    _byRequest[request] = pending;
+                    IPage page = PageOf(request);
+                    if (page != null && _pages.TryGetValue(page, out PageRecord record))
+                    {
+                        pending.PageId = record.Id;
                     }
                 }
             }
