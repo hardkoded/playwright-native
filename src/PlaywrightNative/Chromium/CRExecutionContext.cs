@@ -618,29 +618,40 @@ namespace PlaywrightNative.Chromium
         /// <returns>The protocol response when the context survives.</returns>
         private async Task<T> RaceDestroyedAsync<T>(Task<T> task)
         {
-            if (_destroyed.Task.IsCompleted)
+            if (task == null)
+            {
+                throw new ArgumentNullException(nameof(task));
+            }
+
+            if (_destroyed.Task.IsCompleted && !task.IsCompleted)
             {
                 throw new PlaywrightException(EvaluateSerialization.NavigationMessage);
             }
 
-            Task completed = await Task.WhenAny(task, _destroyed.Task).ConfigureAwait(false);
-            if (completed == _destroyed.Task)
+            await Task.WhenAny(task, _destroyed.Task).ConfigureAwait(false);
+
+            // Prefer a completed CDP response even when the context was destroyed in
+            // the same turn. Official "should not throw when evaluation does a
+            // navigation" requires returning the script value when Runtime.evaluate
+            // already finished (e.g. location.href = url). Task.WhenAny may pick
+            // either completed task when both finish together.
+            if (task.IsCompleted)
             {
-                throw new PlaywrightException(EvaluateSerialization.NavigationMessage);
+                try
+                {
+                    return await task.ConfigureAwait(false);
+                }
+                catch (PlaywrightException ex) when (
+                    ex.Message != null
+                    && (ex.Message.Contains("Cannot find context with specified id", StringComparison.Ordinal)
+                        || ex.Message.Contains("Inspected target navigated or closed", StringComparison.Ordinal)
+                        || ex.Message.Contains("Execution context was destroyed", StringComparison.Ordinal)))
+                {
+                    throw new PlaywrightException(EvaluateSerialization.NavigationMessage);
+                }
             }
 
-            try
-            {
-                return await task.ConfigureAwait(false);
-            }
-            catch (PlaywrightException ex) when (
-                ex.Message != null
-                && (ex.Message.Contains("Cannot find context with specified id", StringComparison.Ordinal)
-                    || ex.Message.Contains("Inspected target navigated or closed", StringComparison.Ordinal)
-                    || ex.Message.Contains("Execution context was destroyed", StringComparison.Ordinal)))
-            {
-                throw new PlaywrightException(EvaluateSerialization.NavigationMessage);
-            }
+            throw new PlaywrightException(EvaluateSerialization.NavigationMessage);
         }
 
         private async Task<object[]> PrepareCallArgumentsAsync(object[] args)

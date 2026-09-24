@@ -132,6 +132,14 @@ namespace PlaywrightNative.Chromium
                 return false;
             }
 
+            // Match page-level NetworkRequestEvents / upstream frames.ts: favicon
+            // housekeeping is not exposed on BrowserContext.request. Windows Chromium
+            // may fetch /favicon.ico through a controlling service worker.
+            if (NetworkRequestEvents.IsFaviconUrl(url))
+            {
+                return false;
+            }
+
             return url.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
                 || url.StartsWith("https://", StringComparison.OrdinalIgnoreCase);
         }
@@ -364,6 +372,14 @@ namespace PlaywrightNative.Chromium
             {
                 try
                 {
+                    // Abort favicon like page Fetch interception (upstream frames.ts)
+                    // so Windows Chromium housekeeping does not hit user routes.
+                    if (NetworkRequestEvents.IsFaviconUrl(request.Url))
+                    {
+                        await route.AbortAsync("Failed").ConfigureAwait(false);
+                        return;
+                    }
+
                     if (matches.Count == 0)
                     {
                         await route.ContinueAsync().ConfigureAwait(false);
@@ -412,6 +428,11 @@ namespace PlaywrightNative.Chromium
                 httpVersion: "http/1.1");
             request.Response = response;
             response.EnsureRawResponseHeaders();
+            if (!IsReportableUrl(request.Url))
+            {
+                return;
+            }
+
             Response?.Invoke(this, response);
             request.Finished = true;
             request.MarkFinished();
@@ -485,7 +506,10 @@ namespace PlaywrightNative.Chromium
 
             request.Finished = true;
             request.MarkFinished();
-            RequestFinished?.Invoke(this, request);
+            if (IsReportableUrl(request.Url))
+            {
+                RequestFinished?.Invoke(this, request);
+            }
         }
 
         private void OnLoadingFailed(JsonElement? parameters)
@@ -504,7 +528,10 @@ namespace PlaywrightNative.Chromium
             request.FailureText = GetString(parameters.Value, "errorText") ?? "net::ERR_FAILED";
             request.Finished = true;
             request.MarkFinished();
-            RequestFailed?.Invoke(this, request);
+            if (IsReportableUrl(request.Url))
+            {
+                RequestFailed?.Invoke(this, request);
+            }
         }
     }
 }

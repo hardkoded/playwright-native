@@ -1197,34 +1197,42 @@ namespace PlaywrightNative.WebKit
         /// <returns>The protocol response when the context survives.</returns>
         private async Task<T> RaceDestroyedAsync<T>(Task<T> task)
         {
-            if (_destroyed.Task.IsCompleted)
+            if (task == null)
+            {
+                throw new ArgumentNullException(nameof(task));
+            }
+
+            if (_destroyed.Task.IsCompleted && !task.IsCompleted)
             {
                 throw DestroyedEvaluateException();
             }
 
-            Task completed = await Task.WhenAny(task, _destroyed.Task).ConfigureAwait(false);
-            if (completed == _destroyed.Task)
+            await Task.WhenAny(task, _destroyed.Task).ConfigureAwait(false);
+
+            // Prefer a completed protocol response when destroy races the same turn
+            // (evaluate that navigates must return its value).
+            if (task.IsCompleted)
             {
-                throw DestroyedEvaluateException();
+                try
+                {
+                    return await task.ConfigureAwait(false);
+                }
+                catch (TargetClosedException)
+                {
+                    throw;
+                }
+                catch (PlaywrightException ex) when (
+                    ex.Message != null
+                    && (ex.Message.Contains("Cannot find context with specified id", StringComparison.Ordinal)
+                        || ex.Message.Contains("Cannot find object with given id", StringComparison.Ordinal)
+                        || ex.Message.Contains("Execution context was destroyed", StringComparison.Ordinal)
+                        || ex.Message.Contains("Inspected target navigated or closed", StringComparison.Ordinal)))
+                {
+                    throw DestroyedEvaluateException();
+                }
             }
 
-            try
-            {
-                return await task.ConfigureAwait(false);
-            }
-            catch (TargetClosedException)
-            {
-                throw;
-            }
-            catch (PlaywrightException ex) when (
-                ex.Message != null
-                && (ex.Message.Contains("Cannot find context with specified id", StringComparison.Ordinal)
-                    || ex.Message.Contains("Cannot find object with given id", StringComparison.Ordinal)
-                    || ex.Message.Contains("Execution context was destroyed", StringComparison.Ordinal)
-                    || ex.Message.Contains("Inspected target navigated or closed", StringComparison.Ordinal)))
-            {
-                throw DestroyedEvaluateException();
-            }
+            throw DestroyedEvaluateException();
         }
 
         private Exception DestroyedEvaluateException()
