@@ -1674,6 +1674,17 @@ namespace PlaywrightNative.WebKit
                 // were installed before resume (NewPage path). Protocol popups
                 // already applied callbacks in ApplyEmulationToPageAsync.
                 await _initScripts.ApplyAllAsync(page, callbacks: true).ConfigureAwait(false);
+
+                // NewPage: first about:blank predates bootstrap; Darwin also needs
+                // EvaluateOnCurrent's retry loop after Target.resume (target recycle /
+                // Mac locale WS shim). Skip for protocol popups (Opener set) so
+                // InitScriptShouldRunOnlyOnceInPopup does not double-fire.
+                if (!_javaScriptDisabled
+                    && page is WKPage newPage
+                    && newPage.Opener == null)
+                {
+                    await _initScripts.EvaluateOnCurrentAsync(page).ConfigureAwait(false);
+                }
             }
 
             // about:blank is created before addScriptToEvaluateOnNewDocument runs.
