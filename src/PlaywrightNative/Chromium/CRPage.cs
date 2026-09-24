@@ -2717,7 +2717,12 @@ namespace PlaywrightNative.Chromium
             static bool IsAbortedNavigation(NavigationException ex)
                 => ex?.Message != null
                     && (ex.Message.Contains("ERR_ABORTED", StringComparison.Ordinal)
-                        || ex.Message.Contains("ERR_CONNECTION_ABORTED", StringComparison.Ordinal));
+                        || ex.Message.Contains("ERR_CONNECTION_ABORTED", StringComparison.Ordinal)
+
+                        // MITM client-cert error page: origin handshake aborts the
+                        // SOCKS tunnel before the HTML error response is observed
+                        // (BrowserShouldNotHangOnTlsErrorsDuringTls12Handshake).
+                        || ex.Message.Contains("ERR_SOCKET_NOT_CONNECTED", StringComparison.Ordinal));
 
             async Task<CRResponse> RecoverAbortedNavigationResponseAsync(
                 Frame targetFrame,

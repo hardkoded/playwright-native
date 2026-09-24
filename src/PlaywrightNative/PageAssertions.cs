@@ -318,6 +318,65 @@ namespace PlaywrightNative
 
                     if (timeoutMs != Timeout.Infinite && sw.ElapsedMilliseconds >= timeoutMs)
                     {
+                        // Navigation may commit at the deadline (Task.Run + GoTo under
+                        // suite load). Re-check before failing, and keep checking while
+                        // a bounded aria snapshot runs so a late FrameNavigated still
+                        // resolves instead of hanging NUnit on unbounded SnapshotAccessibility.
+                        actual = _page.Url ?? string.Empty;
+                        ok = matches(actual);
+                        if (_negate ? !ok : ok)
+                        {
+                            return;
+                        }
+
+                        string ariaSnapshot = string.Empty;
+                        Task<AccessibilitySnapshotResult> snapTask =
+                            _page.SnapshotAccessibilityAsync(interestingOnly: false);
+                        Task snapDeadline = Task.Delay(TimeSpan.FromSeconds(2));
+                        while (true)
+                        {
+                            Task snapWake = navigated.Task;
+                            Task snapDone = await Task.WhenAny(snapTask, snapWake, snapDeadline)
+                                .ConfigureAwait(false);
+
+                            actual = _page.Url ?? string.Empty;
+                            ok = matches(actual);
+                            if (_negate ? !ok : ok)
+                            {
+                                return;
+                            }
+
+                            if (snapDone == snapWake)
+                            {
+                                navigated = new TaskCompletionSource<bool>(
+                                    TaskCreationOptions.RunContinuationsAsynchronously);
+                                continue;
+                            }
+
+                            if (snapDone == snapTask)
+                            {
+                                try
+                                {
+                                    AccessibilitySnapshotResult snapshot =
+                                        await snapTask.ConfigureAwait(false);
+                                    ariaSnapshot = AriaSnapshotYaml.Format(snapshot) ?? string.Empty;
+                                }
+                                catch (Exception ex) when (ex is PlaywrightException || ex is TimeoutException)
+                                {
+                                    ariaSnapshot = string.Empty;
+                                }
+                            }
+
+                            break;
+                        }
+
+                        actual = _page.Url ?? string.Empty;
+                        ok = matches(actual);
+                        if (_negate ? !ok : ok)
+                        {
+                            return;
+                        }
+
                         System.Text.StringBuilder log = new System.Text.StringBuilder();
                         log.Append(header);
                         log.Append('\n');
@@ -334,18 +393,6 @@ namespace PlaywrightNative
                         log.Append("\" with timeout ");
                         log.Append(timeoutMs.ToString(System.Globalization.CultureInfo.InvariantCulture));
                         log.Append("ms\n");
-                        string ariaSnapshot = null;
-                        try
-                        {
-                            AccessibilitySnapshotResult snapshot = await _page
-                                .SnapshotAccessibilityAsync(interestingOnly: false)
-                                .ConfigureAwait(false);
-                            ariaSnapshot = AriaSnapshotYaml.Format(snapshot) ?? string.Empty;
-                        }
-                        catch (Exception ex) when (ex is PlaywrightException || ex is TimeoutException)
-                        {
-                            ariaSnapshot = string.Empty;
-                        }
 
                         throw ExpectException.Fail(
                             log.ToString(),
@@ -451,6 +498,7 @@ namespace PlaywrightNative
                         {
                             AccessibilitySnapshotResult snapshot = await _page
                                 .SnapshotAccessibilityAsync(interestingOnly: false)
+                                .WaitAsync(TimeSpan.FromSeconds(2))
                                 .ConfigureAwait(false);
                             ariaSnapshot = AriaSnapshotYaml.Format(snapshot) ?? string.Empty;
                         }
