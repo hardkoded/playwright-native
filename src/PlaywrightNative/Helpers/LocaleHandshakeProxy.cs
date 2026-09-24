@@ -956,13 +956,22 @@ namespace PlaywrightNative.Helpers
             // WebKitMacLocaleWebSocketShim); map back to localhost for the
             // real test-server socket, matching ClientCertificatesProxy.
             string connectHost = ClientCertificatesProxy.RewriteToLocalhostIfNeeded(host);
+
+            // Cap DNS + TCP connect. Darwin forces this MITM on every WebKit
+            // context; without a bound, ConnectAsync("nonexistent.invalid") can
+            // hang until the NUnit 30s budget (RequestFailed never fires for
+            // data:-page fetch hang tests). Match WebKitMacProxyBypassShim.
+            using CancellationTokenSource connectCts = CancellationTokenSource.CreateLinkedTokenSource(token);
+            connectCts.CancelAfter(TimeSpan.FromSeconds(5));
+            CancellationToken connectToken = connectCts.Token;
+
             if (string.Equals(connectHost, "localhost", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(connectHost, "127.0.0.1", StringComparison.Ordinal))
             {
                 TcpClient ipv4 = new(AddressFamily.InterNetwork) { NoDelay = true };
                 try
                 {
-                    await ipv4.ConnectAsync(IPAddress.Loopback, port, token).ConfigureAwait(false);
+                    await ipv4.ConnectAsync(IPAddress.Loopback, port, connectToken).ConfigureAwait(false);
                     return ipv4;
                 }
                 catch
@@ -975,7 +984,7 @@ namespace PlaywrightNative.Helpers
             TcpClient server = new() { NoDelay = true };
             try
             {
-                await server.ConnectAsync(connectHost, port, token).ConfigureAwait(false);
+                await server.ConnectAsync(connectHost, port, connectToken).ConfigureAwait(false);
                 return server;
             }
             catch
