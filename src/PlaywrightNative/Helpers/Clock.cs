@@ -298,8 +298,11 @@ namespace PlaywrightNative.Helpers
             // and forces EvaluateHandle + SerializeAwaitedJs (awaitPromise),
             // which deadlocks Darwin WebKit when the deferred work itself waits
             // on embedder timers — PauseAtShouldJumpAndStayFrozen flake.
-            // Use queueMicrotask (or builtins.setTimeout after install fakes
-            // global timers) and bracket-access thenables instead.
+            //
+            // Prefer builtins.setTimeout(0) (macrotask) over queueMicrotask.
+            // Darwin WIP may flush microtasks before completing Runtime.evaluate,
+            // so a microtask that awaits embedder.setTimeout deadlocks inside the
+            // same evaluate (ClockInstallOptionsTests 30s hangs on mac shard2).
             string kickoff =
                 "(() => {" +
                 "  const __pwK = " + markerJson + ";" +
@@ -320,14 +323,10 @@ namespace PlaywrightNative.Helpers
                 "      __pwDone(false, e);" +
                 "    }" +
                 "  };" +
-                "  if (typeof queueMicrotask === 'function') {" +
-                "    queueMicrotask(__pwGo);" +
-                "  } else {" +
-                "    const __pwEmbed = (globalThis.__pwClock && globalThis.__pwClock.builtins)" +
-                "      ? globalThis.__pwClock.builtins.setTimeout" +
-                "      : globalThis.setTimeout;" +
-                "    __pwEmbed(__pwGo, 0);" +
-                "  }" +
+                "  const __pwEmbed = (globalThis.__pwClock && globalThis.__pwClock.builtins)" +
+                "    ? globalThis.__pwClock.builtins.setTimeout" +
+                "    : globalThis.setTimeout;" +
+                "  __pwEmbed(__pwGo, 0);" +
                 "  return 0;" +
                 "})()";
 
