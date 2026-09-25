@@ -4818,12 +4818,6 @@ namespace PlaywrightNative.Chromium
             string message = p.TryGetProperty("message", out JsonElement msgEl) ? msgEl.GetString() : string.Empty;
             string defaultValue = p.TryGetProperty("defaultPrompt", out JsonElement defEl) ? defEl.GetString() : string.Empty;
 
-            // A JS dialog can only open after a real document commit. Mark that
-            // commit before raising so WaitForFirstNonInitialNavigationAsync /
-            // reportAsNew are not stuck while Chrome stalls CDP behind the dialog
-            // (browsercontext-events inline-script popup: WaitForPage 30s).
-            NoteDialogOpened();
-
             CRDialog dialog = new(_client, type, message, defaultValue);
             DialogOpening?.Invoke(this, dialog);
         }
@@ -5574,18 +5568,6 @@ namespace PlaywrightNative.Chromium
             }
 
             return new CRJSHandle(context, objectId, preview);
-        }
-
-        /// <summary>
-        /// A JavaScript dialog can only open after a real document commit. Mark
-        /// that commit so <see cref="Page.IsClientInitialized"/> and popup
-        /// <c>reportAsNew</c> are not stuck waiting on <c>frameNavigated</c>
-        /// while Chrome stalls CDP behind the open dialog.
-        /// </summary>
-        internal void NoteDialogOpened()
-        {
-            HasCommittedNonInitialNavigation = true;
-            _firstNonInitialNavigationTcs.TrySetResult(true);
         }
 
         private void MarkFirstNonInitialNavigation(string url)
