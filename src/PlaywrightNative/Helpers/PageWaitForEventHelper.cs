@@ -105,12 +105,34 @@ namespace PlaywrightNative.Helpers
                         "waitForEvent",
                         () => consoleWait);
                 case "Dialog":
+                    // Resolve inline so waitForEvent('dialog') completes during
+                    // RaiseDialog (same as Load). Deferred predicate ContinueWith
+                    // can starve under macOS suite load while alert blocks evaluate
+                    // (ContextWaitForDialogShouldResolveOnAlert 30s empty stack).
+                    // Replay OpenDialog after subscribe when ScheduleOpen deferred
+                    // the raise past the waiter attach.
                     return WaitTypedAsync<T, IDialog>(
                         page,
                         h => page.Dialog += h,
                         h => page.Dialog -= h,
                         matches,
-                        timeout);
+                        timeout,
+                        existingAfterSubscribe: () =>
+                        {
+                            if (page is IHasPageExtras extras)
+                            {
+                                IDialog open = extras.TryGetOpenDialog();
+                                if (open != null)
+                                {
+                                    extras.TryMarkOpenDialogEmitted();
+                                    return Task.FromResult<IReadOnlyList<T>>(
+                                        (IReadOnlyList<T>)(object)new IDialog[] { open });
+                                }
+                            }
+
+                            return Task.FromResult<IReadOnlyList<T>>(Array.Empty<T>());
+                        },
+                        deferPredicateEvaluation: false);
                 case "DialogClosed":
                     if (page is not IHasPageExtras extras)
                     {

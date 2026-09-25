@@ -36,6 +36,24 @@ namespace PlaywrightNative.Helpers
         ICoverage Coverage { get; }
 
         /// <summary>
+        /// The currently open JavaScript dialog, if any. Used by
+        /// <c>waitForEvent('dialog')</c> so an open that races ahead of the
+        /// subscription (deferred ScheduleOpen) still resolves.
+        /// </summary>
+        /// <returns>The open dialog, or <see langword="null"/>.</returns>
+        IDialog TryGetOpenDialog();
+
+        /// <summary>
+        /// Marks the open dialog as delivered to a waiter so deferred
+        /// ScheduleOpen auto-dismiss does not dismiss after replay.
+        /// </summary>
+        /// <returns>
+        /// <see langword="true"/> on the first claim; <see langword="false"/> when
+        /// the dialog was already emitted to listeners.
+        /// </returns>
+        bool TryMarkOpenDialogEmitted();
+
+        /// <summary>
         /// Captures the accessibility tree for aria snapshots and expect matchers.
         /// </summary>
         /// <param name="interestingOnly">Prune uninteresting nodes. Defaults to <see langword="true"/>.</param>

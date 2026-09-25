@@ -366,6 +366,10 @@ namespace PlaywrightNative
         /// <inheritdoc/>
         bool IHasExposedFunctionNames.HasExposedFunction(string name) => HasExposedFunction(name);
 
+        IDialog IHasPageExtras.TryGetOpenDialog() => _dialogTracker.TryGetOpenDialog();
+
+        bool IHasPageExtras.TryMarkOpenDialogEmitted() => _dialogTracker.TryMarkEmitted();
+
         /// <inheritdoc/>
         public Task<AccessibilitySnapshotResult> SnapshotAccessibilityAsync(bool? interestingOnly = null, IElementHandle root = null)
             => CRAccessibility.SnapshotAsync(_crPage.Session, interestingOnly, root);
@@ -2154,17 +2158,23 @@ namespace PlaywrightNative
             // alert (DialogAcceptShouldWork 30s timeout).
             if (pageDialog != null || contextHasListeners)
             {
+                _dialogTracker.TryMarkEmitted();
                 pageDialog?.Invoke(this, dialog);
                 host?.RaiseDialog(dialog);
                 return;
             }
 
-            // No listeners yet — defer one turn so Click+WaitForDialog can
-            // subscribe before auto-dismiss (browsercontext-events popup).
+            // No listeners yet — defer so Click+WaitForDialog can subscribe
+            // before auto-dismiss (browsercontext-events popup).
             PageDialogTracker.ScheduleOpen(() =>
             {
                 EventHandler<IDialog> deferredPageDialog = Dialog;
                 bool deferredContextHasListeners = host != null && host.HasDialogListeners();
+                if (!_dialogTracker.TryMarkEmitted())
+                {
+                    return;
+                }
+
                 deferredPageDialog?.Invoke(this, dialog);
                 host?.RaiseDialog(dialog);
                 PageDialogTracker.AutoDismissIfNeeded(dialog, deferredPageDialog, deferredContextHasListeners);

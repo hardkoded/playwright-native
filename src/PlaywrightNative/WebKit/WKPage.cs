@@ -526,6 +526,10 @@ namespace PlaywrightNative.WebKit
             => !string.IsNullOrEmpty(name)
             && (_exposedFunctions.ContainsKey(name) || _handleBindings.ContainsKey(name));
 
+        IDialog IHasPageExtras.TryGetOpenDialog() => _dialogTracker.TryGetOpenDialog();
+
+        bool IHasPageExtras.TryMarkOpenDialogEmitted() => _dialogTracker.TryMarkEmitted();
+
         /// <inheritdoc/>
         public async Task<AccessibilitySnapshotResult> SnapshotAccessibilityAsync(bool? interestingOnly = null, IElementHandle root = null)
         {
@@ -9830,6 +9834,7 @@ namespace PlaywrightNative.WebKit
             // Windows suite load starved Task.Run while Click waited on alert).
             if (pageDialog != null || contextHasListeners)
             {
+                _dialogTracker.TryMarkEmitted();
                 pageDialog?.Invoke(this, dialog);
                 host?.RaiseDialog(dialog);
                 return;
@@ -9839,6 +9844,14 @@ namespace PlaywrightNative.WebKit
             {
                 EventHandler<IDialog> deferredPageDialog = Dialog;
                 bool deferredContextHasListeners = host != null && host.HasDialogListeners();
+
+                // A waitForEvent('dialog') may have already claimed this open via
+                // OpenDialog replay while ScheduleOpen was deferred.
+                if (!_dialogTracker.TryMarkEmitted())
+                {
+                    return;
+                }
+
                 deferredPageDialog?.Invoke(this, dialog);
                 host?.RaiseDialog(dialog);
                 PageDialogTracker.AutoDismissIfNeeded(dialog, deferredPageDialog, deferredContextHasListeners);

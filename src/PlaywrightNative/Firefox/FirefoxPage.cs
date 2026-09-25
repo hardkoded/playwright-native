@@ -213,6 +213,10 @@ namespace PlaywrightNative.Firefox
         /// <inheritdoc/>
         public PageViewportSizeResult ViewportSize => _viewportSize;
 
+        IDialog IHasPageExtras.TryGetOpenDialog() => _dialogTracker.TryGetOpenDialog();
+
+        bool IHasPageExtras.TryMarkOpenDialogEmitted() => _dialogTracker.TryMarkEmitted();
+
         /// <inheritdoc/>
         public Task<AccessibilitySnapshotResult> SnapshotAccessibilityAsync(bool? interestingOnly = null, IElementHandle root = null)
         {
@@ -1059,6 +1063,7 @@ namespace PlaywrightNative.Firefox
 
             if (pageDialog != null || contextHasListeners)
             {
+                _dialogTracker.TryMarkEmitted();
                 pageDialog?.Invoke(this, dialog);
                 host?.RaiseDialog(dialog);
                 return;
@@ -1068,6 +1073,11 @@ namespace PlaywrightNative.Firefox
             {
                 EventHandler<IDialog> deferredPageDialog = Dialog;
                 bool deferredContextHasListeners = host != null && host.HasDialogListeners();
+                if (!_dialogTracker.TryMarkEmitted())
+                {
+                    return;
+                }
+
                 deferredPageDialog?.Invoke(this, dialog);
                 host?.RaiseDialog(dialog);
                 PageDialogTracker.AutoDismissIfNeeded(dialog, deferredPageDialog, deferredContextHasListeners);
