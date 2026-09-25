@@ -312,16 +312,40 @@ namespace PlaywrightNative
             string dest = Path.Combine(_publicDownloadsDirectory, destName);
             for (int attempt = 0; attempt < 50; attempt++)
             {
+                string temp = null;
                 try
                 {
-                    File.Copy(source, dest, overwrite: true);
+                    // Stage outside the public directory, then rename in. Directory
+                    // polls (LaunchArtifactsDir) must never observe a mid-copy file
+                    // that Windows still locks for ReadAllText.
+                    temp = Path.Combine(
+                        Path.GetTempPath(),
+                        "pw-promote-" + Guid.NewGuid().ToString("N"));
+                    File.Copy(source, temp, overwrite: true);
+                    File.Move(temp, dest, overwrite: true);
+                    temp = null;
                     if (!string.IsNullOrEmpty(_suggestedFilename)
                         && !string.Equals(destName, _suggestedFilename, StringComparison.OrdinalIgnoreCase))
                     {
                         // Also surface the human name so content-only directory
                         // polls (AcceptDownloads) find a finished file quickly.
                         string named = Path.Combine(_publicDownloadsDirectory, _suggestedFilename);
-                        File.Copy(source, named, overwrite: true);
+                        string namedTemp = Path.Combine(
+                            Path.GetTempPath(),
+                            "pw-promote-" + Guid.NewGuid().ToString("N"));
+                        try
+                        {
+                            File.Copy(source, namedTemp, overwrite: true);
+                            File.Move(namedTemp, named, overwrite: true);
+                            namedTemp = null;
+                        }
+                        finally
+                        {
+                            if (namedTemp != null)
+                            {
+                                TryDeleteFile(namedTemp);
+                            }
+                        }
                     }
 
                     return;
@@ -333,6 +357,13 @@ namespace PlaywrightNative
                 catch (UnauthorizedAccessException)
                 {
                     System.Threading.Thread.Sleep(20);
+                }
+                finally
+                {
+                    if (temp != null)
+                    {
+                        TryDeleteFile(temp);
+                    }
                 }
             }
         }

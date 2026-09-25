@@ -288,6 +288,11 @@ namespace PlaywrightNative
 
                 StopNetworkIdleTimerLocked();
             }
+
+            // Drop a stale networkidle that may have fired from the frame ctor
+            // quiet-period timer before this request was attributed (iframe
+            // attach-and-hang races on slow CI).
+            RootFrame().RecalculateNetworkIdle();
         }
 
         /// <summary>
@@ -369,6 +374,11 @@ namespace PlaywrightNative
                 {
                     _lifecycleEvents.Remove("networkidle");
                 }
+
+                // Wake waiters so they re-check; networkidle is no longer current
+                // (iframe attach / new inflight request). Upstream LifecycleWatcher
+                // keeps waiting until the event is present again.
+                LifecycleChanged?.Invoke("networkidle");
             }
         }
 

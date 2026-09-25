@@ -145,6 +145,10 @@ namespace PlaywrightNative
                 frame.ExecutionContext = pending;
             }
 
+            // New children are not networkidle yet — clear a premature parent
+            // networkidle so waiters (SetContent/networkidle) keep waiting.
+            MainFrame.RecalculateNetworkIdle();
+
             FrameAttached?.Invoke(frame);
         }
 

@@ -1533,7 +1533,9 @@ namespace PlaywrightNative.Chromium
             TaskCompletionSource<bool> lifecycleTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
             void OnLifecycle(string name)
             {
-                if (name == targetLifecycleEvent)
+                // networkidle can be revoked after firing; only complete while present.
+                if (name == targetLifecycleEvent
+                    && frame.LifecycleEvents.Contains(targetLifecycleEvent))
                 {
                     lifecycleTcs.TrySetResult(true);
                 }
@@ -1582,57 +1584,70 @@ namespace PlaywrightNative.Chromium
                     await EvaluateFunctionInFrameAsync<bool>(frame, writeHtml, html).WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
                 }
 
-                if (frame.LifecycleEvents.Contains(targetLifecycleEvent))
-                {
-                    return;
-                }
-
-                // Wait for real CDP lifecycle (upstream frames.ts setContent). Do not
-                // synthesize load from document.readyState — Chromium reports
-                // readyState=complete while hanging subresources (img) are still
-                // outstanding, which broke page-set-content timeout / await-resources.
-                int remainingMs = timeout == System.Threading.Timeout.Infinite
-                    ? System.Threading.Timeout.Infinite
-                    : Math.Max(0, timeout - (int)(Environment.TickCount64 - startTicks));
-                if (remainingMs == 0)
-                {
-                    throw new TimeoutException(
-                        $"SetContentAsync timed out waiting for '{targetLifecycleEvent}' after {timeout}ms");
-                }
-
                 // document.open destroys the main-world context. Wait briefly for a
                 // replacement so callers do not hang on the first post-SetContent
                 // evaluate, but do not treat context recovery as lifecycle success.
-                try
                 {
-                    int contextWaitMs = remainingMs == System.Threading.Timeout.Infinite
-                        ? 5_000
-                        : Math.Min(5_000, remainingMs);
-                    await WaitForFrameExecutionContextAsync(frame, timeout: contextWaitMs).ConfigureAwait(false);
-                }
-                catch (TimeoutException)
-                {
-                }
-
-                if (frame.LifecycleEvents.Contains(targetLifecycleEvent))
-                {
-                    return;
-                }
-
-                remainingMs = timeout == System.Threading.Timeout.Infinite
-                    ? System.Threading.Timeout.Infinite
-                    : Math.Max(0, timeout - (int)(Environment.TickCount64 - startTicks));
-                if (remainingMs == 0)
-                {
-                    throw new TimeoutException(
-                        $"SetContentAsync timed out waiting for '{targetLifecycleEvent}' after {timeout}ms");
+                    int remainingForContext = timeout == System.Threading.Timeout.Infinite
+                        ? System.Threading.Timeout.Infinite
+                        : Math.Max(0, timeout - (int)(Environment.TickCount64 - startTicks));
+                    try
+                    {
+                        int contextWaitMs = remainingForContext == System.Threading.Timeout.Infinite
+                            ? 5_000
+                            : Math.Min(5_000, remainingForContext);
+                        if (contextWaitMs > 0)
+                        {
+                            await WaitForFrameExecutionContextAsync(frame, timeout: contextWaitMs).ConfigureAwait(false);
+                        }
+                    }
+                    catch (TimeoutException)
+                    {
+                    }
                 }
 
-                using var cts = new System.Threading.CancellationTokenSource(remainingMs);
-                cts.Token.Register(() => lifecycleTcs.TrySetException(
-                    new TimeoutException($"SetContentAsync timed out waiting for '{targetLifecycleEvent}' after {timeout}ms")));
+                // Keep waiting until the target lifecycle is currently present —
+                // a revoked networkidle must not count as success.
+                while (!frame.LifecycleEvents.Contains(targetLifecycleEvent))
+                {
+                    int remainingMs = timeout == System.Threading.Timeout.Infinite
+                        ? System.Threading.Timeout.Infinite
+                        : Math.Max(0, timeout - (int)(Environment.TickCount64 - startTicks));
+                    if (remainingMs == 0)
+                    {
+                        throw new TimeoutException(
+                            $"SetContentAsync timed out waiting for '{targetLifecycleEvent}' after {timeout}ms");
+                    }
 
-                await lifecycleTcs.Task.ConfigureAwait(false);
+                    if (lifecycleTcs.Task.IsCompleted)
+                    {
+                        lifecycleTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                    }
+
+                    if (frame.LifecycleEvents.Contains(targetLifecycleEvent))
+                    {
+                        break;
+                    }
+
+                    using var cts = remainingMs == System.Threading.Timeout.Infinite
+                        ? null
+                        : new System.Threading.CancellationTokenSource(remainingMs);
+                    CancellationTokenRegistration registration = default;
+                    if (cts != null)
+                    {
+                        registration = cts.Token.Register(() => lifecycleTcs.TrySetException(
+                            new TimeoutException($"SetContentAsync timed out waiting for '{targetLifecycleEvent}' after {timeout}ms")));
+                    }
+
+                    try
+                    {
+                        await lifecycleTcs.Task.ConfigureAwait(false);
+                    }
+                    finally
+                    {
+                        await registration.DisposeAsync().ConfigureAwait(false);
+                    }
+                }
             }
             finally
             {

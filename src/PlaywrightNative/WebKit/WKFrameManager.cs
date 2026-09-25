@@ -135,6 +135,10 @@ namespace PlaywrightNative.WebKit
             parentFrame.AddChildFrame(frame);
             _frames.TryAdd(frameId, frame);
 
+            // New children are not networkidle yet — clear a premature parent
+            // networkidle so waiters keep waiting for hanging iframe navigations.
+            MainFrame?.RecalculateNetworkIdle();
+
             if (fireEvent)
             {
                 FrameAttached?.Invoke(frame);
