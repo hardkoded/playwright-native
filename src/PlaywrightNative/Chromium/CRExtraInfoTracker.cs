@@ -140,10 +140,7 @@ namespace PlaywrightNative.Chromium
                     hop.FlushRequest();
                     hop.FlushResponse();
                     SealRequestHeaders(hop);
-                    if (ResponseHeadersSettled(hop))
-                    {
-                        hop.Response?.EnsureRawResponseHeaders();
-                    }
+                    SealResponseHeaders(requestId, list, hop);
                 }
 
                 TryStopTracking(requestId, list);
@@ -223,6 +220,45 @@ namespace PlaywrightNative.Chromium
             {
                 await Task.Delay(750).ConfigureAwait(false);
                 pending.EnsureRawRequestHeaders();
+            });
+        }
+
+        private void SealResponseHeaders(string requestId, HopList list, Hop hop)
+        {
+            if (hop?.Response == null)
+            {
+                return;
+            }
+
+            if (ResponseHeadersSettled(hop))
+            {
+                hop.Response.EnsureRawResponseHeaders();
+                return;
+            }
+
+            // ExtraInfo and loadingFinished travel on different CDP channels.
+            // For iframe/nested worker scripts Chromium may set hasExtraInfo
+            // without ever delivering responseReceivedExtraInfo (playwright#39948).
+            // Mirror SealRequestHeaders: allow channel skew, then seal provisional.
+            CRResponse pending = hop.Response;
+            _ = Task.Run(async () =>
+            {
+                await Task.Delay(750).ConfigureAwait(false);
+                if (!_hops.TryGetValue(requestId, out HopList current) || !ReferenceEquals(current, list))
+                {
+                    return;
+                }
+
+                lock (list.Gate)
+                {
+                    if (!hop.HasResponseExtra && pending.ExpectsExtraInfo)
+                    {
+                        pending.SetExpectsExtraInfo(false);
+                        pending.EnsureRawResponseHeaders();
+                    }
+
+                    TryStopTracking(requestId, list);
+                }
             });
         }
 

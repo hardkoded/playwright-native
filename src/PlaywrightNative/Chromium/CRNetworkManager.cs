@@ -108,10 +108,14 @@ namespace PlaywrightNative.Chromium
             session.MessageReceived += state.Handler;
             try
             {
-                List<Task> tasks = new List<Task>
-                {
-                    session.SendAsync("Network.enable"),
-                };
+                // Network.enable must complete before the caller resumes a
+                // PlzDedicatedWorker target. loadingFinished for the main script
+                // arrives on this session and is not replayed; the old 3s
+                // WaitAsync swallowed timeouts and resumed without Network,
+                // dropping RequestFinished for nested workers under CI load.
+                await session.SendAsync("Network.enable").ConfigureAwait(false);
+
+                List<Task> tasks = new List<Task>();
                 if (_extraHttpHeaders != null && _extraHttpHeaders.Count > 0)
                 {
                     tasks.Add(session.SendAsync("Network.setExtraHTTPHeaders", new { headers = _extraHttpHeaders }));
@@ -141,10 +145,10 @@ namespace PlaywrightNative.Chromium
                         }));
                 }
 
-                await Task.WhenAll(tasks).WaitAsync(TimeSpan.FromSeconds(3)).ConfigureAwait(false);
-            }
-            catch (TimeoutException)
-            {
+                if (tasks.Count > 0)
+                {
+                    await Task.WhenAll(tasks).ConfigureAwait(false);
+                }
             }
             catch (PlaywrightException)
             {
