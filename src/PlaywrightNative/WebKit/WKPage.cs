@@ -3199,6 +3199,10 @@ namespace PlaywrightNative.WebKit
             TaskCompletionSource<bool> commitTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
             string previousUrl;
             bool sameDocumentHash;
+            TaskCompletionSource<bool> interruptedLoad = null;
+            TaskCompletionSource<bool> interruptedDom = null;
+            TaskCompletionSource<bool> interruptedCommit = null;
+            PlaywrightException interruptedException = null;
 
             lock (_navigationLock)
             {
@@ -3214,12 +3218,18 @@ namespace PlaywrightNative.WebKit
                     }
                     else
                     {
-                        PlaywrightException interrupted = new(
+                        // Defer TrySetException until after this sync NavigateAsync
+                        // stack returns: the competing GoTo is often started from a
+                        // hanging route callback as `anotherPromise = page.GoToAsync(...)`.
+                        // Sync fault here lets CatchAsync finish before GoToAsync
+                        // returns, leaving anotherPromise null
+                        // (ShouldFailWhenReplacedByAnotherNavigation).
+                        interruptedException = new PlaywrightException(
                             "page.goto: Navigation to \"" + _pendingNavigationUrl +
                             "\" is interrupted by another navigation to \"" + url + "\"");
-                        _pendingLoadTcs?.TrySetException(interrupted);
-                        _pendingDomContentTcs?.TrySetException(interrupted);
-                        _pendingCommitTcs?.TrySetException(interrupted);
+                        interruptedLoad = _pendingLoadTcs;
+                        interruptedDom = _pendingDomContentTcs;
+                        interruptedCommit = _pendingCommitTcs;
                     }
                 }
 
@@ -3250,6 +3260,20 @@ namespace PlaywrightNative.WebKit
                 _emittedPendingNavigationRequest = false;
                 _emittedPendingNavigationFinished = false;
                 _firstPendingNavigationRequest = null;
+            }
+
+            if (interruptedException != null)
+            {
+                PlaywrightException fault = interruptedException;
+                TaskCompletionSource<bool> prevLoad = interruptedLoad;
+                TaskCompletionSource<bool> prevDom = interruptedDom;
+                TaskCompletionSource<bool> prevCommit = interruptedCommit;
+                ThreadPool.QueueUserWorkItem(_ =>
+                {
+                    prevLoad?.TrySetException(fault);
+                    prevDom?.TrySetException(fault);
+                    prevCommit?.TrySetException(fault);
+                });
             }
 
             string frameId = _frameManager.MainFrame?.FrameId ?? _mainFrameId;

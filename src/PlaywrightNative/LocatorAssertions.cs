@@ -2728,6 +2728,25 @@ namespace PlaywrightNative
                                 {
                                     lastReceived = recovered;
                                     sawElement = true;
+                                    if (single
+                                        && needles.Length == 1
+                                        && string.Equals(method, "toHaveText", StringComparison.Ordinal))
+                                    {
+                                        matched = ExpectTextMatch.MatchesHaveTextNeedle(
+                                            recovered[0],
+                                            needles[0],
+                                            exact,
+                                            ignoreCase);
+                                    }
+                                    else
+                                    {
+                                        matched = ExpectTextMatch.MatchesSequence(
+                                            recovered,
+                                            needles,
+                                            requireLength,
+                                            exact,
+                                            ignoreCase);
+                                    }
                                 }
                             }
                         }
