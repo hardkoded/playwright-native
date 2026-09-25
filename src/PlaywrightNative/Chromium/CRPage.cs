@@ -2536,6 +2536,10 @@ namespace PlaywrightNative.Chromium
                 // hung the full NUnit timeout after f6f9a84's soft-grace). Require a
                 // real non-blank frame URL that matches the target, or a lifecycle
                 // event, before accepting the abort as success.
+                //
+                // On success return early — falling through into the full-timeout
+                // lifecycle wait below recreated the NUnit 30s hang under parallel
+                // suite load when URL looked committed but load never arrived.
                 expectedDocumentId = ex.DocumentId;
                 navigationSettled = true;
                 bool urlCommitted = !string.IsNullOrEmpty(frame.Url)
@@ -2550,35 +2554,45 @@ namespace PlaywrightNative.Chromium
                     || frame.LifecycleEvents.Contains(targetLifecycleEvent)
                     || urlCommitted)
                 {
-                    result = new GotoResult(ex.DocumentId);
+                    Crashed -= OnCrashed;
+                    Closed -= OnClosed;
+                    frame.LifecycleChanged -= OnLifecycle;
+                    _frameManager.FrameDetached -= OnDetached;
+                    _frameManager.FrameNavigated -= OnNavigated;
+                    frame.Url = NavigationTimeout.PreserveUserInfo(url, frame.Url);
+                    return;
                 }
-                else
+
+                int graceMs = waitMs == System.Threading.Timeout.Infinite
+                    ? 2_000
+                    : Math.Min(2_000, Math.Max(250, waitMs));
+                using System.Threading.CancellationTokenSource graceCts = new(graceMs);
+                try
                 {
-                    int graceMs = waitMs == System.Threading.Timeout.Infinite
-                        ? 2_000
-                        : Math.Min(2_000, Math.Max(250, waitMs));
-                    using System.Threading.CancellationTokenSource graceCts = new(graceMs);
-                    try
-                    {
-                        graceCts.Token.Register(
-                            () => lifecycleTcs.TrySetCanceled(graceCts.Token));
-                        await lifecycleTcs.Task.WaitAsync(graceCts.Token).ConfigureAwait(false);
-                        result = new GotoResult(ex.DocumentId);
-                    }
-                    catch (Exception)
-                    {
-                        Crashed -= OnCrashed;
-                        Closed -= OnClosed;
-                        frame.LifecycleChanged -= OnLifecycle;
-                        _frameManager.FrameDetached -= OnDetached;
-                        _frameManager.FrameNavigated -= OnNavigated;
-                        ExceptionDispatchInfo.Capture(ex).Throw();
-                        throw;
-                    }
+                    graceCts.Token.Register(
+                        () => lifecycleTcs.TrySetCanceled(graceCts.Token));
+                    await lifecycleTcs.Task.WaitAsync(graceCts.Token).ConfigureAwait(false);
+                    Crashed -= OnCrashed;
+                    Closed -= OnClosed;
+                    frame.LifecycleChanged -= OnLifecycle;
+                    _frameManager.FrameDetached -= OnDetached;
+                    _frameManager.FrameNavigated -= OnNavigated;
+                    frame.Url = NavigationTimeout.PreserveUserInfo(url, frame.Url);
+                    return;
+                }
+                catch (Exception)
+                {
+                    Crashed -= OnCrashed;
+                    Closed -= OnClosed;
+                    frame.LifecycleChanged -= OnLifecycle;
+                    _frameManager.FrameDetached -= OnDetached;
+                    _frameManager.FrameNavigated -= OnNavigated;
+                    ExceptionDispatchInfo.Capture(ex).Throw();
+                    throw;
                 }
             }
 
-            expectedDocumentId = result.NewDocumentId ?? expectedDocumentId;
+            expectedDocumentId = result.NewDocumentId;
             navigationSettled = true;
 
             try
