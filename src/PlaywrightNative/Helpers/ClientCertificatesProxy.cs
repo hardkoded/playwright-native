@@ -1576,7 +1576,13 @@ namespace PlaywrightNative.Helpers
                     // until the next socket I/O. Hard-close the origin TCP when the
                     // budget expires and paint immediately without awaiting the
                     // cancelled handshake unwind / DisposeAsync stall.
-                    const int handshakeBudgetMs = 400;
+                    //
+                    // 400ms was enough for the TLS1.2 hang fixture but too tight for
+                    // successful client-cert handshakes under Windows suite load
+                    // (BrowserShouldHandleTlsRenegotiationWithClientCertificates →
+                    // ERR_PROXY_CONNECTION_FAILED). 550ms + ForceClose still paints
+                    // the MITM error page before Chromium closes the SOCKS tunnel.
+                    const int handshakeBudgetMs = 550;
                     using CancellationTokenSource handshakeCts =
                         CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
                     handshakeCts.CancelAfter(TimeSpan.FromMilliseconds(handshakeBudgetMs));

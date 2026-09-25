@@ -3069,11 +3069,17 @@ namespace PlaywrightNative.Chromium
                     return;
                 }
 
-                // Do not let a superseding goto overwrite a response that already
-                // matches THIS goto's URL (ShouldReturnFromGotoIfNewNavigationIsStarted
+                // Do not let a superseding goto overwrite a FINAL document response
+                // that already matches THIS goto's URL (ShouldReturnFromGotoIfNewNavigationIsStarted
                 // under Windows suite load: EmptyPage lands while first capture still
                 // holds load-event.html's 200).
+                //
+                // Intermediate 3xx responses also match the goto URL, but must be
+                // replaced by the redirect destination — otherwise GoTo returns the
+                // first 302 forever (ShouldWorkWithRedirects /
+                // ShouldReturnLastResponseInRedirectChain).
                 if (captured != null
+                    && IsFinalDocumentCapture(captured)
                     && ResponseUrlMatchesTarget(captured, url)
                     && !ResponseUrlMatchesTarget(response, url))
                 {
@@ -3094,13 +3100,13 @@ namespace PlaywrightNative.Chromium
                     IsHttpResponseCodeFailure(ex)
                     && TryRecoverNavigationResponse(frame, url, captured, out CRResponse recoveredCode))
                 {
-                    return recoveredCode;
+                    return ResolveRedirectChainEnd(recoveredCode);
                 }
                 catch (NavigationException ex) when (
                     IsAbortedNavigation(ex)
                     && TryRecoverNavigationResponse(frame, url, captured, out CRResponse recoveredAbort, ex.DocumentId))
                 {
-                    return recoveredAbort;
+                    return ResolveRedirectChainEnd(recoveredAbort);
                 }
                 catch (NavigationException ex) when (IsAbortedNavigation(ex))
                 {
@@ -3114,7 +3120,7 @@ namespace PlaywrightNative.Chromium
                         () => captured).ConfigureAwait(false);
                     if (delayed != null)
                     {
-                        return delayed;
+                        return ResolveRedirectChainEnd(delayed);
                     }
 
                     throw;
@@ -3127,16 +3133,30 @@ namespace PlaywrightNative.Chromium
                     return null;
                 }
 
+                // Prefer a final document capture for THIS navigation — including
+                // redirect destinations whose URL differs from the goto target but
+                // whose RedirectedFrom chain includes it — before TryRecover's
+                // URL-only scan (which would miss empty.html after /redirect/1.html).
+                CRResponse fromCapture = ResolveRedirectChainEnd(captured);
+                if (IsFinalDocumentCapture(fromCapture)
+                    && CaptureBelongsToFrame(fromCapture, frame)
+                    && (ResponseUrlMatchesTarget(fromCapture, url)
+                        || ResponseUrlMatchesTarget(captured, url)
+                        || RedirectChainIncludesTarget(fromCapture, url)))
+                {
+                    return fromCapture;
+                }
+
                 // Prefer a response that still matches the original goto URL. A
                 // superseding navigation may have overwritten `captured` while
                 // ERR_ABORTED-with-loaderId was treated as a successful navigate.
                 if (TryRecoverNavigationResponse(frame, url, captured, out CRResponse preferred)
                     && preferred != null)
                 {
-                    return preferred;
+                    return ResolveRedirectChainEnd(preferred);
                 }
 
-                return captured;
+                return fromCapture;
             }
             finally
             {
@@ -3409,6 +3429,70 @@ namespace PlaywrightNative.Chromium
 
                 return response.Request != null
                     && NavigationUrlsMatch(response.Request.Url, targetUrl);
+            }
+
+            static bool IsFinalDocumentCapture(CRResponse response)
+            {
+                if (response == null)
+                {
+                    return false;
+                }
+
+                int status = response.Status;
+                return status >= 200
+                    && status != 204
+                    && (status < 300 || status >= 400);
+            }
+
+            static bool CaptureBelongsToFrame(CRResponse response, Frame targetFrame)
+            {
+                Frame responseFrame = response?.Request?.Frame;
+                if (responseFrame == null || targetFrame == null)
+                {
+                    return responseFrame == null && targetFrame == null;
+                }
+
+                return ReferenceEquals(responseFrame, targetFrame)
+                    || string.Equals(responseFrame.FrameId, targetFrame.FrameId, StringComparison.Ordinal);
+            }
+
+            static bool RedirectChainIncludesTarget(CRResponse response, string targetUrl)
+            {
+                if (response?.Request == null || string.IsNullOrEmpty(targetUrl))
+                {
+                    return false;
+                }
+
+                CRRequest current = response.Request;
+                int guard = 0;
+                while (current != null && guard++ < 32)
+                {
+                    if (NavigationUrlsMatch(current.Url, targetUrl))
+                    {
+                        return true;
+                    }
+
+                    current = current.RedirectedFrom;
+                }
+
+                return false;
+            }
+
+            static CRResponse ResolveRedirectChainEnd(CRResponse response)
+            {
+                if (response?.Request == null)
+                {
+                    return response;
+                }
+
+                CRRequest current = response.Request;
+                int guard = 0;
+                while (current.RedirectedTo != null && guard++ < 32)
+                {
+                    current = current.RedirectedTo;
+                }
+
+                return current.Response ?? response;
             }
 
             bool TryRecoverNavigationResponse(
