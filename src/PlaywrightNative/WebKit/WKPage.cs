@@ -3969,24 +3969,10 @@ namespace PlaywrightNative.WebKit
                     && !_closing
                     && IsRetryableEvaluateFailure(ex))
                 {
-                    string frameId = frame?.FrameId;
-                    if (!string.IsNullOrEmpty(frameId))
-                    {
-                        if (_frameContexts.TryRemove(frameId, out WKExecutionContext dropped))
-                        {
-                            dropped?.MarkDestroyed();
-                            if (ReferenceEquals(dropped, _executionContext))
-                            {
-                                _executionContext = null;
-                            }
-                        }
-                    }
-                    else if (frame == null || frame.ParentFrame == null)
-                    {
-                        _executionContext?.MarkDestroyed();
-                        _executionContext = null;
-                    }
-
+                    // Do not MarkDestroyed / clear maps here. Process-swap already
+                    // ClearExecutionContexts and installs a fresh world. Clearing on
+                    // remapped TargetClosed orphaned the live about:blank popup world
+                    // (mac ShouldExposeFunctionsInPopups / InitScriptOnce).
                     await Task.Delay(50).ConfigureAwait(false);
                 }
             }
@@ -7331,32 +7317,13 @@ namespace PlaywrightNative.WebKit
             string frameId = frame?.FrameId;
             if (!string.IsNullOrEmpty(frameId) && _frameContexts.TryGetValue(frameId, out context))
             {
-                // Reject destroyed worlds so WaitForFrameContextAsync can pick up the
-                // post-process-swap replacement (SetContent). Do not drop contexts whose
-                // session looks disposed yet — about:blank popups can still evaluate on
-                // that session, and clearing them caused mac CI
-                // ShouldExposeFunctionsInPopups / ShouldWorkWithoutNavigationInPopup to
-                // hang until "Execution context is not yet available".
-                if (context != null && !context.Destroyed.IsCompleted)
-                {
-                    return true;
-                }
-
-                _frameContexts.TryRemove(frameId, out _);
+                return true;
             }
 
             if (frame == null || frame.ParentFrame == null)
             {
                 context = _executionContext;
-                if (context != null && !context.Destroyed.IsCompleted)
-                {
-                    return true;
-                }
-
-                if (context != null && ReferenceEquals(context, _executionContext))
-                {
-                    _executionContext = null;
-                }
+                return context != null;
             }
 
             context = null;
