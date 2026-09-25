@@ -4558,15 +4558,30 @@ namespace PlaywrightNative.Chromium
         {
             try
             {
-                await worker.EnableRuntimeAsync().ConfigureAwait(false);
                 Frame ownerFrame = !string.IsNullOrEmpty(parentFrameId)
                     ? _frameManager.FrameById(parentFrameId)
                     : null;
+
+                // PlzDedicatedWorker fetches the main script while the target is still
+                // paused; loadingFinished for that script is delivered on this worker
+                // session and is not replayed. Official queues Runtime.enable without
+                // awaiting its ack before addSession(Network.enable). Awaiting
+                // Runtime.enable first delayed Network.enable under CI load and lost
+                // RequestFinished for nested workers inside iframes (30s timeout).
                 await _networkManager.AddWorkerSessionAsync(
                     worker.Session,
                     ownerFrame ?? MainFrame,
                     isWorker: true,
                     parentFrameId).ConfigureAwait(false);
+                try
+                {
+                    await worker.EnableRuntimeAsync().ConfigureAwait(false);
+                }
+                catch (PlaywrightException)
+                {
+                    // Official session._sendMayFail('Runtime.enable').
+                }
+
                 try
                 {
                     await worker.Session.SendAsync(
