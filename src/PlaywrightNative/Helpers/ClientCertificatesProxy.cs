@@ -1121,13 +1121,35 @@ namespace PlaywrightNative.Helpers
 
         private static List<SslApplicationProtocol> ErrorPageAlpn(IReadOnlyList<string> offered)
         {
-            // Upstream socksClientCertificatesInterceptor error path passes
-            // `serverDecrypted.alpnProtocol` into the MITM upgrade; on handshake
-            // failure that value is undefined, so the browser MITM offers only
-            // ["http/1.1"]. Re-offering "h2" here makes WebKit negotiate HTTP/2
-            // for the error page, and our lightweight HTTP/2 error writer then
-            // trips "Broken pipe" / hangs instead of rendering the HTML.
-            _ = offered;
+            // Prefer http/1.1 so WebKit does not negotiate h2 for the lightweight
+            // error writer (Broken pipe / hang). When the ClientHello offered only
+            // h2 — common against HTTP/2-only fixtures — echoing only http/1.1
+            // fails ALPN and Chromium reports net::ERR_SOCKET_NOT_CONNECTED
+            // before any error HTML arrives
+            // (BrowserShouldReturnTargetConnectionErrorsWhenUsingHttp2).
+            bool offeredH2 = false;
+            bool offeredHttp11 = false;
+            if (offered != null)
+            {
+                for (int i = 0; i < offered.Count; i++)
+                {
+                    string protocol = offered[i];
+                    if (string.Equals(protocol, "h2", StringComparison.Ordinal))
+                    {
+                        offeredH2 = true;
+                    }
+                    else if (string.Equals(protocol, "http/1.1", StringComparison.Ordinal))
+                    {
+                        offeredHttp11 = true;
+                    }
+                }
+            }
+
+            if (offeredH2 && !offeredHttp11)
+            {
+                return new List<SslApplicationProtocol> { SslApplicationProtocol.Http2 };
+            }
+
             return new List<SslApplicationProtocol> { SslApplicationProtocol.Http11 };
         }
 
@@ -1500,13 +1522,14 @@ namespace PlaywrightNative.Helpers
                     // server resets mid-TLS (SNI reject / TLS1.2 fixtures) or when
                     // certificate validation stalls. Upstream surfaces an error page
                     // instead of hanging page.goto.
-                    // Keep the origin handshake short: Chromium aborts the SOCKS
-                    // tunnel with net::ERR_CONNECTION_ABORTED when the error-page
-                    // MITM starts too late under Windows suite load
-                    // (BrowserShouldNotHangOnTlsErrorsDuringTls12Handshake).
+                    // Keep this well under Chromium's SOCKS patience: a 2s budget
+                    // still loses the tunnel to net::ERR_SOCKET_NOT_CONNECTED under
+                    // suite load before WriteTlsErrorPageAsync runs
+                    // (BrowserShouldNotHangOnTlsErrorsDuringTls12Handshake /
+                    // BrowserShouldReturnTargetConnectionErrorsWhenUsingHttp2).
                     using CancellationTokenSource handshakeCts =
                         CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
-                    handshakeCts.CancelAfter(TimeSpan.FromSeconds(2));
+                    handshakeCts.CancelAfter(TimeSpan.FromMilliseconds(750));
                     await serverTls.AuthenticateAsClientAsync(clientOptions, handshakeCts.Token)
                         .ConfigureAwait(false);
                 }
@@ -1620,9 +1643,10 @@ namespace PlaywrightNative.Helpers
             SslStream tls = new(browser, leaveInnerStreamOpen: true);
             try
             {
-                // Origin handshake already failed — mirror upstream's error path
-                // (ALPN http/1.1 only). Pin TLS 1.2|1.3 so AuthenticateAsServer
-                // accepts a TLS 1.2-only ClientHello from WebKit on macOS
+                // Origin handshake already failed — prefer http/1.1 like upstream,
+                // but echo h2 when that is all the ClientHello offered (see
+                // ErrorPageAlpn). Pin TLS 1.2|1.3 so AuthenticateAsServer accepts
+                // a TLS 1.2-only ClientHello from WebKit on macOS
                 // (BrowserShouldNotHangOnTlsErrorsDuringTls12Handshake).
 #pragma warning disable CA5398
                 SslServerAuthenticationOptions options = new()

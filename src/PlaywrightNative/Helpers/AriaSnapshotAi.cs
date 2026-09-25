@@ -762,6 +762,10 @@ namespace PlaywrightNative.Helpers
         /// <summary>
         /// Retries an empty multi-iframe stitch by DOM <c>querySelectorAll</c>
         /// index via <c>FrameLocator.Nth</c> (srcdoc-safe; creation order differs).
+        /// The locator is scoped to <paramref name="frame"/> — page-level
+        /// <c>FrameLocator.Nth</c> only sees top-level iframes, so nested
+        /// retries would stitch the wrong sibling (ShouldStitchAllFrameSnapshots
+        /// under Windows suite load).
         /// </summary>
         private static async Task<string> CaptureChildYamlByDomIndexAsync(
             IPage page,
@@ -785,7 +789,7 @@ namespace PlaywrightNative.Helpers
 
             try
             {
-                IElementHandle enterRoot = await page.FrameLocator("iframe, frame")
+                IElementHandle enterRoot = await frame.FrameLocator("iframe, frame")
                     .Nth(domIndex.Value)
                     .Locator("body, frameset")
                     .ElementHandleAsync(2_000f)
