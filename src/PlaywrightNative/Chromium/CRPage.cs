@@ -1022,7 +1022,16 @@ namespace PlaywrightNative.Chromium
 
             worker.ExceptionThrown += (_, error) => PageError?.Invoke(this, error);
             child.MessageReceived += OnWorkerSessionMessage;
-            _ = AttachWorkerAndReportAsync(worker, parentFrameId);
+
+            Frame ownerFrame = !string.IsNullOrEmpty(parentFrameId)
+                ? _frameManager.FrameById(parentFrameId)
+                : null;
+            Task networkTask = _networkManager.AddWorkerSessionAsync(
+                child,
+                ownerFrame ?? MainFrame,
+                isWorker: true,
+                parentFrameId);
+            _ = AttachWorkerAndReportAsync(worker, parentFrameId, networkTask);
         }
 
         /// <summary>
@@ -4537,7 +4546,19 @@ namespace PlaywrightNative.Chromium
 
             worker.ExceptionThrown += (_, error) => PageError?.Invoke(this, error);
             child.MessageReceived += OnWorkerSessionMessage;
-            _ = AttachWorkerAndReportAsync(worker, parentFrameId);
+
+            // Start Network.enable before any async yield from this attach
+            // handler. PlzDedicatedWorker may finish the main script on this
+            // session while we are still scheduling AttachWorkerAndReportAsync.
+            Frame ownerFrame = !string.IsNullOrEmpty(parentFrameId)
+                ? _frameManager.FrameById(parentFrameId)
+                : null;
+            Task networkTask = _networkManager.AddWorkerSessionAsync(
+                child,
+                ownerFrame ?? MainFrame,
+                isWorker: true,
+                parentFrameId);
+            _ = AttachWorkerAndReportAsync(worker, parentFrameId, networkTask);
         }
 
         private void OnWorkerSessionMessage(string method, JsonElement? parameters)
@@ -4554,25 +4575,30 @@ namespace PlaywrightNative.Chromium
             }
         }
 
-        private async Task AttachWorkerAndReportAsync(CRWorker worker, string parentFrameId)
+        private async Task AttachWorkerAndReportAsync(CRWorker worker, string parentFrameId, Task networkTask = null)
         {
             try
             {
-                Frame ownerFrame = !string.IsNullOrEmpty(parentFrameId)
-                    ? _frameManager.FrameById(parentFrameId)
-                    : null;
+                // Network.enable was already sent from OnAttachedToTarget /
+                // AttachChildWorker. Await it before resume so loadingFinished
+                // on this PlzDedicatedWorker session is not missed; Runtime.enable
+                // is best-effort and must not delay Network.
+                if (networkTask != null)
+                {
+                    await networkTask.ConfigureAwait(false);
+                }
+                else
+                {
+                    Frame ownerFrame = !string.IsNullOrEmpty(parentFrameId)
+                        ? _frameManager.FrameById(parentFrameId)
+                        : null;
+                    await _networkManager.AddWorkerSessionAsync(
+                        worker.Session,
+                        ownerFrame ?? MainFrame,
+                        isWorker: true,
+                        parentFrameId).ConfigureAwait(false);
+                }
 
-                // PlzDedicatedWorker fetches the main script while the target is still
-                // paused; loadingFinished for that script is delivered on this worker
-                // session and is not replayed. Official queues Runtime.enable without
-                // awaiting its ack before addSession(Network.enable). Awaiting
-                // Runtime.enable first delayed Network.enable under CI load and lost
-                // RequestFinished for nested workers inside iframes (30s timeout).
-                await _networkManager.AddWorkerSessionAsync(
-                    worker.Session,
-                    ownerFrame ?? MainFrame,
-                    isWorker: true,
-                    parentFrameId).ConfigureAwait(false);
                 try
                 {
                     await worker.EnableRuntimeAsync().ConfigureAwait(false);
@@ -4791,6 +4817,12 @@ namespace PlaywrightNative.Chromium
             string type = p.TryGetProperty("type", out JsonElement typeEl) ? typeEl.GetString() : "alert";
             string message = p.TryGetProperty("message", out JsonElement msgEl) ? msgEl.GetString() : string.Empty;
             string defaultValue = p.TryGetProperty("defaultPrompt", out JsonElement defEl) ? defEl.GetString() : string.Empty;
+
+            // A JS dialog can only open after a real document commit. Mark that
+            // commit before raising so WaitForFirstNonInitialNavigationAsync /
+            // reportAsNew are not stuck while Chrome stalls CDP behind the dialog
+            // (browsercontext-events inline-script popup: WaitForPage 30s).
+            NoteDialogOpened();
 
             CRDialog dialog = new(_client, type, message, defaultValue);
             DialogOpening?.Invoke(this, dialog);
@@ -5544,6 +5576,18 @@ namespace PlaywrightNative.Chromium
             return new CRJSHandle(context, objectId, preview);
         }
 
+        /// <summary>
+        /// A JavaScript dialog can only open after a real document commit. Mark
+        /// that commit so <see cref="Page.IsClientInitialized"/> and popup
+        /// <c>reportAsNew</c> are not stuck waiting on <c>frameNavigated</c>
+        /// while Chrome stalls CDP behind the open dialog.
+        /// </summary>
+        internal void NoteDialogOpened()
+        {
+            HasCommittedNonInitialNavigation = true;
+            _firstNonInitialNavigationTcs.TrySetResult(true);
+        }
+
         private void MarkFirstNonInitialNavigation(string url)
         {
             if (url != null
@@ -5623,7 +5667,10 @@ namespace PlaywrightNative.Chromium
                 return;
             }
 
-            await SyncMainFrameFromTreeAsync().ConfigureAwait(false);
+            // Bound getFrameTree: an in-flight Page.getFrameTree after prompt()
+            // never returns until the dialog is handled, which deadlocks
+            // InitializeAsync → reportAsNew → WaitForPage (inline-script popup).
+            await Task.WhenAny(SyncMainFrameFromTreeAsync(), Task.Delay(250)).ConfigureAwait(false);
             if (_firstNonInitialNavigationTcs.Task.IsCompleted)
             {
                 return;
