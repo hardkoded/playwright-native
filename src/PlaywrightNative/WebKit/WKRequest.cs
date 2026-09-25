@@ -436,6 +436,15 @@ namespace PlaywrightNative.WebKit
         }
 
         /// <summary>
+        /// Whether <see cref="MarkFinished"/> already completed finish waiters
+        /// (e.g. network-manager dispose) even when <see cref="Finished"/> has
+        /// not been set by <c>loadingFinished</c>.
+        /// </summary>
+        /// <returns><see langword="true"/> when finish waiters are completed.</returns>
+        internal bool IsFinishWaiterCompleted()
+            => _finished.Task.IsCompleted;
+
+        /// <summary>
         /// Marks the page-level <c>requestfinished</c> event as raised once.
         /// COOP / process-swap can finish the same navigation via both
         /// <c>Network.loadingFinished</c> and session dispose.

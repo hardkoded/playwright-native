@@ -1048,6 +1048,11 @@ namespace PlaywrightNative.WebKit
             // Promise by-value serialization must still be awaited via a handle.
             // Stash the first-run result so the handle recover does not re-execute page
             // side effects (exposeFunction / evaluate callbacks).
+            if (_destroyed.Task.IsCompleted)
+            {
+                throw ClosedOrNavigationException();
+            }
+
             string stashKey = "__pw_eval_" + Guid.NewGuid().ToString("N");
             string stashedExpression =
                 "(() => { const __pw_r = (" + expression + "); globalThis[" +
@@ -1057,9 +1062,21 @@ namespace PlaywrightNative.WebKit
                 "(() => { const __pw_k = " + JsonSerializer.Serialize(stashKey) +
                 "; const __pw_v = globalThis[__pw_k]; try { delete globalThis[__pw_k]; } catch (e) {} return __pw_v; })()";
 
-            JsonElement? evalResponse = await _session.SendAsync(
-                "Runtime.evaluate",
-                BuildEvaluateParams(stashedExpression, returnByValue: true)).ConfigureAwait(false);
+            JsonElement? evalResponse;
+            try
+            {
+                evalResponse = await _session.SendAsync(
+                    "Runtime.evaluate",
+                    BuildEvaluateParams(stashedExpression, returnByValue: true)).ConfigureAwait(false);
+            }
+            catch (TargetClosedException)
+            {
+                // Same as EvaluateHandleAsync: process-swap disposes the session without
+                // IsClosing. Surface the navigation destroyed-context error so callers
+                // (SetContent) can wait for the replacement world instead of failing as
+                // "Target page, context or browser has been closed".
+                throw ClosedOrNavigationException();
+            }
 
             if (evalResponse == null)
             {
@@ -1099,9 +1116,18 @@ namespace PlaywrightNative.WebKit
             string objectId = RemoteObject.GetObjectId(result);
             if (string.IsNullOrEmpty(objectId))
             {
-                JsonElement? asHandle = await _session.SendAsync(
-                    "Runtime.evaluate",
-                    BuildEvaluateParams(recoverExpression, returnByValue: false)).ConfigureAwait(false);
+                JsonElement? asHandle;
+                try
+                {
+                    asHandle = await _session.SendAsync(
+                        "Runtime.evaluate",
+                        BuildEvaluateParams(recoverExpression, returnByValue: false)).ConfigureAwait(false);
+                }
+                catch (TargetClosedException)
+                {
+                    throw ClosedOrNavigationException();
+                }
+
                 if (asHandle == null)
                 {
                     return null;

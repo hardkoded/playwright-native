@@ -1005,6 +1005,21 @@ namespace PlaywrightNative.WebKit
                 return;
             }
 
+            // Process-swap dispose may MarkFinished before responseReceived
+            // assigns Response (so Dispose skipped OnRequestFinished). Emit
+            // requestfinished now that the response is public.
+            if (publicRequest.IsFinishWaiterCompleted())
+            {
+                RaiseRequestFinished(publicRequest);
+                if (publicRequest != request)
+                {
+                    request.Finished = true;
+                    request.MarkFinished();
+                }
+
+                return;
+            }
+
             if (publicRequest != request && publicRequest.Finished)
             {
                 _page.OnRequestFinished(request);

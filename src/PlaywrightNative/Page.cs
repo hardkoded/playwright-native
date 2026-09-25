@@ -2131,6 +2131,19 @@ namespace PlaywrightNative
 
         private void OnDialogOpening(CRDialog crDialog)
         {
+            // Popup inline <script>prompt()</script> opens before InitializeAsync
+            // reaches ReportPopupAsNew. browsercontext-events awaits WaitForPage
+            // before Accept; report the page now so that wait can complete while
+            // post-resume evaluates / getFrameTree are stalled on the open dialog.
+            // Skip blank/javascript: prompts — official leaves dialog.Page null until
+            // reportAsNew (DialogEventShouldWorkInPopup2).
+            if (_crPage.Opener != null
+                && _context is ChromiumBrowserContext chromiumContext
+                && _crPage.NoteDialogOpened())
+            {
+                chromiumContext.ReportPopupAsNew(this);
+            }
+
             IDialog dialog = _dialogTracker.Wrap(new ChromiumDialog(crDialog, this), EmitDialogClosed);
             IDialogHost host = _context as IDialogHost;
             EventHandler<IDialog> pageDialog = Dialog;

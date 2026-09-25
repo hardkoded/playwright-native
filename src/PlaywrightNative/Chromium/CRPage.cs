@@ -3926,6 +3926,33 @@ namespace PlaywrightNative.Chromium
         }
 
         /// <summary>
+        /// A JavaScript dialog can only open after a real document commit. Mark
+        /// that commit so <see cref="Page.IsClientInitialized"/> and popup
+        /// <c>reportAsNew</c> are not stuck waiting on <c>frameNavigated</c>
+        /// while Chrome stalls CDP behind the open dialog. No-op for blank /
+        /// <c>javascript:</c> URLs (official omits <c>dialog.page</c> until
+        /// <c>reportAsNew</c>).
+        /// </summary>
+        /// <returns>
+        /// <see langword="true"/> when a non-blank, non-<c>javascript:</c> commit was marked.
+        /// </returns>
+        internal bool NoteDialogOpened()
+        {
+            string url = MainFrame?.Url ?? string.Empty;
+            if (string.IsNullOrEmpty(url)
+                || PopupOpenedHelper.IsInitialEmptyDocumentUrl(url)
+                || PopupOpenedHelper.IsBlankUrl(url)
+                || url.StartsWith("javascript:", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            HasCommittedNonInitialNavigation = true;
+            _firstNonInitialNavigationTcs.TrySetResult(true);
+            return true;
+        }
+
+        /// <summary>
         /// Invoked by <see cref="CRBrowser"/> when a new target whose <c>openerId</c>
         /// matches this page's target attaches. Fires <see cref="PopupOpened"/>.
         /// </summary>

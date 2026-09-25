@@ -3953,8 +3953,60 @@ namespace PlaywrightNative.WebKit
         /// <returns>The deserialized result.</returns>
         internal async Task<T> EvaluateInFrameAsync<T>(WKFrame frame, string expression)
         {
-            WKExecutionContext context = await WaitForFrameContextAsync(frame).ConfigureAwait(false);
-            return await context.EvaluateAsync<T>(expression).ConfigureAwait(false);
+            // Process-swap / COOP can dispose the target session between waiting for a
+            // context and Runtime.evaluate (BrowserContext.Events.Response SetContent on
+            // Linux CI). Retry on the replacement world while the page stays open.
+            for (int attempt = 0; ; attempt++)
+            {
+                try
+                {
+                    WKExecutionContext context = await WaitForFrameContextAsync(frame).ConfigureAwait(false);
+                    return await context.EvaluateAsync<T>(expression).ConfigureAwait(false);
+                }
+                catch (PlaywrightException ex) when (
+                    attempt < 20
+                    && !_closed
+                    && !_closing
+                    && IsRetryableEvaluateFailure(ex))
+                {
+                    string frameId = frame?.FrameId;
+                    if (!string.IsNullOrEmpty(frameId))
+                    {
+                        if (_frameContexts.TryRemove(frameId, out WKExecutionContext dropped))
+                        {
+                            dropped?.MarkDestroyed();
+                            if (ReferenceEquals(dropped, _executionContext))
+                            {
+                                _executionContext = null;
+                            }
+                        }
+                    }
+                    else if (frame == null || frame.ParentFrame == null)
+                    {
+                        _executionContext?.MarkDestroyed();
+                        _executionContext = null;
+                    }
+
+                    await Task.Delay(50).ConfigureAwait(false);
+                }
+            }
+
+            static bool IsRetryableEvaluateFailure(PlaywrightException ex)
+            {
+                if (ex == null)
+                {
+                    return false;
+                }
+
+                if (DestroyedContext.IsDestroyedContext(ex))
+                {
+                    return true;
+                }
+
+                string message = ex.Message ?? string.Empty;
+                return message.Contains("most likely because of a navigation", StringComparison.Ordinal)
+                    || message.Contains("Execution context is not yet available", StringComparison.Ordinal);
+            }
         }
 
         /// <summary>
@@ -5366,7 +5418,15 @@ namespace PlaywrightNative.WebKit
                 return;
             }
 
-            if (ReferenceEquals(publicRequest, _firstPendingNavigationRequest)
+            // Redirect hops complete before the final document request. Do not
+            // treat them as the pending navigation requestfinished; that flag
+            // would swallow the hop DONE under process-swap races
+            // (ShouldSupportRedirects: foo gets GET,302 without DONE).
+            bool redirectHop = publicRequest.Response != null
+                && ResponseHeaders.IsRedirectStatus(publicRequest.Response.Status);
+
+            if (!redirectHop
+                && ReferenceEquals(publicRequest, _firstPendingNavigationRequest)
                 && _emittedPendingNavigationFinished)
             {
                 return;
@@ -5379,7 +5439,11 @@ namespace PlaywrightNative.WebKit
 
             if (request.SuppressPageEvents)
             {
-                _emittedPendingNavigationFinished = true;
+                if (!redirectHop)
+                {
+                    _emittedPendingNavigationFinished = true;
+                }
+
                 publicRequest.MarkFinished();
                 TrackInflight(publicRequest, started: false);
                 RequestFinished?.Invoke(this, publicRequest);
@@ -5387,7 +5451,8 @@ namespace PlaywrightNative.WebKit
                 return;
             }
 
-            if (ReferenceEquals(request, _firstPendingNavigationRequest))
+            if (!redirectHop
+                && ReferenceEquals(request, _firstPendingNavigationRequest))
             {
                 _emittedPendingNavigationFinished = true;
             }
@@ -7264,13 +7329,32 @@ namespace PlaywrightNative.WebKit
             string frameId = frame?.FrameId;
             if (!string.IsNullOrEmpty(frameId) && _frameContexts.TryGetValue(frameId, out context))
             {
-                return true;
+                if (context != null
+                    && !context.Destroyed.IsCompleted
+                    && context.Session != null
+                    && !context.Session.IsDisposed)
+                {
+                    return true;
+                }
+
+                _frameContexts.TryRemove(frameId, out _);
             }
 
             if (frame == null || frame.ParentFrame == null)
             {
                 context = _executionContext;
-                return context != null;
+                if (context != null
+                    && !context.Destroyed.IsCompleted
+                    && context.Session != null
+                    && !context.Session.IsDisposed)
+                {
+                    return true;
+                }
+
+                if (ReferenceEquals(context, _executionContext))
+                {
+                    _executionContext = null;
+                }
             }
 
             context = null;
