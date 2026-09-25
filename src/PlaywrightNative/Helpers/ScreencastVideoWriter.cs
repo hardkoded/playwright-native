@@ -18,6 +18,7 @@ using System;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace PlaywrightNative.Helpers
@@ -47,12 +48,29 @@ namespace PlaywrightNative.Helpers
             0x01, 0x00, 0x02, 0x11, 0x03, 0x11, 0x00, 0x3F, 0x00, 0xBF, 0x80, 0x0F, 0xFF, 0xD9,
         };
 
+        // Minimal EBML/WebM header + void so Directory.GetFiles("*.webm") sees a
+        // file when ffmpeg could not encode a white frame.
+        private static readonly byte[] MinimalWebmPlaceholder =
+        {
+            0x1A, 0x45, 0xDF, 0xA3, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1F,
+            0x42, 0x86, 0x81, 0x01, 0x42, 0xF7, 0x81, 0x01, 0x42, 0xF2, 0x81, 0x04,
+            0x42, 0xF3, 0x81, 0x08, 0x42, 0x82, 0x84, 0x77, 0x65, 0x62, 0x6D, 0x42,
+            0x87, 0x81, 0x02, 0x42, 0x85, 0x81, 0x02,
+        };
+
+        // Serialize empty-recording ffmpeg launches: Windows suite load that
+        // closes two RecordVideo pages back-to-back otherwise races two ffmpeg
+        // image2pipe writers and can drop one .webm
+        // (ShouldCloseFfmpegEvenIfThereWereNoFrames).
+        private static readonly SemaphoreSlim WhiteVideoGate = new(1, 1);
+
         private readonly string _path;
         private readonly int _width;
         private readonly int _height;
         private readonly object _gate = new();
         private Process _ffmpeg;
         private Task _stderrTask;
+        private Task _stopTask;
         private int _frames;
         private bool _stopped;
 
@@ -126,7 +144,21 @@ namespace PlaywrightNative.Helpers
         /// so official empty-video assertions still see a duration and size.
         /// </summary>
         /// <returns>A task that completes when ffmpeg exits.</returns>
-        internal async Task StopAsync()
+        internal Task StopAsync()
+        {
+            lock (_gate)
+            {
+                if (_stopTask != null)
+                {
+                    return _stopTask;
+                }
+
+                _stopTask = StopCoreAsync();
+                return _stopTask;
+            }
+        }
+
+        private async Task StopCoreAsync()
         {
             Process ffmpeg;
             Task stderrTask;
@@ -205,20 +237,6 @@ namespace PlaywrightNative.Helpers
             }
         }
 
-        private static async Task DrainErrorAsync(Process process)
-        {
-            try
-            {
-                await process.StandardError.ReadToEndAsync().ConfigureAwait(false);
-            }
-            catch (IOException)
-            {
-            }
-            catch (ObjectDisposedException)
-            {
-            }
-        }
-
         private Process EnsureFfmpeg()
         {
             lock (_gate)
@@ -273,81 +291,97 @@ namespace PlaywrightNative.Helpers
 
         private async Task WriteWhiteVideoAsync()
         {
-            // Bundled screencast ffmpeg often lacks lavfi. Prefer the same
-            // image2pipe path as live frames (pad/crop to size) so empty
-            // recordings still leave a .webm (ShouldCloseFfmpegEvenIfThereWereNoFrames).
-            if (await WriteWhiteVideoViaImagePipeAsync().ConfigureAwait(false))
+            await WhiteVideoGate.WaitAsync().ConfigureAwait(false);
+            try
             {
-                return;
-            }
-
-            // Optional system-ffmpeg lavfi fallback when image2pipe is unavailable.
-            string[] candidates =
-            {
-                FfmpegLocator.ResolveForWebp(),
-                FfmpegLocator.Resolve(),
-            };
-
-            foreach (string ffmpeg in candidates)
-            {
-                if (string.IsNullOrEmpty(ffmpeg))
+                // Bundled screencast ffmpeg often lacks lavfi. Prefer the same
+                // image2pipe path as live frames (pad/crop to size) so empty
+                // recordings still leave a .webm (ShouldCloseFfmpegEvenIfThereWereNoFrames).
+                if (await WriteWhiteVideoViaImagePipeAsync().ConfigureAwait(false))
                 {
-                    continue;
+                    return;
                 }
 
-                ProcessStartInfo startInfo = new()
+                // Optional system-ffmpeg lavfi fallback when image2pipe is unavailable.
+                string[] candidates =
                 {
-                    FileName = ffmpeg,
-                    Arguments = string.Format(
-                        CultureInfo.InvariantCulture,
-                        "-y -f lavfi -i color=c=white:s={0}x{1}:d=1 -an -r 25 -c:v libvpx -b:v 1M -pix_fmt yuv420p \"{2}\"",
-                        _width,
-                        _height,
-                        _path),
-                    RedirectStandardError = true,
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
+                    FfmpegLocator.ResolveForWebp(),
+                    FfmpegLocator.Resolve(),
                 };
 
-                try
+                foreach (string ffmpeg in candidates)
                 {
-                    using Process process = new() { StartInfo = startInfo };
-                    if (!process.Start())
+                    if (string.IsNullOrEmpty(ffmpeg))
                     {
                         continue;
                     }
 
-                    await process.StandardError.ReadToEndAsync().ConfigureAwait(false);
-                    if (!await Task.Run(() => process.WaitForExit(15_000)).ConfigureAwait(false))
+                    ProcessStartInfo startInfo = new()
                     {
-                        try
+                        FileName = ffmpeg,
+                        Arguments = string.Format(
+                            CultureInfo.InvariantCulture,
+                            "-y -f lavfi -i color=c=white:s={0}x{1}:d=1 -an -r 25 -c:v libvpx -b:v 1M -pix_fmt yuv420p \"{2}\"",
+                            _width,
+                            _height,
+                            _path),
+                        RedirectStandardError = true,
+                        UseShellExecute = false,
+                        CreateNoWindow = true,
+                    };
+
+                    try
+                    {
+                        using Process process = new() { StartInfo = startInfo };
+                        if (!process.Start())
                         {
-                            process.Kill();
-                        }
-                        catch (InvalidOperationException)
-                        {
+                            continue;
                         }
 
-                        continue;
-                    }
+                        await process.StandardError.ReadToEndAsync().ConfigureAwait(false);
+                        if (!await Task.Run(() => process.WaitForExit(15_000)).ConfigureAwait(false))
+                        {
+                            try
+                            {
+                                process.Kill();
+                            }
+                            catch (InvalidOperationException)
+                            {
+                            }
 
-                    if (process.ExitCode == 0 && File.Exists(_path) && new FileInfo(_path).Length > 0)
+                            continue;
+                        }
+
+                        if (process.ExitCode == 0 && File.Exists(_path) && new FileInfo(_path).Length > 0)
+                        {
+                            return;
+                        }
+                    }
+                    catch (InvalidOperationException)
                     {
-                        return;
+                        // Try the next ffmpeg candidate.
+                    }
+                    catch (System.ComponentModel.Win32Exception)
+                    {
+                        // ffmpeg missing or not executable on this candidate.
+                    }
+                    catch (IOException)
+                    {
+                        // Try the next ffmpeg candidate.
                     }
                 }
-                catch (InvalidOperationException)
+
+                // Last resort: leave a non-empty .webm so close-with-no-frames
+                // still produces one file per page when every ffmpeg launch fails
+                // under Windows suite load.
+                if (!File.Exists(_path) || new FileInfo(_path).Length == 0)
                 {
-                    // Try the next ffmpeg candidate.
+                    await File.WriteAllBytesAsync(_path, MinimalWebmPlaceholder).ConfigureAwait(false);
                 }
-                catch (System.ComponentModel.Win32Exception)
-                {
-                    // ffmpeg missing or not executable on this candidate.
-                }
-                catch (IOException)
-                {
-                    // Try the next ffmpeg candidate.
-                }
+            }
+            finally
+            {
+                WhiteVideoGate.Release();
             }
         }
 
@@ -435,6 +469,20 @@ namespace PlaywrightNative.Helpers
             catch (IOException)
             {
                 return false;
+            }
+        }
+
+        private async Task DrainErrorAsync(Process process)
+        {
+            try
+            {
+                await process.StandardError.ReadToEndAsync().ConfigureAwait(false);
+            }
+            catch (IOException)
+            {
+            }
+            catch (ObjectDisposedException)
+            {
             }
         }
     }
