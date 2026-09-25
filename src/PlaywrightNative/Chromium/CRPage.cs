@@ -612,52 +612,79 @@ namespace PlaywrightNative.Chromium
                     return true;
                 }
 
-                // Suite load: responseReceived can trail Page.navigate's ERR_ABORTED by
-                // tens to hundreds of ms while the document request is still open.
-                if (!_networkManager.TryFindNavigationRequest(abortedLoaderId, targetFrame, targetUrl, out CRRequest pending)
-                    || pending == null)
+                // Suite load: Network.requestWillBeSent / responseReceived can trail
+                // Page.navigate's ERR_ABORTED by tens to hundreds of ms. Poll for a
+                // usable committed response even when the request is not in the
+                // recent ring yet (ShouldReturnFromGotoIfNewNavigationIsStarted).
+                System.Diagnostics.Stopwatch clock = System.Diagnostics.Stopwatch.StartNew();
+                while (clock.ElapsedMilliseconds < 8_000)
                 {
-                    return false;
-                }
-
-                if (pending.Response != null)
-                {
-                    return IsCommittedNavigationStatus(pending.Response.Status)
-                        && (NavigationResponseMatches(pending.Response, targetFrame, targetUrl, abortedLoaderId)
-                            || NavigationResponseMatches(pending.Response, targetFrame, targetUrl, documentId: null));
-                }
-
-                if (!string.IsNullOrEmpty(pending.FailureText))
-                {
-                    return false;
-                }
-
-                try
-                {
-                    Task<CRResponse> wait = pending.WaitForResponseAsync();
-                    Task finished = await Task.WhenAny(wait, Task.Delay(5_000)).ConfigureAwait(false);
-                    if (finished != wait)
-                    {
-                        return HasUsableCommittedNavigationResponse(targetFrame, targetUrl, abortedLoaderId);
-                    }
-
-                    CRResponse arrived = await wait.ConfigureAwait(false);
-                    if (arrived != null
-                        && IsCommittedNavigationStatus(arrived.Status)
-                        && (NavigationResponseMatches(arrived, targetFrame, targetUrl, abortedLoaderId)
-                            || NavigationResponseMatches(arrived, targetFrame, targetUrl, documentId: null)))
+                    if (HasUsableCommittedNavigationResponse(targetFrame, targetUrl, abortedLoaderId)
+                        || HasUsableCommittedNavigationResponse(targetFrame, targetUrl, documentId: null))
                     {
                         return true;
                     }
-                }
-                catch (PlaywrightException)
-                {
-                }
-                catch (TimeoutException)
-                {
+
+                    if (_networkManager.TryFindNavigationRequest(abortedLoaderId, targetFrame, targetUrl, out CRRequest pending)
+                        || _networkManager.TryFindNavigationRequest(documentId: null, targetFrame, targetUrl, out pending))
+                    {
+                        if (pending?.Response != null)
+                        {
+                            if (IsCommittedNavigationStatus(pending.Response.Status)
+                                && (NavigationResponseMatches(pending.Response, targetFrame, targetUrl, abortedLoaderId)
+                                    || NavigationResponseMatches(pending.Response, targetFrame, targetUrl, documentId: null)))
+                            {
+                                return true;
+                            }
+                        }
+
+                        if (!string.IsNullOrEmpty(pending?.FailureText))
+                        {
+                            // Request may be marked failed (ERR_ABORTED) after the
+                            // document already committed — keep polling the ring.
+                            if (HasUsableCommittedNavigationResponse(targetFrame, targetUrl, abortedLoaderId)
+                                || HasUsableCommittedNavigationResponse(targetFrame, targetUrl, documentId: null))
+                            {
+                                return true;
+                            }
+
+                            await Task.Delay(20).ConfigureAwait(false);
+                            continue;
+                        }
+
+                        if (pending != null && pending.Response == null)
+                        {
+                            try
+                            {
+                                Task<CRResponse> wait = pending.WaitForResponseAsync();
+                                int remainMs = Math.Max(1, 8_000 - (int)clock.ElapsedMilliseconds);
+                                Task finished = await Task.WhenAny(wait, Task.Delay(Math.Min(250, remainMs))).ConfigureAwait(false);
+                                if (finished == wait)
+                                {
+                                    CRResponse arrived = await wait.ConfigureAwait(false);
+                                    if (arrived != null
+                                        && IsCommittedNavigationStatus(arrived.Status)
+                                        && (NavigationResponseMatches(arrived, targetFrame, targetUrl, abortedLoaderId)
+                                            || NavigationResponseMatches(arrived, targetFrame, targetUrl, documentId: null)))
+                                    {
+                                        return true;
+                                    }
+                                }
+                            }
+                            catch (PlaywrightException)
+                            {
+                            }
+                            catch (TimeoutException)
+                            {
+                            }
+                        }
+                    }
+
+                    await Task.Delay(20).ConfigureAwait(false);
                 }
 
-                return HasUsableCommittedNavigationResponse(targetFrame, targetUrl, abortedLoaderId);
+                return HasUsableCommittedNavigationResponse(targetFrame, targetUrl, abortedLoaderId)
+                    || HasUsableCommittedNavigationResponse(targetFrame, targetUrl, documentId: null);
             }
 
             bool HasUsableCommittedNavigationResponse(Frame targetFrame, string targetUrl, string documentId)
