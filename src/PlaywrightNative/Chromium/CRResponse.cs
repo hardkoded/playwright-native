@@ -39,6 +39,12 @@ namespace PlaywrightNative.Chromium
         private readonly TaskCompletionSource<IReadOnlyList<NameValueEntry>> _rawHeaders =
             new TaskCompletionSource<IReadOnlyList<NameValueEntry>>(TaskCreationOptions.RunContinuationsAsynchronously);
 
+        /// <summary>
+        /// ExtraInfo wire headers, when applied. Prefer this over a provisional
+        /// <see cref="_rawHeaders"/> result if ExtraInfo arrives after seal.
+        /// </summary>
+        private IReadOnlyList<NameValueEntry> _rawHeadersFromExtraInfo;
+
         private IReadOnlyList<NameValueEntry> _headerPairs;
         private Task<byte[]> _bodyTask;
         private bool _bodyDeliveredToCaller;
@@ -163,6 +169,7 @@ namespace PlaywrightNative.Chromium
             }
 
             _headerPairs = pairs;
+            _rawHeadersFromExtraInfo = pairs;
             _extraHeaders.TrySetResult(true);
             SetRawResponseHeaders(pairs);
         }
@@ -274,7 +281,35 @@ namespace PlaywrightNative.Chromium
         /// Waits until extra-info (or provisional) response headers are available.
         /// </summary>
         /// <returns>The raw header list.</returns>
-        internal Task<IReadOnlyList<NameValueEntry>> WaitForRawHeadersAsync() => _rawHeaders.Task;
+        internal async Task<IReadOnlyList<NameValueEntry>> WaitForRawHeadersAsync()
+        {
+            // ExtraInfo can trail loadingFinished. If provisional headers already
+            // sealed (or are about to), still give ExtraInfo a short window so
+            // multi-value headers are not returned comma-joined
+            // (ShouldReportAllHeaders under Windows suite load).
+            if (_rawHeadersFromExtraInfo == null && !_extraHeaders.Task.IsCompleted)
+            {
+                if (ExpectsExtraInfo || _rawHeaders.Task.IsCompleted)
+                {
+                    await Task.WhenAny(_extraHeaders.Task, Task.Delay(750)).ConfigureAwait(false);
+                }
+                else
+                {
+                    await Task.WhenAny(_extraHeaders.Task, _rawHeaders.Task).ConfigureAwait(false);
+                    if (_rawHeadersFromExtraInfo == null && !_extraHeaders.Task.IsCompleted)
+                    {
+                        await Task.WhenAny(_extraHeaders.Task, Task.Delay(750)).ConfigureAwait(false);
+                    }
+                }
+            }
+
+            if (_rawHeadersFromExtraInfo != null)
+            {
+                return _rawHeadersFromExtraInfo;
+            }
+
+            return await _rawHeaders.Task.ConfigureAwait(false);
+        }
 
         private async Task<byte[]> LoadBodyAsync()
         {
