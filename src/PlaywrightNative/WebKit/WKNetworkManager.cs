@@ -739,28 +739,38 @@ namespace PlaywrightNative.WebKit
                 if (_requestsById.TryRemove(requestId, out WKRequest existingRequest))
                 {
                     _handledIntercepts.TryRemove(requestId, out _);
-                    int redirectStatus = GetInt(redirectResponse, "status");
-                    string redirectStatusText = GetString(redirectResponse, "statusText");
-                    IDictionary<string, string> redirectHeaders = ParseHeaders(redirectResponse, caseInsensitive: true);
 
-                    // Upstream Response.url is always request.url(), not
-                    // redirectResponse.url (which WebKit sometimes sets to the
-                    // Location target). Using the payload URL mis-keys page
-                    // Response events (ShouldSupportRedirects).
-                    WKResponse redirectResponseObj = new(
-                        _session,
-                        existingRequest,
-                        existingRequest.Url,
-                        redirectStatus,
-                        redirectStatusText,
-                        redirectHeaders,
-                        ResponseNetworkInfo.ParseServerAddr(redirectResponse),
-                        ResponseNetworkInfo.ParseSecurityDetails(redirectResponse),
-                        ResponseNetworkInfo.ParseFromServiceWorker(redirectResponse),
-                        ResponseNetworkInfo.ParseHttpVersion(redirectResponse));
+                    // Network.responseReceived may already have reported the redirect
+                    // hop (and finished it). Re-emitting would duplicate 302 events.
+                    if (existingRequest.Response == null)
+                    {
+                        int redirectStatus = GetInt(redirectResponse, "status");
+                        string redirectStatusText = GetString(redirectResponse, "statusText");
+                        IDictionary<string, string> redirectHeaders = ParseHeaders(redirectResponse, caseInsensitive: true);
 
-                    RaiseResponseReceived(redirectResponseObj);
-                    RaiseRequestFinished(existingRequest);
+                        // Upstream Response.url is always request.url(), not
+                        // redirectResponse.url (which WebKit sometimes sets to the
+                        // Location target). Using the payload URL mis-keys page
+                        // Response events (ShouldSupportRedirects).
+                        WKResponse redirectResponseObj = new(
+                            _session,
+                            existingRequest,
+                            existingRequest.Url,
+                            redirectStatus,
+                            redirectStatusText,
+                            redirectHeaders,
+                            ResponseNetworkInfo.ParseServerAddr(redirectResponse),
+                            ResponseNetworkInfo.ParseSecurityDetails(redirectResponse),
+                            ResponseNetworkInfo.ParseFromServiceWorker(redirectResponse),
+                            ResponseNetworkInfo.ParseHttpVersion(redirectResponse));
+
+                        RaiseResponseReceived(redirectResponseObj);
+                        RaiseRequestFinished(existingRequest);
+                    }
+                    else if (!existingRequest.Finished)
+                    {
+                        RaiseRequestFinished(existingRequest);
+                    }
 
                     redirectedFrom = existingRequest;
                 }
@@ -895,7 +905,6 @@ namespace PlaywrightNative.WebKit
                 return;
             }
 
-            string url = GetString(responsePayload, "url");
             int status = GetInt(responsePayload, "status");
             string statusText = GetString(responsePayload, "statusText");
             IDictionary<string, string> headers = ParseHeaders(responsePayload, caseInsensitive: true);
@@ -922,10 +931,14 @@ namespace PlaywrightNative.WebKit
                 }
             }
 
+            // Upstream network.Response.url is always request.url(). WebKit's
+            // responsePayload.url can be the Location target for redirect hops,
+            // which mis-keys Page.Response events (ShouldSupportRedirects).
+            string responseUrl = publicRequest.Url;
             WKResponse response = new(
                 _session,
                 publicRequest,
-                url,
+                responseUrl,
                 status,
                 statusText,
                 headers,
@@ -938,7 +951,7 @@ namespace PlaywrightNative.WebKit
                 ResponsePayload = responsePayload,
             };
 
-            if (IsHttpsUrl(url))
+            if (IsHttpsUrl(responseUrl))
             {
                 ResponseSecurityDetailsResult early = ResponseNetworkInfo.ParseWebKitSecurity(responsePayload, null);
                 if (early != null)
@@ -970,6 +983,25 @@ namespace PlaywrightNative.WebKit
             if (status == 204 && publicRequest.IsNavigationRequest)
             {
                 OnLoadingFailed(CreateSyntheticLoadingFailed(requestId, "Aborted: 204 No Content"));
+                return;
+            }
+
+            // Redirect hops often get responseReceived without a matching
+            // loadingFinished (process-swap / session dispose races). Upstream
+            // pairs redirect response + requestfinished via redirectResponse;
+            // finish here too so Page.RequestFinished is not lost (foo: GET,302
+            // without DONE).
+            if (ResponseHeaders.IsRedirectStatus(status))
+            {
+                _requestsById.TryRemove(requestId, out _);
+                _handledIntercepts.TryRemove(requestId, out _);
+                RaiseRequestFinished(publicRequest);
+                if (publicRequest != request)
+                {
+                    request.Finished = true;
+                    request.MarkFinished();
+                }
+
                 return;
             }
 
@@ -1460,6 +1492,11 @@ namespace PlaywrightNative.WebKit
                 request.AbortClosed(new TargetClosedException(
                     DriverMessages.BrowserOrContextClosedExceptionMessage));
                 return;
+            }
+
+            if (request != null)
+            {
+                request.Finished = true;
             }
 
             request?.MarkFinished();

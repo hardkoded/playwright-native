@@ -428,48 +428,73 @@ namespace PlaywrightNative.Chromium
                 // Enables sent while paused usually complete immediately after resume.
                 await Task.WhenAny(critical, Task.Delay(1_000)).ConfigureAwait(false);
                 await Task.WhenAny(optional, Task.Delay(250)).ConfigureAwait(false);
-            }
 
-            if (PublicPage != null && owner?.PublicContext != null
-                && (Opener == null || !initScripts.IsCompletedSuccessfully))
-            {
-                // NewPage about:blank already exists when scripts are registered, so
-                // addScriptToEvaluateOnNewDocument does not run them. Replay on the
-                // current document after resume. Popups replay only when the paused
-                // addScript hung (--disable-web-security); otherwise once-only holds.
-                await owner.PublicContext.EvaluateInitScriptsOnCurrentAsync(PublicPage).ConfigureAwait(false);
-            }
-
-            if (PublicPage != null && owner?.PublicContext != null)
-            {
-                await owner.PublicContext.ApplyMediaEmulationAsync(PublicPage).ConfigureAwait(false);
-                await owner.PublicContext.ApplyCallbackInitScriptsAsync(PublicPage).ConfigureAwait(false);
-            }
-
-            // Official _initialize waits for the first non-initial navigation
-            // (getFrameTree URL is ":" / "" for the empty document) before
-            // reportAsNew. Popups that already committed have a real URL.
-            // window.open() / about:blank may never emit a second frameNavigated
-            // when the target was not paused — poll then treat as about:blank.
-            try
-            {
-                await WaitForFirstNonInitialNavigationAsync().ConfigureAwait(false);
-            }
+                // Official _initialize waits for the first non-initial navigation
+                // before reportAsNew. Report BEFORE any post-resume evaluate:
+                // inline <script>prompt()</script> opens a dialog that stalls
+                // Runtime.evaluate, and browsercontext-events awaits WaitForPage
+                // before Accept — unbounded evaluate here deadlocks both.
+                try
+                {
+                    await WaitForFirstNonInitialNavigationAsync().ConfigureAwait(false);
+                }
 #pragma warning disable RCS1075
-            catch (Exception)
+                catch (Exception)
 #pragma warning restore RCS1075
-            {
-                _firstNonInitialNavigationTcs.TrySetResult(true);
-            }
+                {
+                    _firstNonInitialNavigationTcs.TrySetResult(true);
+                }
 
-            // Report popup Page events only after the main-frame URL has synced
-            // so WaitForEvent(Page) observers see the navigated URL, not "".
-            // Binding dispatch may already have reported (page|binding order).
-            if (Opener != null && owner?.PublicContext != null && PublicPage != null)
+                if (PublicPage != null && owner?.PublicContext != null)
+                {
+                    owner.PublicContext.ReportPopupAsNew(PublicPage);
+                    Task replay = ReplayExposedBindingsAsync();
+                    await Task.WhenAny(replay, Task.Delay(1_000)).ConfigureAwait(false);
+                }
+
+                // Bound: Runtime.evaluate / emulation stall while prompt() is open.
+                if (PublicPage != null && owner?.PublicContext != null
+                    && !initScripts.IsCompletedSuccessfully)
+                {
+                    await Task.WhenAny(
+                        owner.PublicContext.EvaluateInitScriptsOnCurrentAsync(PublicPage),
+                        Task.Delay(1_000)).ConfigureAwait(false);
+                }
+
+                if (PublicPage != null && owner?.PublicContext != null)
+                {
+                    await Task.WhenAny(
+                        owner.PublicContext.ApplyMediaEmulationAsync(PublicPage),
+                        Task.Delay(1_000)).ConfigureAwait(false);
+                    await Task.WhenAny(
+                        owner.PublicContext.ApplyCallbackInitScriptsAsync(PublicPage),
+                        Task.Delay(1_000)).ConfigureAwait(false);
+                }
+            }
+            else
             {
-                owner.PublicContext.ReportPopupAsNew(PublicPage);
-                Task replay = ReplayExposedBindingsAsync();
-                await Task.WhenAny(replay, Task.Delay(1_000)).ConfigureAwait(false);
+                if (PublicPage != null && owner?.PublicContext != null)
+                {
+                    // NewPage about:blank already exists when scripts are registered, so
+                    // addScriptToEvaluateOnNewDocument does not run them. Replay on the
+                    // current document after resume.
+                    await owner.PublicContext.EvaluateInitScriptsOnCurrentAsync(PublicPage).ConfigureAwait(false);
+                    await owner.PublicContext.ApplyMediaEmulationAsync(PublicPage).ConfigureAwait(false);
+                    await owner.PublicContext.ApplyCallbackInitScriptsAsync(PublicPage).ConfigureAwait(false);
+                }
+
+                // window.open() / about:blank may never emit a second frameNavigated
+                // when the target was not paused — poll then treat as about:blank.
+                try
+                {
+                    await WaitForFirstNonInitialNavigationAsync().ConfigureAwait(false);
+                }
+#pragma warning disable RCS1075
+                catch (Exception)
+#pragma warning restore RCS1075
+                {
+                    _firstNonInitialNavigationTcs.TrySetResult(true);
+                }
             }
 
             _initializationTcs.TrySetResult(true);
@@ -2626,11 +2651,10 @@ namespace PlaywrightNative.Chromium
                     return;
                 }
 
-                // Prefer navigation requests; also accept Document resources when
-                // IsNavigationRequest was not set (Fetch-paired paths on Windows).
-                bool navigation = response.Request.IsNavigationRequest
-                    || NetworkRequestEvents.IsDocumentNavigation(response.Request.ResourceType);
-                if (!navigation)
+                // Prefer navigation requests; also accept Document resources and
+                // CDP main-resource id equality when IsNavigationRequest was not
+                // set (Fetch-paired paths on Windows).
+                if (!response.Request.TracksDocumentNavigation)
                 {
                     return;
                 }
@@ -2737,40 +2761,12 @@ namespace PlaywrightNative.Chromium
                 }
 
                 // Page.navigate ERR_ABORTED can beat Network.responseReceived under
-                // Windows suite load. Resolve by loaderId and await the response.
-                if (_networkManager.TryFindNavigationRequest(documentId, targetFrame, targetUrl, out CRRequest request)
-                    && request != null)
-                {
-                    if (request.Response is CRResponse ready
-                        && IsUsableNavigationResponse(ready, targetFrame, targetUrl, documentId))
-                    {
-                        return ready;
-                    }
-
-                    try
-                    {
-                        Task<CRResponse> wait = request.WaitForResponseAsync();
-                        Task finished = await Task.WhenAny(wait, Task.Delay(5_000)).ConfigureAwait(false);
-                        if (finished == wait)
-                        {
-                            CRResponse awaited = await wait.ConfigureAwait(false);
-                            if (IsUsableNavigationResponse(awaited, targetFrame, targetUrl, documentId))
-                            {
-                                return awaited;
-                            }
-                        }
-                    }
-                    catch (PlaywrightException)
-                    {
-                    }
-                    catch (TimeoutException)
-                    {
-                    }
-                }
-
-                // Poll recent commits + live capture: the document response often
-                // lands after ERR_ABORTED while a superseding goto is in flight.
+                // Windows suite load. Resolve by loaderId / URL and await the
+                // response, but keep polling the recent ring in parallel — the
+                // loaderId may point at an aborted stub while the committed
+                // document response lands on a different request id.
                 System.Diagnostics.Stopwatch clock = System.Diagnostics.Stopwatch.StartNew();
+                Task<CRResponse> pendingWait = null;
                 while (clock.ElapsedMilliseconds < 5_000)
                 {
                     if (TryRecoverNavigationResponse(targetFrame, targetUrl, fromEvent?.Invoke(), out recovered, documentId)
@@ -2796,7 +2792,85 @@ namespace PlaywrightNative.Chromium
                         return recovered;
                     }
 
+                    if (_networkManager.TryFindNavigationRequest(documentId, targetFrame, targetUrl, out CRRequest request)
+                        && request != null)
+                    {
+                        if (request.Response is CRResponse ready
+                            && IsUsableNavigationResponse(ready, targetFrame, targetUrl, documentId))
+                        {
+                            return ready;
+                        }
+
+                        if (request.Response is CRResponse readyByUrl
+                            && IsUsableNavigationResponse(readyByUrl, targetFrame, targetUrl, documentId: null)
+                            && ResponseUrlMatchesTarget(readyByUrl, targetUrl))
+                        {
+                            return readyByUrl;
+                        }
+
+                        // Arm a single wait for the first promising in-flight
+                        // request; keep polling the ring while it is outstanding.
+                        if (pendingWait == null && request.Response == null)
+                        {
+                            pendingWait = request.WaitForResponseAsync();
+                        }
+                    }
+
+                    if (pendingWait != null && pendingWait.IsCompleted)
+                    {
+                        try
+                        {
+                            CRResponse awaited = await pendingWait.ConfigureAwait(false);
+                            if (IsUsableNavigationResponse(awaited, targetFrame, targetUrl, documentId))
+                            {
+                                return awaited;
+                            }
+
+                            if (IsUsableNavigationResponse(awaited, targetFrame, targetUrl, documentId: null)
+                                && ResponseUrlMatchesTarget(awaited, targetUrl))
+                            {
+                                return awaited;
+                            }
+                        }
+                        catch (PlaywrightException)
+                        {
+                        }
+                        catch (TimeoutException)
+                        {
+                        }
+
+                        pendingWait = null;
+                    }
+
                     await Task.Delay(25).ConfigureAwait(false);
+                }
+
+                if (pendingWait != null)
+                {
+                    try
+                    {
+                        Task finished = await Task.WhenAny(pendingWait, Task.Delay(1)).ConfigureAwait(false);
+                        if (finished == pendingWait)
+                        {
+                            CRResponse awaited = await pendingWait.ConfigureAwait(false);
+                            if (IsUsableNavigationResponse(awaited, targetFrame, targetUrl, documentId))
+                            {
+                                return awaited;
+                            }
+
+                            if (IsUsableNavigationResponse(awaited, targetFrame, targetUrl, documentId: null)
+                                && ResponseUrlMatchesTarget(awaited, targetUrl))
+                            {
+                                return awaited;
+                            }
+                        }
+                    }
+                    catch (PlaywrightException)
+                    {
+                    }
+                    catch (TimeoutException)
+                    {
+                    }
                 }
 
                 if (TryRecoverNavigationResponse(targetFrame, targetUrl, fromEvent?.Invoke(), out recovered, documentId)
@@ -2822,14 +2896,18 @@ namespace PlaywrightNative.Chromium
 
             static bool ResponseUrlMatchesTarget(CRResponse response, string targetUrl)
             {
-                if (response == null || string.IsNullOrEmpty(targetUrl) || string.IsNullOrEmpty(response.Url))
+                if (response == null || string.IsNullOrEmpty(targetUrl))
                 {
                     return false;
                 }
 
-                return string.Equals(response.Url, targetUrl, StringComparison.OrdinalIgnoreCase)
-                    || response.Url.StartsWith(targetUrl, StringComparison.OrdinalIgnoreCase)
-                    || targetUrl.StartsWith(response.Url, StringComparison.OrdinalIgnoreCase);
+                if (NavigationUrlsMatch(response.Url, targetUrl))
+                {
+                    return true;
+                }
+
+                return response.Request != null
+                    && NavigationUrlsMatch(response.Request.Url, targetUrl);
             }
 
             bool TryRecoverNavigationResponse(
@@ -2907,14 +2985,78 @@ namespace PlaywrightNative.Chromium
                     return true;
                 }
 
-                if (string.IsNullOrEmpty(targetUrl) || string.IsNullOrEmpty(response.Url))
+                if (string.IsNullOrEmpty(targetUrl))
                 {
                     return string.IsNullOrEmpty(documentId);
                 }
 
-                return string.Equals(response.Url, targetUrl, StringComparison.OrdinalIgnoreCase)
-                    || response.Url.StartsWith(targetUrl, StringComparison.OrdinalIgnoreCase)
-                    || targetUrl.StartsWith(response.Url, StringComparison.OrdinalIgnoreCase);
+                if (NavigationUrlsMatch(response.Url, targetUrl))
+                {
+                    return true;
+                }
+
+                return response.Request != null
+                    && NavigationUrlsMatch(response.Request.Url, targetUrl);
+            }
+
+            static bool NavigationUrlsMatch(string left, string right)
+            {
+                if (string.IsNullOrEmpty(left) || string.IsNullOrEmpty(right))
+                {
+                    return false;
+                }
+
+                if (string.Equals(left, right, StringComparison.OrdinalIgnoreCase)
+                    || left.StartsWith(right, StringComparison.OrdinalIgnoreCase)
+                    || right.StartsWith(left, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+
+                string normalizedLeft = NormalizeNavigationUrl(left);
+                string normalizedRight = NormalizeNavigationUrl(right);
+                if (string.IsNullOrEmpty(normalizedLeft) || string.IsNullOrEmpty(normalizedRight))
+                {
+                    return false;
+                }
+
+                return string.Equals(normalizedLeft, normalizedRight, StringComparison.OrdinalIgnoreCase)
+                    || normalizedLeft.StartsWith(normalizedRight, StringComparison.OrdinalIgnoreCase)
+                    || normalizedRight.StartsWith(normalizedLeft, StringComparison.OrdinalIgnoreCase);
+            }
+
+            static string NormalizeNavigationUrl(string url)
+            {
+                if (string.IsNullOrEmpty(url))
+                {
+                    return url;
+                }
+
+                string withoutHash = NavigationTimeout.WithoutHash(url);
+                string withoutUser = NavigationTimeout.WithoutUserInfo(withoutHash);
+                if (!Uri.TryCreate(withoutUser, UriKind.Absolute, out Uri uri))
+                {
+                    return withoutUser.TrimEnd('/');
+                }
+
+                string host = uri.Host;
+                if (string.Equals(host, "127.0.0.1", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(host, "::1", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(host, "[::1]", StringComparison.OrdinalIgnoreCase))
+                {
+                    host = "localhost";
+                }
+
+                string path = uri.AbsolutePath;
+                if (path.Length > 1)
+                {
+                    path = path.TrimEnd('/');
+                }
+
+                return uri.Scheme + "://" + host
+                    + (uri.IsDefaultPort ? string.Empty : ":" + uri.Port.ToString(System.Globalization.CultureInfo.InvariantCulture))
+                    + path
+                    + uri.Query;
             }
         }
 
@@ -3758,8 +3900,7 @@ namespace PlaywrightNative.Chromium
         {
             if (response?.Request != null
                 && response.Status != 204
-                && (response.Request.IsNavigationRequest
-                    || NetworkRequestEvents.IsDocumentNavigation(response.Request.ResourceType)))
+                && response.Request.TracksDocumentNavigation)
             {
                 _lastCommittedNavigationResponse = response;
                 lock (_navigationResponseGate)
@@ -5459,6 +5600,14 @@ namespace PlaywrightNative.Chromium
 
         private async Task WaitForFirstNonInitialNavigationAsync()
         {
+            // Frame commit may already have signaled (inline prompt popups). Skip
+            // Page.getFrameTree when done — Chrome stalls CDP replies while a
+            // JavaScript dialog is open.
+            if (_firstNonInitialNavigationTcs.Task.IsCompleted)
+            {
+                return;
+            }
+
             await SyncMainFrameFromTreeAsync().ConfigureAwait(false);
             if (_firstNonInitialNavigationTcs.Task.IsCompleted)
             {

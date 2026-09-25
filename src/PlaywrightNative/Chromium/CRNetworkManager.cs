@@ -206,7 +206,7 @@ namespace PlaywrightNative.Chromium
             List<CRRequest> pending = new();
             foreach (CRRequest request in _requestsById.Values)
             {
-                if (request.IsNavigationRequest
+                if (request.TracksDocumentNavigation
                     && request.Response != null
                     && !request.Finished
                     && request.Frame != null
@@ -253,7 +253,7 @@ namespace PlaywrightNative.Chromium
                     continue;
                 }
 
-                if (byDocument != null)
+                if (byDocument?.Response != null)
                 {
                     break;
                 }
@@ -261,7 +261,7 @@ namespace PlaywrightNative.Chromium
 
             // Requests may already be removed from _requestsById after abort /
             // finish under Windows suite load — also scan the recent ring.
-            if (byDocument == null)
+            if (byDocument?.Response == null)
             {
                 CRRequest[] recent;
                 lock (_recentNavigationRequestsGate)
@@ -276,26 +276,34 @@ namespace PlaywrightNative.Chromium
                         continue;
                     }
 
-                    if (byDocument != null)
+                    if (byDocument?.Response != null)
                     {
                         break;
                     }
                 }
             }
 
-            request = byDocument ?? byUrl;
+            // Prefer a candidate that already has a response: Page.navigate's
+            // loaderId can point at an aborted in-flight request while the
+            // committed document response lives on the URL-matched request.
+            if (byDocument?.Response != null)
+            {
+                request = byDocument;
+            }
+            else if (byUrl?.Response != null)
+            {
+                request = byUrl;
+            }
+            else
+            {
+                request = byDocument ?? byUrl;
+            }
+
             return request != null;
 
             bool Match(CRRequest candidate)
             {
-                if (candidate == null)
-                {
-                    return false;
-                }
-
-                bool navigation = candidate.IsNavigationRequest
-                    || NetworkRequestEvents.IsDocumentNavigation(candidate.ResourceType);
-                if (!navigation)
+                if (candidate == null || !candidate.TracksDocumentNavigation)
                 {
                     return false;
                 }
@@ -312,18 +320,27 @@ namespace PlaywrightNative.Chromium
                     && (string.Equals(candidate.DocumentId, documentId, StringComparison.Ordinal)
                         || string.Equals(candidate.ProtocolRequestId, documentId, StringComparison.Ordinal)))
                 {
-                    byDocument = candidate;
+                    // Keep a documentId hit that already has a response; otherwise
+                    // allow a later map/ring entry to replace a response-less stub.
+                    if (byDocument == null || byDocument.Response == null)
+                    {
+                        byDocument = candidate;
+                    }
+
                     return true;
                 }
 
-                if (byUrl == null
-                    && !string.IsNullOrEmpty(url)
+                if (!string.IsNullOrEmpty(url)
                     && !string.IsNullOrEmpty(candidate.Url)
                     && (string.Equals(candidate.Url, url, StringComparison.OrdinalIgnoreCase)
                         || candidate.Url.StartsWith(url, StringComparison.OrdinalIgnoreCase)
                         || url.StartsWith(candidate.Url, StringComparison.OrdinalIgnoreCase)))
                 {
-                    byUrl = candidate;
+                    if (byUrl == null || (byUrl.Response == null && candidate.Response != null))
+                    {
+                        byUrl = candidate;
+                    }
+
                     return true;
                 }
 
@@ -1154,7 +1171,13 @@ namespace PlaywrightNative.Chromium
                 type = "preflight";
             }
 
-            bool isNavigationRequest = NetworkRequestEvents.IsDocumentNavigation(type);
+            // Main document navigations report loaderId == requestId. Resource
+            // type can be missing on Fetch-paired Windows paths, so also treat
+            // that equality as a navigation request before constructing CRRequest.
+            string loaderId = GetString(p, "loaderId");
+            bool isMainResource = !string.IsNullOrEmpty(loaderId)
+                && string.Equals(loaderId, rawId, StringComparison.Ordinal);
+            bool isNavigationRequest = NetworkRequestEvents.IsDocumentNavigation(type) || isMainResource;
 
             CRRequest request = new(
                 requestId,
@@ -1176,7 +1199,6 @@ namespace PlaywrightNative.Chromium
             // raw CDP id on whichever session emits them.
             _extraInfo.RequestCreated(rawId, request);
 
-            string loaderId = GetString(p, "loaderId");
             request.DocumentId = !string.IsNullOrEmpty(loaderId) ? loaderId : frame?.DocumentId;
             request.DocumentUrl = isNavigationRequest ? url : frame?.Url;
             request.TimestampSeconds = ResourceTimingParser.ReadDouble(p, "timestamp");
@@ -1194,7 +1216,7 @@ namespace PlaywrightNative.Chromium
 
             _requestsById[requestId] = request;
             _requestsByRawId[rawId] = request;
-            if (isNavigationRequest || NetworkRequestEvents.IsDocumentNavigation(type ?? string.Empty))
+            if (request.TracksDocumentNavigation)
             {
                 lock (_recentNavigationRequestsGate)
                 {

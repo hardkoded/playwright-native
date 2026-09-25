@@ -107,8 +107,10 @@ namespace PlaywrightNative.Helpers
 
             try
             {
+                // Do not Flush per frame: on Windows a full pipe Flush blocks the
+                // caller (previously the CDP read loop via VideoRecorder) long
+                // enough to starve Evaluate/Screenshot and trip 60s NUnit aborts.
                 ffmpeg.StandardInput.BaseStream.Write(jpeg, 0, jpeg.Length);
-                ffmpeg.StandardInput.BaseStream.Flush();
                 _frames++;
             }
             catch (IOException)
@@ -169,6 +171,7 @@ namespace PlaywrightNative.Helpers
             {
                 try
                 {
+                    await ffmpeg.StandardInput.BaseStream.FlushAsync().ConfigureAwait(false);
                     ffmpeg.StandardInput.Close();
                 }
                 catch (IOException)

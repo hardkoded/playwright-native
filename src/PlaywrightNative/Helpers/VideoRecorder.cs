@@ -298,6 +298,7 @@ namespace PlaywrightNative.Helpers
             private int _wkGeneration;
             private Task _startTask = Task.CompletedTask;
             private Task _stopTask;
+            private Task _deliverChain = Task.CompletedTask;
 
             internal PageRecording(IPage page, string path, RecordVideoSize size)
             {
@@ -452,6 +453,28 @@ namespace PlaywrightNative.Helpers
                     }
                 }
 
+                // Drain writes/acks that were already queued off the CDP read loop
+                // before closing ffmpeg stdin.
+                Task pending;
+                lock (_gate)
+                {
+                    pending = _deliverChain;
+                }
+
+                try
+                {
+                    await pending
+                        .WithTimeout(TimeSpan.FromSeconds(2), _ => new TimeoutException())
+                        .ConfigureAwait(false);
+                }
+                catch (TimeoutException)
+                {
+                }
+                catch (Exception ex)
+                {
+                    LogError(ex);
+                }
+
                 try
                 {
                     await _writer.StopAsync().ConfigureAwait(false);
@@ -479,25 +502,10 @@ namespace PlaywrightNative.Helpers
                     ? value
                     : 0;
 
-                if (!string.IsNullOrEmpty(data))
-                {
-                    try
-                    {
-                        byte[] jpeg = Convert.FromBase64String(data);
-                        WriteFrame(jpeg);
-                    }
-                    catch (FormatException)
-                    {
-                    }
-                }
-
-                CRSession session = _crSession;
-                if (session == null)
-                {
-                    return;
-                }
-
-                _ = session.SendAsync("Page.screencastFrameAck", new { sessionId });
+                // Never Write/Flush on the CDP read loop: under continuous CSS
+                // animation (e.g. rotate-z) a full ffmpeg pipe stalls every
+                // Evaluate/Screenshot response for the whole session.
+                EnqueueFrame(data, () => AckCrAsync(sessionId));
             }
 
             private void OnWkMessage(string method, JsonElement? parameters)
@@ -511,25 +519,98 @@ namespace PlaywrightNative.Helpers
                 string data = payload.TryGetProperty("data", out JsonElement dataElement)
                     ? dataElement.GetString()
                     : null;
-                if (!string.IsNullOrEmpty(data))
+
+                EnqueueFrame(data, AckWkAsync);
+            }
+
+            private void EnqueueFrame(string data, Func<Task> ackAsync)
+            {
+                Task previous;
+                TaskCompletionSource<bool> done = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                bool write;
+                lock (_gate)
                 {
-                    try
-                    {
-                        byte[] jpeg = Convert.FromBase64String(data);
-                        WriteFrame(jpeg);
-                    }
-                    catch (FormatException)
-                    {
-                    }
+                    // StopAsync owns the gate first; skip new writes once closing.
+                    write = _stopTask == null;
+                    previous = _deliverChain;
+                    _deliverChain = done.Task;
                 }
 
+                _ = DeliverFrameAsync(previous, done, write ? data : null, ackAsync);
+            }
+
+            private async Task DeliverFrameAsync(
+                Task previous,
+                TaskCompletionSource<bool> done,
+                string data,
+                Func<Task> ackAsync)
+            {
+                try
+                {
+                    await previous.ConfigureAwait(false);
+
+                    if (!string.IsNullOrEmpty(data))
+                    {
+                        try
+                        {
+                            WriteFrame(Convert.FromBase64String(data));
+                        }
+                        catch (FormatException)
+                        {
+                        }
+                    }
+
+                    await ackAsync().ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    LogError(ex);
+                }
+                finally
+                {
+                    done.TrySetResult(true);
+                }
+            }
+
+            private async Task AckCrAsync(int sessionId)
+            {
+                CRSession session = _crSession;
+                if (session == null)
+                {
+                    return;
+                }
+
+                try
+                {
+                    await session.SendAsync("Page.screencastFrameAck", new { sessionId }).ConfigureAwait(false);
+                }
+                catch (TargetClosedException)
+                {
+                }
+                catch (PlaywrightException)
+                {
+                }
+            }
+
+            private async Task AckWkAsync()
+            {
                 WKSession session = _wkSession;
                 if (session == null)
                 {
                     return;
                 }
 
-                _ = session.SendAsync("Screencast.screencastFrameAck", new { generation = _wkGeneration });
+                try
+                {
+                    await session.SendAsync("Screencast.screencastFrameAck", new { generation = _wkGeneration })
+                        .ConfigureAwait(false);
+                }
+                catch (TargetClosedException)
+                {
+                }
+                catch (PlaywrightException)
+                {
+                }
             }
 
             private void WriteFrame(byte[] jpeg)
@@ -541,6 +622,16 @@ namespace PlaywrightNative.Helpers
 
                 _video.LastJpeg = jpeg;
                 _writer.Write(jpeg);
+            }
+
+            private void LogError(Exception ex)
+            {
+                if (ex == null)
+                {
+                    return;
+                }
+
+                System.Diagnostics.Debug.WriteLine(ex);
             }
         }
     }

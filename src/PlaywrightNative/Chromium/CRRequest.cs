@@ -221,6 +221,29 @@ namespace PlaywrightNative.Chromium
         internal bool IsNavigationRequest { get; }
 
         /// <summary>
+        /// Returns whether this request should be treated as a document navigation
+        /// for goto response capture. CDP main-resource navigations report
+        /// <c>loaderId == requestId</c>; under Windows suite load Fetch-paired
+        /// paths can omit a <c>Document</c> resource type, so equality is also
+        /// accepted (ShouldReturnFromGotoIfNewNavigationIsStarted).
+        /// </summary>
+        internal bool TracksDocumentNavigation
+        {
+            get
+            {
+                if (IsNavigationRequest
+                    || NetworkRequestEvents.IsDocumentNavigation(ResourceType))
+                {
+                    return true;
+                }
+
+                return !string.IsNullOrEmpty(DocumentId)
+                    && !string.IsNullOrEmpty(ProtocolRequestId)
+                    && string.Equals(DocumentId, ProtocolRequestId, StringComparison.Ordinal);
+            }
+        }
+
+        /// <summary>
         /// Gets the frame that initiated this request.
         /// </summary>
         internal Frame Frame { get; }
