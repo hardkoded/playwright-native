@@ -257,7 +257,7 @@ namespace PlaywrightNative.Chromium
                     continue;
                 }
 
-                if (byDocument?.Response != null)
+                if (HasUsableResponse(byDocument) && HasUsableResponse(byUrl))
                 {
                     break;
                 }
@@ -265,7 +265,7 @@ namespace PlaywrightNative.Chromium
 
             // Requests may already be removed from _requestsById after abort /
             // finish under Windows suite load — also scan the recent ring.
-            if (byDocument?.Response == null)
+            if (!HasUsableResponse(byDocument) || !HasUsableResponse(byUrl))
             {
                 CRRequest[] recent;
                 lock (_recentNavigationRequestsGate)
@@ -280,30 +280,53 @@ namespace PlaywrightNative.Chromium
                         continue;
                     }
 
-                    if (byDocument?.Response != null)
+                    if (HasUsableResponse(byDocument) && HasUsableResponse(byUrl))
                     {
                         break;
                     }
                 }
             }
 
-            // Prefer a candidate that already has a response: Page.navigate's
-            // loaderId can point at an aborted in-flight request while the
-            // committed document response lives on the URL-matched request.
-            if (byDocument?.Response != null)
+            // Prefer a candidate that already has a usable final response:
+            // Page.navigate's loaderId can point at an aborted stub (null or
+            // non-final response) while the committed document 200 lives on the
+            // URL-matched request (ShouldReturnFromGotoIfNewNavigationIsStarted).
+            if (HasUsableResponse(byDocument))
             {
                 request = byDocument;
+            }
+            else if (HasUsableResponse(byUrl))
+            {
+                request = byUrl;
             }
             else if (byUrl?.Response != null)
             {
                 request = byUrl;
             }
+            else if (byDocument?.Response != null)
+            {
+                request = byDocument;
+            }
             else
             {
-                request = byDocument ?? byUrl;
+                request = byUrl ?? byDocument;
             }
 
             return request != null;
+
+            static bool HasUsableResponse(CRRequest candidate)
+            {
+                CRResponse response = candidate?.Response;
+                if (response == null)
+                {
+                    return false;
+                }
+
+                int status = response.Status;
+                return status >= 200
+                    && status != 204
+                    && (status < 300 || status >= 400);
+            }
 
             bool Match(CRRequest candidate)
             {
@@ -324,9 +347,9 @@ namespace PlaywrightNative.Chromium
                     && (string.Equals(candidate.DocumentId, documentId, StringComparison.Ordinal)
                         || string.Equals(candidate.ProtocolRequestId, documentId, StringComparison.Ordinal)))
                 {
-                    // Keep a documentId hit that already has a response; otherwise
-                    // allow a later map/ring entry to replace a response-less stub.
-                    if (byDocument == null || byDocument.Response == null)
+                    // Prefer a documentId hit that already has a usable response;
+                    // otherwise allow a later map/ring entry to replace a stub.
+                    if (byDocument == null || !HasUsableResponse(byDocument))
                     {
                         byDocument = candidate;
                     }
@@ -336,11 +359,9 @@ namespace PlaywrightNative.Chromium
 
                 if (!string.IsNullOrEmpty(url)
                     && !string.IsNullOrEmpty(candidate.Url)
-                    && (string.Equals(candidate.Url, url, StringComparison.OrdinalIgnoreCase)
-                        || candidate.Url.StartsWith(url, StringComparison.OrdinalIgnoreCase)
-                        || url.StartsWith(candidate.Url, StringComparison.OrdinalIgnoreCase)))
+                    && NavigationRequestUrlsMatch(candidate.Url, url))
                 {
-                    if (byUrl == null || (byUrl.Response == null && candidate.Response != null))
+                    if (byUrl == null || (!HasUsableResponse(byUrl) && HasUsableResponse(candidate)))
                     {
                         byUrl = candidate;
                     }
@@ -351,6 +372,66 @@ namespace PlaywrightNative.Chromium
                 // documentId was requested but this candidate is neither a loader
                 // nor URL match — keep scanning.
                 return false;
+            }
+
+            static bool NavigationRequestUrlsMatch(string left, string right)
+            {
+                if (string.IsNullOrEmpty(left) || string.IsNullOrEmpty(right))
+                {
+                    return false;
+                }
+
+                if (string.Equals(left, right, StringComparison.OrdinalIgnoreCase)
+                    || left.StartsWith(right, StringComparison.OrdinalIgnoreCase)
+                    || right.StartsWith(left, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+
+                string normalizedLeft = NormalizeNavigationRequestUrl(left);
+                string normalizedRight = NormalizeNavigationRequestUrl(right);
+                if (string.IsNullOrEmpty(normalizedLeft) || string.IsNullOrEmpty(normalizedRight))
+                {
+                    return false;
+                }
+
+                return string.Equals(normalizedLeft, normalizedRight, StringComparison.OrdinalIgnoreCase)
+                    || normalizedLeft.StartsWith(normalizedRight, StringComparison.OrdinalIgnoreCase)
+                    || normalizedRight.StartsWith(normalizedLeft, StringComparison.OrdinalIgnoreCase);
+            }
+
+            static string NormalizeNavigationRequestUrl(string value)
+            {
+                if (string.IsNullOrEmpty(value))
+                {
+                    return value;
+                }
+
+                string withoutHash = NavigationTimeout.WithoutHash(value);
+                string withoutUser = NavigationTimeout.WithoutUserInfo(withoutHash);
+                if (!Uri.TryCreate(withoutUser, UriKind.Absolute, out Uri uri))
+                {
+                    return withoutUser.TrimEnd('/');
+                }
+
+                string host = uri.Host;
+                if (string.Equals(host, "127.0.0.1", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(host, "::1", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(host, "[::1]", StringComparison.OrdinalIgnoreCase))
+                {
+                    host = "localhost";
+                }
+
+                string path = uri.AbsolutePath;
+                if (path.Length > 1)
+                {
+                    path = path.TrimEnd('/');
+                }
+
+                return uri.Scheme + "://" + host
+                    + (uri.IsDefaultPort ? string.Empty : ":" + uri.Port.ToString(System.Globalization.CultureInfo.InvariantCulture))
+                    + path
+                    + uri.Query;
             }
         }
 
