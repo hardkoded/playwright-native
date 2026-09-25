@@ -4004,8 +4004,10 @@ namespace PlaywrightNative.WebKit
                 }
 
                 string message = ex.Message ?? string.Empty;
-                return message.Contains("most likely because of a navigation", StringComparison.Ordinal)
-                    || message.Contains("Execution context is not yet available", StringComparison.Ordinal);
+
+                // Do not retry "Execution context is not yet available" — WaitForFrameContextAsync
+                // already polls, and MarkDestroyed on that path clears live popup worlds.
+                return message.Contains("most likely because of a navigation", StringComparison.Ordinal);
             }
         }
 
@@ -7329,10 +7331,13 @@ namespace PlaywrightNative.WebKit
             string frameId = frame?.FrameId;
             if (!string.IsNullOrEmpty(frameId) && _frameContexts.TryGetValue(frameId, out context))
             {
-                if (context != null
-                    && !context.Destroyed.IsCompleted
-                    && context.Session != null
-                    && !context.Session.IsDisposed)
+                // Reject destroyed worlds so WaitForFrameContextAsync can pick up the
+                // post-process-swap replacement (SetContent). Do not drop contexts whose
+                // session looks disposed yet — about:blank popups can still evaluate on
+                // that session, and clearing them caused mac CI
+                // ShouldExposeFunctionsInPopups / ShouldWorkWithoutNavigationInPopup to
+                // hang until "Execution context is not yet available".
+                if (context != null && !context.Destroyed.IsCompleted)
                 {
                     return true;
                 }
@@ -7343,15 +7348,12 @@ namespace PlaywrightNative.WebKit
             if (frame == null || frame.ParentFrame == null)
             {
                 context = _executionContext;
-                if (context != null
-                    && !context.Destroyed.IsCompleted
-                    && context.Session != null
-                    && !context.Session.IsDisposed)
+                if (context != null && !context.Destroyed.IsCompleted)
                 {
                     return true;
                 }
 
-                if (ReferenceEquals(context, _executionContext))
+                if (context != null && ReferenceEquals(context, _executionContext))
                 {
                     _executionContext = null;
                 }

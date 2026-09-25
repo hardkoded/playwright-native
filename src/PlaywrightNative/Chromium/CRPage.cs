@@ -2963,11 +2963,14 @@ namespace PlaywrightNative.Chromium
                 string targetUrl,
                 string documentId = null)
             {
-                // 503 is the MITM client-certificate error page
-                // (BrowserShouldNotHangOnTlsErrorsDuringTls12Handshake).
+                // Accept final document statuses (2xx, 4xx, 5xx) including 401 from
+                // cancelled HTTP auth and 503 MITM client-certificate error pages.
+                // Skip only redirects (3xx) and 204 — rejecting 401 made cross-process
+                // auth goto recover a prior localhost 200 after 127.0.0.1→localhost
+                // URL normalization (credentials origin tests).
                 if (response == null
                     || response.Status < 200
-                    || (response.Status >= 300 && response.Status != 503)
+                    || (response.Status >= 300 && response.Status < 400)
                     || response.Status == 204)
                 {
                     return false;
