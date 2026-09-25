@@ -635,7 +635,7 @@ namespace PlaywrightNative.Chromium
                 try
                 {
                     Task<CRResponse> wait = pending.WaitForResponseAsync();
-                    Task finished = await Task.WhenAny(wait, Task.Delay(2_000)).ConfigureAwait(false);
+                    Task finished = await Task.WhenAny(wait, Task.Delay(5_000)).ConfigureAwait(false);
                     if (finished != wait)
                     {
                         return HasUsableCommittedNavigationResponse(targetFrame, targetUrl, abortedLoaderId);

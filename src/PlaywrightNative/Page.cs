@@ -2191,7 +2191,7 @@ namespace PlaywrightNative
             }
 
             ChromiumBrowserContext browserContext = _context as ChromiumBrowserContext;
-            string directory = browserContext?.DownloadsPath;
+            string directory = browserContext?.BrowserDownloadPath ?? browserContext?.DownloadsPath;
             string contextId = browserContext?.BrowserContextId;
             bool acceptDownloads = browserContext?.AcceptDownloads != false;
             Page target = ResolveDownloadTarget();
@@ -2202,7 +2202,8 @@ namespace PlaywrightNative
                 directory,
                 e.Guid,
                 () => _crPage.CancelDownloadAsync(e.Guid, contextId),
-                acceptDownloads);
+                acceptDownloads,
+                publicDownloadsDirectory: browserContext?.DownloadsPath);
             target.AdoptDownload(e.Guid, download, e.SuggestedFilename);
         }
 

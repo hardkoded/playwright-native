@@ -68,6 +68,7 @@ namespace PlaywrightNative.Chromium
         private ScreenSize _screenSize;
         private bool _acceptDownloads = true;
         private string _downloadsPath;
+        private string _browserDownloadPath;
         private bool _ownsDownloadsPath = true;
         private bool _closed;
         private bool _creatingStorageStatePage;
@@ -263,9 +264,18 @@ namespace PlaywrightNative.Chromium
                 : _crCtx.Proxy;
 
         /// <summary>
-        /// Directory that receives accepted downloads, or <see langword="null"/> before emulation is configured.
+        /// Public directory where completed downloads are surfaced. Callers that
+        /// poll this path (persistent-context acceptDownloads) must not see
+        /// in-progress <c>.crdownload</c> files.
         /// </summary>
         internal string DownloadsPath => _downloadsPath;
+
+        /// <summary>
+        /// Chromium <c>Browser.setDownloadBehavior</c> target (nested
+        /// <c>.pw-pending</c>). Completed files are promoted into
+        /// <see cref="DownloadsPath"/>.
+        /// </summary>
+        internal string BrowserDownloadPath => _browserDownloadPath ?? _downloadsPath;
 
         /// <summary>
         /// Official <c>acceptDownloads</c>. Denied downloads still emit the event.
@@ -755,6 +765,7 @@ namespace PlaywrightNative.Chromium
             Directory.CreateDirectory(path);
             _downloadsPath = Path.GetFullPath(path);
             _ownsDownloadsPath = false;
+            EnsureBrowserDownloadPath();
         }
 
         /// <summary>
@@ -765,12 +776,13 @@ namespace PlaywrightNative.Chromium
         {
             EnsureDownloadsDirectory();
             DownloadEventsEnabled = true;
+            string downloadPath = BrowserDownloadPath;
             if (string.IsNullOrEmpty(_crCtx.BrowserContextId))
             {
                 return _crCtx.Browser.Connection.RootSession.SendAsync("Browser.setDownloadBehavior", new
                 {
                     behavior = _acceptDownloads ? "allowAndName" : "deny",
-                    downloadPath = _downloadsPath,
+                    downloadPath,
                     eventsEnabled = true,
                 });
             }
@@ -778,7 +790,7 @@ namespace PlaywrightNative.Chromium
             return _crCtx.Browser.Connection.RootSession.SendAsync("Browser.setDownloadBehavior", new
             {
                 behavior = _acceptDownloads ? "allowAndName" : "deny",
-                downloadPath = _downloadsPath,
+                downloadPath,
                 eventsEnabled = true,
                 browserContextId = _crCtx.BrowserContextId,
             });
@@ -1631,13 +1643,28 @@ namespace PlaywrightNative.Chromium
 
         private void EnsureDownloadsDirectory()
         {
-            if (!string.IsNullOrEmpty(_downloadsPath))
+            if (string.IsNullOrEmpty(_downloadsPath))
+            {
+                _downloadsPath = Path.Combine(Path.GetTempPath(), "pwsharp-downloads-" + Guid.NewGuid().ToString("N"));
+                Directory.CreateDirectory(_downloadsPath);
+            }
+
+            EnsureBrowserDownloadPath();
+        }
+
+        private void EnsureBrowserDownloadPath()
+        {
+            if (string.IsNullOrEmpty(_downloadsPath))
             {
                 return;
             }
 
-            _downloadsPath = Path.Combine(Path.GetTempPath(), "pwsharp-downloads-" + Guid.NewGuid().ToString("N"));
-            Directory.CreateDirectory(_downloadsPath);
+            if (string.IsNullOrEmpty(_browserDownloadPath))
+            {
+                _browserDownloadPath = Path.Combine(_downloadsPath, ".pw-pending");
+            }
+
+            Directory.CreateDirectory(_browserDownloadPath);
         }
 
         private void DeleteDownloadsDirectory()
@@ -1662,6 +1689,7 @@ namespace PlaywrightNative.Chromium
             }
 
             _downloadsPath = null;
+            _browserDownloadPath = null;
         }
 
         private async Task<Exception> FlushHarQuietlyAsync()

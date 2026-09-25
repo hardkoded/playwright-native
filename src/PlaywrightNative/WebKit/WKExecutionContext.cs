@@ -1245,7 +1245,12 @@ namespace PlaywrightNative.WebKit
                 }
                 catch (TargetClosedException)
                 {
-                    throw;
+                    // SendAsync faults with TargetClosed when the session was
+                    // disposed for a target/world swap. Only a real page/browser
+                    // close should stay TargetClosed; otherwise surface the
+                    // navigation destroyed-context error so selector waits retry
+                    // (ViewScaleShouldResetAfterNavigation on WebKit).
+                    throw ClosedOrNavigationException();
                 }
                 catch (PlaywrightException ex) when (
                     ex.Message != null

@@ -259,11 +259,14 @@ namespace PlaywrightNative.Helpers
                     IsFrameDetachedError(ex)
                     || PlaywrightNative.Helpers.DestroyedContext.IsDestroyedContext(ex)
                     || IsMissingInjectedScript(ex)
+                    || ex is TargetClosedException
                     || (isDetached != null && isDetached()))
                 {
                     // Frame-scoped waits (isDetached set) fail hard on detach.
                     // Page-scoped waits treat child-frame detach as transient so
                     // locator.click can survive iframe remove+reattach.
+                    // TargetClosed during a WebKit world/session swap is also
+                    // transient for page-scoped waits (ViewScaleShouldResetAfterNavigation).
                     if (isDetached != null)
                     {
                         throw new PlaywrightException(apiName + ": Frame was detached", ex);
