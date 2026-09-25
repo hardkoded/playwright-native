@@ -3291,18 +3291,25 @@ namespace PlaywrightNative.WebKit
 
             JsonElement? result = null;
 
-            // blank→blank: Darwin WebKit can wedge Playwright.navigate so the
-            // post-RPC readyState seed never runs. Race a settle delay in the
-            // WhenAny loop and seed only if navigate is still open (immediate
-            // seed races the document swap). Track the seed task so CA2025 is
-            // satisfied before NavigateAsync returns.
-            bool blankToBlank = PopupOpenedHelper.IsBlankUrl(url)
-                && PopupOpenedHelper.IsBlankUrl(previousUrl);
+            // Navigate to about:blank from blank or file:: Darwin WebKit can
+            // wedge Playwright.navigate so the post-RPC readyState seed never
+            // runs. Race a settle delay in the WhenAny loop and seed only if
+            // navigate is still open (immediate seed races the document swap).
+            // Track the seed task so CA2025 is satisfied before NavigateAsync
+            // returns. blank→blank alone was insufficient — file→about:blank
+            // hung the full NUnit budget on macOS CI
+            // (ShouldNavigateFromFileUrlToAboutBlank). Do not arm for arbitrary
+            // http→blank navigations.
+            bool navigateToBlank = PopupOpenedHelper.IsBlankUrl(url);
+            bool blankOrFileToBlank = navigateToBlank
+                && (PopupOpenedHelper.IsBlankUrl(previousUrl)
+                    || (!string.IsNullOrEmpty(previousUrl)
+                        && previousUrl.StartsWith("file:", StringComparison.OrdinalIgnoreCase)));
             CancellationTokenSource blankWedgeProbeCts = null;
             Task blankWedgeProbe = new TaskCompletionSource<bool>(
                 TaskCreationOptions.RunContinuationsAsynchronously).Task;
             Task blankWedgeSeedTask = Task.CompletedTask;
-            if (blankToBlank)
+            if (blankOrFileToBlank)
             {
                 blankWedgeProbeCts = new CancellationTokenSource();
                 blankWedgeProbe = Task.Delay(2_000, blankWedgeProbeCts.Token);
@@ -3319,7 +3326,7 @@ namespace PlaywrightNative.WebKit
                 {
                     Task completed = await Task.WhenAny(sendTask, waitTcs.Task, timeoutTask, blankWedgeProbe)
                         .ConfigureAwait(false);
-                    if (blankToBlank && completed == blankWedgeProbe)
+                    if (blankOrFileToBlank && completed == blankWedgeProbe)
                     {
                         blankWedgeProbe = new TaskCompletionSource<bool>(
                             TaskCreationOptions.RunContinuationsAsynchronously).Task;
@@ -6469,6 +6476,12 @@ namespace PlaywrightNative.WebKit
             // budget on AddInitScriptAsyncShouldPassArg). Keep polling / retrying, and
             // bound each attempt to the remaining poll window so a zombie cannot burn
             // the full command timeout.
+            //
+            // When DidClose wins the race (pageProxyDestroyed during NewPage chrome
+            // apply), soft-return like EvaluateOnCurrentAsync / NewWKPageAsync's
+            // InitializedTask tolerance — throwing here fails NewPage itself
+            // (ShouldFailWithoutCredentials on macOS CI) after init scripts were
+            // already added to the in-memory list.
             DateTime deadline = DateTime.UtcNow.AddSeconds(5);
             Exception lastError = null;
             while (DateTime.UtcNow < deadline && !_closed)
@@ -6545,7 +6558,7 @@ namespace PlaywrightNative.WebKit
 
             if (_closed)
             {
-                throw PageClosedException();
+                return;
             }
 
             if (lastError != null)
@@ -10236,20 +10249,44 @@ namespace PlaywrightNative.WebKit
                     // Only seed the document that started this poll — later HTTP
                     // navigations clear lifecycle and must not be completed by a
                     // leftover about:/data: seed task.
+                    //
+                    // file→about:blank: pending is blank while _mainFrameUrl is still
+                    // the file URL until frameNavigated. Do not bail — keep polling
+                    // until the blank document commits or the exhaust path force-
+                    // completes (ShouldNavigateFromFileUrlToAboutBlank). Limit that
+                    // pending-only path to blank/file start URLs so http→blank is
+                    // unchanged.
                     string url = _mainFrameUrl;
                     bool allowBlankSeed;
+                    bool pendingBlankFromBlankOrFile;
                     lock (_navigationLock)
                     {
-                        allowBlankSeed = _pendingLoadTcs != null
-                            && PopupOpenedHelper.IsBlankUrl(url)
+                        bool pendingBlank = _pendingLoadTcs != null
                             && PopupOpenedHelper.IsBlankUrl(_pendingNavigationUrl);
+                        string startUrl = _navigationStartUrl;
+                        bool startBlankOrFile = PopupOpenedHelper.IsBlankUrl(startUrl)
+                            || (!string.IsNullOrEmpty(startUrl)
+                                && startUrl.StartsWith("file:", StringComparison.OrdinalIgnoreCase));
+                        pendingBlankFromBlankOrFile = pendingBlank && startBlankOrFile;
+                        allowBlankSeed = pendingBlank
+                            && PopupOpenedHelper.IsBlankUrl(url);
                     }
 
                     if (string.IsNullOrEmpty(url)
                         || (!url.StartsWith("data:", StringComparison.OrdinalIgnoreCase)
-                            && !allowBlankSeed))
+                            && !allowBlankSeed
+                            && !pendingBlankFromBlankOrFile))
                     {
                         return;
+                    }
+
+                    if (!allowBlankSeed
+                        && !url.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+                    {
+                        // Pending about:blank but document URL not updated yet —
+                        // wait for commit or fall through to the exhaust settle.
+                        await Task.Delay(25).ConfigureAwait(false);
+                        continue;
                     }
 
                     if (string.Equals(readyState, "interactive", StringComparison.Ordinal)
@@ -10318,12 +10355,14 @@ namespace PlaywrightNative.WebKit
                     await Task.Delay(25).ConfigureAwait(false);
                 }
 
-                // blank→blank / data:: if readyState polling never saw a usable
+                // blank destination / data:: if readyState polling never saw a usable
                 // context (Darwin target recycle under suite load), still complete
                 // waiters after the settle window so GoTo cannot hang for the full
                 // navigation timeout / NUnit budget. Delayed (~1s) — unlike
                 // sync-complete-on-RPC which raced the document swap. data: was
                 // previously excluded and hung TouchscreenTapFiresEvent on macOS CI.
+                // Pending about:blank from blank/file start covers wedged
+                // file→about:blank (navigate RPC and/or load waiters stuck).
                 if (Volatile.Read(ref _lifecycleSeedGeneration) != seedGeneration)
                 {
                     return;
@@ -10334,9 +10373,14 @@ namespace PlaywrightNative.WebKit
                 TaskCompletionSource<bool> exhaustedCommit;
                 lock (_navigationLock)
                 {
-                    bool allowBlankSeed = _pendingLoadTcs != null
-                        && PopupOpenedHelper.IsBlankUrl(_mainFrameUrl)
+                    bool pendingBlank = _pendingLoadTcs != null
                         && PopupOpenedHelper.IsBlankUrl(_pendingNavigationUrl);
+                    string startUrl = _navigationStartUrl;
+                    bool startBlankOrFile = PopupOpenedHelper.IsBlankUrl(startUrl)
+                        || (!string.IsNullOrEmpty(startUrl)
+                            && startUrl.StartsWith("file:", StringComparison.OrdinalIgnoreCase));
+                    bool allowBlankSeed = pendingBlank
+                        && (PopupOpenedHelper.IsBlankUrl(_mainFrameUrl) || startBlankOrFile);
                     bool allowDataSeed = _pendingLoadTcs != null
                         && ((!string.IsNullOrEmpty(_mainFrameUrl)
                                 && _mainFrameUrl.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
@@ -10345,6 +10389,20 @@ namespace PlaywrightNative.WebKit
                     if (!allowBlankSeed && !allowDataSeed)
                     {
                         return;
+                    }
+
+                    // file→about:blank with a wedged navigate never emits
+                    // frameNavigated — promote the pending blank URL so callers
+                    // observe about:blank after GoTo completes.
+                    if (allowBlankSeed
+                        && !PopupOpenedHelper.IsBlankUrl(_mainFrameUrl)
+                        && !string.IsNullOrEmpty(_pendingNavigationUrl))
+                    {
+                        _mainFrameUrl = _pendingNavigationUrl;
+                        if (_frameManager.MainFrame != null)
+                        {
+                            _frameManager.MainFrame.Url = _mainFrameUrl;
+                        }
                     }
 
                     _pendingNavigationCommitted = true;

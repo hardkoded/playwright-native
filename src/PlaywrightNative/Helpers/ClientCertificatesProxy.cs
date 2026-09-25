@@ -1153,6 +1153,41 @@ namespace PlaywrightNative.Helpers
             return new List<SslApplicationProtocol> { SslApplicationProtocol.Http11 };
         }
 
+        /// <summary>
+        /// Hard-closes an accepted or outbound TCP client so a stalled
+        /// <see cref="SslStream"/> handshake cannot outlive its budget.
+        /// </summary>
+        /// <param name="client">The client to close, or null.</param>
+        private static void ForceCloseTcpClient(TcpClient client)
+        {
+            if (client == null)
+            {
+                return;
+            }
+
+            try
+            {
+                client.Client?.Close();
+            }
+            catch (SocketException)
+            {
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+
+            try
+            {
+                client.Dispose();
+            }
+            catch (SocketException)
+            {
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+        }
+
         private async Task AcceptLoopAsync()
         {
             while (!_cts.IsCancellationRequested)
@@ -1315,7 +1350,14 @@ namespace PlaywrightNative.Helpers
                     if (hello[0] == 0x16 && willMitm)
                     {
                         await EstablishTlsTunnelAsync(
-                            browser, origin, hello, request.Host, request.Port, mitmCert, client)
+                            browser,
+                            origin,
+                            hello,
+                            request.Host,
+                            request.Port,
+                            mitmCert,
+                            client,
+                            server)
                             .ConfigureAwait(false);
                     }
                     else
@@ -1489,7 +1531,8 @@ namespace PlaywrightNative.Helpers
             string host,
             int port,
             X509Certificate2 clientCert,
-            TcpClient browserClient = null)
+            TcpClient browserClient = null,
+            TcpClient originClient = null)
         {
             IReadOnlyList<string> offered = ParseAlpnFromClientHello(clientHello)
                 ?? new[] { "http/1.1" };
@@ -1522,16 +1565,75 @@ namespace PlaywrightNative.Helpers
                     // server resets mid-TLS (SNI reject / TLS1.2 fixtures) or when
                     // certificate validation stalls. Upstream surfaces an error page
                     // instead of hanging page.goto.
-                    // Keep this well under Chromium's SOCKS patience: a 2s budget
-                    // still loses the tunnel to net::ERR_SOCKET_NOT_CONNECTED under
-                    // suite load before WriteTlsErrorPageAsync runs
-                    // (BrowserShouldNotHangOnTlsErrorsDuringTls12Handshake /
-                    // BrowserShouldReturnTargetConnectionErrorsWhenUsingHttp2).
+                    // Keep this well under Chromium's SOCKS patience: 750ms still
+                    // loses the tunnel to net::ERR_CONNECTION_ABORTED under Windows
+                    // suite load before WriteTlsErrorPageAsync finishes the MITM
+                    // AuthenticateAsServer
+                    // (BrowserShouldNotHangOnTlsErrorsDuringTls12Handshake).
+                    //
+                    // CancelAfter alone is not enough on Windows: SslStream can keep
+                    // AuthenticateAsClientAsync outstanding past the token cancel
+                    // until the next socket I/O. Hard-close the origin TCP when the
+                    // budget expires and paint immediately without awaiting the
+                    // cancelled handshake unwind / DisposeAsync stall.
+                    const int handshakeBudgetMs = 400;
                     using CancellationTokenSource handshakeCts =
                         CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
-                    handshakeCts.CancelAfter(TimeSpan.FromMilliseconds(750));
-                    await serverTls.AuthenticateAsClientAsync(clientOptions, handshakeCts.Token)
-                        .ConfigureAwait(false);
+                    handshakeCts.CancelAfter(TimeSpan.FromMilliseconds(handshakeBudgetMs));
+                    using (handshakeCts.Token.Register(() => ForceCloseTcpClient(originClient)))
+                    {
+                        Task handshakeTask = serverTls.AuthenticateAsClientAsync(
+                            clientOptions, handshakeCts.Token);
+                        Task budgetTask = Task.Delay(
+                            TimeSpan.FromMilliseconds(handshakeBudgetMs + 25));
+                        if (await Task.WhenAny(handshakeTask, budgetTask).ConfigureAwait(false)
+                            != handshakeTask)
+                        {
+                            ForceCloseTcpClient(originClient);
+                            string timeoutMessage = ClientCertificateHelper.RewriteTlsMessage(
+                                new OperationCanceledException());
+                            try
+                            {
+                                await serverTls.DisposeAsync().AsTask()
+                                    .WaitAsync(TimeSpan.FromMilliseconds(50))
+                                    .ConfigureAwait(false);
+                            }
+                            catch (TimeoutException)
+                            {
+                            }
+                            catch (IOException)
+                            {
+                            }
+                            catch (ObjectDisposedException)
+                            {
+                            }
+
+                            serverTls = null;
+                            await WriteTlsErrorPageAsync(browserPrefixed, offered, timeoutMessage)
+                                .ConfigureAwait(false);
+                            await HalfCloseAfterErrorPageAsync(browserClient).ConfigureAwait(false);
+                            try
+                            {
+                                await handshakeTask.ConfigureAwait(false);
+                            }
+                            catch (IOException)
+                            {
+                            }
+                            catch (ObjectDisposedException)
+                            {
+                            }
+                            catch (AuthenticationException)
+                            {
+                            }
+                            catch (OperationCanceledException)
+                            {
+                            }
+
+                            return;
+                        }
+
+                        await handshakeTask.ConfigureAwait(false);
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -1541,9 +1643,17 @@ namespace PlaywrightNative.Helpers
                     // the browser side, so a mid-handshake RST cannot race the
                     // error-page MITM (Darwin CFNetwork reports "Could not connect"
                     // when the CONNECT tunnel dies during AuthenticateAsServer).
+                    // Bound DisposeAsync after ForceClose — an unbounded dispose can
+                    // stall and push the MITM HTML past Chromium's SOCKS patience.
+                    ForceCloseTcpClient(originClient);
                     try
                     {
-                        await serverTls.DisposeAsync().ConfigureAwait(false);
+                        await serverTls.DisposeAsync().AsTask()
+                            .WaitAsync(TimeSpan.FromMilliseconds(50))
+                            .ConfigureAwait(false);
+                    }
+                    catch (TimeoutException)
+                    {
                     }
                     catch (IOException)
                     {

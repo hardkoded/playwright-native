@@ -19,6 +19,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.ExceptionServices;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -2505,21 +2506,79 @@ namespace PlaywrightNative.Chromium
             // can keep the CDP command outstanding; official progress.race
             // aborts the whole goto, not just the lifecycle wait.
             Task<GotoResult> navigateTask = NavigateFrameAsync(frame, url, referrer);
-            if (waitMs != System.Threading.Timeout.Infinite)
+            GotoResult result;
+            try
             {
-                using System.Threading.CancellationTokenSource navigateCts = new(waitMs);
-                try
+                if (waitMs != System.Threading.Timeout.Infinite)
                 {
-                    await navigateTask.WaitAsync(navigateCts.Token).ConfigureAwait(false);
+                    using System.Threading.CancellationTokenSource navigateCts = new(waitMs);
+                    try
+                    {
+                        await navigateTask.WaitAsync(navigateCts.Token).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        throw NavigationTimeout.Exceeded(apiName, url, NavigationTimeout.WaitUntilName(waitUntil), timeout);
+                    }
                 }
-                catch (OperationCanceledException)
+
+                result = await navigateTask.ConfigureAwait(false);
+            }
+            catch (NavigationException ex) when (IsMitmTunnelAbort(ex))
+            {
+                // Client-cert MITM: Page.navigate can report ERR_SOCKET_NOT_CONNECTED
+                // / ERR_CONNECTION_ABORTED while the SOCKS tunnel is upgraded to the
+                // HTML error document. Settle navigation and give lifecycle a short
+                // grace window before surfacing the abort — GoToFrameCapturingResponse
+                // also recovers via Network when a 503 lands.
+                //
+                // Do NOT treat empty/about:blank frame.Url as a commit match (that
+                // hung the full NUnit timeout after f6f9a84's soft-grace). Require a
+                // real non-blank frame URL that matches the target, or a lifecycle
+                // event, before accepting the abort as success.
+                expectedDocumentId = ex.DocumentId;
+                navigationSettled = true;
+                bool urlCommitted = !string.IsNullOrEmpty(frame.Url)
+                    && !PopupOpenedHelper.IsBlankUrl(frame.Url)
+                    && (string.Equals(
+                            NavigationTimeout.WithoutUserInfo(frame.Url),
+                            NavigationTimeout.WithoutUserInfo(url),
+                            StringComparison.OrdinalIgnoreCase)
+                        || frame.Url.StartsWith(url, StringComparison.OrdinalIgnoreCase)
+                        || url.StartsWith(frame.Url, StringComparison.OrdinalIgnoreCase));
+                if (sawTargetLifecycle
+                    || frame.LifecycleEvents.Contains(targetLifecycleEvent)
+                    || urlCommitted)
                 {
-                    throw NavigationTimeout.Exceeded(apiName, url, NavigationTimeout.WaitUntilName(waitUntil), timeout);
+                    result = new GotoResult(ex.DocumentId);
+                }
+                else
+                {
+                    int graceMs = waitMs == System.Threading.Timeout.Infinite
+                        ? 2_000
+                        : Math.Min(2_000, Math.Max(250, waitMs));
+                    using System.Threading.CancellationTokenSource graceCts = new(graceMs);
+                    try
+                    {
+                        graceCts.Token.Register(
+                            () => lifecycleTcs.TrySetCanceled(graceCts.Token));
+                        await lifecycleTcs.Task.WaitAsync(graceCts.Token).ConfigureAwait(false);
+                        result = new GotoResult(ex.DocumentId);
+                    }
+                    catch (Exception)
+                    {
+                        Crashed -= OnCrashed;
+                        Closed -= OnClosed;
+                        frame.LifecycleChanged -= OnLifecycle;
+                        _frameManager.FrameDetached -= OnDetached;
+                        _frameManager.FrameNavigated -= OnNavigated;
+                        ExceptionDispatchInfo.Capture(ex).Throw();
+                        throw;
+                    }
                 }
             }
 
-            GotoResult result = await navigateTask.ConfigureAwait(false);
-            expectedDocumentId = result.NewDocumentId;
+            expectedDocumentId = result.NewDocumentId ?? expectedDocumentId;
             navigationSettled = true;
 
             try
@@ -2586,6 +2645,11 @@ namespace PlaywrightNative.Chromium
                 _frameManager.FrameDetached -= OnDetached;
                 _frameManager.FrameNavigated -= OnNavigated;
             }
+
+            static bool IsMitmTunnelAbort(NavigationException ex)
+                => ex?.Message != null
+                    && (ex.Message.Contains("ERR_SOCKET_NOT_CONNECTED", StringComparison.Ordinal)
+                        || ex.Message.Contains("ERR_CONNECTION_ABORTED", StringComparison.Ordinal));
 
             void ThrowIfWebUiWouldCrashIsolatedContext()
             {
@@ -2776,9 +2840,36 @@ namespace PlaywrightNative.Chromium
                 // document response lands on a different request id.
                 System.Diagnostics.Stopwatch clock = System.Diagnostics.Stopwatch.StartNew();
                 Task<CRResponse> pendingWait = null;
-                while (clock.ElapsedMilliseconds < 5_000)
+
+                // Snapshot the event response before the superseding goto can
+                // overwrite the shared `captured` cell under Windows suite load
+                // (ShouldReturnFromGotoIfNewNavigationIsStarted /
+                // BrowserShouldNotHangOnTlsErrorsDuringTls12Handshake).
+                CRResponse eventSnapshot = fromEvent?.Invoke();
+                if (TryRecoverNavigationResponse(targetFrame, targetUrl, eventSnapshot, out recovered, documentId)
+                    && recovered != null)
                 {
-                    if (TryRecoverNavigationResponse(targetFrame, targetUrl, fromEvent?.Invoke(), out recovered, documentId)
+                    return recovered;
+                }
+
+                if (TryRecoverNavigationResponse(
+                        targetFrame,
+                        targetUrl,
+                        eventSnapshot,
+                        out recovered,
+                        documentId: null)
+                    && recovered != null
+                    && ResponseUrlMatchesTarget(recovered, targetUrl))
+                {
+                    return recovered;
+                }
+
+                // 8s: MITM error-page AuthenticateAsServer + concurrent-goto
+                // response commit both lag under Windows headful suite load past
+                // the prior 5s budget (ERR_CONNECTION_ABORTED / ERR_ABORTED).
+                while (clock.ElapsedMilliseconds < 8_000)
+                {
+                    if (TryRecoverNavigationResponse(targetFrame, targetUrl, fromEvent?.Invoke() ?? eventSnapshot, out recovered, documentId)
                         && recovered != null)
                     {
                         return recovered;
@@ -2792,7 +2883,7 @@ namespace PlaywrightNative.Chromium
                     if (TryRecoverNavigationResponse(
                             targetFrame,
                             targetUrl,
-                            fromEvent?.Invoke(),
+                            fromEvent?.Invoke() ?? eventSnapshot,
                             out recovered,
                             documentId: null)
                         && recovered != null

@@ -634,9 +634,34 @@ namespace PlaywrightNative.WebKit
                 throw ClosedTarget.Exception("Context has been closed.", _closeReason);
             }
 
-            WKPage page = await NewWKPageAsync().ConfigureAwait(false);
-            page.OwnerContext = this;
-            await ApplyContextChromeAsync(page).ConfigureAwait(false);
+            // Darwin pageProxyDestroyed can race NewPage chrome apply after a
+            // successful InitializedTask (SyncBootstrap / setBootstrapScript).
+            // Soft-tolerate the closed page once, then retry so callers that need
+            // a live page (credentials NewPage) are not handed a dead proxy.
+            // Intentionally closed during init (InitializedTask faulted) still
+            // returns the closed page for ShouldCloseAllBelongingPages*.
+            WKPage page = null;
+            for (int attempt = 0; attempt < 2; attempt++)
+            {
+                page = await NewWKPageAsync().ConfigureAwait(false);
+                page.OwnerContext = this;
+                bool initSucceeded = page.InitializedTask.IsCompletedSuccessfully;
+                await ApplyContextChromeAsync(page).ConfigureAwait(false);
+                if (!page.IsClosed || !initSucceeded || attempt > 0)
+                {
+                    return page;
+                }
+
+                // Chromium-style: drop the dead proxy and open a replacement.
+                try
+                {
+                    await page.CloseAsync().ConfigureAwait(false);
+                }
+                catch (PlaywrightException)
+                {
+                }
+            }
+
             return page;
         }
 
@@ -2000,7 +2025,37 @@ namespace PlaywrightNative.WebKit
 
         private async Task ApplyContextChromeAsync(IPage page)
         {
-            await ApplyInitScriptsAsync(page).ConfigureAwait(false);
+            // Darwin pageProxyDestroyed can close the page between InitializedTask
+            // and chrome apply (same race SyncBootstrapScriptAsync soft-tolerates).
+            // Skip the rest so NewPage returns the closed page for cleanup rather
+            // than failing mid-bootstrap (ShouldFailWithoutCredentials).
+            if (page is WKPage closedCheck && closedCheck.IsClosed)
+            {
+                return;
+            }
+
+            try
+            {
+                await ApplyInitScriptsAsync(page).ConfigureAwait(false);
+            }
+            catch (TargetClosedException) when (page is WKPage wkInit && wkInit.IsClosed)
+            {
+                return;
+            }
+            catch (PlaywrightException ex) when (
+                page is WKPage wkInit && wkInit.IsClosed
+                && ex.Message != null
+                && (ex.Message.Contains("Target closed", StringComparison.OrdinalIgnoreCase)
+                    || ex.Message.Contains("Session closed", StringComparison.OrdinalIgnoreCase)
+                    || ex.Message.Contains("has been closed", StringComparison.OrdinalIgnoreCase)))
+            {
+                return;
+            }
+
+            if (page is WKPage closedAfterInit && closedAfterInit.IsClosed)
+            {
+                return;
+            }
 
             Dictionary<string, string> headers = BuildExtraHeaders();
             if (page is IAppliesMergedExtraHttpHeaders)
@@ -2014,92 +2069,32 @@ namespace PlaywrightNative.WebKit
 
             if (page is WKPage wkPage)
             {
-                // Create-time HttpCredentials must reach the page network managers and
-                // enable interception (HeadersWithAuth). Match SetHttpCredentialsAsync:
-                // store credentials, cancel the HTTP auth dialog, then update interception.
-                wkPage.SetHttpCredentials(_httpCredentials);
-                await wkPage.ApplyAuthCredentialsAsync().ConfigureAwait(false);
-                await wkPage.UpdateNetworkInterceptionAsync().ConfigureAwait(false);
-
-                List<WKRouteEntry> routes;
-                lock (_routes)
+                try
                 {
-                    routes = new List<WKRouteEntry>(_routes);
+                    await ApplyWkPageChromeAsync(wkPage).ConfigureAwait(false);
                 }
-
-                foreach (WKRouteEntry entry in routes)
+                catch (TargetClosedException) when (wkPage.IsClosed)
                 {
-                    await wkPage.AddRouteAsync(entry).ConfigureAwait(false);
+                    return;
                 }
-
-                if (!string.IsNullOrEmpty(_userAgent))
+                catch (PlaywrightException ex) when (
+                    wkPage.IsClosed
+                    && ex.Message != null
+                    && (ex.Message.Contains("Target closed", StringComparison.OrdinalIgnoreCase)
+                        || ex.Message.Contains("Session closed", StringComparison.OrdinalIgnoreCase)
+                        || ex.Message.Contains("has been closed", StringComparison.OrdinalIgnoreCase)))
                 {
-                    await wkPage.SetUserAgentAsync(_userAgent).ConfigureAwait(false);
-                }
-                else
-                {
-                    await EnsureDefaultUserAgentHasSafariTokenAsync(wkPage).ConfigureAwait(false);
-                }
-
-                if (!string.IsNullOrEmpty(_timezoneId))
-                {
-                    await wkPage.SetTimezoneAsync(_timezoneId).ConfigureAwait(false);
-                }
-
-                if (_offline)
-                {
-                    await wkPage.SetOfflineAsync(true).ConfigureAwait(false);
-                }
-
-                await wkPage.SetTouchEmulationEnabledAsync(_hasTouch).ConfigureAwait(false);
-                await wkPage.ApplySafariOverrideSettingsAsync(_isMobile).ConfigureAwait(false);
-
-                if (_bypassCsp)
-                {
-                    await wkPage.SetBypassCSPAsync(true).ConfigureAwait(false);
-                }
-
-                await ApplyGrantedPermissionsAsync(wkPage).ConfigureAwait(false);
-
-                if (_geolocation != null)
-                {
-                    await SetGeolocationOverrideAsync(_geolocation).ConfigureAwait(false);
-
-                    // Official WebKit only uses Playwright.setGeolocationOverride on the browser
-                    // session. Page-proxy Emulation.setGeolocationOverride is Chromium-only.
-                }
-
-                if (_ignoreHttpsErrors || _clientCertificatesProxy != null)
-                {
-                    await SetIgnoreCertificateErrorsAsync(true).ConfigureAwait(false);
-                }
-
-                if (_javaScriptDisabled)
-                {
-                    await wkPage.SetJavaScriptEnabledAsync(false).ConfigureAwait(false);
-                }
-
-                if (!string.IsNullOrEmpty(_locale))
-                {
-                    wkPage.SetLocale(_locale);
-                    await wkPage.UpdateLocaleInterceptionAsync().ConfigureAwait(false);
-                }
-
-                if (_viewport != null || _deviceScaleFactor.HasValue || _isMobile || _screenSize != null)
-                {
-                    int width = _viewport?.Width ?? ViewportSizeHelper.Default.Width;
-                    int height = _viewport?.Height ?? ViewportSizeHelper.Default.Height;
-                    await wkPage.SetEmulatedViewportAsync(
-                        width,
-                        height,
-                        _deviceScaleFactor ?? 1,
-                        _isMobile,
-                        _screenSize).ConfigureAwait(false);
+                    return;
                 }
             }
             else if (_viewport != null)
             {
                 await page.SetViewportSizeAsync(_viewport.Width, _viewport.Height).ConfigureAwait(false);
+            }
+
+            if (page is WKPage stillOpen && stillOpen.IsClosed)
+            {
+                return;
             }
 
             if (_colorScheme != ColorScheme.Null)
@@ -2125,6 +2120,92 @@ namespace PlaywrightNative.WebKit
             if (Credentials is ContextCredentials credentials)
             {
                 await credentials.AttachIfInstalledAsync(page).ConfigureAwait(false);
+            }
+        }
+
+        private async Task ApplyWkPageChromeAsync(WKPage wkPage)
+        {
+            // Create-time HttpCredentials must reach the page network managers and
+            // enable interception (HeadersWithAuth). Match SetHttpCredentialsAsync:
+            // store credentials, cancel the HTTP auth dialog, then update interception.
+            wkPage.SetHttpCredentials(_httpCredentials);
+            await wkPage.ApplyAuthCredentialsAsync().ConfigureAwait(false);
+            await wkPage.UpdateNetworkInterceptionAsync().ConfigureAwait(false);
+
+            List<WKRouteEntry> routes;
+            lock (_routes)
+            {
+                routes = new List<WKRouteEntry>(_routes);
+            }
+
+            foreach (WKRouteEntry entry in routes)
+            {
+                await wkPage.AddRouteAsync(entry).ConfigureAwait(false);
+            }
+
+            if (!string.IsNullOrEmpty(_userAgent))
+            {
+                await wkPage.SetUserAgentAsync(_userAgent).ConfigureAwait(false);
+            }
+            else
+            {
+                await EnsureDefaultUserAgentHasSafariTokenAsync(wkPage).ConfigureAwait(false);
+            }
+
+            if (!string.IsNullOrEmpty(_timezoneId))
+            {
+                await wkPage.SetTimezoneAsync(_timezoneId).ConfigureAwait(false);
+            }
+
+            if (_offline)
+            {
+                await wkPage.SetOfflineAsync(true).ConfigureAwait(false);
+            }
+
+            await wkPage.SetTouchEmulationEnabledAsync(_hasTouch).ConfigureAwait(false);
+            await wkPage.ApplySafariOverrideSettingsAsync(_isMobile).ConfigureAwait(false);
+
+            if (_bypassCsp)
+            {
+                await wkPage.SetBypassCSPAsync(true).ConfigureAwait(false);
+            }
+
+            await ApplyGrantedPermissionsAsync(wkPage).ConfigureAwait(false);
+
+            if (_geolocation != null)
+            {
+                await SetGeolocationOverrideAsync(_geolocation).ConfigureAwait(false);
+
+                // Official WebKit only uses Playwright.setGeolocationOverride on the browser
+                // session. Page-proxy Emulation.setGeolocationOverride is Chromium-only.
+            }
+
+            if (_ignoreHttpsErrors || _clientCertificatesProxy != null)
+            {
+                await SetIgnoreCertificateErrorsAsync(true).ConfigureAwait(false);
+            }
+
+            if (_javaScriptDisabled)
+            {
+                await wkPage.SetJavaScriptEnabledAsync(false).ConfigureAwait(false);
+            }
+
+            if (!string.IsNullOrEmpty(_locale))
+            {
+                wkPage.SetLocale(_locale);
+                await wkPage.UpdateLocaleInterceptionAsync().ConfigureAwait(false);
+            }
+
+            if (_viewport != null || _deviceScaleFactor.HasValue || _isMobile || _screenSize != null)
+            {
+                int width = _viewport?.Width ?? ViewportSizeHelper.Default.Width;
+                int height = _viewport?.Height ?? ViewportSizeHelper.Default.Height;
+                await wkPage.SetEmulatedViewportAsync(
+                    width,
+                    height,
+                    _deviceScaleFactor ?? 1,
+                    _isMobile,
+                    _screenSize).ConfigureAwait(false);
             }
         }
 
