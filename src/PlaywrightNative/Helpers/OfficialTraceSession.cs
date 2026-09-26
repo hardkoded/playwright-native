@@ -23,6 +23,7 @@ using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Microsoft.Playwright;
+using PlaywrightNative.Chromium;
 
 namespace PlaywrightNative.Helpers
 {
@@ -733,7 +734,7 @@ namespace PlaywrightNative.Helpers
 
                     using (ActionTrace.SuppressRecording())
                     {
-                        byte[] jpeg = await page.ScreenshotAsync(type: ScreenshotType.Jpeg, quality: 50, timeout: 1000).ConfigureAwait(false);
+                        byte[] jpeg = await CaptureTraceScreenshotAsync(page, jpeg: true).ConfigureAwait(false);
                         AddScreencastFrame(jpeg);
                     }
                 }
@@ -1192,7 +1193,12 @@ namespace PlaywrightNative.Helpers
                     byte[] png;
                     using (ActionTrace.SuppressRecording())
                     {
-                        png = await page.ScreenshotAsync(timeout: 1000).ConfigureAwait(false);
+                        // Hard budget: do not let a hung screenshot (fonts / CDP)
+                        // wedge the traced action for the full NUnit timeout. Prefer
+                        // the raw browser capture so we never take ScreenshotDecorations'
+                        // per-page gate — an abandoned WaitForFontsAsync would otherwise
+                        // deadlock the next phase (ShouldCollectActionScreenshots).
+                        png = await CaptureTraceScreenshotAsync(page, jpeg: false).ConfigureAwait(false);
                     }
 
                     lock (_gate)
@@ -1225,6 +1231,40 @@ namespace PlaywrightNative.Helpers
                 {
                 }
             }
+        }
+
+        /// <summary>
+        /// Captures a page screenshot for tracing with a hard wall-clock budget.
+        /// Chromium uses the raw CDP path (no decorations / fonts / gate).
+        /// </summary>
+        private async Task<byte[]> CaptureTraceScreenshotAsync(IPage page, bool jpeg)
+        {
+            Task<byte[]> shotTask;
+            if (page is Page chromiumPage)
+            {
+                ScreenshotOptions options = new ScreenshotOptions
+                {
+                    Format = jpeg ? "jpeg" : "png",
+                    Quality = jpeg ? 50 : null,
+                };
+                shotTask = chromiumPage.CrPage.ScreenshotAsync(options);
+            }
+            else if (jpeg)
+            {
+                shotTask = page.ScreenshotAsync(type: ScreenshotType.Jpeg, quality: 50, timeout: 1000);
+            }
+            else
+            {
+                shotTask = page.ScreenshotAsync(timeout: 1000);
+            }
+
+            Task finished = await Task.WhenAny(shotTask, Task.Delay(1_500)).ConfigureAwait(false);
+            if (finished != shotTask)
+            {
+                throw new TimeoutException("trace screenshot budget exceeded");
+            }
+
+            return await shotTask.ConfigureAwait(false);
         }
 
         private async Task CaptureAriaSnapshotAsync(string callId, string phase)

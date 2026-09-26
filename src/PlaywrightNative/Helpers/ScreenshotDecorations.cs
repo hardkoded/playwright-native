@@ -353,15 +353,17 @@ namespace PlaywrightNative.Helpers
         {
             try
             {
-                // Upstream: frame.nonStallingEvaluateInExistingContext('document.fonts.ready', 'utility')
-                // Do not race a short timer — ScreenshotTimeout owns the deadline.
-                if (page is WKPage webkit)
+                // Upstream: frame.nonStallingEvaluateInExistingContext('document.fonts.ready', 'utility').
+                // Bound the wait so an abandoned ScreenshotTimeout capture still exits
+                // CaptureAsync and releases ScreenshotGates — otherwise the next
+                // screenshot on the same page deadlocks on the gate forever.
+                Task fontsTask = page is WKPage webkit
+                    ? EvaluateInWebKitUtilityAsync(webkit, "document.fonts && document.fonts.ready")
+                    : page.EvaluateAsync("document.fonts && document.fonts.ready");
+                Task finished = await Task.WhenAny(fontsTask, Task.Delay(5_000)).ConfigureAwait(false);
+                if (finished == fontsTask)
                 {
-                    await EvaluateInWebKitUtilityAsync(webkit, "document.fonts && document.fonts.ready").ConfigureAwait(false);
-                }
-                else
-                {
-                    await page.EvaluateAsync("document.fonts && document.fonts.ready").ConfigureAwait(false);
+                    await fontsTask.ConfigureAwait(false);
                 }
             }
             catch (PlaywrightException)
