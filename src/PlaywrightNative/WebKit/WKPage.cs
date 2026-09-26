@@ -3222,11 +3222,11 @@ namespace PlaywrightNative.WebKit
                     }
                     else
                     {
-                        // Defer TrySetException until after this sync NavigateAsync
-                        // stack returns: the competing GoTo is often started from a
-                        // hanging route callback as `anotherPromise = page.GoToAsync(...)`.
-                        // Sync fault here lets CatchAsync finish before GoToAsync
-                        // returns, leaving anotherPromise null
+                        // Defer TrySetException until after await Task.Yield() below so
+                        // this NavigateAsync returns a Task to the caller first. The
+                        // competing GoTo is often started from a hanging route callback
+                        // as `anotherPromise = page.GoToAsync(...)`; faulting before
+                        // that assignment leaves anotherPromise null
                         // (ShouldFailWhenReplacedByAnotherNavigation).
                         interruptedException = new PlaywrightException(
                             "page.goto: Navigation to \"" + _pendingNavigationUrl +
@@ -3268,16 +3268,19 @@ namespace PlaywrightNative.WebKit
 
             if (interruptedException != null)
             {
+                // Yield before TrySetException so this NavigateAsync returns a Task
+                // to the caller first. Route callbacks assign
+                // `anotherPromise = page.GoToAsync(...)` from that return; ThreadPool
+                // QueueUserWorkItem still raced CatchAsync on Darwin under suite load
+                // (ShouldFailWhenReplacedByAnotherNavigation anotherPromise null).
                 PlaywrightException fault = interruptedException;
                 TaskCompletionSource<bool> prevLoad = interruptedLoad;
                 TaskCompletionSource<bool> prevDom = interruptedDom;
                 TaskCompletionSource<bool> prevCommit = interruptedCommit;
-                ThreadPool.QueueUserWorkItem(_ =>
-                {
-                    prevLoad?.TrySetException(fault);
-                    prevDom?.TrySetException(fault);
-                    prevCommit?.TrySetException(fault);
-                });
+                await Task.Yield();
+                prevLoad?.TrySetException(fault);
+                prevDom?.TrySetException(fault);
+                prevCommit?.TrySetException(fault);
             }
 
             string frameId = _frameManager.MainFrame?.FrameId ?? _mainFrameId;
