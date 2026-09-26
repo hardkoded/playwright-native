@@ -1331,6 +1331,7 @@ namespace PlaywrightNative.Chromium
             _requestsById[requestId] = request;
             _requestsByRawId[rawId] = request;
             RememberRecentNavigationRequest(request);
+            _page.NoteFrameNavigateRequest(frame, url, loaderId, isNavigationRequest || request.TracksDocumentNavigation);
 
             RaiseRequestCreated(request);
             frame?.OnInflightRequestStarted(
@@ -1907,6 +1908,11 @@ namespace PlaywrightNative.Chromium
             {
                 request.PromoteToDocumentNavigation(pausedType);
                 RememberRecentNavigationRequest(request);
+                _page.NoteFrameNavigateRequest(
+                    request.Frame,
+                    request.Url,
+                    request.DocumentId,
+                    isDocumentNavigation: true);
 
                 // Response may have landed before Fetch promotion; OnResponseReceived
                 // skipped the committed ring while TracksDocumentNavigation was false.
@@ -2233,6 +2239,11 @@ namespace PlaywrightNative.Chromium
             }
 
             RememberRecentNavigationRequest(request);
+            _page.NoteFrameNavigateRequest(
+                request.Frame,
+                request.Url,
+                request.DocumentId,
+                isDocumentNavigation: true);
             _page.LatchCommittedNavigationResponse(response);
         }
 

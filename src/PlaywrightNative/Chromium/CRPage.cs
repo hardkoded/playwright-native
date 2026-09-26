@@ -68,6 +68,8 @@ namespace PlaywrightNative.Chromium
         private readonly object _navigationResponseGate = new();
         private readonly List<FrameNavigationCommit> _recentFrameCommits = new();
         private readonly object _frameCommitGate = new();
+        private readonly List<InFlightFrameNavigate> _inflightFrameNavigates = new();
+        private readonly object _inflightFrameNavigateGate = new();
         private string _userAgentOverride;
         private string _acceptLanguageOverride;
         private bool _userAgentIsMobile;
@@ -551,61 +553,84 @@ namespace PlaywrightNative.Chromium
                 ArmChromeCrashFallback();
             }
 
-            object parameters = string.IsNullOrEmpty(referrer)
-                ? (object)new { url, frameId = frame.FrameId, referrerPolicy = "unsafeUrl" }
-                : new { url, referrer, frameId = frame.FrameId, referrerPolicy = "unsafeUrl" };
-            JsonElement? response = await SessionForFrame(frame).SendAsync("Page.navigate", parameters).ConfigureAwait(false);
+            // Under Windows suite load a superseding GoTo can Page.navigate before the
+            // in-flight peer has even issued Network.requestWillBeSent. Chrome then
+            // aborts the peer with ERR_ABORTED and no document commit, so concurrent-
+            // goto recovery cannot return the first navigation's 200. Wait for the
+            // peer to at least start (and briefly for commit) before sending ours —
+            // hung cancel/replace peers already have requestWillBeSent and proceed
+            // after a short grace (ShouldReturnFromGotoIfNewNavigationIsStarted /
+            // ShouldFailWhenCanceledByAnotherNavigation).
+            await WaitForPeerFrameNavigateReadyAsync(frame).ConfigureAwait(false);
 
-            if (!response.HasValue)
+            InFlightFrameNavigate inflight = BeginFrameNavigate(frame, url);
+            try
             {
-                return new GotoResult(null);
-            }
+                object parameters = string.IsNullOrEmpty(referrer)
+                    ? (object)new { url, frameId = frame.FrameId, referrerPolicy = "unsafeUrl" }
+                    : new { url, referrer, frameId = frame.FrameId, referrerPolicy = "unsafeUrl" };
+                JsonElement? response = await SessionForFrame(frame).SendAsync("Page.navigate", parameters).ConfigureAwait(false);
 
-            JsonElement responseValue = response.Value;
-
-            if (responseValue.TryGetProperty("isDownload", out JsonElement downloadEl)
-                && downloadEl.ValueKind == JsonValueKind.True)
-            {
-                throw new NavigationException("Download is starting", url);
-            }
-
-            string loaderId = null;
-            if (responseValue.TryGetProperty("loaderId", out JsonElement loaderIdElement))
-            {
-                loaderId = loaderIdElement.GetString();
-            }
-
-            if (responseValue.TryGetProperty("errorText", out JsonElement errorTextElement))
-            {
-                string errorText = errorTextElement.GetString();
-                if (!string.IsNullOrEmpty(errorText))
+                if (!response.HasValue)
                 {
-                    // Concurrent GoTo under Windows suite load: Page.navigate can
-                    // report ERR_ABORTED after the document already committed (or
-                    // while its Network.responseReceived is still in flight). If we
-                    // can see a usable committed response for this URL/loaderId,
-                    // treat navigate as success so lifecycle wait + response capture
-                    // still return the first document's 200
-                    // (ShouldReturnFromGotoIfNewNavigationIsStarted).
-                    // Cancel/replace/204 keep throwing — those never produce a
-                    // usable committed response for the aborted URL.
-                    if (!string.IsNullOrEmpty(loaderId)
-                        && errorText.Contains("ERR_ABORTED", StringComparison.Ordinal)
-                        && await TryAcceptAbortedNavigateAsCommittedAsync(frame, url, loaderId).ConfigureAwait(false))
-                    {
-                        return new GotoResult(loaderId);
-                    }
-
-                    // Preserve loaderId so GoToFrameCapturingResponseAsync can await
-                    // the document response after concurrent GoTo aborts Page.navigate
-                    // (ShouldReturnFromGotoIfNewNavigationIsStarted under Windows load).
-                    // Still throw: cancel/replace/204 navigations must surface ERR_ABORTED
-                    // (ShouldFailWhenCanceledByAnotherNavigation / …Returns204).
-                    throw new NavigationException($"Navigation failed: {errorText}", url, loaderId);
+                    return new GotoResult(null);
                 }
-            }
 
-            return new GotoResult(loaderId);
+                JsonElement responseValue = response.Value;
+
+                if (responseValue.TryGetProperty("isDownload", out JsonElement downloadEl)
+                    && downloadEl.ValueKind == JsonValueKind.True)
+                {
+                    throw new NavigationException("Download is starting", url);
+                }
+
+                string loaderId = null;
+                if (responseValue.TryGetProperty("loaderId", out JsonElement loaderIdElement))
+                {
+                    loaderId = loaderIdElement.GetString();
+                }
+
+                if (!string.IsNullOrEmpty(loaderId))
+                {
+                    inflight.NoteLoaderId(loaderId);
+                }
+
+                if (responseValue.TryGetProperty("errorText", out JsonElement errorTextElement))
+                {
+                    string errorText = errorTextElement.GetString();
+                    if (!string.IsNullOrEmpty(errorText))
+                    {
+                        // Concurrent GoTo under Windows suite load: Page.navigate can
+                        // report ERR_ABORTED after the document already committed (or
+                        // while its Network.responseReceived is still in flight). If we
+                        // can see a usable committed response for this URL/loaderId,
+                        // treat navigate as success so lifecycle wait + response capture
+                        // still return the first document's 200
+                        // (ShouldReturnFromGotoIfNewNavigationIsStarted).
+                        // Cancel/replace/204 keep throwing — those never produce a
+                        // usable committed response for the aborted URL.
+                        if (!string.IsNullOrEmpty(loaderId)
+                            && errorText.Contains("ERR_ABORTED", StringComparison.Ordinal)
+                            && await TryAcceptAbortedNavigateAsCommittedAsync(frame, url, loaderId).ConfigureAwait(false))
+                        {
+                            return new GotoResult(loaderId);
+                        }
+
+                        // Preserve loaderId so GoToFrameCapturingResponseAsync can await
+                        // the document response after concurrent GoTo aborts Page.navigate
+                        // (ShouldReturnFromGotoIfNewNavigationIsStarted under Windows load).
+                        // Still throw: cancel/replace/204 navigations must surface ERR_ABORTED
+                        // (ShouldFailWhenCanceledByAnotherNavigation / …Returns204).
+                        throw new NavigationException($"Navigation failed: {errorText}", url, loaderId);
+                    }
+                }
+
+                return new GotoResult(loaderId);
+            }
+            finally
+            {
+                EndFrameNavigate(inflight);
+            }
 
             async Task<bool> TryAcceptAbortedNavigateAsCommittedAsync(Frame targetFrame, string targetUrl, string abortedLoaderId)
             {
@@ -4708,6 +4733,36 @@ namespace PlaywrightNative.Chromium
             => RememberCommittedNavigationResponse(response);
 
         /// <summary>
+        /// Marks an in-flight <c>Page.navigate</c> as having observed
+        /// <c>Network.requestWillBeSent</c> for its document (or a matching
+        /// main-frame GET). Used so a superseding goto can wait until the peer
+        /// has started before aborting it.
+        /// </summary>
+        /// <param name="frame">Frame that owns the request.</param>
+        /// <param name="url">Request URL.</param>
+        /// <param name="loaderId">CDP loader id when known.</param>
+        /// <param name="isDocumentNavigation">Whether the request tracks a document navigation.</param>
+        internal void NoteFrameNavigateRequest(Frame frame, string url, string loaderId, bool isDocumentNavigation)
+        {
+            if (!isDocumentNavigation || frame == null)
+            {
+                return;
+            }
+
+            string frameId = frame.FrameId;
+            InFlightFrameNavigate[] peers;
+            lock (_inflightFrameNavigateGate)
+            {
+                peers = _inflightFrameNavigates.ToArray();
+            }
+
+            for (int i = 0; i < peers.Length; i++)
+            {
+                peers[i].NoteRequestIfMatches(frameId, url, loaderId);
+            }
+        }
+
+        /// <summary>
         /// A JavaScript dialog can only open after a real document commit. Mark
         /// that commit so <see cref="Page.IsClientInitialized"/> and popup
         /// <c>reportAsNew</c> are not stuck waiting on <c>frameNavigated</c>
@@ -6564,6 +6619,8 @@ namespace PlaywrightNative.Chromium
                 RememberCommittedNavigationResponse(readyByUrl);
             }
 
+            NoteFrameNavigateCommit(frameId, url, loaderId);
+
             lock (_frameCommitGate)
             {
                 _recentFrameCommits.Add(new FrameNavigationCommit(frameId, url, loaderId));
@@ -6604,6 +6661,99 @@ namespace PlaywrightNative.Chromium
             }
         }
 
+        private void NoteFrameNavigateCommit(string frameId, string url, string loaderId)
+        {
+            InFlightFrameNavigate[] peers;
+            lock (_inflightFrameNavigateGate)
+            {
+                peers = _inflightFrameNavigates.ToArray();
+            }
+
+            for (int i = 0; i < peers.Length; i++)
+            {
+                peers[i].NoteCommitIfMatches(frameId, url, loaderId);
+            }
+        }
+
+        private InFlightFrameNavigate BeginFrameNavigate(Frame frame, string url)
+        {
+            InFlightFrameNavigate inflight = new InFlightFrameNavigate(frame?.FrameId, url);
+            lock (_inflightFrameNavigateGate)
+            {
+                _inflightFrameNavigates.Add(inflight);
+            }
+
+            return inflight;
+        }
+
+        private void EndFrameNavigate(InFlightFrameNavigate inflight)
+        {
+            if (inflight == null)
+            {
+                return;
+            }
+
+            inflight.MarkCompleted();
+            lock (_inflightFrameNavigateGate)
+            {
+                _inflightFrameNavigates.Remove(inflight);
+            }
+        }
+
+        private async Task WaitForPeerFrameNavigateReadyAsync(Frame frame)
+        {
+            string frameId = frame?.FrameId;
+            if (string.IsNullOrEmpty(frameId))
+            {
+                return;
+            }
+
+            InFlightFrameNavigate[] peers;
+            lock (_inflightFrameNavigateGate)
+            {
+                peers = _inflightFrameNavigates.ToArray();
+            }
+
+            for (int i = 0; i < peers.Length; i++)
+            {
+                InFlightFrameNavigate peer = peers[i];
+                if (!peer.MatchesFrame(frameId) || peer.IsCompleted)
+                {
+                    continue;
+                }
+
+                // Peer has not reached the network yet: wait until it does (or
+                // commits / finishes) so we do not abort a navigate that never
+                // started under suite load.
+                if (!peer.HasSeenRequest && !peer.HasCommitted)
+                {
+                    await Task.WhenAny(
+                            peer.RequestSeenTask,
+                            peer.CommittedTask,
+                            peer.CompletedTask,
+                            Task.Delay(3_000))
+                        .ConfigureAwait(false);
+                }
+
+                if (peer.IsCompleted || peer.HasCommitted)
+                {
+                    continue;
+                }
+
+                // Request is in flight but document not committed yet. Give a
+                // short grace for normal HTML commits; hung cancel/replace peers
+                // time out here and we proceed so ERR_ABORTED still surfaces.
+                if (peer.HasSeenRequest && !peer.HasCommitted)
+                {
+                    await Task.WhenAny(
+                            peer.CommittedTask,
+                            peer.CompletedTask,
+                            Task.Delay(2_000))
+                        .ConfigureAwait(false);
+                }
+            }
+        }
+
         private readonly struct FrameNavigationCommit
         {
             internal FrameNavigationCommit(string frameId, string url, string loaderId)
@@ -6618,6 +6768,144 @@ namespace PlaywrightNative.Chromium
             internal string Url { get; }
 
             internal string LoaderId { get; }
+        }
+
+        private sealed class InFlightFrameNavigate
+        {
+            private readonly string _frameId;
+            private readonly string _url;
+            private readonly TaskCompletionSource<bool> _requestSeenTcs =
+                new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            private readonly TaskCompletionSource<bool> _committedTcs =
+                new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            private readonly TaskCompletionSource<bool> _completedTcs =
+                new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            private string _loaderId;
+
+            internal InFlightFrameNavigate(string frameId, string url)
+            {
+                _frameId = frameId ?? string.Empty;
+                _url = url ?? string.Empty;
+            }
+
+            internal bool HasSeenRequest => _requestSeenTcs.Task.IsCompletedSuccessfully;
+
+            internal bool HasCommitted => _committedTcs.Task.IsCompletedSuccessfully;
+
+            internal bool IsCompleted => _completedTcs.Task.IsCompletedSuccessfully;
+
+            internal Task RequestSeenTask => _requestSeenTcs.Task;
+
+            internal Task CommittedTask => _committedTcs.Task;
+
+            internal Task CompletedTask => _completedTcs.Task;
+
+            internal bool MatchesFrame(string frameId)
+                => !string.IsNullOrEmpty(frameId)
+                    && string.Equals(_frameId, frameId, StringComparison.Ordinal);
+
+            internal void NoteLoaderId(string loaderId)
+            {
+                if (!string.IsNullOrEmpty(loaderId))
+                {
+                    _loaderId = loaderId;
+                }
+            }
+
+            internal void NoteRequestIfMatches(string frameId, string url, string loaderId)
+            {
+                if (!MatchesFrame(frameId))
+                {
+                    return;
+                }
+
+                if (!string.IsNullOrEmpty(loaderId)
+                    && !string.IsNullOrEmpty(_loaderId)
+                    && string.Equals(loaderId, _loaderId, StringComparison.Ordinal))
+                {
+                    _requestSeenTcs.TrySetResult(true);
+                    return;
+                }
+
+                if (UrlsLikelyMatch(_url, url))
+                {
+                    _requestSeenTcs.TrySetResult(true);
+                    if (!string.IsNullOrEmpty(loaderId) && string.IsNullOrEmpty(_loaderId))
+                    {
+                        _loaderId = loaderId;
+                    }
+                }
+            }
+
+            internal void NoteCommitIfMatches(string frameId, string url, string loaderId)
+            {
+                if (!MatchesFrame(frameId))
+                {
+                    return;
+                }
+
+                if (!string.IsNullOrEmpty(loaderId)
+                    && !string.IsNullOrEmpty(_loaderId)
+                    && string.Equals(loaderId, _loaderId, StringComparison.Ordinal))
+                {
+                    _requestSeenTcs.TrySetResult(true);
+                    _committedTcs.TrySetResult(true);
+                    return;
+                }
+
+                if (UrlsLikelyMatch(_url, url))
+                {
+                    _requestSeenTcs.TrySetResult(true);
+                    _committedTcs.TrySetResult(true);
+                    if (!string.IsNullOrEmpty(loaderId) && string.IsNullOrEmpty(_loaderId))
+                    {
+                        _loaderId = loaderId;
+                    }
+                }
+            }
+
+            internal void MarkCompleted()
+            {
+                _requestSeenTcs.TrySetResult(true);
+                _committedTcs.TrySetResult(true);
+                _completedTcs.TrySetResult(true);
+            }
+
+            private static bool UrlsLikelyMatch(string left, string right)
+            {
+                if (string.IsNullOrEmpty(left) || string.IsNullOrEmpty(right))
+                {
+                    return false;
+                }
+
+                if (string.Equals(left, right, StringComparison.OrdinalIgnoreCase)
+                    || left.StartsWith(right, StringComparison.OrdinalIgnoreCase)
+                    || right.StartsWith(left, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+
+                try
+                {
+                    if (!Uri.TryCreate(left, UriKind.Absolute, out Uri leftUri)
+                        || !Uri.TryCreate(right, UriKind.Absolute, out Uri rightUri))
+                    {
+                        return false;
+                    }
+
+                    return string.Equals(
+                        leftUri.AbsolutePath.TrimEnd('/'),
+                        rightUri.AbsolutePath.TrimEnd('/'),
+                        StringComparison.OrdinalIgnoreCase);
+                }
+                catch (UriFormatException)
+                {
+                    return false;
+                }
+            }
         }
     }
 }
