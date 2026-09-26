@@ -213,12 +213,12 @@ namespace PlaywrightNative.Chromium
         /// <summary>
         /// Gets the resource type (e.g. Document, Script, Stylesheet).
         /// </summary>
-        internal string ResourceType { get; }
+        internal string ResourceType { get; private set; }
 
         /// <summary>
         /// Gets a value indicating whether this is a navigation request.
         /// </summary>
-        internal bool IsNavigationRequest { get; }
+        internal bool IsNavigationRequest { get; private set; }
 
         /// <summary>
         /// Returns whether this request should be treated as a document navigation
@@ -237,9 +237,28 @@ namespace PlaywrightNative.Chromium
                     return true;
                 }
 
-                return !string.IsNullOrEmpty(DocumentId)
+                if (!string.IsNullOrEmpty(DocumentId)
                     && !string.IsNullOrEmpty(ProtocolRequestId)
-                    && string.Equals(DocumentId, ProtocolRequestId, StringComparison.Ordinal);
+                    && string.Equals(DocumentId, ProtocolRequestId, StringComparison.Ordinal))
+                {
+                    return true;
+                }
+
+                // Fetch-paired Chromium navigations under Windows suite load can omit
+                // ResourceType and use requestId != loaderId while still carrying the
+                // frame loader as DocumentId. Treat main-frame GETs with an empty type
+                // as document navigations so concurrent-goto recovery can find the 200
+                // (ShouldReturnFromGotoIfNewNavigationIsStarted).
+                if (string.IsNullOrEmpty(ResourceType)
+                    && !string.IsNullOrEmpty(DocumentId)
+                    && string.Equals(Method, "GET", StringComparison.OrdinalIgnoreCase)
+                    && Frame?.ParentFrame == null
+                    && !IsFavicon)
+                {
+                    return true;
+                }
+
+                return false;
             }
         }
 
@@ -591,6 +610,22 @@ namespace PlaywrightNative.Chromium
         /// </summary>
         /// <returns>The raw header list.</returns>
         internal Task<IReadOnlyList<NameValueEntry>> WaitForRawHeadersAsync() => _rawHeaders.Task;
+
+        /// <summary>
+        /// Promotes a Fetch-paired request to document navigation when
+        /// <c>Fetch.requestPaused</c> reports <c>resourceType=Document</c> after
+        /// <c>Network.requestWillBeSent</c> omitted the type.
+        /// </summary>
+        /// <param name="resourceType">Fetch resource type, or null.</param>
+        internal void PromoteToDocumentNavigation(string resourceType)
+        {
+            if (!string.IsNullOrEmpty(resourceType))
+            {
+                ResourceType = resourceType;
+            }
+
+            IsNavigationRequest = true;
+        }
 
         /// <summary>
         /// Replaces post data from a later protocol event (e.g. Fetch.requestPaused).

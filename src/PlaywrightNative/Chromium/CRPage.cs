@@ -66,6 +66,8 @@ namespace PlaywrightNative.Chromium
         private readonly string _utilityWorldName;
         private readonly List<CRResponse> _recentNavigationResponses = new();
         private readonly object _navigationResponseGate = new();
+        private readonly List<FrameNavigationCommit> _recentFrameCommits = new();
+        private readonly object _frameCommitGate = new();
         private string _userAgentOverride;
         private string _acceptLanguageOverride;
         private bool _userAgentIsMobile;
@@ -607,20 +609,35 @@ namespace PlaywrightNative.Chromium
 
             async Task<bool> TryAcceptAbortedNavigateAsCommittedAsync(Frame targetFrame, string targetUrl, string abortedLoaderId)
             {
-                if (HasUsableCommittedNavigationResponse(targetFrame, targetUrl, abortedLoaderId))
+                // 204 main-frame navigations also report ERR_ABORTED with a loaderId
+                // but must keep throwing (ShouldFailWhenServerReturns204).
+                if (HasAbortedNavigationStatus(targetFrame, targetUrl, abortedLoaderId, status: 204))
+                {
+                    return false;
+                }
+
+                if (HasUsableCommittedNavigationResponse(targetFrame, targetUrl, abortedLoaderId)
+                    || HasMatchingFrameCommit(targetFrame, targetUrl, abortedLoaderId))
                 {
                     return true;
                 }
 
                 // Suite load: Network.requestWillBeSent / responseReceived can trail
-                // Page.navigate's ERR_ABORTED by tens to hundreds of ms. Poll for a
-                // usable committed response even when the request is not in the
-                // recent ring yet (ShouldReturnFromGotoIfNewNavigationIsStarted).
+                // Page.navigate's ERR_ABORTED by tens to hundreds of ms. Page.frameNavigated
+                // may also land after the abort ack. Poll for a usable committed response
+                // or FrameNavigated commit even when the request is not in the recent ring
+                // yet (ShouldReturnFromGotoIfNewNavigationIsStarted).
                 System.Diagnostics.Stopwatch clock = System.Diagnostics.Stopwatch.StartNew();
                 while (clock.ElapsedMilliseconds < 8_000)
                 {
+                    if (HasAbortedNavigationStatus(targetFrame, targetUrl, abortedLoaderId, status: 204))
+                    {
+                        return false;
+                    }
+
                     if (HasUsableCommittedNavigationResponse(targetFrame, targetUrl, abortedLoaderId)
-                        || HasUsableCommittedNavigationResponse(targetFrame, targetUrl, documentId: null))
+                        || HasUsableCommittedNavigationResponse(targetFrame, targetUrl, documentId: null)
+                        || HasMatchingFrameCommit(targetFrame, targetUrl, abortedLoaderId))
                     {
                         return true;
                     }
@@ -630,6 +647,11 @@ namespace PlaywrightNative.Chromium
                     {
                         if (pending?.Response != null)
                         {
+                            if (pending.Response.Status == 204)
+                            {
+                                return false;
+                            }
+
                             if (IsCommittedNavigationStatus(pending.Response.Status)
                                 && (NavigationResponseMatches(pending.Response, targetFrame, targetUrl, abortedLoaderId)
                                     || NavigationResponseMatches(pending.Response, targetFrame, targetUrl, documentId: null)))
@@ -641,9 +663,11 @@ namespace PlaywrightNative.Chromium
                         if (!string.IsNullOrEmpty(pending?.FailureText))
                         {
                             // Request may be marked failed (ERR_ABORTED) after the
-                            // document already committed — keep polling the ring.
+                            // document already committed — keep polling the ring /
+                            // FrameNavigated commits.
                             if (HasUsableCommittedNavigationResponse(targetFrame, targetUrl, abortedLoaderId)
-                                || HasUsableCommittedNavigationResponse(targetFrame, targetUrl, documentId: null))
+                                || HasUsableCommittedNavigationResponse(targetFrame, targetUrl, documentId: null)
+                                || HasMatchingFrameCommit(targetFrame, targetUrl, abortedLoaderId))
                             {
                                 return true;
                             }
@@ -662,6 +686,11 @@ namespace PlaywrightNative.Chromium
                                 if (finished == wait)
                                 {
                                     CRResponse arrived = await wait.ConfigureAwait(false);
+                                    if (arrived != null && arrived.Status == 204)
+                                    {
+                                        return false;
+                                    }
+
                                     if (arrived != null
                                         && IsCommittedNavigationStatus(arrived.Status)
                                         && (NavigationResponseMatches(arrived, targetFrame, targetUrl, abortedLoaderId)
@@ -683,8 +712,51 @@ namespace PlaywrightNative.Chromium
                     await Task.Delay(20).ConfigureAwait(false);
                 }
 
+                if (HasAbortedNavigationStatus(targetFrame, targetUrl, abortedLoaderId, status: 204))
+                {
+                    return false;
+                }
+
                 return HasUsableCommittedNavigationResponse(targetFrame, targetUrl, abortedLoaderId)
-                    || HasUsableCommittedNavigationResponse(targetFrame, targetUrl, documentId: null);
+                    || HasUsableCommittedNavigationResponse(targetFrame, targetUrl, documentId: null)
+                    || HasMatchingFrameCommit(targetFrame, targetUrl, abortedLoaderId);
+            }
+
+            bool HasAbortedNavigationStatus(Frame targetFrame, string targetUrl, string documentId, int status)
+            {
+                if (_networkManager.TryFindNavigationRequest(documentId, targetFrame, targetUrl, out CRRequest request)
+                    && request?.Response != null
+                    && request.Response.Status == status)
+                {
+                    return true;
+                }
+
+                if (_networkManager.TryFindNavigationRequest(documentId: null, targetFrame, targetUrl, out request)
+                    && request?.Response != null
+                    && request.Response.Status == status)
+                {
+                    return true;
+                }
+
+                CRResponse[] recent;
+                lock (_navigationResponseGate)
+                {
+                    recent = _recentNavigationResponses.ToArray();
+                }
+
+                for (int i = recent.Length - 1; i >= 0; i--)
+                {
+                    CRResponse candidate = recent[i];
+                    if (candidate != null
+                        && candidate.Status == status
+                        && (NavigationResponseMatches(candidate, targetFrame, targetUrl, documentId)
+                            || NavigationResponseMatches(candidate, targetFrame, targetUrl, documentId: null)))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
             }
 
             bool HasUsableCommittedNavigationResponse(Frame targetFrame, string targetUrl, string documentId)
@@ -722,6 +794,52 @@ namespace PlaywrightNative.Chromium
                     {
                         return true;
                     }
+                }
+
+                return false;
+            }
+
+            bool HasMatchingFrameCommit(Frame targetFrame, string targetUrl, string documentId)
+            {
+                string frameId = targetFrame?.FrameId;
+                FrameNavigationCommit[] commits;
+                lock (_frameCommitGate)
+                {
+                    commits = _recentFrameCommits.ToArray();
+                }
+
+                for (int i = commits.Length - 1; i >= 0; i--)
+                {
+                    FrameNavigationCommit commit = commits[i];
+                    if (!string.IsNullOrEmpty(frameId)
+                        && !string.IsNullOrEmpty(commit.FrameId)
+                        && !string.Equals(frameId, commit.FrameId, StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+
+                    if (!string.IsNullOrEmpty(documentId)
+                        && string.Equals(commit.LoaderId, documentId, StringComparison.Ordinal))
+                    {
+                        return true;
+                    }
+
+                    if (!string.IsNullOrEmpty(targetUrl)
+                        && CommittedNavigationUrlsMatch(commit.Url, targetUrl))
+                    {
+                        return true;
+                    }
+                }
+
+                // Document may still be the aborted navigation's loader even after
+                // Network events were dropped under suite load.
+                if (!string.IsNullOrEmpty(documentId)
+                    && targetFrame != null
+                    && string.Equals(targetFrame.DocumentId, documentId, StringComparison.Ordinal)
+                    && !string.IsNullOrEmpty(targetUrl)
+                    && CommittedNavigationUrlsMatch(targetFrame.Url, targetUrl))
+                {
+                    return true;
                 }
 
                 return false;
@@ -4532,15 +4650,7 @@ namespace PlaywrightNative.Chromium
                 && response.Status != 204
                 && response.Request.TracksDocumentNavigation)
             {
-                _lastCommittedNavigationResponse = response;
-                lock (_navigationResponseGate)
-                {
-                    _recentNavigationResponses.Add(response);
-                    while (_recentNavigationResponses.Count > 16)
-                    {
-                        _recentNavigationResponses.RemoveAt(0);
-                    }
-                }
+                RememberCommittedNavigationResponse(response);
             }
 
             ResponseReceived?.Invoke(this, response);
@@ -5779,6 +5889,7 @@ namespace PlaywrightNative.Chromium
                 Frame before = _frameManager.FrameById(frameId) ?? _frameManager.MainFrame;
                 string previousDocumentId = before?.DocumentId;
                 _frameManager.FrameCommittedNewDocumentNavigation(frameId, url ?? string.Empty, name ?? string.Empty, loaderId);
+                RecordFrameNavigationCommit(frameId, url, loaderId);
                 Frame navigated = _frameManager.FrameById(frameId) ?? _frameManager.MainFrame;
                 if (navigated != null && navigated.ParentFrame == null
                     && !string.Equals(navigated.DocumentId, previousDocumentId, StringComparison.Ordinal))
@@ -6357,6 +6468,105 @@ namespace PlaywrightNative.Chromium
             }
 
             MarkFirstNonInitialNavigation(url);
+        }
+
+        /// <summary>
+        /// Records a <c>Page.frameNavigated</c> commit so concurrent-goto
+        /// <c>ERR_ABORTED</c> recovery can treat the document as committed even
+        /// when <c>Network.responseReceived</c> was dropped from the ring under
+        /// Windows suite load (ShouldReturnFromGotoIfNewNavigationIsStarted).
+        /// </summary>
+        /// <param name="frameId">CDP frame id.</param>
+        /// <param name="url">Committed URL.</param>
+        /// <param name="loaderId">CDP loader id.</param>
+        private void RecordFrameNavigationCommit(string frameId, string url, string loaderId)
+        {
+            if (string.IsNullOrEmpty(loaderId) && string.IsNullOrEmpty(url))
+            {
+                return;
+            }
+
+            if (!string.IsNullOrEmpty(url)
+                && (url.StartsWith("javascript:", StringComparison.OrdinalIgnoreCase)
+                    || PopupOpenedHelper.IsBlankUrl(url)))
+            {
+                return;
+            }
+
+            Frame frame = !string.IsNullOrEmpty(frameId)
+                ? _frameManager.FrameById(frameId) ?? _frameManager.MainFrame
+                : _frameManager.MainFrame;
+
+            // Latch any already-known document response into the recent ring so
+            // TryAccept / RecoverAborted can still return status 200 after the
+            // Network request map entry is removed on abort.
+            if (_networkManager.TryFindNavigationRequest(loaderId, frame, url, out CRRequest byLoader)
+                && byLoader?.Response is CRResponse ready
+                && ready.Status != 204)
+            {
+                RememberCommittedNavigationResponse(ready);
+            }
+            else if (_networkManager.TryFindNavigationRequest(documentId: null, frame, url, out CRRequest byUrl)
+                && byUrl?.Response is CRResponse readyByUrl
+                && readyByUrl.Status != 204)
+            {
+                RememberCommittedNavigationResponse(readyByUrl);
+            }
+
+            lock (_frameCommitGate)
+            {
+                _recentFrameCommits.Add(new FrameNavigationCommit(frameId, url, loaderId));
+                while (_recentFrameCommits.Count > 16)
+                {
+                    _recentFrameCommits.RemoveAt(0);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Ensures <paramref name="response"/> stays visible to goto abort recovery.
+        /// </summary>
+        /// <param name="response">A committed document response.</param>
+        private void RememberCommittedNavigationResponse(CRResponse response)
+        {
+            if (response == null || response.Status == 204)
+            {
+                return;
+            }
+
+            _lastCommittedNavigationResponse = response;
+            lock (_navigationResponseGate)
+            {
+                for (int i = 0; i < _recentNavigationResponses.Count; i++)
+                {
+                    if (ReferenceEquals(_recentNavigationResponses[i], response))
+                    {
+                        return;
+                    }
+                }
+
+                _recentNavigationResponses.Add(response);
+                while (_recentNavigationResponses.Count > 16)
+                {
+                    _recentNavigationResponses.RemoveAt(0);
+                }
+            }
+        }
+
+        private readonly struct FrameNavigationCommit
+        {
+            internal FrameNavigationCommit(string frameId, string url, string loaderId)
+            {
+                FrameId = frameId ?? string.Empty;
+                Url = url ?? string.Empty;
+                LoaderId = loaderId ?? string.Empty;
+            }
+
+            internal string FrameId { get; }
+
+            internal string Url { get; }
+
+            internal string LoaderId { get; }
         }
     }
 }

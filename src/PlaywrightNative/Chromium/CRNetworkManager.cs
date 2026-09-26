@@ -330,7 +330,20 @@ namespace PlaywrightNative.Chromium
 
             bool Match(CRRequest candidate)
             {
-                if (candidate == null || !candidate.TracksDocumentNavigation)
+                if (candidate == null)
+                {
+                    return false;
+                }
+
+                // Prefer TracksDocumentNavigation, but when the caller searches by
+                // loaderId also accept DocumentId hits whose Fetch-paired main
+                // resource omitted Document type and used requestId != loaderId
+                // (ShouldReturnFromGotoIfNewNavigationIsStarted under Windows load).
+                bool documentIdHit = !string.IsNullOrEmpty(documentId)
+                    && (string.Equals(candidate.DocumentId, documentId, StringComparison.Ordinal)
+                        || string.Equals(candidate.ProtocolRequestId, documentId, StringComparison.Ordinal));
+
+                if (!candidate.TracksDocumentNavigation && !documentIdHit)
                 {
                     return false;
                 }
@@ -343,9 +356,7 @@ namespace PlaywrightNative.Chromium
                     return false;
                 }
 
-                if (!string.IsNullOrEmpty(documentId)
-                    && (string.Equals(candidate.DocumentId, documentId, StringComparison.Ordinal)
-                        || string.Equals(candidate.ProtocolRequestId, documentId, StringComparison.Ordinal)))
+                if (documentIdHit)
                 {
                     // Prefer a documentId hit that already has a usable response;
                     // otherwise allow a later map/ring entry to replace a stub.
@@ -361,6 +372,13 @@ namespace PlaywrightNative.Chromium
                     && !string.IsNullOrEmpty(candidate.Url)
                     && NavigationRequestUrlsMatch(candidate.Url, url))
                 {
+                    // URL-only matches still require document-navigation tracking so
+                    // subresources that share the page loaderId are not adopted.
+                    if (!candidate.TracksDocumentNavigation)
+                    {
+                        return false;
+                    }
+
                     if (byUrl == null || (!HasUsableResponse(byUrl) && HasUsableResponse(candidate)))
                     {
                         byUrl = candidate;
@@ -1301,17 +1319,7 @@ namespace PlaywrightNative.Chromium
 
             _requestsById[requestId] = request;
             _requestsByRawId[rawId] = request;
-            if (request.TracksDocumentNavigation)
-            {
-                lock (_recentNavigationRequestsGate)
-                {
-                    _recentNavigationRequests.Add(request);
-                    while (_recentNavigationRequests.Count > 32)
-                    {
-                        _recentNavigationRequests.RemoveAt(0);
-                    }
-                }
-            }
+            RememberRecentNavigationRequest(request);
 
             RaiseRequestCreated(request);
             frame?.OnInflightRequestStarted(
@@ -1841,11 +1849,53 @@ namespace PlaywrightNative.Chromium
             OnInterceptedRequest(interceptionId, fetchRequest, session);
         }
 
+        /// <summary>
+        /// Adds <paramref name="request"/> to the recent navigation ring when it
+        /// tracks a document navigation (including late Fetch Document promotion).
+        /// </summary>
+        /// <param name="request">The request to remember.</param>
+        private void RememberRecentNavigationRequest(CRRequest request)
+        {
+            if (request == null || !request.TracksDocumentNavigation)
+            {
+                return;
+            }
+
+            lock (_recentNavigationRequestsGate)
+            {
+                for (int i = 0; i < _recentNavigationRequests.Count; i++)
+                {
+                    if (ReferenceEquals(_recentNavigationRequests[i], request))
+                    {
+                        return;
+                    }
+                }
+
+                _recentNavigationRequests.Add(request);
+                while (_recentNavigationRequests.Count > 32)
+                {
+                    _recentNavigationRequests.RemoveAt(0);
+                }
+            }
+        }
+
         private void ApplyPausedRequestDetails(CRRequest request, JsonElement paused)
         {
             if (!paused.TryGetProperty("request", out JsonElement pausedRequest))
             {
                 return;
+            }
+
+            // Fetch.requestPaused often carries resourceType=Document when
+            // Network.requestWillBeSent omitted type and used requestId != loaderId.
+            // Promote those to navigation tracking so concurrent-goto recovery can
+            // still find the committed 200 (ShouldReturnFromGotoIfNewNavigationIsStarted).
+            string pausedType = GetString(paused, "resourceType");
+            if (!request.TracksDocumentNavigation
+                && NetworkRequestEvents.IsDocumentNavigation(pausedType))
+            {
+                request.PromoteToDocumentNavigation(pausedType);
+                RememberRecentNavigationRequest(request);
             }
 
             request.UpdatePostData(RequestPostData.FromProtocol(pausedRequest));

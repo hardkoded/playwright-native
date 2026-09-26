@@ -1188,6 +1188,50 @@ namespace PlaywrightNative.Helpers
             }
         }
 
+        /// <summary>
+        /// Picks the MITM error-page message when the origin handshake exceeds the
+        /// budget. Prefer a faulted <see cref="AuthenticationException"/> so HTTP/2
+        /// self-signed origins still report "self-signed certificate" instead of a
+        /// generic disconnect when ForceClose races certificate validation
+        /// (BrowserShouldReturnTargetConnectionErrorsWhenUsingHttp2).
+        /// </summary>
+        /// <param name="handshakeTask">The outstanding AuthenticateAsClient task.</param>
+        /// <returns>Official Playwright client-certificate error text.</returns>
+        private static async Task<string> ResolveHandshakeTimeoutMessageAsync(Task handshakeTask)
+        {
+            if (handshakeTask == null)
+            {
+                return ClientCertificateHelper.RewriteTlsMessage(new OperationCanceledException());
+            }
+
+            try
+            {
+                Task finished = await Task.WhenAny(
+                    handshakeTask,
+                    Task.Delay(150)).ConfigureAwait(false);
+                if (finished == handshakeTask)
+                {
+                    await handshakeTask.ConfigureAwait(false);
+                }
+            }
+            catch (AuthenticationException ex)
+            {
+                return ClientCertificateHelper.RewriteTlsMessage(ex);
+            }
+            catch (IOException ex)
+            {
+                return ClientCertificateHelper.RewriteTlsMessage(ex);
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+            catch (OperationCanceledException)
+            {
+            }
+
+            return ClientCertificateHelper.RewriteTlsMessage(new OperationCanceledException());
+        }
+
         private async Task AcceptLoopAsync()
         {
             while (!_cts.IsCancellationRequested)
@@ -1596,8 +1640,13 @@ namespace PlaywrightNative.Helpers
                             != handshakeTask)
                         {
                             ForceCloseTcpClient(originClient);
-                            string timeoutMessage = ClientCertificateHelper.RewriteTlsMessage(
-                                new OperationCanceledException());
+
+                            // Prefer AuthenticationException (self-signed) over a
+                            // generic cancel when ForceClose unblocks a validation
+                            // failure that raced the budget
+                            // (BrowserShouldReturnTargetConnectionErrorsWhenUsingHttp2).
+                            string timeoutMessage = await ResolveHandshakeTimeoutMessageAsync(
+                                handshakeTask).ConfigureAwait(false);
                             try
                             {
                                 await serverTls.DisposeAsync().AsTask()
