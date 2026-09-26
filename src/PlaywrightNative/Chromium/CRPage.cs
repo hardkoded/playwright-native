@@ -2873,8 +2873,10 @@ namespace PlaywrightNative.Chromium
                 }
 
                 // A new-document commit clears LifecycleEvents. Drop any mid-navigate
-                // sawTargetLifecycle so GoTo cannot resolve on a cleared load
-                // (GoToShouldClearLifecycleOnNewNavigation).
+                // sawTargetLifecycle so GoTo cannot resolve on a cleared load when the
+                // commit belongs to a different document than NavigateFrameAsync returned
+                // (GoToShouldClearLifecycleOnNewNavigation). Same-documentId commits after
+                // settle still leave saw set — lifecycleReady then replays live events.
                 if (!string.IsNullOrEmpty(documentId)
                     && (expectedDocumentId == null
                         || !string.Equals(documentId, expectedDocumentId, StringComparison.Ordinal)))
@@ -3063,6 +3065,25 @@ namespace PlaywrightNative.Chromium
                 // once the frame really has the new URL.
                 if (lifecycleReady)
                 {
+                    // sawTargetLifecycle can win after FrameNavigated wiped live
+                    // events down to {commit} (EmptyPage / MITM TLS under load).
+                    // Replay so LifecycleEvents matches the waitUntil GoTo promised.
+                    if (!networkIdle
+                        && !frame.LifecycleEvents.Contains(targetLifecycleEvent)
+                        && (string.Equals(targetLifecycleEvent, "load", StringComparison.Ordinal)
+                            || string.Equals(targetLifecycleEvent, "DOMContentLoaded", StringComparison.Ordinal)))
+                    {
+                        if (!frame.LifecycleEvents.Contains("DOMContentLoaded"))
+                        {
+                            frame.OnLifecycleEvent("DOMContentLoaded");
+                        }
+
+                        if (string.Equals(targetLifecycleEvent, "load", StringComparison.Ordinal))
+                        {
+                            frame.OnLifecycleEvent("load");
+                        }
+                    }
+
                     frame.Url = NavigationTimeout.PreserveUserInfo(url, frame.Url);
                     return;
                 }
@@ -3130,6 +3151,26 @@ namespace PlaywrightNative.Chromium
                 else
                 {
                     await lifecycleTcs.Task.ConfigureAwait(false);
+
+                    // FrameNavigated can wipe load after OnLifecycle already completed
+                    // the wait TCS (EmptyPage under suite load). Replay so GoTo's
+                    // waitUntil matches LifecycleEvents for callers that inspect them.
+                    if (!frame.LifecycleEvents.Contains(targetLifecycleEvent)
+                        && (string.Equals(targetLifecycleEvent, "load", StringComparison.Ordinal)
+                            || string.Equals(targetLifecycleEvent, "DOMContentLoaded", StringComparison.Ordinal))
+                        && (expectedDocumentId == null
+                            || string.Equals(frame.DocumentId, expectedDocumentId, StringComparison.Ordinal)))
+                    {
+                        if (!frame.LifecycleEvents.Contains("DOMContentLoaded"))
+                        {
+                            frame.OnLifecycleEvent("DOMContentLoaded");
+                        }
+
+                        if (string.Equals(targetLifecycleEvent, "load", StringComparison.Ordinal))
+                        {
+                            frame.OnLifecycleEvent("load");
+                        }
+                    }
                 }
 
                 frame.Url = NavigationTimeout.PreserveUserInfo(url, frame.Url);
