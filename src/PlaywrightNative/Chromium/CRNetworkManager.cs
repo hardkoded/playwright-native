@@ -2181,7 +2181,59 @@ namespace PlaywrightNative.Chromium
                 _ = response.PrefetchBodyAsync();
             }
 
+            // Under Windows suite load Network.requestWillBeSent can omit
+            // Document type and leave DocumentId unset (requestId != loaderId)
+            // until Fetch.requestPaused. Promote + latch main-frame GETs that
+            // already look like documents so concurrent-goto ERR_ABORTED
+            // recovery still finds the committed 200 even when Fetch never
+            // promotes (ShouldReturnFromGotoIfNewNavigationIsStarted).
+            MaybeLatchMainFrameDocumentResponse(request, response);
+
             _page.OnResponseReceived(response);
+        }
+
+        private void MaybeLatchMainFrameDocumentResponse(CRRequest request, CRResponse response)
+        {
+            if (request == null || response == null)
+            {
+                return;
+            }
+
+            int status = response.Status;
+            if (status < 200
+                || status == 204
+                || (status >= 300 && status < 400))
+            {
+                return;
+            }
+
+            if (request.Frame?.ParentFrame != null
+                || !string.Equals(request.Method, "GET", StringComparison.OrdinalIgnoreCase)
+                || request.IsFavicon)
+            {
+                return;
+            }
+
+            string resourceType = request.ResourceType;
+            bool looksDocument = request.TracksDocumentNavigation
+                || string.IsNullOrEmpty(resourceType)
+                || string.Equals(resourceType, "Other", StringComparison.OrdinalIgnoreCase)
+                || NetworkRequestEvents.IsDocumentNavigation(resourceType);
+            if (!looksDocument)
+            {
+                return;
+            }
+
+            if (!request.TracksDocumentNavigation)
+            {
+                request.PromoteToDocumentNavigation(
+                    NetworkRequestEvents.IsDocumentNavigation(resourceType)
+                        ? resourceType
+                        : "Document");
+            }
+
+            RememberRecentNavigationRequest(request);
+            _page.LatchCommittedNavigationResponse(response);
         }
 
         private void RaiseRequestFinished(CRRequest request)

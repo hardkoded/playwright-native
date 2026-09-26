@@ -585,7 +585,129 @@ namespace PlaywrightNative.WebKit
             IReadOnlyList<BrowserContextCookiesResult> cookies =
                 ContextCookies.FromProtocol(result, webKit: true);
             cookies = HideMacWsShimCookies(cookies);
+
+            // Linux WebKit can leave Playwright.getAllCookies holding a stale
+            // empty-name cookie value after document.cookie = '=…' under suite
+            // load. Prefer the live document.cookie unnamed value so a
+            // Cookies→AddCookies roundtrip (ShouldAllowUnnamedCookies) does not
+            // resurrect the protocol-stale value. Darwin already treats unnamed
+            // cookies as invisible in document.cookie, so skip there.
+            if (cookies.Count > 0 && !RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+            {
+                bool hasUnnamed = false;
+                for (int i = 0; i < cookies.Count; i++)
+                {
+                    if (cookies[i] != null && string.IsNullOrEmpty(cookies[i].Name))
+                    {
+                        hasUnnamed = true;
+                        break;
+                    }
+                }
+
+                if (hasUnnamed)
+                {
+                    Dictionary<string, string> liveUnnamedByHost =
+                        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                    foreach (WKPage page in WKPages)
+                    {
+                        if (page == null || page.IsClosed)
+                        {
+                            continue;
+                        }
+
+                        string pageUrl = page.Url;
+                        if (string.IsNullOrEmpty(pageUrl)
+                            || !Uri.TryCreate(pageUrl, UriKind.Absolute, out Uri pageUri)
+                            || string.IsNullOrEmpty(pageUri.Host))
+                        {
+                            continue;
+                        }
+
+                        try
+                        {
+                            string live = await page.EvaluateAsync<string>("document.cookie")
+                                .ConfigureAwait(false);
+                            string unnamed = ExtractUnnamedCookieValue(live);
+                            if (!string.IsNullOrEmpty(unnamed))
+                            {
+                                liveUnnamedByHost[pageUri.Host] = unnamed;
+                            }
+                        }
+                        catch (PlaywrightException)
+                        {
+                        }
+                    }
+
+                    if (liveUnnamedByHost.Count > 0)
+                    {
+                        List<BrowserContextCookiesResult> reconciled =
+                            new List<BrowserContextCookiesResult>(cookies.Count);
+                        for (int i = 0; i < cookies.Count; i++)
+                        {
+                            BrowserContextCookiesResult cookie = cookies[i];
+                            if (cookie == null
+                                || !string.IsNullOrEmpty(cookie.Name)
+                                || string.IsNullOrEmpty(cookie.Domain))
+                            {
+                                reconciled.Add(cookie);
+                                continue;
+                            }
+
+                            string host = cookie.Domain.TrimStart('.');
+                            if (liveUnnamedByHost.TryGetValue(host, out string liveValue)
+                                && !string.Equals(liveValue, cookie.Value, StringComparison.Ordinal))
+                            {
+                                reconciled.Add(new BrowserContextCookiesResult
+                                {
+                                    Name = cookie.Name,
+                                    Value = liveValue,
+                                    Domain = cookie.Domain,
+                                    Path = cookie.Path,
+                                    Expires = cookie.Expires,
+                                    HttpOnly = cookie.HttpOnly,
+                                    Secure = cookie.Secure,
+                                    SameSite = cookie.SameSite,
+                                    PartitionKey = cookie.PartitionKey,
+                                });
+                            }
+                            else
+                            {
+                                reconciled.Add(cookie);
+                            }
+                        }
+
+                        cookies = reconciled;
+                    }
+                }
+            }
+
             return ContextCookies.FilterByUrls(cookies, urls);
+
+            // Empty-name cookies appear in document.cookie as a bare value (no name=).
+            static string ExtractUnnamedCookieValue(string documentCookie)
+            {
+                if (string.IsNullOrEmpty(documentCookie))
+                {
+                    return null;
+                }
+
+                string[] parts = documentCookie.Split(';');
+                for (int i = 0; i < parts.Length; i++)
+                {
+                    string part = parts[i].Trim();
+                    if (part.Length == 0)
+                    {
+                        continue;
+                    }
+
+                    if (part.IndexOf('=') < 0)
+                    {
+                        return part;
+                    }
+                }
+
+                return null;
+            }
         }
 
         /// <inheritdoc/>

@@ -299,11 +299,17 @@ namespace PlaywrightNative.Chromium
             }
             catch (PlaywrightException)
             {
-                return frame.ExecutionContext;
+                // Never fall back to the page main world: evaluating
+                // setup/cleanup there mid-gesture drops textarea text
+                // selection under headful Chromium suite load
+                // (ShouldSelectTheTextWithMouse). Skip the frame instead —
+                // missing drag listeners only weakens HTML5 drag intercept,
+                // which is preferable to corrupting selection.
+                return null;
             }
             catch (TimeoutException)
             {
-                return frame.ExecutionContext;
+                return null;
             }
         }
     }
