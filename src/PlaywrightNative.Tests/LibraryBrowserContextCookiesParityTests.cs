@@ -218,6 +218,10 @@ namespace PlaywrightNative.Tests
         {
             EnsureServer();
             double expire = (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() / 1000d) + (401d * 24 * 3600);
+            // Cookie.Expires is float32 (Microsoft.Playwright). Upstream Node compares the
+            // same JS number used for addCookies; after the float cast we must compare
+            // against that float — (float)expire can round above the original double.
+            float expireFloat = (float)expire;
             await _context.AddCookiesAsync(new[]
             {
                 new Cookie
@@ -226,7 +230,7 @@ namespace PlaywrightNative.Tests
                     Value = "John Doe",
                     Domain = Hostname,
                     Path = "/",
-                    Expires = (float?)expire,
+                    Expires = expireFloat,
                     HttpOnly = false,
                     Secure = false,
                     SameSite = SameSiteAttribute.Lax,
@@ -240,7 +244,7 @@ namespace PlaywrightNative.Tests
             Assert.That(cookies[0].Domain, Is.EqualTo(Hostname));
             Assert.That(cookies[0].Path, Is.EqualTo("/"));
             Assert.That(cookies[0].Expires, Is.GreaterThan(0d));
-            Assert.That(cookies[0].Expires, Is.LessThanOrEqualTo(expire));
+            Assert.That(cookies[0].Expires, Is.LessThanOrEqualTo(expireFloat));
         }
 
         [PlaywrightTest("browsercontext-cookies.spec.ts", "should properly report httpOnly cookie")]
@@ -532,7 +536,9 @@ namespace PlaywrightNative.Tests
                         Name = "doggo",
                         Value = "woofs",
                         SameSite = SameSiteAttribute.None,
-                        Expires = 253402300800,
+                        // float32 cannot represent Max+1 (253402300800) distinctly from Max;
+                        // use the next representable float above (float)Max so overflow still throws.
+                        Expires = 253402316800f,
                     },
                 }).ConfigureAwait(false);
             }
@@ -666,7 +672,7 @@ namespace PlaywrightNative.Tests
             Assert.That(cookies[0].Value, Is.EqualTo("value1"));
             Assert.That(cookies[0].Domain, Is.EqualTo(Hostname));
             Assert.That(cookies[0].Path, Is.EqualTo("/"));
-            Assert.That(cookies[0].Expires, Is.TypeOf<double>());
+            Assert.That(cookies[0].Expires, Is.TypeOf<float>());
             Assert.That(cookies[0].HttpOnly, Is.False);
             Assert.That(cookies[0].Secure, Is.False);
             Assert.That(cookies[0].SameSite, Is.EqualTo(DefaultSameSiteCookieValue()));
@@ -758,17 +764,24 @@ namespace PlaywrightNative.Tests
 
         private static SameSiteAttribute DefaultSameSiteCookieValue()
         {
-            if (TestConstants.IsWebKit && TestConstants.IsWindows)
+            // Upstream defaultSameSiteCookieValue: Chromium and WebKit/Linux are Lax;
+            // WebKit on Windows and older macOS (mac14 bots) report None; Firefox is None.
+            if (TestConstants.IsChromium)
+            {
+                return SameSiteAttribute.Lax;
+            }
+
+            if (TestConstants.IsWebKit && TestConstants.IsLinux)
+            {
+                return SameSiteAttribute.Lax;
+            }
+
+            if (TestConstants.IsWebKit)
             {
                 return SameSiteAttribute.None;
             }
 
-            if (TestConstants.IsFirefox)
-            {
-                return SameSiteAttribute.None;
-            }
-
-            return SameSiteAttribute.Lax;
+            return SameSiteAttribute.None;
         }
 
         private static SameSiteAttribute SameSiteLaxOrWindowsNone()

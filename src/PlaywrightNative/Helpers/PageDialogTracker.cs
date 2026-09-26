@@ -28,6 +28,7 @@ namespace PlaywrightNative.Helpers
     {
         private IDialog _open;
         private bool _closedEmitted;
+        private bool _emitted;
 
         /// <summary>
         /// Playwright auto-dismisses when neither the page nor the context has
@@ -38,6 +39,27 @@ namespace PlaywrightNative.Helpers
         /// <returns>True when the dialog should be dismissed automatically.</returns>
         internal static bool ShouldAutoDismiss(EventHandler<IDialog> pageDialog, bool contextHasListeners)
             => pageDialog == null && !contextHasListeners;
+
+        /// <summary>
+        /// Defers snapshot + raise + auto-dismiss by a short async gap so the
+        /// Click-then-<c>WaitForDialog</c> pattern (browsercontext-events
+        /// inline-script popup) can subscribe before an in-process prompt is
+        /// auto-dismissed. Yield alone can starve under macOS suite-load
+        /// thread-pool pressure; a 1ms delay gives waiters a reliable turn.
+        /// </summary>
+        /// <param name="emitAndMaybeDismiss">
+        /// Captures listeners, raises <c>Dialog</c>, then auto-dismisses when
+        /// nobody was listening.
+        /// </param>
+        internal static void ScheduleOpen(Action emitAndMaybeDismiss)
+        {
+            if (emitAndMaybeDismiss == null)
+            {
+                return;
+            }
+
+            _ = EmitOpenDeferredAsync(emitAndMaybeDismiss);
+        }
 
         /// <summary>
         /// Dismisses <paramref name="dialog"/> when nobody was listening at
@@ -97,7 +119,36 @@ namespace PlaywrightNative.Helpers
             TrackedDialog tracked = new TrackedDialog(inner, this, emitClosed);
             _open = tracked;
             _closedEmitted = false;
+            _emitted = false;
             return tracked;
+        }
+
+        /// <summary>
+        /// The still-open dialog, if any. Used by <c>waitForEvent('dialog')</c>
+        /// to replay an open that raced ahead of the subscription (ScheduleOpen
+        /// deferral under suite load).
+        /// </summary>
+        /// <returns>The open dialog, or <see langword="null"/>.</returns>
+        internal IDialog TryGetOpenDialog() => !_closedEmitted ? _open : null;
+
+        /// <summary>
+        /// Marks the dialog as delivered to page/context listeners so a deferred
+        /// <see cref="ScheduleOpen"/> auto-dismiss does not dismiss after a waiter
+        /// already claimed it via open-dialog replay.
+        /// </summary>
+        /// <returns>
+        /// <see langword="true"/> when this is the first emit; <see langword="false"/>
+        /// when a waiter already replayed the open dialog.
+        /// </returns>
+        internal bool TryMarkEmitted()
+        {
+            if (_emitted)
+            {
+                return false;
+            }
+
+            _emitted = true;
+            return true;
         }
 
         /// <summary>
@@ -123,6 +174,22 @@ namespace PlaywrightNative.Helpers
 
             _closedEmitted = true;
             emitClosed(dialog);
+        }
+
+        private static async Task EmitOpenDeferredAsync(Action emitAndMaybeDismiss)
+        {
+            try
+            {
+                await Task.Yield();
+                await Task.Delay(1).ConfigureAwait(false);
+                emitAndMaybeDismiss();
+            }
+#pragma warning disable RCS1075
+            catch (Exception)
+#pragma warning restore RCS1075
+            {
+                // Best-effort open; page/context may already be closed.
+            }
         }
 
         private sealed class TrackedDialog : IDialog

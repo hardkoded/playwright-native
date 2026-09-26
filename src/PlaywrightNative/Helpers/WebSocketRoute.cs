@@ -39,11 +39,13 @@ namespace PlaywrightNative.Helpers
         private Action<IWebSocketFrame> _onMessage;
         private Action<int?, string> _onClose;
         private ServerRoute _server;
+        private RoutedHarWebSocket _harSocket;
         private IFrame _frame;
         private Task _dispatchTail = Task.CompletedTask;
         private bool _connected;
         private bool _closed;
         private bool _subscribed;
+        private bool _handlerCompleted;
 
         internal WebSocketRoute(IPage page, string id, string url, IReadOnlyList<string> protocols = null, bool createdInMainFrame = true, IFrame frame = null)
         {
@@ -137,16 +139,24 @@ namespace PlaywrightNative.Helpers
         /// <inheritdoc/>
         public IWebSocketRoute ConnectToServer()
         {
+            RoutedHarWebSocket harSocket;
             lock (_lock)
             {
                 if (_connected)
                 {
-                    throw new PlaywrightNativeException("Already connected to the server");
+                    throw new PlaywrightException("Already connected to the server");
                 }
 
                 _connected = true;
                 _server = new ServerRoute(this);
+                harSocket = new RoutedHarWebSocket(Url);
+                _harSocket = harSocket;
             }
+
+            // Claim the HAR/tracing slot before the native page socket is created so
+            // recorded frames reflect connectToServer wire traffic (including rewrites).
+            HarRecorder.ObserveWebSocket(_page, harSocket);
+            harSocket.MarkConnected();
 
             Dispatch(new Dictionary<string, object>
             {
@@ -161,6 +171,7 @@ namespace PlaywrightNative.Helpers
             bool connected;
             lock (_lock)
             {
+                _handlerCompleted = true;
                 connected = _connected;
             }
 
@@ -186,7 +197,11 @@ namespace PlaywrightNative.Helpers
             {
                 handler = _onMessage;
                 server = _server;
-                if (handler == null && server == null)
+
+                // Keep page frames queued until the route handler finishes installing
+                // OnMessage. Otherwise ConnectToServer + a premature open can forward
+                // the original payload before the rewrite handler is registered.
+                if (handler == null && (server == null || !_handlerCompleted))
                 {
                     _earlyPage.Enqueue((data, binary));
                     return;
@@ -338,7 +353,7 @@ namespace PlaywrightNative.Helpers
                         return;
                     }
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
             }
@@ -444,7 +459,12 @@ namespace PlaywrightNative.Helpers
             ServerRoute server;
             lock (_lock)
             {
-                if (_earlyPage.Count == 0 || (_onMessage == null && _server == null))
+                if (_earlyPage.Count == 0)
+                {
+                    return;
+                }
+
+                if (_onMessage == null && (_server == null || !_handlerCompleted))
                 {
                     return;
                 }
@@ -490,7 +510,7 @@ namespace PlaywrightNative.Helpers
                 {
                     await previous.ConfigureAwait(false);
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
                 catch (ObjectDisposedException)
@@ -553,6 +573,15 @@ namespace PlaywrightNative.Helpers
             Dispatch(request);
         }
 
+        private void RecordHarSent(IWebSocketFrame frame)
+            => _harSocket?.NotifyFrameSent(frame);
+
+        private void RecordHarReceived(IWebSocketFrame frame)
+            => _harSocket?.NotifyFrameReceived(frame);
+
+        private void RecordHarClosed()
+            => _harSocket?.NotifyClosed();
+
         private sealed class ServerRoute : IWebSocketRoute
         {
             private readonly WebSocketRoute _owner;
@@ -588,13 +617,21 @@ namespace PlaywrightNative.Helpers
             }
 
             public void Send(string message)
-                => _owner.DispatchServer("sendToServer", message ?? string.Empty, binary: false);
+            {
+                string payload = message ?? string.Empty;
+                _owner.RecordHarSent(ToFrame(payload, binary: false));
+                _owner.DispatchServer("sendToServer", payload, binary: false);
+            }
 
             public void Send(byte[] message)
-                => _owner.DispatchServer("sendToServer", Convert.ToBase64String(message ?? Array.Empty<byte>()), binary: true);
+            {
+                byte[] payload = message ?? Array.Empty<byte>();
+                _owner.RecordHarSent(new WebSocketFrame(string.Empty, payload, opcode: 2));
+                _owner.DispatchServer("sendToServer", Convert.ToBase64String(payload), binary: true);
+            }
 
             public IWebSocketRoute ConnectToServer()
-                => throw new PlaywrightNativeException("connectToServer must be called on the page-side WebSocketRoute");
+                => throw new PlaywrightException("connectToServer must be called on the page-side WebSocketRoute");
 
             public Task CloseAsync(int? code = null, string reason = null)
             {
@@ -634,6 +671,7 @@ namespace PlaywrightNative.Helpers
                 }
 
                 IWebSocketFrame frame = ToFrame(data, binary);
+                _owner.RecordHarReceived(frame);
                 if (handler != null)
                 {
                     handler(frame);
@@ -650,7 +688,10 @@ namespace PlaywrightNative.Helpers
             }
 
             internal void CloseFromPage(int? code, string reason)
-                => _owner.DispatchServer("closeServer", null, binary: false, code, reason);
+            {
+                _owner.RecordHarClosed();
+                _owner.DispatchServer("closeServer", null, binary: false, code, reason);
+            }
 
             internal void ClosedFromServer(int? code, string reason)
                 => ClosedFromServer(code, reason, wasClean: code != 1006);
@@ -663,6 +704,7 @@ namespace PlaywrightNative.Helpers
                     handler = _onClose;
                 }
 
+                _owner.RecordHarClosed();
                 if (handler != null)
                 {
                     handler(code, reason);
@@ -694,7 +736,8 @@ namespace PlaywrightNative.Helpers
         }
 
 #pragma warning disable SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
-        Task IWebSocketRoute.CloseAsync(WebSocketRouteCloseOptions options) => Task.CompletedTask;
+        Task IWebSocketRoute.CloseAsync(WebSocketRouteCloseOptions options)
+            => CloseAsync(options?.Code, options?.Reason);
 #pragma warning restore SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
     }
 }

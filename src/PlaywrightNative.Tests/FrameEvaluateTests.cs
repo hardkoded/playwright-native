@@ -19,6 +19,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Text.Json;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 using PlaywrightNative.TestServer;
@@ -177,7 +178,7 @@ namespace PlaywrightNative.Tests
             JsonElement childResult = await childFrame.EvaluateAsync<JsonElement>("(() => window['__foo'])()").ConfigureAwait(false);
             Assert.That(childResult.GetProperty("bar").GetString(), Is.EqualTo("baz"));
 
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => childFrame.EvaluateAsync("foo => foo.bar", handle));
             Assert.That(error, Is.Not.Null);
             Assert.That(error.Message, Does.Contain("JSHandles can be evaluated only in the context they were created!"));
@@ -213,7 +214,7 @@ namespace PlaywrightNative.Tests
             await page.GoToAsync(EmptyPage).ConfigureAwait(false);
             IFrame frame = await AttachFrameAsync(page, "frame1", CrossProcessPrefix + "/empty.html").ConfigureAwait(false);
             IElementHandle bodyHandle = await frame.QuerySelectorAsync("body").ConfigureAwait(false);
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => page.EvaluateAsync("body => body.innerHTML", bodyHandle));
             Assert.That(error, Is.Not.Null);
             Assert.That(error.Message, Does.Contain("Unable to adopt element handle from a different document"));
@@ -232,7 +233,7 @@ namespace PlaywrightNative.Tests
             IFrame frame1 = await AttachFrameAsync(page, "frame1", EmptyPage).ConfigureAwait(false);
             await DetachFrameAsync(page, "frame1").ConfigureAwait(false);
 
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => frame1.EvaluateAsync("(() => 7 * 8)()"));
             Assert.That(error, Is.Not.Null);
             Assert.That(error.Message, Does.Contain("frame.evaluate: Frame was detached"));

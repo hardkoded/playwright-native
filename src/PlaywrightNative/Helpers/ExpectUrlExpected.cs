@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 using System.Text.Json;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -28,11 +29,11 @@ namespace PlaywrightNative.Helpers
         /// </summary>
         /// <param name="expected">The rejected value.</param>
         /// <returns>The official error.</returns>
-        internal static PlaywrightNativeException Invalid(object expected)
+        internal static PlaywrightException Invalid(object expected)
         {
             string type = expected == null ? "null" : "object";
             string value = expected == null ? "null" : JsonSerializer.Serialize(expected);
-            return new PlaywrightNativeException(
+            return new PlaywrightException(
                 "expect(page).toHaveURL(expected) failed\n\n" +
                 "Error: expected value must be a string or regular expression\n" +
                 "Expected has type:  " + type + "\n" +

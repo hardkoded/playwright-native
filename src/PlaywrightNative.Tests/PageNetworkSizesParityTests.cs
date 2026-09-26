@@ -24,6 +24,7 @@ using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Features;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 using PlaywrightNative.TestServer;
@@ -379,7 +380,7 @@ namespace PlaywrightNative.Tests
             await Task.WhenAll(requestTask, navTask).ConfigureAwait(false);
             IRequest request = await requestTask.ConfigureAwait(false);
 
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(() => request.SizesAsync());
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(() => request.SizesAsync());
             Assert.That(error, Is.Not.Null);
             Assert.That(error.Message, Does.Contain("Unable to fetch sizes for failed request"));
         }

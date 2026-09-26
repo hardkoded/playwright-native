@@ -36,10 +36,21 @@ namespace PlaywrightNative.Helpers
     /// </summary>
     internal static class APIRequestProxyConnect
     {
-        internal static void Apply(SocketsHttpHandler handler, Proxy proxy, bool ignoreTls)
+        internal static void Apply(
+            SocketsHttpHandler handler,
+            Proxy proxy,
+            bool ignoreTls,
+            Action<Socket> onSocket = null)
         {
-            if (handler == null || proxy == null || string.IsNullOrEmpty(proxy.Server))
+            if (handler == null)
             {
+                return;
+            }
+
+            if (proxy == null || string.IsNullOrEmpty(proxy.Server))
+            {
+                handler.ConnectCallback = (context, cancellationToken) =>
+                    ConnectDirectTrackedAsync(context.DnsEndPoint.Host, context.DnsEndPoint.Port, onSocket, cancellationToken);
                 return;
             }
 
@@ -52,7 +63,22 @@ namespace PlaywrightNative.Helpers
             Uri proxyUri = new Uri(server);
             handler.UseProxy = false;
             handler.ConnectCallback = (context, cancellationToken) =>
-                ConnectAsync(context, proxy, proxyUri, ignoreTls, cancellationToken);
+                ConnectAsync(context, proxy, proxyUri, ignoreTls, onSocket, cancellationToken);
+        }
+
+        private static async ValueTask<Stream> ConnectDirectTrackedAsync(
+            string host,
+            int port,
+            Action<Socket> onSocket,
+            CancellationToken cancellationToken)
+        {
+            Socket socket = await OpenSocketAsync(host, port, cancellationToken).ConfigureAwait(false);
+            onSocket?.Invoke(socket);
+
+            // ownsSocket true so SocketsHttpHandler can finish the response.
+            // Abort still RSTs first (Close(0)) before the abort gate, so a later
+            // NetworkStream dispose cannot turn that into a graceful FIN.
+            return new NetworkStream(socket, ownsSocket: true);
         }
 
         private static async ValueTask<Stream> ConnectAsync(
@@ -60,17 +86,21 @@ namespace PlaywrightNative.Helpers
             Proxy proxy,
             Uri proxyUri,
             bool ignoreTls,
+            Action<Socket> onSocket,
             CancellationToken cancellationToken)
         {
             string targetHost = context.DnsEndPoint.Host;
             int targetPort = context.DnsEndPoint.Port;
             if (ProxySettings.ShouldBypass(ProxySettings.RequestHost(targetHost, targetPort), proxy.Bypass))
             {
-                return await ConnectDirectAsync(targetHost, targetPort, cancellationToken).ConfigureAwait(false);
+                return await ConnectDirectTrackedAsync(targetHost, targetPort, onSocket, cancellationToken)
+                    .ConfigureAwait(false);
             }
 
-            Stream stream = await ConnectDirectAsync(proxyUri.IdnHost, ResolvePort(proxyUri), cancellationToken)
+            Socket proxySocket = await OpenSocketAsync(proxyUri.IdnHost, ResolvePort(proxyUri), cancellationToken)
                 .ConfigureAwait(false);
+            onSocket?.Invoke(proxySocket);
+            Stream stream = new NetworkStream(proxySocket, ownsSocket: true);
             try
             {
                 if (IsSocks(proxyUri))
@@ -101,7 +131,7 @@ namespace PlaywrightNative.Helpers
             }
         }
 
-        private static async Task<Stream> ConnectDirectAsync(string host, int port, CancellationToken cancellationToken)
+        private static async Task<Socket> OpenSocketAsync(string host, int port, CancellationToken cancellationToken)
         {
             Socket socket = new Socket(SocketType.Stream, ProtocolType.Tcp)
             {
@@ -130,12 +160,13 @@ namespace PlaywrightNative.Helpers
                     await socket.ConnectAsync(host, port, cancellationToken).ConfigureAwait(false);
                 }
 
-                return new NetworkStream(socket, ownsSocket: true);
+                Socket result = socket;
+                socket = null;
+                return result;
             }
-            catch
+            finally
             {
-                socket.Dispose();
-                throw;
+                socket?.Dispose();
             }
         }
 

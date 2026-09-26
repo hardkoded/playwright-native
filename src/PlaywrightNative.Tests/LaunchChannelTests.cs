@@ -17,6 +17,7 @@
 using System;
 using System.IO;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.Helpers;
 using PlaywrightNative.NUnit;
@@ -54,11 +55,16 @@ namespace PlaywrightNative.Tests
             if (installed)
             {
                 string path = BrowserChannelResolver.Resolve(BrowserChannel.Msedge);
-                Assert.That(path, Does.Contain("msedge").IgnoreCase);
+                // Linux/Windows install layouts use "msedge" in the path; macOS
+                // ships the official app as "Microsoft Edge.app/.../Microsoft Edge".
+                Assert.That(
+                    path,
+                    Does.Contain("msedge").IgnoreCase
+                        .Or.Contain("Microsoft Edge").IgnoreCase);
                 return;
             }
 
-            PlaywrightNativeException exception = Assert.Catch(() => BrowserChannelResolver.Resolve(BrowserChannel.Msedge)) as PlaywrightNativeException;
+            PlaywrightException exception = Assert.Catch(() => BrowserChannelResolver.Resolve(BrowserChannel.Msedge)) as PlaywrightException;
             Assert.That(exception, Is.Not.Null);
             Assert.That(exception.Message, Does.Contain("msedge"));
         }

@@ -18,6 +18,7 @@ using System;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 
@@ -826,7 +827,7 @@ namespace PlaywrightNative.Tests
             {
                 await hidden.CheckAsync(force: true).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
 
@@ -1011,7 +1012,7 @@ namespace PlaywrightNative.Tests
             {
                 await hidden.UncheckAsync(force: true).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
 

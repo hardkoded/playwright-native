@@ -126,7 +126,10 @@ namespace PlaywrightNative.Tests
             TimeoutException ex = Assert.ThrowsAsync<TimeoutException>(
                 async () => await browser.WaitForDisconnectedAsync(timeout: 200).ConfigureAwait(false));
             Assert.That(ex.Message, Does.Contain("browser.waitForEvent"));
-            Assert.That(ex.Message, Does.Contain("Timeout 200ms exceeded."));
+            // Node page._waitForEvent: `Timeout Nms exceeded while waiting for event "${event}"`
+            Assert.That(
+                ex.Message,
+                Does.Contain("Timeout 200ms exceeded while waiting for event \"disconnected\""));
         }
 
         [PlaywrightTest("browser.spec.ts", "BrowserType reports the launched engine")]

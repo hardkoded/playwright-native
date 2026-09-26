@@ -14,6 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using Microsoft.Playwright;
@@ -36,7 +37,7 @@ public class BrowserTest : PlaywrightTest
     public IBrowser Browser { get; private set; } = null!;
 
     /// <summary>
-    /// Creates a new context and tracks it for tear-down when the test passes.
+    /// Creates a new context and tracks it for tear-down.
     /// </summary>
     /// <param name="options">Optional context options.</param>
     /// <returns>The new browser context.</returns>
@@ -61,20 +62,29 @@ public class BrowserTest : PlaywrightTest
     }
 
     /// <summary>
-    /// Closes contexts created via <see cref="NewContext"/> when the test passed.
+    /// Closes contexts created via <see cref="NewContext"/>.
+    /// Always closes — even on failure — so contexts do not linger on a reused
+    /// browser, and so failed tests do not rely solely on browser dispose for FD cleanup.
     /// </summary>
     [TearDown]
     public async Task BrowserTearDown()
     {
-        if (TestOk())
+        // Snapshot first: CloseAsync can fire events that create/track more contexts
+        // and would otherwise throw Collection was modified during enumeration.
+        IBrowserContext[] contexts = _contexts.ToArray();
+        _contexts.Clear();
+        foreach (IBrowserContext context in contexts)
         {
-            foreach (IBrowserContext context in _contexts)
+            try
             {
                 await context.CloseAsync().ConfigureAwait(false);
             }
+            catch (Exception)
+            {
+                // Best-effort cleanup during teardown.
+            }
         }
 
-        _contexts.Clear();
         Browser = null!;
     }
 

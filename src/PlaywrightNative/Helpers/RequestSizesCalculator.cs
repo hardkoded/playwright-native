@@ -88,6 +88,12 @@ namespace PlaywrightNative.Helpers
 
             if (gzip && encodedDataLength > 0)
             {
+                if (encodedDataLengthIncludesHeaders)
+                {
+                    int subtracted = encodedDataLength - responseHeadersSize;
+                    return subtracted >= 0 ? subtracted : 0;
+                }
+
                 return encodedDataLength;
             }
 

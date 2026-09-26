@@ -19,6 +19,7 @@ using System.Collections.Generic;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -41,7 +42,8 @@ namespace PlaywrightNative.Helpers
         /// <param name="waitingLog">Optional official <c>waiting for …</c> timeout line.</param>
         /// <param name="waitForEventName">
         /// Official lowercase event name. When set, the timeout text is
-        /// <c>Timeout Nms exceeded while waiting for event "name"</c>.
+        /// <c>Timeout Nms exceeded while waiting for event "name"</c> (Node
+        /// <c>page._waitForEvent</c>) plus a waiting-for-event log line.
         /// </param>
         /// <param name="abortOnPageClose">
         /// When set, page close rejects the wait with the official target-closed
@@ -54,6 +56,16 @@ namespace PlaywrightNative.Helpers
         /// Optional snapshot of events that may have arrived before the
         /// handler was attached. Replayed after subscribe so
         /// <c>evaluate</c>-then-<c>waitForEvent</c> matches Node's event loop.
+        /// </param>
+        /// <param name="deferPredicateEvaluation">
+        /// When <see langword="true"/> (default), predicates run on a background
+        /// continuation so sync-over-async filters cannot stall the transport
+        /// read loop. Lifecycle events (<c>load</c> / <c>DOMContentLoaded</c>)
+        /// pass <see langword="false"/> so the match runs inside the public
+        /// event invoke; continuations still use
+        /// <see cref="TaskCreationOptions.RunContinuationsAsynchronously"/> to
+        /// avoid transport-thread deadlocks (autowait ordering relies on
+        /// <c>LifecycleWaiter</c>'s delay drain).
         /// </param>
         /// <param name="cancellationToken">Cancels the wait (Node <c>signal</c>).</param>
         /// <returns>The matching event payload.</returns>
@@ -68,6 +80,7 @@ namespace PlaywrightNative.Helpers
             IPage abortOnPageClose = null,
             bool abortOnPageCrash = false,
             Func<Task<IReadOnlyList<T>>> existingAfterSubscribe = null,
+            bool deferPredicateEvaluation = true,
             CancellationToken cancellationToken = default)
         {
             if (addHandler == null)
@@ -85,7 +98,22 @@ namespace PlaywrightNative.Helpers
                 throw new ArgumentNullException(nameof(matches));
             }
 
+            // Always run continuations asynchronously. A synchronous TCS would resume
+            // waitForEvent awaiters inside Load.Invoke on the transport read thread;
+            // any follow-up protocol call from that continuation deadlocks the pipe
+            // (macOS WebKit CI: mass 30s timeouts after deferPredicateEvaluation:false).
+            // Autowait ordering (route|load|clickload) is preserved by LifecycleWaiter's
+            // Task.Delay(1) drain when the load state is already recorded.
             TaskCompletionSource<T> tcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            // The predicate must not run on the transport's read loop: an official
+            // sync-predicate wait like page.waitForResponse(r => r.TextAsync().Result...)
+            // has to call back into the protocol to fetch the body, and that reply is
+            // read by the very loop this handler would otherwise be blocking. Chain
+            // matches() onto a background task per event, in arrival order, so events
+            // are still evaluated one at a time (preserving "predicate called once")
+            // without stalling the reader. Lifecycle waits skip the hop (predicate only).
+            Task chain = Task.CompletedTask;
 
             void Handler(object sender, T payload)
             {
@@ -94,13 +122,47 @@ namespace PlaywrightNative.Helpers
                     return;
                 }
 
-                if (!matches(payload))
+                if (!deferPredicateEvaluation)
                 {
+                    try
+                    {
+                        if (tcs.Task.IsCompleted || !matches(payload))
+                        {
+                            return;
+                        }
+
+                        removeHandler(Handler);
+                        tcs.TrySetResult(payload);
+                    }
+                    catch (Exception ex)
+                    {
+                        tcs.TrySetException(ex);
+                    }
+
                     return;
                 }
 
-                removeHandler(Handler);
-                tcs.TrySetResult(payload);
+                chain = chain.ContinueWith(
+                    _ =>
+                    {
+                        try
+                        {
+                            if (tcs.Task.IsCompleted || !matches(payload))
+                            {
+                                return;
+                            }
+
+                            removeHandler(Handler);
+                            tcs.TrySetResult(payload);
+                        }
+                        catch (Exception ex)
+                        {
+                            tcs.TrySetException(ex);
+                        }
+                    },
+                    CancellationToken.None,
+                    TaskContinuationOptions.None,
+                    TaskScheduler.Default);
             }
 
             addHandler(Handler);
@@ -132,7 +194,8 @@ namespace PlaywrightNative.Helpers
         /// <param name="waitingLog">Optional official <c>waiting for …</c> timeout line.</param>
         /// <param name="waitForEventName">
         /// Official lowercase event name. When set, the timeout text is
-        /// <c>Timeout Nms exceeded while waiting for event "name"</c>.
+        /// <c>Timeout Nms exceeded while waiting for event "name"</c> (Node
+        /// <c>page._waitForEvent</c>) plus a waiting-for-event log line.
         /// </param>
         /// <param name="abortOnPageClose">
         /// When set, page close rejects the wait with the official target-closed
@@ -332,7 +395,7 @@ namespace PlaywrightNative.Helpers
 
                 if (abortOnPageCrash && abortOnPageClose != null)
                 {
-                    crashHandler = (_, _) => tcs.TrySetException(new PlaywrightNativeException("Page crashed"));
+                    crashHandler = (_, _) => tcs.TrySetException(new PlaywrightException("Page crashed"));
                     abortOnPageClose.Crash += crashHandler;
                 }
 
@@ -391,14 +454,35 @@ namespace PlaywrightNative.Helpers
         private static TimeoutException TimeoutError(string apiName, int timeoutMs, string waitingLog, string waitForEventName)
         {
             string timeoutText = timeoutMs.ToString(System.Globalization.CultureInfo.InvariantCulture);
-            string message;
+
+            // Keep the canonical "Timeout Nms exceeded." substring (with the
+            // trailing period) so WaitForPageError / frame / request parity
+            // asserts that use Does.Contain("Timeout Nms exceeded.") succeed.
+            // Node page._waitForEvent also emits
+            //   `Timeout Nms exceeded while waiting for event "${event}"`
+            // which Browser.WaitForDisconnected and friends assert on — keep
+            // that as a following call-log line when waitForEventName is set.
+            // ChannelOwner prefixes `page.waitForEvent: `.
+            string message = (string.IsNullOrEmpty(apiName) ? string.Empty : apiName + ": ")
+                + "Timeout " + timeoutText + "ms exceeded.";
             if (!string.IsNullOrEmpty(waitForEventName))
             {
-                message = apiName + ": Timeout " + timeoutText + "ms exceeded while waiting for event \"" + waitForEventName + "\"";
-            }
-            else
-            {
-                message = apiName + ": Timeout " + timeoutText + "ms exceeded.";
+                string whileWaiting = "Timeout " + timeoutText
+                    + "ms exceeded while waiting for event \"" + waitForEventName + "\"";
+                string eventLine = "waiting for event \"" + waitForEventName + "\"";
+                if (string.IsNullOrEmpty(waitingLog))
+                {
+                    waitingLog = whileWaiting + System.Environment.NewLine + eventLine;
+                }
+                else if (!waitingLog.Contains(waitForEventName, StringComparison.Ordinal))
+                {
+                    waitingLog = whileWaiting + System.Environment.NewLine
+                        + eventLine + System.Environment.NewLine + waitingLog;
+                }
+                else if (!waitingLog.Contains("while waiting for event", StringComparison.Ordinal))
+                {
+                    waitingLog = whileWaiting + System.Environment.NewLine + waitingLog;
+                }
             }
 
             if (!string.IsNullOrEmpty(waitingLog))

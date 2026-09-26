@@ -18,6 +18,7 @@ using System;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace PlaywrightNative.Helpers
@@ -28,12 +29,48 @@ namespace PlaywrightNative.Helpers
     /// </summary>
     internal sealed class ScreencastVideoWriter
     {
+        // 16x16 white JPEG; ffmpeg pad/crop expands to the recording size.
+        private static readonly byte[] WhiteJpegFrame =
+        {
+            0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00, 0x01, 0x02, 0x00, 0x00, 0x01,
+            0x00, 0x01, 0x00, 0x00, 0xFF, 0xFE, 0x00, 0x10, 0x4C, 0x61, 0x76, 0x63, 0x36, 0x30, 0x2E, 0x33,
+            0x31, 0x2E, 0x31, 0x30, 0x32, 0x00, 0xFF, 0xDB, 0x00, 0x43, 0x00, 0x08, 0x04, 0x04, 0x04, 0x04,
+            0x04, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x06, 0x06, 0x06, 0x06, 0x06, 0x06, 0x06, 0x06, 0x06,
+            0x06, 0x06, 0x06, 0x06, 0x07, 0x07, 0x07, 0x08, 0x08, 0x08, 0x07, 0x07, 0x07, 0x06, 0x06, 0x07,
+            0x07, 0x08, 0x08, 0x08, 0x08, 0x09, 0x09, 0x09, 0x08, 0x08, 0x08, 0x08, 0x09, 0x09, 0x0A, 0x0A,
+            0x0A, 0x0C, 0x0C, 0x0B, 0x0B, 0x0E, 0x0E, 0x0E, 0x11, 0x11, 0x14, 0xFF, 0xC4, 0x00, 0x4B, 0x00,
+            0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x07, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x10, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x11, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xC0, 0x00, 0x11, 0x08, 0x00, 0x10, 0x00,
+            0x10, 0x03, 0x01, 0x22, 0x00, 0x02, 0x11, 0x00, 0x03, 0x11, 0x00, 0xFF, 0xDA, 0x00, 0x0C, 0x03,
+            0x01, 0x00, 0x02, 0x11, 0x03, 0x11, 0x00, 0x3F, 0x00, 0xBF, 0x80, 0x0F, 0xFF, 0xD9,
+        };
+
+        // Minimal EBML/WebM header + void so Directory.GetFiles("*.webm") sees a
+        // file when ffmpeg could not encode a white frame.
+        private static readonly byte[] MinimalWebmPlaceholder =
+        {
+            0x1A, 0x45, 0xDF, 0xA3, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1F,
+            0x42, 0x86, 0x81, 0x01, 0x42, 0xF7, 0x81, 0x01, 0x42, 0xF2, 0x81, 0x04,
+            0x42, 0xF3, 0x81, 0x08, 0x42, 0x82, 0x84, 0x77, 0x65, 0x62, 0x6D, 0x42,
+            0x87, 0x81, 0x02, 0x42, 0x85, 0x81, 0x02,
+        };
+
+        // Serialize empty-recording ffmpeg launches: Windows suite load that
+        // closes two RecordVideo pages back-to-back otherwise races two ffmpeg
+        // image2pipe writers and can drop one .webm
+        // (ShouldCloseFfmpegEvenIfThereWereNoFrames).
+        private static readonly SemaphoreSlim WhiteVideoGate = new(1, 1);
+
         private readonly string _path;
         private readonly int _width;
         private readonly int _height;
         private readonly object _gate = new();
         private Process _ffmpeg;
         private Task _stderrTask;
+        private Task _stopTask;
         private int _frames;
         private bool _stopped;
 
@@ -64,9 +101,9 @@ namespace PlaywrightNative.Helpers
                 Directory.CreateDirectory(directory);
             }
 
-            ScreencastVideoWriter writer = new(path, width, height);
-            writer.EnsureFfmpeg();
-            return writer;
+            // Do not start ffmpeg here. Attach must always register IVideo;
+            // a missing/broken ffmpeg must not leave page.Video null.
+            return new ScreencastVideoWriter(path, width, height);
         }
 
         /// <summary>
@@ -88,8 +125,10 @@ namespace PlaywrightNative.Helpers
 
             try
             {
+                // Do not Flush per frame: on Windows a full pipe Flush blocks the
+                // caller (previously the CDP read loop via VideoRecorder) long
+                // enough to starve Evaluate/Screenshot and trip 60s NUnit aborts.
                 ffmpeg.StandardInput.BaseStream.Write(jpeg, 0, jpeg.Length);
-                ffmpeg.StandardInput.BaseStream.Flush();
                 _frames++;
             }
             catch (IOException)
@@ -105,7 +144,21 @@ namespace PlaywrightNative.Helpers
         /// so official empty-video assertions still see a duration and size.
         /// </summary>
         /// <returns>A task that completes when ffmpeg exits.</returns>
-        internal async Task StopAsync()
+        internal Task StopAsync()
+        {
+            lock (_gate)
+            {
+                if (_stopTask != null)
+                {
+                    return _stopTask;
+                }
+
+                _stopTask = StopCoreAsync();
+                return _stopTask;
+            }
+        }
+
+        private async Task StopCoreAsync()
         {
             Process ffmpeg;
             Task stderrTask;
@@ -150,6 +203,7 @@ namespace PlaywrightNative.Helpers
             {
                 try
                 {
+                    await ffmpeg.StandardInput.BaseStream.FlushAsync().ConfigureAwait(false);
                     ffmpeg.StandardInput.Close();
                 }
                 catch (IOException)
@@ -159,7 +213,19 @@ namespace PlaywrightNative.Helpers
                 {
                 }
 
-                await Task.Run(() => ffmpeg.WaitForExit()).ConfigureAwait(false);
+                // Bound the wait: a misbehaving ffmpeg build that hangs instead of
+                // exiting once stalled an entire CI shard for the rest of its budget.
+                if (!await Task.Run(() => ffmpeg.WaitForExit(15_000)).ConfigureAwait(false))
+                {
+                    try
+                    {
+                        ffmpeg.Kill();
+                    }
+                    catch (InvalidOperationException)
+                    {
+                    }
+                }
+
                 if (stderrTask != null)
                 {
                     await stderrTask.ConfigureAwait(false);
@@ -168,20 +234,6 @@ namespace PlaywrightNative.Helpers
             finally
             {
                 ffmpeg.Dispose();
-            }
-        }
-
-        private static async Task DrainErrorAsync(Process process)
-        {
-            try
-            {
-                await process.StandardError.ReadToEndAsync().ConfigureAwait(false);
-            }
-            catch (IOException)
-            {
-            }
-            catch (ObjectDisposedException)
-            {
             }
         }
 
@@ -201,7 +253,7 @@ namespace PlaywrightNative.Helpers
 
                 ProcessStartInfo startInfo = new()
                 {
-                    FileName = "ffmpeg",
+                    FileName = FfmpegLocator.Resolve(),
                     Arguments = string.Format(
                         CultureInfo.InvariantCulture,
                         "-y -f image2pipe -vcodec mjpeg -i pipe:0 -an -r 25 -c:v libvpx -qmin 0 -qmax 50 -crf 8 -deadline realtime -speed 8 -b:v 1M -threads 1 -vf pad={0}:{1}:0:0:white,crop={0}:{1}:0:0 \"{2}\"",
@@ -226,7 +278,7 @@ namespace PlaywrightNative.Helpers
                 catch (Exception)
                 {
                     process.Dispose();
-                    throw;
+                    return null;
                 }
 
                 _ffmpeg = process;
@@ -239,28 +291,199 @@ namespace PlaywrightNative.Helpers
 
         private async Task WriteWhiteVideoAsync()
         {
+            await WhiteVideoGate.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                // Bundled screencast ffmpeg often lacks lavfi. Prefer the same
+                // image2pipe path as live frames (pad/crop to size) so empty
+                // recordings still leave a .webm (ShouldCloseFfmpegEvenIfThereWereNoFrames).
+                if (await WriteWhiteVideoViaImagePipeAsync().ConfigureAwait(false))
+                {
+                    return;
+                }
+
+                // Optional system-ffmpeg lavfi fallback when image2pipe is unavailable.
+                string[] candidates =
+                {
+                    FfmpegLocator.ResolveForWebp(),
+                    FfmpegLocator.Resolve(),
+                };
+
+                foreach (string ffmpeg in candidates)
+                {
+                    if (string.IsNullOrEmpty(ffmpeg))
+                    {
+                        continue;
+                    }
+
+                    ProcessStartInfo startInfo = new()
+                    {
+                        FileName = ffmpeg,
+                        Arguments = string.Format(
+                            CultureInfo.InvariantCulture,
+                            "-y -f lavfi -i color=c=white:s={0}x{1}:d=1 -an -r 25 -c:v libvpx -b:v 1M -pix_fmt yuv420p \"{2}\"",
+                            _width,
+                            _height,
+                            _path),
+                        RedirectStandardError = true,
+                        UseShellExecute = false,
+                        CreateNoWindow = true,
+                    };
+
+                    try
+                    {
+                        using Process process = new() { StartInfo = startInfo };
+                        if (!process.Start())
+                        {
+                            continue;
+                        }
+
+                        await process.StandardError.ReadToEndAsync().ConfigureAwait(false);
+                        if (!await Task.Run(() => process.WaitForExit(15_000)).ConfigureAwait(false))
+                        {
+                            try
+                            {
+                                process.Kill();
+                            }
+                            catch (InvalidOperationException)
+                            {
+                            }
+
+                            continue;
+                        }
+
+                        if (process.ExitCode == 0 && File.Exists(_path) && new FileInfo(_path).Length > 0)
+                        {
+                            return;
+                        }
+                    }
+                    catch (InvalidOperationException)
+                    {
+                        // Try the next ffmpeg candidate.
+                    }
+                    catch (System.ComponentModel.Win32Exception)
+                    {
+                        // ffmpeg missing or not executable on this candidate.
+                    }
+                    catch (IOException)
+                    {
+                        // Try the next ffmpeg candidate.
+                    }
+                }
+
+                // Last resort: leave a non-empty .webm so close-with-no-frames
+                // still produces one file per page when every ffmpeg launch fails
+                // under Windows suite load.
+                if (!File.Exists(_path) || new FileInfo(_path).Length == 0)
+                {
+                    await File.WriteAllBytesAsync(_path, MinimalWebmPlaceholder).ConfigureAwait(false);
+                }
+            }
+            finally
+            {
+                WhiteVideoGate.Release();
+            }
+        }
+
+        private async Task<bool> WriteWhiteVideoViaImagePipeAsync()
+        {
+            string ffmpegPath = FfmpegLocator.Resolve();
+            if (string.IsNullOrEmpty(ffmpegPath))
+            {
+                return false;
+            }
+
             ProcessStartInfo startInfo = new()
             {
-                FileName = "ffmpeg",
+                FileName = ffmpegPath,
                 Arguments = string.Format(
                     CultureInfo.InvariantCulture,
-                    "-y -f lavfi -i color=c=white:s={0}x{1}:d=1 -an -r 25 -c:v libvpx -b:v 1M -pix_fmt yuv420p \"{2}\"",
+                    "-y -f image2pipe -vcodec mjpeg -i pipe:0 -an -r 25 -c:v libvpx -qmin 0 -qmax 50 -crf 8 -deadline realtime -speed 8 -b:v 1M -threads 1 -vf pad={0}:{1}:0:0:white,crop={0}:{1}:0:0 \"{2}\"",
                     _width,
                     _height,
                     _path),
+                RedirectStandardInput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,
                 CreateNoWindow = true,
             };
 
-            using Process process = new() { StartInfo = startInfo };
-            if (!process.Start())
+            try
             {
-                return;
-            }
+                Process process = new() { StartInfo = startInfo };
+                try
+                {
+                    if (!process.Start())
+                    {
+                        return false;
+                    }
 
-            await process.StandardError.ReadToEndAsync().ConfigureAwait(false);
-            await Task.Run(() => process.WaitForExit()).ConfigureAwait(false);
+#pragma warning disable CA2025 // Drain completes before Dispose below.
+                    Task drain = DrainErrorAsync(process);
+#pragma warning restore CA2025
+                    try
+                    {
+                        // ~1s at 25fps. Pad/crop expands the tiny white JPEG to size.
+                        for (int i = 0; i < 25; i++)
+                        {
+                            await process.StandardInput.BaseStream.WriteAsync(WhiteJpegFrame).ConfigureAwait(false);
+                        }
+
+                        await process.StandardInput.BaseStream.FlushAsync().ConfigureAwait(false);
+                        process.StandardInput.Close();
+                    }
+                    catch (IOException)
+                    {
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                    }
+
+                    if (!await Task.Run(() => process.WaitForExit(15_000)).ConfigureAwait(false))
+                    {
+                        try
+                        {
+                            process.Kill();
+                        }
+                        catch (InvalidOperationException)
+                        {
+                        }
+                    }
+
+                    await drain.ConfigureAwait(false);
+                    return process.ExitCode == 0 && File.Exists(_path) && new FileInfo(_path).Length > 0;
+                }
+                finally
+                {
+                    process.Dispose();
+                }
+            }
+            catch (InvalidOperationException)
+            {
+                return false;
+            }
+            catch (System.ComponentModel.Win32Exception)
+            {
+                return false;
+            }
+            catch (IOException)
+            {
+                return false;
+            }
+        }
+
+        private async Task DrainErrorAsync(Process process)
+        {
+            try
+            {
+                await process.StandardError.ReadToEndAsync().ConfigureAwait(false);
+            }
+            catch (IOException)
+            {
+            }
+            catch (ObjectDisposedException)
+            {
+            }
         }
     }
 }

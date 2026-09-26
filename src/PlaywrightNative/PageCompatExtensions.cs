@@ -186,13 +186,15 @@ namespace PlaywrightNative
             bool? force = default,
             ActionScroll scroll = default,
             bool? strict = default)
-            => page.FillAsync(selector, value, new PageFillOptions
-            {
-                NoWaitAfter = noWaitAfter,
-                Timeout = timeout,
-                Force = force,
-                Strict = strict,
-            });
+            => page is IHasScrollAwareActions scrollAware
+                ? scrollAware.FillAsync(selector, value, noWaitAfter, timeout, force, scroll, strict)
+                : page.FillAsync(selector, value, new PageFillOptions
+                {
+                    NoWaitAfter = noWaitAfter,
+                    Timeout = timeout,
+                    Force = force,
+                    Strict = strict,
+                });
 
         /// <summary>Legacy expanded-parameter focus.</summary>
         public static Task FocusAsync(
@@ -201,11 +203,13 @@ namespace PlaywrightNative
             float? timeout = default,
             ActionScroll scroll = default,
             bool? strict = default)
-            => page.FocusAsync(selector, new PageFocusOptions
-            {
-                Timeout = timeout,
-                Strict = strict,
-            });
+            => page is IHasScrollAwareActions scrollAware
+                ? scrollAware.FocusAsync(selector, timeout, scroll, strict)
+                : page.FocusAsync(selector, new PageFocusOptions
+                {
+                    Timeout = timeout,
+                    Strict = strict,
+                });
 
         /// <summary>Legacy expanded-parameter hover.</summary>
         public static Task HoverAsync(
@@ -240,13 +244,15 @@ namespace PlaywrightNative
             bool? force = default,
             ActionScroll scroll = default,
             bool? strict = default)
-            => page.PressAsync(selector, key, new PagePressOptions
-            {
-                Delay = delay,
-                NoWaitAfter = noWaitAfter,
-                Timeout = timeout,
-                Strict = strict,
-            });
+            => page is IHasScrollAwareActions scrollAware
+                ? scrollAware.PressAsync(selector, key, delay, noWaitAfter, timeout, force, scroll, strict)
+                : page.PressAsync(selector, key, new PagePressOptions
+                {
+                    Delay = delay,
+                    NoWaitAfter = noWaitAfter,
+                    Timeout = timeout,
+                    Strict = strict,
+                });
 
         /// <summary>Legacy expanded-parameter select option (two string values).</summary>
         [System.Runtime.CompilerServices.OverloadResolutionPriority(1)]
@@ -277,13 +283,15 @@ namespace PlaywrightNative
             bool? force = default,
             ActionScroll scroll = default,
             bool? strict = default)
-            => CompatCollections.AsCollectionAsync(page.SelectOptionAsync(selector, values, new PageSelectOptionOptions
-            {
-                NoWaitAfter = noWaitAfter,
-                Timeout = timeout,
-                Force = force,
-                Strict = strict,
-            }));
+            => page is IHasScrollAwareActions scrollAware
+                ? scrollAware.SelectOptionAsync(selector, values, noWaitAfter, timeout, force, scroll, strict)
+                : CompatCollections.AsCollectionAsync(page.SelectOptionAsync(selector, values, new PageSelectOptionOptions
+                {
+                    NoWaitAfter = noWaitAfter,
+                    Timeout = timeout,
+                    Force = force,
+                    Strict = strict,
+                }));
 
         /// <summary>Legacy expanded-parameter select option.</summary>
         [System.Runtime.CompilerServices.OverloadResolutionPriority(1)]
@@ -397,12 +405,14 @@ namespace PlaywrightNative
             bool? force = default,
             ActionScroll scroll = default,
             bool? strict = default)
-            => page.SetInputFilesAsync(selector, files, new PageSetInputFilesOptions
-            {
-                NoWaitAfter = noWaitAfter,
-                Timeout = timeout,
-                Strict = strict,
-            });
+            => page is IHasScrollAwareActions scrollAware
+                ? scrollAware.SetInputFilesAsync(selector, files, noWaitAfter, timeout, force, scroll, strict)
+                : page.SetInputFilesAsync(selector, files, new PageSetInputFilesOptions
+                {
+                    NoWaitAfter = noWaitAfter,
+                    Timeout = timeout,
+                    Strict = strict,
+                });
 
         /// <summary>Legacy expanded-parameter set input files.</summary>
         public static Task SetInputFilesAsync(
@@ -484,13 +494,15 @@ namespace PlaywrightNative
             bool? force = default,
             ActionScroll scroll = default,
             bool? strict = default)
-            => page.TypeAsync(selector, text, new PageTypeOptions
-            {
-                Delay = delay,
-                NoWaitAfter = noWaitAfter,
-                Timeout = timeout,
-                Strict = strict,
-            });
+            => page is IHasScrollAwareActions scrollAware
+                ? scrollAware.TypeAsync(selector, text, delay, noWaitAfter, timeout, force, scroll, strict)
+                : page.TypeAsync(selector, text, new PageTypeOptions
+                {
+                    Delay = delay,
+                    NoWaitAfter = noWaitAfter,
+                    Timeout = timeout,
+                    Strict = strict,
+                });
 
         /// <summary>Legacy expanded-parameter uncheck.</summary>
         public static Task UncheckAsync(
@@ -589,8 +601,8 @@ namespace PlaywrightNative
             this IPage page,
             string expression,
             object arg = default,
-            float? timeout = default,
-            object polling = default)
+            object polling = default,
+            float? timeout = default)
             => page.WaitForFunctionAsync(expression, arg, new PageWaitForFunctionOptions
             {
                 Timeout = timeout,
@@ -869,11 +881,15 @@ namespace PlaywrightNative
             Func<Task> handler,
             int? times = default,
             bool? noWaitAfter = default)
-            => page.AddLocatorHandlerAsync(locator, handler, new PageAddLocatorHandlerOptions
+        {
+            if (handler == null)
             {
-                Times = times,
-                NoWaitAfter = noWaitAfter,
-            });
+                throw new ArgumentNullException(nameof(handler));
+            }
+
+            LocatorHandlers.Add(page, locator, _ => handler(), times, noWaitAfter);
+            return Task.CompletedTask;
+        }
 
         /// <summary>Legacy add-locator-handler with times/noWaitAfter.</summary>
         [System.Runtime.CompilerServices.OverloadResolutionPriority(1)]
@@ -883,11 +899,10 @@ namespace PlaywrightNative
             Func<ILocator, Task> handler,
             int? times = default,
             bool? noWaitAfter = default)
-            => page.AddLocatorHandlerAsync(locator, handler, new PageAddLocatorHandlerOptions
-            {
-                Times = times,
-                NoWaitAfter = noWaitAfter,
-            });
+        {
+            LocatorHandlers.Add(page, locator, handler, times, noWaitAfter);
+            return Task.CompletedTask;
+        }
 
         /// <summary>Internal accessibility tree used by aria snapshots and expect matchers.</summary>
         internal static Task<AccessibilitySnapshotResult> SnapshotAccessibilityAsync(
@@ -899,34 +914,7 @@ namespace PlaywrightNative
                 : throw new NotSupportedException("This page does not expose PlaywrightNative accessibility snapshots.");
 
         private static WaitUntilState ParseWaitUntilState(string waitUntil)
-        {
-            if (string.IsNullOrEmpty(waitUntil))
-            {
-                return default;
-            }
-
-            if (string.Equals(waitUntil, "load", StringComparison.OrdinalIgnoreCase))
-            {
-                return WaitUntilState.Load;
-            }
-
-            if (string.Equals(waitUntil, "domcontentloaded", StringComparison.OrdinalIgnoreCase))
-            {
-                return WaitUntilState.DOMContentLoaded;
-            }
-
-            if (string.Equals(waitUntil, "networkidle", StringComparison.OrdinalIgnoreCase))
-            {
-                return WaitUntilState.NetworkIdle;
-            }
-
-            if (string.Equals(waitUntil, "commit", StringComparison.OrdinalIgnoreCase))
-            {
-                return WaitUntilState.Commit;
-            }
-
-            throw new PlaywrightNativeException($"Unknown waitUntil value: {waitUntil}");
-        }
+            => Helpers.WaitUntilName.Parse(waitUntil);
 
         private static RemoveAllListenersBehavior ParseRemoveAllListenersBehavior(string behavior)
         {
@@ -950,7 +938,7 @@ namespace PlaywrightNative
                 return RemoveAllListenersBehavior.Default;
             }
 
-            throw new PlaywrightNativeException($"Unknown removeAllListeners behavior: {behavior}");
+            throw new PlaywrightException($"Unknown removeAllListeners behavior: {behavior}");
         }
 
         private static float? ParsePollingInterval(object polling)
@@ -964,7 +952,7 @@ namespace PlaywrightNative
             {
                 if (string.Equals(pollingText, "raf", StringComparison.OrdinalIgnoreCase))
                 {
-                    return 0;
+                    return null;
                 }
 
                 if (float.TryParse(pollingText, out float parsed))
@@ -972,7 +960,8 @@ namespace PlaywrightNative
                     return parsed;
                 }
 
-                throw new PlaywrightNativeException($"Unknown polling value: {pollingText}");
+                WaitForFunctionHelper.ValidatePollingOption(pollingText);
+                throw new PlaywrightException($"Unknown polling value: {pollingText}");
             }
 
             if (polling is float floatValue)
@@ -990,7 +979,7 @@ namespace PlaywrightNative
                 return intValue;
             }
 
-            throw new PlaywrightNativeException($"Unknown polling value: {polling}");
+            throw new PlaywrightException($"Unknown polling value: {polling}");
         }
     }
 }

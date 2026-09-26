@@ -18,6 +18,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using PlaywrightNative.Chromium;
 using PlaywrightNative.WebKit;
 
@@ -41,7 +42,7 @@ namespace PlaywrightNative.Helpers
         {
             if (element == null)
             {
-                throw new PlaywrightNativeException("File chooser has no element handle.");
+                throw new PlaywrightException("File chooser has no element handle.");
             }
 
             List<string> paths = new List<string>();

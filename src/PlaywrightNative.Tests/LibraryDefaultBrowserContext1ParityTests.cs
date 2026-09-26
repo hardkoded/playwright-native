@@ -398,17 +398,24 @@ namespace PlaywrightNative.Tests
 
         private static SameSiteAttribute DefaultSameSiteCookieValue()
         {
-            if (TestConstants.IsWebKit && TestConstants.IsWindows)
+            // Upstream defaultSameSiteCookieValue: Chromium and WebKit/Linux are Lax;
+            // WebKit on Windows and older macOS (mac14 bots) report None; Firefox is None.
+            if (TestConstants.IsChromium)
+            {
+                return SameSiteAttribute.Lax;
+            }
+
+            if (TestConstants.IsWebKit && TestConstants.IsLinux)
+            {
+                return SameSiteAttribute.Lax;
+            }
+
+            if (TestConstants.IsWebKit)
             {
                 return SameSiteAttribute.None;
             }
 
-            if (TestConstants.IsFirefox)
-            {
-                return SameSiteAttribute.None;
-            }
-
-            return SameSiteAttribute.Lax;
+            return SameSiteAttribute.None;
         }
 
         private static SameSiteAttribute SameSiteLaxOrWindowsNone()

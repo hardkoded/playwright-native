@@ -18,6 +18,7 @@ using System;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 
@@ -373,7 +374,7 @@ namespace PlaywrightNative.Tests
                     childSum = await child.EvaluateAsync<int>("1 + 1").ConfigureAwait(false);
                     childIsTop = await child.EvaluateAsync<bool>("window === window.top").ConfigureAwait(false);
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                     await Task.Delay(100).ConfigureAwait(false);
                 }

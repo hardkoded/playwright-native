@@ -81,45 +81,76 @@ namespace PlaywrightNative.Helpers
             string name = ToEventName(state);
             if (Contains(snapshot(), name))
             {
+                // Page.Load / DOMContentLoaded waiters use RunContinuationsAsynchronously.
+                // If the lifecycle was recorded on this turn (or just before click returned),
+                // yield so waitForEvent continuations run before waitForLoadState returns
+                // (page-autowaiting-basic expects route|load|clickload).
+                await DrainPublicLifecycleContinuationsAsync().ConfigureAwait(false);
                 return;
             }
 
-            TaskCompletionSource<bool> tcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            int timeoutMs = TimeoutSettings.TimeoutMs(timeout);
+            using CancellationTokenSource cts = timeoutMs == Timeout.Infinite
+                ? null
+                : new CancellationTokenSource(timeoutMs);
 
-            void OnChanged(string fired)
+            // networkidle can be added then revoked (iframe attach / new request).
+            // Keep waiting until the event is currently present, matching upstream
+            // LifecycleWatcher.
+            while (!Contains(snapshot(), name))
             {
-                if (fired == name)
+                TaskCompletionSource<bool> pulse =
+                    new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+                void OnChanged(string fired)
                 {
-                    tcs.TrySetResult(true);
+                    if (Contains(snapshot(), name))
+                    {
+                        pulse.TrySetResult(true);
+                    }
+                }
+
+                subscribe(OnChanged);
+                CancellationTokenRegistration registration = default;
+                try
+                {
+                    if (Contains(snapshot(), name))
+                    {
+                        break;
+                    }
+
+                    if (cts != null)
+                    {
+                        registration = cts.Token.Register(
+                            () => pulse.TrySetException(
+                                new TimeoutException($"{apiName}: Timeout {timeoutMs}ms exceeded.")));
+                    }
+
+                    await pulse.Task.ConfigureAwait(false);
+                }
+                finally
+                {
+                    await registration.DisposeAsync().ConfigureAwait(false);
+                    unsubscribe(OnChanged);
                 }
             }
 
-            subscribe(OnChanged);
-            try
-            {
-                if (Contains(snapshot(), name))
-                {
-                    return;
-                }
+            await DrainPublicLifecycleContinuationsAsync().ConfigureAwait(false);
+        }
 
-                int timeoutMs = TimeoutSettings.TimeoutMs(timeout);
-                if (timeoutMs == Timeout.Infinite)
-                {
-                    await tcs.Task.ConfigureAwait(false);
-                    return;
-                }
-
-                using CancellationTokenSource cts = new(timeoutMs);
-                cts.Token.Register(
-                    () => tcs.TrySetException(
-                        new TimeoutException($"{apiName}: Timeout {timeoutMs}ms exceeded.")));
-
-                await tcs.Task.ConfigureAwait(false);
-            }
-            finally
-            {
-                unsubscribe(OnChanged);
-            }
+        /// <summary>
+        /// Lets <c>Page.Load</c> / <c>DOMContentLoaded</c> RCA continuations run
+        /// before <c>waitForLoadState</c> returns.
+        /// </summary>
+        /// <returns>A task that completes after a short scheduler drain.</returns>
+        private static async Task DrainPublicLifecycleContinuationsAsync()
+        {
+            // Under Windows suite load a single Task.Delay(1) can complete before
+            // Page.Load RCA continuations, so clickload is recorded first
+            // (ShouldWorkWithWaitForLoadStateLoad → route|clickload|load).
+            await Task.Yield();
+            await Task.Yield();
+            await Task.Delay(16).ConfigureAwait(false);
         }
 
         private static bool Contains(IReadOnlyCollection<string> events, string name)

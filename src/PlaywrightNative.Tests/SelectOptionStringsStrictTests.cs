@@ -16,6 +16,7 @@
  */
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 
@@ -40,7 +41,7 @@ namespace PlaywrightNative.Tests
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
             await page.SetContentAsync("<select><option value='wave673'>a</option></select><select><option value='wave673'>b</option></select>").ConfigureAwait(false);
 
-            PlaywrightNativeException ex = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException ex = Assert.CatchAsync<PlaywrightException>(
                 () => page.SelectOptionAsync("select", WaveValues(), strict: true));
 
             Assert.That(ex, Is.Not.Null);
@@ -100,7 +101,7 @@ namespace PlaywrightNative.Tests
             Assert.That(frame, Is.Not.Null);
             await frame.SetContentAsync("<select><option value='wave673'>a</option></select><select><option value='wave673'>b</option></select>").ConfigureAwait(false);
 
-            PlaywrightNativeException ex = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException ex = Assert.CatchAsync<PlaywrightException>(
                 () => frame.SelectOptionAsync("select", WaveValues(), strict: true));
 
             Assert.That(ex, Is.Not.Null);

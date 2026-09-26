@@ -18,6 +18,7 @@ using System;
 using System.Collections.Generic;
 using System.Text;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -54,6 +55,14 @@ namespace PlaywrightNative.Helpers
     }
     function isVisible(element) {
         if (!element) return false;
+        // Unloaded loading=lazy iframes: never call getComputedStyle /
+        // getBoundingClientRect — Darwin WebKit wedges the target for the
+        // full command timeout (ReturnEmptySnapshotWhenIframeIsNotLoaded).
+        const tag = (element.tagName || '').toUpperCase();
+        if ((tag === 'IFRAME' || tag === 'FRAME') &&
+            String(element.getAttribute('loading') || '').toLowerCase() === 'lazy') {
+            return !!(element.isConnected);
+        }
         const view = element.ownerDocument && element.ownerDocument.defaultView;
         const style = view ? view.getComputedStyle(element) : null;
         if (!style) return true;
@@ -119,13 +128,13 @@ namespace PlaywrightNative.Helpers
 
             if (selector.Contains("##", StringComparison.Ordinal))
             {
-                throw new PlaywrightNativeException(
+                throw new PlaywrightException(
                     "Unexpected token \"#\" while parsing css selector \"" + selector + "\". Did you mean to CSS.escape it?");
             }
 
             if (selector.Contains(']') && !selector.Contains('['))
             {
-                throw new PlaywrightNativeException(
+                throw new PlaywrightException(
                     "Unexpected token \"]\" while parsing css selector \"" + selector + "\"");
             }
 
@@ -133,29 +142,45 @@ namespace PlaywrightNative.Helpers
             for (int i = 0; i < parts.Count; i++)
             {
                 string part = parts[i];
+                bool capture = false;
                 if (part.Length > 0 && part[0] == '*')
                 {
+                    // Official selectorParser: leading * is the capture modifier and is
+                    // stripped from the engine name before unknown-engine checks.
+                    capture = true;
                     part = part.Substring(1);
                 }
 
                 int equals = part.IndexOf('=');
-                if (equals <= 0)
+                if (equals < 0)
                 {
                     continue;
                 }
 
-                string name = part.Substring(0, equals);
+                // Official: `*=div` parses as capture + empty engine name.
+                if (equals == 0)
+                {
+                    if (capture)
+                    {
+                        throw new PlaywrightException(
+                            "Unknown engine \"\" while parsing selector " + selector);
+                    }
+
+                    continue;
+                }
+
+                string name = part.Substring(0, equals).Trim();
                 if (!IsEngineName(name))
                 {
                     continue;
                 }
 
-                if (IsKnownEngine(name) || CustomSelectors.TryResolve(part, out _))
+                if (IsKnownEngine(name) || CustomSelectors.TryResolve(part.Trim(), out _))
                 {
                     continue;
                 }
 
-                throw new PlaywrightNativeException(
+                throw new PlaywrightException(
                     "Unknown engine \"" + name + "\" while parsing selector " + selector);
             }
         }

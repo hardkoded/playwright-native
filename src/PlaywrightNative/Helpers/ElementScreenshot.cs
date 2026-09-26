@@ -17,6 +17,7 @@
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using PlaywrightNative;
 using PlaywrightNative.Chromium;
 using PlaywrightNative.WebKit;
@@ -71,6 +72,12 @@ namespace PlaywrightNative.Helpers
                 throw new ArgumentNullException(nameof(page));
             }
 
+            // Do NOT wait for Stable before CaptureAsync: infinite CSS/Web animations
+            // never stabilize, and FinishAnimationsAsync runs inside CaptureAsync
+            // (ScreenshotAsyncShouldDisableAnimations /
+            // ShouldNotCaptureInfiniteCssAnimation). Visibility/stable wait stays in
+            // CaptureClipAsync after decorations — fonts budget is short so
+            // ShouldWaitUntilVisible still has time after WaitForFontsAsync.
             return await ScreenshotDecorations.CaptureAsync(
                 page,
                 animations,
@@ -116,7 +123,7 @@ namespace PlaywrightNative.Helpers
             bool attached = await element.EvaluateAsync<bool>("el => el.isConnected").ConfigureAwait(false);
             if (!attached)
             {
-                throw new PlaywrightNativeException("Element is not attached to the DOM");
+                throw new PlaywrightException("Element is not attached to the DOM");
             }
 
             await WaitForScreenshotReadyAsync(element, timeout).ConfigureAwait(false);
@@ -125,7 +132,7 @@ namespace PlaywrightNative.Helpers
             ElementHandleBoundingBoxResult box = await element.BoundingBoxAsync().ConfigureAwait(false);
             if (box == null || box.Width <= 0 || box.Height <= 0)
             {
-                throw new PlaywrightNativeException("Node is either not visible or not an HTMLElement");
+                throw new PlaywrightException("Node is either not visible or not an HTMLElement");
             }
 
             // Official screenshotter.screenshotElement: documentRect = bbox + scroll,

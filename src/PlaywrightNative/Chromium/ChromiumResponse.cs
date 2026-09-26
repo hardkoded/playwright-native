@@ -67,7 +67,7 @@ namespace PlaywrightNative.Chromium
 
         /// <inheritdoc/>
         public Task<byte[]> BodyAsync()
-            => _crResponse.GetBodyBytesAsync();
+            => _crResponse.GetBodyBytesForCallerAsync();
 
         /// <inheritdoc/>
         public Task<string> FinishedAsync()
@@ -75,40 +75,38 @@ namespace PlaywrightNative.Chromium
 
         /// <inheritdoc/>
         public Task<T> JsonAsync<T>()
-            => ResponseContent.ReadJsonAsync<T>(_crResponse.GetBodyBytesAsync);
+            => ResponseContent.ReadJsonAsync<T>(_crResponse.GetBodyBytesForCallerAsync);
 
         /// <inheritdoc/>
         public Task<string> TextAsync()
-            => ResponseContent.ReadTextAsync(_crResponse.GetBodyBytesAsync);
+            => ResponseContent.ReadTextAsync(_crResponse.GetBodyBytesForCallerAsync);
 
         /// <inheritdoc/>
         public async Task<Dictionary<string, string>> AllHeadersAsync()
         {
-            await _crResponse.WaitForExtraHeadersAsync().ConfigureAwait(false);
-            return HeaderMap.All(_crResponse.HeaderPairs);
+            IReadOnlyList<NameValueEntry> raw = await _crResponse.WaitForRawHeadersAsync().ConfigureAwait(false);
+            return HeaderMap.All(ResponseHeaders.ToPairs(raw));
         }
 
         /// <inheritdoc/>
         public async Task<string> HeaderValueAsync(string name)
         {
-            await _crResponse.WaitForExtraHeadersAsync().ConfigureAwait(false);
-            return HeaderMap.Value(_crResponse.HeaderPairs, name);
+            IReadOnlyList<NameValueEntry> raw = await _crResponse.WaitForRawHeadersAsync().ConfigureAwait(false);
+            return HeaderMap.Value(ResponseHeaders.ToPairs(raw), name);
         }
 
         /// <inheritdoc/>
         public async Task<IReadOnlyList<string>> HeaderValuesAsync(string name)
         {
-            await _crResponse.WaitForExtraHeadersAsync().ConfigureAwait(false);
-            return HeaderMap.Values(_crResponse.HeaderPairs, name);
+            IReadOnlyList<NameValueEntry> raw = await _crResponse.WaitForRawHeadersAsync().ConfigureAwait(false);
+            return HeaderMap.Values(ResponseHeaders.ToPairs(raw), name);
         }
 
         /// <inheritdoc/>
         public async Task<IReadOnlyList<Header>> HeadersArrayAsync()
         {
-            await _crResponse.WaitForExtraHeadersAsync().ConfigureAwait(false);
-            return HeaderMap.Array(_crResponse.HeaderPairs)
-                .Select(e => new Header { Name = e.Name, Value = e.Value })
-                .ToList();
+            IReadOnlyList<NameValueEntry> raw = await _crResponse.WaitForRawHeadersAsync().ConfigureAwait(false);
+            return EquatableHeader.FromEntries(raw ?? Array.Empty<NameValueEntry>());
         }
 
         /// <inheritdoc/>

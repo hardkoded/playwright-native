@@ -17,6 +17,7 @@
 using System;
 using System.Collections.Generic;
 using System.Text.RegularExpressions;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -69,7 +70,7 @@ namespace PlaywrightNative.Helpers
   };
 
   const customEngines = {};
-  const official = { css: 1, xpath: 1, text: 1, 'text:light': 1, id: 1, 'data-test': 1, 'data-testid': 1, 'data-test-id': 1, nth: 1, visible: 1, 'internal:has': 1, 'internal:has-not': 1, 'internal:and': 1, 'internal:or': 1, 'internal:chain': 1, 'id:light': 1, 'data-test:light': 1, 'data-testid:light': 1, 'data-test-id:light': 1, 'css:light': 1, 'xpath:light': 1, role: 1, 'internal:role': 1, 'aria-ref': 1 };
+  const official = { css: 1, xpath: 1, text: 1, 'text:light': 1, id: 1, 'data-test': 1, 'data-testid': 1, 'data-test-id': 1, nth: 1, visible: 1, 'internal:has': 1, 'internal:has-not': 1, 'internal:and': 1, 'internal:or': 1, 'internal:chain': 1, 'internal:control': 1, 'id:light': 1, 'data-test:light': 1, 'data-testid:light': 1, 'data-test-id:light': 1, 'css:light': 1, 'xpath:light': 1, role: 1, 'internal:role': 1, 'aria-ref': 1 };
   const cssEscapeAttr = (s) => String(s).replace(/\\/g, '\\\\').replace(new RegExp(dq, 'g'), '\\' + dq);
 
   const parsePart = (part) => {
@@ -77,6 +78,9 @@ namespace PlaywrightNative.Helpers
     let rest = (part || '').trim();
     if (rest.charAt(0) === '*' && rest.length > 1) {
       const after = rest.slice(1);
+      // Official: `*=div` is capture + empty engine (parse-time error).
+      if (after.charAt(0) === '=' || !after.trim())
+        throw new Error('Unknown engine ' + dq + dq + ' while parsing selector ' + part);
       const cap = /^([a-zA-Z_][\w:-]*)\s*=/.exec(after);
       if (cap && official[cap[1]]) {
         capture = true;
@@ -648,6 +652,10 @@ namespace PlaywrightNative.Helpers
           const one = custom.query(root, parsed.body);
           hits = one ? [one] : [];
         }
+        for (let ci = 0; ci < hits.length; ci++) {
+          if (!hits[ci] || !('nodeName' in hits[ci]))
+            throw new Error('Expected a Node but got ' + Object.prototype.toString.call(hits[ci]));
+        }
       }
       else if (hasCustomPseudo(parsed.body))
         hits = queryCustomCss(root, parsed.body);
@@ -712,6 +720,11 @@ namespace PlaywrightNative.Helpers
         const want = parsed.body === 'true';
         current = current.filter((el) => el && el.nodeType === 1 && isElementVisible(el) === want);
         continue;
+      }
+      if (parsed.engine === 'internal:control') {
+        // Official enter-frame / pierce-frames / any-frame are resolved in C#
+        // (FrameSelector). Injected query must not treat them as CSS.
+        return [];
       }
       if (parsed.engine === 'internal:and') {
         const nested = parseNestedBody('internal:and', parsed.body);
@@ -1247,14 +1260,14 @@ namespace PlaywrightNative.Helpers
         {
             if (selector == null)
             {
-                throw new PlaywrightNativeException("selector: expected string, got object");
+                throw new PlaywrightException("selector: expected string, got object");
             }
 
             string first = FirstChainPart(selector);
             if (first.StartsWith("internal:has=", StringComparison.Ordinal)
                 || string.Equals(first, "internal:has", StringComparison.Ordinal))
             {
-                throw new PlaywrightNativeException("\"internal:has\" selector cannot be first");
+                throw new PlaywrightException("\"internal:has\" selector cannot be first");
             }
         }
 

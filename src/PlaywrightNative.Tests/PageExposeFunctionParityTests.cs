@@ -21,6 +21,7 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 using PlaywrightNative.TestServer;
@@ -144,7 +145,7 @@ namespace PlaywrightNative.Tests
 
             await binding.DisposeAsync().ConfigureAwait(false);
 
-            PlaywrightNativeException exception = Assert.ThrowsAsync<PlaywrightNativeException>(
+            PlaywrightException exception = Assert.ThrowsAsync<PlaywrightException>(
                 async () => await page.EvaluateAsync<int>(
                     "(async function() { return await window['compute'](9, 4); })()").ConfigureAwait(false));
             Assert.That(exception.Message, Does.Contain("is not a function"));
@@ -183,7 +184,7 @@ namespace PlaywrightNative.Tests
             await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
 
-            await page.ExposeFunctionAsync("woof", (Action)(() => throw new PlaywrightNativeException("WOOF WOOF"))).ConfigureAwait(false);
+            await page.ExposeFunctionAsync("woof", (Action)(() => throw new PlaywrightException("WOOF WOOF"))).ConfigureAwait(false);
             JsonElement result = await page.EvaluateAsync<JsonElement>(@"(async () => {
                 try {
                     await window['woof']();
@@ -350,7 +351,7 @@ namespace PlaywrightNative.Tests
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
 
             await page.ExposeFunctionAsync("foo", () => { }).ConfigureAwait(false);
-            PlaywrightNativeException error = Assert.ThrowsAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.ThrowsAsync<PlaywrightException>(
                 async () => await page.ExposeFunctionAsync("foo", () => { }).ConfigureAwait(false));
             Assert.That(error.Message, Does.Contain("page.exposeFunction: Function \"foo\" has been already registered"));
         }
@@ -468,7 +469,7 @@ namespace PlaywrightNative.Tests
             await page.EvaluateHandleAsync("() => (Array.prototype).toJSON = () => '\"[]\"'").ConfigureAwait(false);
             await page.ExposeFunctionAsync("add", (int a, int b) => a + b).ConfigureAwait(false);
 
-            PlaywrightNativeException exception = Assert.ThrowsAsync<PlaywrightNativeException>(
+            PlaywrightException exception = Assert.ThrowsAsync<PlaywrightException>(
                 async () => await page.EvaluateAsync<int>("(() => add(5, 6))()").ConfigureAwait(false));
             Assert.That(
                 exception.Message,

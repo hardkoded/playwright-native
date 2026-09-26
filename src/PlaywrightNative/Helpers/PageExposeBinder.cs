@@ -153,5 +153,45 @@ namespace PlaywrightNative.Helpers
                 Source(context, page),
                 ExposeFunctionBinder.Arg<T1>(args, 0),
                 ExposeFunctionBinder.Arg<T2>(args, 1)));
+
+        /// <summary>Wraps a binding that receives <see cref="BindingSource"/> and three arguments.</summary>
+        /// <typeparam name="T1">The first argument type.</typeparam>
+        /// <typeparam name="T2">The second argument type.</typeparam>
+        /// <typeparam name="T3">The third argument type.</typeparam>
+        /// <typeparam name="TResult">The return type.</typeparam>
+        /// <param name="context">The owning context.</param>
+        /// <param name="page">The owning page.</param>
+        /// <param name="callback">The user callback.</param>
+        /// <returns>The installed handler.</returns>
+        internal static Func<JsonElement[], Task<object>> WrapBinding<T1, T2, T3, TResult>(
+            IBrowserContext context,
+            IPage page,
+            Func<BindingSource, T1, T2, T3, TResult> callback)
+            => args => ExposeFunctionBinder.InvokeAsync(callback(
+                Source(context, page),
+                ExposeFunctionBinder.Arg<T1>(args, 0),
+                ExposeFunctionBinder.Arg<T2>(args, 1),
+                ExposeFunctionBinder.Arg<T3>(args, 2)));
+
+        /// <summary>Wraps a binding that receives <see cref="BindingSource"/> and four arguments.</summary>
+        /// <typeparam name="T1">The first argument type.</typeparam>
+        /// <typeparam name="T2">The second argument type.</typeparam>
+        /// <typeparam name="T3">The third argument type.</typeparam>
+        /// <typeparam name="T4">The fourth argument type.</typeparam>
+        /// <typeparam name="TResult">The return type.</typeparam>
+        /// <param name="context">The owning context.</param>
+        /// <param name="page">The owning page.</param>
+        /// <param name="callback">The user callback.</param>
+        /// <returns>The installed handler.</returns>
+        internal static Func<JsonElement[], Task<object>> WrapBinding<T1, T2, T3, T4, TResult>(
+            IBrowserContext context,
+            IPage page,
+            Func<BindingSource, T1, T2, T3, T4, TResult> callback)
+            => args => ExposeFunctionBinder.InvokeAsync(callback(
+                Source(context, page),
+                ExposeFunctionBinder.Arg<T1>(args, 0),
+                ExposeFunctionBinder.Arg<T2>(args, 1),
+                ExposeFunctionBinder.Arg<T3>(args, 2),
+                ExposeFunctionBinder.Arg<T4>(args, 3)));
     }
 }

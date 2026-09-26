@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 using System;
+using System.IO;
 using System.Threading.Tasks;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
@@ -38,6 +39,13 @@ namespace PlaywrightNative.Tests
                 Assert.Ignore("chrome://crash is Chromium-only");
             }
 
+            // Upstream skips on Ubuntu 24.04: Chromium never dispatches the crash
+            // event for chrome://crash (same as LibraryPageEventCrashParityTests).
+            if (IsUbuntu2404())
+            {
+                Assert.Ignore("official skip: never dispatches the crash event");
+            }
+
             await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
             await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
@@ -47,6 +55,29 @@ namespace PlaywrightNative.Tests
             _ = page.GoToAsync("chrome://crash");
             IPage crashed = await waitTask.ConfigureAwait(false);
             Assert.That(crashed, Is.SameAs(page));
+        }
+
+        private static bool IsUbuntu2404()
+        {
+            if (!OperatingSystem.IsLinux())
+            {
+                return false;
+            }
+
+            try
+            {
+                string osRelease = System.IO.File.ReadAllText("/etc/os-release");
+                return osRelease.Contains("VERSION_ID=\"24.04\"", StringComparison.Ordinal)
+                    || osRelease.Contains("VERSION_ID=24.04", StringComparison.Ordinal);
+            }
+            catch (IOException)
+            {
+                return false;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return false;
+            }
         }
 
         [PlaywrightTest("page-event-crash.spec.ts", "should fire Crash after Page.crash on WebKit")]

@@ -55,6 +55,11 @@ namespace PlaywrightNative.Helpers
                 server = "http://" + server;
             }
 
+            // Chromium context proxies do not get launch --host-resolver-rules.
+            // On Windows, socks5://localhost resolves to ::1 while MockSocksProxy
+            // listens on IPv4 Loopback only → ERR_CONNECTION_RESET. Prefer 127.0.0.1.
+            server = RewriteLocalhostToIpv4Loopback(server);
+
             if (!includeCredentials || !HasCredentials(proxy))
             {
                 return server;
@@ -105,6 +110,14 @@ namespace PlaywrightNative.Helpers
         /// <summary>
         /// Official <c>shouldBypassProxy</c>: comma-separated tokens, optional
         /// leading <c>*</c>, and a leading <c>.</c> matches a host suffix.
+        /// Matches both <c>URL.host</c> (may include a non-default port) and
+        /// <c>URL.hostname</c>, same as upstream Playwright.
+        /// Also expands <c>&lt;loopback&gt;</c> / <c>&lt;-loopback&gt;</c> to
+        /// localhost / link-local hosts for internal HTTP proxy shims
+        /// (<see cref="WebKitMacProxyBypassShim"/>, client-cert MITM). Chromium's
+        /// native <c>--proxy-bypass-list=&lt;-loopback&gt;</c> is passed to the
+        /// browser unchanged via <see cref="FormatBypassList"/> and is not
+        /// evaluated here.
         /// </summary>
         /// <param name="host">Official <c>URL.host</c> (port only when non-default).</param>
         /// <param name="bypass">Raw bypass list, or <see langword="null"/>.</param>
@@ -116,6 +129,7 @@ namespace PlaywrightNative.Helpers
                 return false;
             }
 
+            string hostname = HostnameWithoutPort(host);
             string[] parts = bypass.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
             foreach (string raw in parts)
             {
@@ -125,17 +139,66 @@ namespace PlaywrightNative.Helpers
                     continue;
                 }
 
+                // LocaleHandshakeProxy / Mac bypass shim: "localhost stays direct".
+                // Accept both SOCKS-style <loopback> and the Chromium-looking
+                // <-loopback> token historically written by bypassLoopback:true.
+                if (string.Equals(token, "<loopback>", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(token, "<-loopback>", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (IsLoopbackHostname(hostname))
+                    {
+                        return true;
+                    }
+
+                    continue;
+                }
+
                 if (token[0] == '.'
-                    && (host.EndsWith(token, StringComparison.Ordinal)
-                        || string.Equals(host, token.Substring(1), StringComparison.Ordinal)))
+                    && (hostname.EndsWith(token, StringComparison.Ordinal)
+                        || string.Equals(hostname, token.Substring(1), StringComparison.Ordinal)))
                 {
                     return true;
                 }
 
-                if (string.Equals(host, token, StringComparison.Ordinal))
+                // Upstream: url.host === domain || url.hostname === domain
+                if (string.Equals(host, token, StringComparison.Ordinal)
+                    || string.Equals(hostname, token, StringComparison.Ordinal))
                 {
                     return true;
                 }
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Whether <paramref name="hostname"/> is loopback / link-local in the
+        /// Chromium <c>&lt;loopback&gt;</c> sense (localhost, *.localhost,
+        /// 127.0.0.0/8, ::1).
+        /// </summary>
+        /// <param name="hostname">Host without port.</param>
+        /// <returns><see langword="true"/> for loopback hosts.</returns>
+        internal static bool IsLoopbackHostname(string hostname)
+        {
+            if (string.IsNullOrEmpty(hostname))
+            {
+                return false;
+            }
+
+            if (string.Equals(hostname, "localhost", StringComparison.OrdinalIgnoreCase)
+                || hostname.EndsWith(".localhost", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(hostname, "::1", StringComparison.Ordinal)
+                || string.Equals(hostname, "[::1]", StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            // 127.0.0.0/8
+            if (hostname.StartsWith("127.", StringComparison.Ordinal)
+                && System.Net.IPAddress.TryParse(hostname, out System.Net.IPAddress ip)
+                && System.Net.IPAddress.IsLoopback(ip))
+            {
+                return true;
             }
 
             return false;
@@ -207,6 +270,57 @@ namespace PlaywrightNative.Helpers
 
             merged.Add(new KeyValuePair<string, string>("Proxy-Authorization", "Basic " + token));
             return merged;
+        }
+
+        /// <summary>
+        /// Rewrites <c>localhost</c> / <c>[::1]</c> hosts in a proxy URL to
+        /// <c>127.0.0.1</c> so IPv4-only test proxies accept the connection.
+        /// </summary>
+        /// <param name="server">Formatted proxy server URL.</param>
+        /// <returns>The rewritten URL, or the original when the host is not loopback-by-name.</returns>
+        private static string RewriteLocalhostToIpv4Loopback(string server)
+        {
+            if (string.IsNullOrEmpty(server)
+                || !Uri.TryCreate(server, UriKind.Absolute, out Uri uri))
+            {
+                return server;
+            }
+
+            string host = uri.Host;
+            if (!string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(host, "::1", StringComparison.Ordinal)
+                && !string.Equals(host, "[::1]", StringComparison.OrdinalIgnoreCase))
+            {
+                return server;
+            }
+
+            UriBuilder builder = new UriBuilder(uri)
+            {
+                Host = "127.0.0.1",
+            };
+            return builder.Uri.AbsoluteUri.TrimEnd('/');
+        }
+
+        /// <summary>
+        /// Strips a non-default port from <paramref name="host"/> (IPv6-safe).
+        /// </summary>
+        /// <param name="host">Official <c>URL.host</c>.</param>
+        /// <returns>The hostname portion.</returns>
+        private static string HostnameWithoutPort(string host)
+        {
+            if (string.IsNullOrEmpty(host))
+            {
+                return host ?? string.Empty;
+            }
+
+            if (host[0] == '[')
+            {
+                int end = host.IndexOf(']');
+                return end > 0 ? host.Substring(0, end + 1) : host;
+            }
+
+            int colon = host.LastIndexOf(':');
+            return colon > 0 ? host.Substring(0, colon) : host;
         }
     }
 }

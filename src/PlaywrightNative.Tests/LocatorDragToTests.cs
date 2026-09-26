@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 
@@ -63,7 +64,7 @@ namespace PlaywrightNative.Tests
                 <div class='src' style='width:80px;height:80px;background:#c00'>b</div>
                 <div id='dst' style='width:80px;height:80px;background:#0c0'>dst</div>").ConfigureAwait(false);
 
-            PlaywrightNativeException ex = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException ex = Assert.CatchAsync<PlaywrightException>(
                 () => page.Locator(".src").DragToAsync(page.Locator("#dst")));
 
             Assert.That(ex, Is.Not.Null);

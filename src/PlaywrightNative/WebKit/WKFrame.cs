@@ -216,6 +216,10 @@ namespace PlaywrightNative.WebKit
                 _inflightRequestIds.Add(requestId);
                 StopNetworkIdleTimerLocked();
             }
+
+            // Drop a stale networkidle that may have fired before this request
+            // was attributed (iframe attach-and-hang races).
+            RootFrame().RecalculateNetworkIdle();
         }
 
         /// <summary>
@@ -286,6 +290,9 @@ namespace PlaywrightNative.WebKit
                 {
                     _lifecycleEvents.Remove("networkidle");
                 }
+
+                // Wake waiters so they re-check; networkidle is no longer current.
+                LifecycleChanged?.Invoke("networkidle");
             }
         }
 

@@ -19,6 +19,7 @@ using System;
 using System.Collections.Generic;
 using System.Text.Json;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using PlaywrightNative.Helpers;
 
 namespace PlaywrightNative.Chromium
@@ -28,7 +29,7 @@ namespace PlaywrightNative.Chromium
     /// Not sealed — <see cref="ChromiumElementHandle"/> inherits to gain the same
     /// <c>EvaluateAsync</c>/<c>DisposeAsync</c> behaviour while layering on DOM-node methods.
     /// </remarks>
-    internal partial class ChromiumJSHandle : IJSHandle
+    internal partial class ChromiumJSHandle : IJSHandle, IHasDisposedState
     {
         private readonly CRJSHandle _crHandle;
         private readonly CRPage _page;
@@ -42,8 +43,14 @@ namespace PlaywrightNative.Chromium
         /// <inheritdoc/>
         public virtual IElementHandle AsElement() => null;
 
+        /// <inheritdoc/>
+        bool IHasDisposedState.IsDisposed => IsDisposed;
+
         /// <summary>Gets the CDP remote object id for this handle.</summary>
         internal string ObjectId => _crHandle.ObjectId;
+
+        /// <summary>Gets whether <see cref="DisposeAsync"/> has already run.</summary>
+        internal bool IsDisposed => _crHandle.IsDisposed;
 
         /// <summary>Gets the execution context that owns this handle.</summary>
         internal CRExecutionContext ExecutionContext => _crHandle.ExecutionContext;
@@ -99,7 +106,7 @@ namespace PlaywrightNative.Chromium
             {
                 names = await EvaluateAsync<string[]>(JsonValueHelper.EnumerablePropertyNamesFunction).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 return result;
             }

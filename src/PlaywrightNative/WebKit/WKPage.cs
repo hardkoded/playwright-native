@@ -19,6 +19,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using System.Net;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -44,7 +45,7 @@ namespace PlaywrightNative.WebKit
     /// creation and commit so events from either side are not lost.
     /// </remarks>
     [SuppressMessage("IDisposable", "CA2213", Justification = "Target sessions are released when the page closes, not from DisposeAsync.")]
-    internal sealed partial class WKPage : IPage, IHasPageExtras, IHasDefaultTimeouts, IHasLastPageErrorLocation, IHasClientInitializedPage, IHasExposedFunctionNames, IAppliesMergedExtraHttpHeaders
+    internal sealed partial class WKPage : IPage, IHasScrollAwareActions, IHasPageExtras, IHasDefaultTimeouts, IHasLastPageErrorLocation, IHasClientInitializedPage, IHasExposedFunctionNames, IAppliesMergedExtraHttpHeaders
     {
         private const string UtilityWorldName = "__playwright_utility_world__";
 
@@ -62,12 +63,17 @@ namespace PlaywrightNative.WebKit
         private readonly TaskCompletionSource<bool> _closedTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly TaskCompletionSource<bool> _initializedTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly TaskCompletionSource<bool> _firstNonInitialNavigationTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<bool> _firstNonBlankNavigationTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly TaskCompletionSource<bool> _reportAsNewNavigationTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly object _reportAsNewLock = new object();
+        private readonly TaskCompletionSource<bool> _reportedAsNewTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly object _navigationLock = new();
         private readonly HashSet<string> _lifecycleEvents = new();
         private readonly List<string> _initScripts = new() { WebKitFormDataScript.Source };
+        private readonly object _initScriptsLock = new();
         private readonly ConcurrentDictionary<string, Func<JsonElement[], Task<object>>> _exposedFunctions = new(StringComparer.Ordinal);
         private readonly ConcurrentDictionary<string, (long Ticks, Task<object> Task)> _recentBindingInvocations = new(StringComparer.Ordinal);
+        private readonly object _bindingCoalesceLock = new();
         private readonly ConcurrentDictionary<string, byte> _evaluateCallbackNames = new(StringComparer.Ordinal);
         private readonly ConcurrentDictionary<string, Func<IJSHandle, Task<object>>> _handleBindings = new(StringComparer.Ordinal);
         private readonly Queue<string[]> _windowOpenFeatures = new();
@@ -78,6 +84,7 @@ namespace PlaywrightNative.WebKit
         private readonly ConcurrentDictionary<string, PageDownload> _downloads = new(StringComparer.Ordinal);
         private readonly ConcurrentDictionary<string, WKWorker> _workers = new(StringComparer.Ordinal);
         private readonly ConcurrentDictionary<WKWorker, WebKitWorker> _directWorkers = new();
+        private readonly ConcurrentDictionary<string, WKFrameSession> _frameSessions = new(StringComparer.Ordinal);
         private readonly PageConsoleLog _consoleLog = new();
         private readonly PageEventLog<string> _pageErrors = new();
         private readonly PageEventLog<IRequest> _requests = new(NetworkRequestEvents.RecentRequestLimit);
@@ -88,6 +95,7 @@ namespace PlaywrightNative.WebKit
         private readonly Input.Keyboard _keyboard;
         private readonly Input.Mouse _mouse;
         private readonly Input.Touchscreen _touchscreen;
+        private readonly HashSet<string> _firstPartyInteractionHosts = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private Task _bindingReady;
         private IKeyboard _directKeyboard;
         private IMouse _directMouse;
@@ -97,6 +105,8 @@ namespace PlaywrightNative.WebKit
         private int _reportedAsNew;
         private IConsoleMessage _lastConsoleMessage;
         private int _lastConsoleRepeatCount;
+        private string _lastPageErrorText;
+        private long _lastPageErrorTicks;
 
         private WKTargetSession _targetSession;
         private WKTargetSession _provisionalSession;
@@ -106,6 +116,7 @@ namespace PlaywrightNative.WebKit
         private WKNetworkManager _provisionalNetworkManager;
         private string _mainFrameId;
         private string _mainFrameUrl = "about:blank";
+        private int _lifecycleSeedGeneration;
         private TaskCompletionSource<bool> _pendingLoadTcs;
         private TaskCompletionSource<bool> _pendingDomContentTcs;
         private TaskCompletionSource<bool> _pendingCommitTcs;
@@ -114,6 +125,7 @@ namespace PlaywrightNative.WebKit
         private bool _pendingNavigationCommitted;
         private string _pendingRedirectTarget;
         private WKRequest _pendingRedirectSource;
+        private string _pendingContinueOverrideSourceUrl;
         private bool _harRedirectInProgress;
         private string _lastCompetingNavigationUrl;
         private bool _provisionalSwapCommitted;
@@ -126,6 +138,7 @@ namespace PlaywrightNative.WebKit
         private bool _closed;
         private bool _closing;
         private bool _pageResumed;
+        private bool _contextInitScriptsInstalledBeforeResume;
         private string _closeReason;
         private bool _crashed;
         private bool _crashRequested;
@@ -134,6 +147,7 @@ namespace PlaywrightNative.WebKit
         private PageViewportSizeResult _viewportSize;
         private float _emulatedDeviceScaleFactor = 1;
         private bool _emulatedIsMobile;
+        private bool _emulatedOffline;
         private ScreenSize _independentScreen;
         private float _defaultTimeout = 30_000;
         private float _defaultNavigationTimeout = 30_000;
@@ -303,6 +317,9 @@ namespace PlaywrightNative.WebKit
         public ICoverage Coverage { get; } = new EmptyCoverage();
 
         /// <inheritdoc/>
+        bool IHasPageExtras.HasCrashed => _crashed;
+
+        /// <inheritdoc/>
         public IClock Clock => Context.Clock;
 
         /// <inheritdoc/>
@@ -350,7 +367,7 @@ namespace PlaywrightNative.WebKit
         }
 
         /// <inheritdoc/>
-        public string Url => string.IsNullOrEmpty(_mainFrameUrl) ? "about:blank" : _mainFrameUrl;
+        public string Url => PopupOpenedHelper.PublicDocumentUrl(_mainFrameUrl);
 
         /// <inheritdoc/>
         public PageViewportSizeResult ViewportSize => _viewportSize;
@@ -367,6 +384,9 @@ namespace PlaywrightNative.WebKit
 
         /// <summary>Raw keyboard used by pointer actions for modifier snapshots.</summary>
         internal Input.Keyboard InputKeyboard => _keyboard;
+
+        /// <summary>Raw mouse used by element pointer actions that honor <c>steps</c>.</summary>
+        internal Input.Mouse InputMouse => _mouse;
 
         /// <summary>
         /// Gets the inner target session currently driving this page, or <see langword="null"/>
@@ -456,6 +476,13 @@ namespace PlaywrightNative.WebKit
         internal Task InitializedTask => _initializedTcs.Task;
 
         /// <summary>
+        /// True when context string init scripts were installed via
+        /// <c>ApplyInitScriptsBeforeResumeAsync</c> (bootstrap updated before
+        /// <c>Target.resume</c>).
+        /// </summary>
+        internal bool ContextInitScriptsInstalledBeforeResume => _contextInitScriptsInstalledBeforeResume;
+
+        /// <summary>
         /// Official <c>reportAsNew</c>: true after the first non-initial navigation.
         /// </summary>
         internal bool HasCommittedNonInitialNavigation => _hasCommittedNonInitialNavigation;
@@ -464,6 +491,12 @@ namespace PlaywrightNative.WebKit
         /// Official first non-initial URL from getResourceTree / frameNavigated.
         /// </summary>
         internal Task ReportAsNewNavigationTask => _reportAsNewNavigationTcs.Task;
+
+        /// <summary>
+        /// Completes when the context <c>page</c> event has been raised for this page
+        /// (or the page was already marked reported).
+        /// </summary>
+        internal Task ReportedAsNewTask => _reportedAsNewTcs.Task;
 
         /// <summary>
         /// Gets a value indicating whether <see cref="Popup"/> has subscribers
@@ -492,6 +525,10 @@ namespace PlaywrightNative.WebKit
         public bool HasExposedFunction(string name)
             => !string.IsNullOrEmpty(name)
             && (_exposedFunctions.ContainsKey(name) || _handleBindings.ContainsKey(name));
+
+        IDialog IHasPageExtras.TryGetOpenDialog() => _dialogTracker.TryGetOpenDialog();
+
+        bool IHasPageExtras.TryMarkOpenDialogEmitted() => _dialogTracker.TryMarkEmitted();
 
         /// <inheritdoc/>
         public async Task<AccessibilitySnapshotResult> SnapshotAccessibilityAsync(bool? interestingOnly = null, IElementHandle root = null)
@@ -575,8 +612,13 @@ namespace PlaywrightNative.WebKit
                     _closing = true;
                 }
 
+                // DidClose sets _closed before raising Close / completing _closedTcs.
+                // Under load, Playwright.closePage can ACK while DidClose is still in
+                // cleanup — returning on _closed alone races past the Close event.
+                // Wait for _closedTcs (completed after Close) once close has begun.
                 if (_closed)
                 {
+                    await _closedTcs.Task.ConfigureAwait(false);
                     return;
                 }
 
@@ -615,12 +657,13 @@ namespace PlaywrightNative.WebKit
                         DidClose();
                     }
 
+                    await _closedTcs.Task.ConfigureAwait(false);
                     return;
                 }
 
                 await Task.WhenAny(closePage, _closedTcs.Task).ConfigureAwait(false);
                 _ = closePage.Exception;
-                if (_closed)
+                if (_closedTcs.Task.IsCompleted)
                 {
                     return;
                 }
@@ -637,10 +680,7 @@ namespace PlaywrightNative.WebKit
                     _ = targetClose.Exception;
                 }
 
-                if (!_closed)
-                {
-                    await _closedTcs.Task.ConfigureAwait(false);
-                }
+                await _closedTcs.Task.ConfigureAwait(false);
             }).ConfigureAwait(false);
         }
 
@@ -708,7 +748,7 @@ namespace PlaywrightNative.WebKit
 
         /// <inheritdoc/>
         public Task EmulateVisionDeficiencyAsync(VisionDeficiency type = default)
-            => throw new PlaywrightNativeException("EmulateVisionDeficiencyAsync is Chromium-only.");
+            => throw new PlaywrightException("EmulateVisionDeficiencyAsync is Chromium-only.");
 
         /// <inheritdoc/>
         public Task EmulateMediaAsync(ReducedMotion? reducedMotion = default, ForcedColors? forcedColors = default, Contrast? contrast = default)
@@ -753,14 +793,29 @@ namespace PlaywrightNative.WebKit
             ThrowIfClosed();
             return ActionTrace.EvaluateUserAsync(Context, () =>
             {
+                // Primitive EvaluateHandle results are ImmediateJSHandle (no objectId).
+                // WebKit rejects {value}/{unserializableValue} on callFunctionOn with
+                // executionContextId — inline via the handle-tree revive path instead.
+                if (arg is ImmediateJSHandle)
+                {
+                    EvaluateWithArg.ThrowIfDisposedHandle(arg);
+                    if (EvaluateHandleArg.TryPrepareHandleCall(expression, arg, out string immFn, out object[] immArgs))
+                    {
+                        return EvaluatePreparedAsync<T>(immFn, immArgs);
+                    }
+                }
+
+                // Bare remote handles must use callFunctionOn with only objectId arguments.
+                // WebKit rejects mixed value/objectId lists used by the nested-handle tree path.
+                if (arg is IJSHandle)
+                {
+                    EvaluateWithArg.ThrowIfDisposedHandle(arg);
+                    return EvaluateFunctionSerializedAsync<T>(EvaluateWithArg.AsFunction(expression), arg);
+                }
+
                 if (EvaluateHandleArg.TryPrepareHandleCall(expression, arg, out string handleFn, out object[] handleArgs))
                 {
                     return EvaluatePreparedAsync<T>(handleFn, handleArgs);
-                }
-
-                if (arg is IJSHandle)
-                {
-                    return EvaluateFunctionSerializedAsync<T>(expression, arg);
                 }
 
                 string toEval = arg == null
@@ -776,14 +831,24 @@ namespace PlaywrightNative.WebKit
             ThrowIfClosed();
             return ActionTrace.EvaluateUserAsync(Context, () =>
             {
-                if (EvaluateHandleArg.TryPrepareHandleCall(expression, arg, out string handleFn, out object[] handleArgs))
+                if (arg is ImmediateJSHandle)
                 {
-                    return EvaluatePreparedAsync<JsonElement?>(handleFn, handleArgs);
+                    EvaluateWithArg.ThrowIfDisposedHandle(arg);
+                    if (EvaluateHandleArg.TryPrepareHandleCall(expression, arg, out string immFn, out object[] immArgs))
+                    {
+                        return EvaluatePreparedAsync<JsonElement?>(immFn, immArgs);
+                    }
                 }
 
                 if (arg is IJSHandle)
                 {
-                    return EvaluateFunctionSerializedAsync<JsonElement?>(expression, arg);
+                    EvaluateWithArg.ThrowIfDisposedHandle(arg);
+                    return EvaluateFunctionSerializedAsync<JsonElement?>(EvaluateWithArg.AsFunction(expression), arg);
+                }
+
+                if (EvaluateHandleArg.TryPrepareHandleCall(expression, arg, out string handleFn, out object[] handleArgs))
+                {
+                    return EvaluatePreparedAsync<JsonElement?>(handleFn, handleArgs);
                 }
 
                 string toEval = arg == null
@@ -798,11 +863,40 @@ namespace PlaywrightNative.WebKit
             => ActionTrace.EvaluateHandleUserAsync(Context, async () =>
             {
                 WKExecutionContext context = RequireExecutionContext();
+                if (arg is WKJSHandle handleArg)
+                {
+                    EvaluateWithArg.ThrowIfDisposedHandle(handleArg);
+                    string objectId = await context.ResolveHandleObjectIdAsync(handleArg).ConfigureAwait(false);
+                    JsonElement? direct = await context
+                        .EvaluateHandleOnHandleAsync(objectId, EvaluateWithArg.AsFunction(expression))
+                        .ConfigureAwait(false);
+                    return WrapRemoteObject(context, direct);
+                }
+
+                // Immediate (value-only) handles: revive via the JSON tree path.
+                if (arg is ImmediateJSHandle)
+                {
+                    EvaluateWithArg.ThrowIfDisposedHandle(arg);
+                    if (EvaluateHandleArg.TryPrepareHandleCall(expression, arg, out string immFn, out object[] immArgs))
+                    {
+                        await StashAdoptedHandlesAsync(context, immArgs).ConfigureAwait(false);
+                        JsonElement? immBound = await context
+                            .EvaluateHandleAsync(EvaluateHandleArg.PreparedExpression(immFn, immArgs))
+                            .ConfigureAwait(false);
+                        return WrapRemoteObject(context, immBound);
+                    }
+                }
+
+                if (arg is IJSHandle)
+                {
+                    throw new PlaywrightException(DispatchEventScript.DifferentContextMessage);
+                }
+
                 if (EvaluateHandleArg.TryPrepareHandleCall(expression, arg, out string handleFn, out object[] handleArgs))
                 {
-                    await EvaluateHandleArg.StashRemoteHandlesAsync(handleArgs).ConfigureAwait(false);
+                    await StashAdoptedHandlesAsync(context, handleArgs).ConfigureAwait(false);
                     JsonElement? bound = await context
-                        .EvaluateFunctionHandleAsync(handleFn, EvaluateHandleArg.TreeArgument(handleArgs))
+                        .EvaluateHandleAsync(EvaluateHandleArg.PreparedExpression(handleFn, handleArgs))
                         .ConfigureAwait(false);
                     return WrapRemoteObject(context, bound);
                 }
@@ -1022,7 +1116,7 @@ namespace PlaywrightNative.WebKit
         {
             if (_crashed)
             {
-                throw new PlaywrightNativeException("page.goto: Target crashed");
+                throw new PlaywrightException("page.goto: Target crashed");
             }
 
             url = NavigationTimeout.CompleteUserUrl(NavigationUrl.Resolve(Context, url));
@@ -1102,7 +1196,7 @@ namespace PlaywrightNative.WebKit
             {
                 if (_crashed)
                 {
-                    throw new PlaywrightNativeException("Target crashed");
+                    throw new PlaywrightException("Target crashed");
                 }
 
                 string currentUrl = Url;
@@ -1147,15 +1241,21 @@ namespace PlaywrightNative.WebKit
             => RunHistoryNavigationAsync(() => TryGoHistoryAsync("Page.goForward"), waitUntil, timeout);
 
         /// <inheritdoc/>
-        public Task BringToFrontAsync()
+        public async Task BringToFrontAsync()
         {
             WKTargetSession target = _targetSession
                 ?? throw PageClosedException();
-            return _session.SendAsync("Target.activate", new { targetId = target.TargetId });
+            await _session.SendAsync("Target.activate", new { targetId = target.TargetId })
+                .ConfigureAwait(false);
+
+            // Upstream keeps the page focused via Emulation.setActiveAndFocused at
+            // page-proxy init; re-assert after activate so requestStorageAccess and
+            // other user-activation APIs see an active focused document (macOS).
+            await EnsureActiveAndFocusedAsync().ConfigureAwait(false);
         }
 
         /// <inheritdoc/>
-        public Task<IReadOnlyList<IConsoleMessage>> ConsoleMessagesAsync(ConsoleMessagesFilter filter = default)
+        public Task<IReadOnlyList<IConsoleMessage>> ConsoleMessagesAsync(ConsoleMessagesFilter filter = ConsoleMessagesFilter.SinceNavigation)
             => Task.FromResult(_consoleLog.Snapshot(filter));
 
         /// <inheritdoc/>
@@ -1218,7 +1318,7 @@ namespace PlaywrightNative.WebKit
             => AtomicSelectorRead.WaitStringAsync(
                 expression => EvaluateAsync<JsonElement?>(expression),
                 selector,
-                "el.innerText",
+                ElementStateScript.InnerTextValueExpression,
                 timeout,
                 "page.innerText",
                 strict ?? (Context is IHasStrictSelectors s && s.StrictSelectors));
@@ -1342,7 +1442,7 @@ namespace PlaywrightNative.WebKit
             async Task<byte[]> CaptureRectAsync()
             {
                 WKTargetSession target = _targetSession
-                    ?? throw new PlaywrightNativeException("Cannot take a screenshot: the page has no active target session.");
+                    ?? throw new PlaywrightException("Cannot take a screenshot: the page has no active target session.");
 
                 bool captureFullPage = fullPage ?? false;
                 bool hideBackground = omitBackground == true;
@@ -1382,7 +1482,7 @@ namespace PlaywrightNative.WebKit
                                 break;
                             }
                         }
-                        catch (PlaywrightNativeException ex) when (
+                        catch (PlaywrightException ex) when (
                             ex.Message.Contains("Execution context was destroyed", StringComparison.Ordinal)
                             || ex.Message.Contains("most likely because of a navigation", StringComparison.Ordinal)
                             || ex.Message.Contains("Missing injected script", StringComparison.Ordinal)
@@ -1392,7 +1492,7 @@ namespace PlaywrightNative.WebKit
 
                         if (attempt >= 20)
                         {
-                            throw new PlaywrightNativeException(navigating);
+                            throw new PlaywrightException(navigating);
                         }
 
                         await Task.Delay(50).ConfigureAwait(false);
@@ -1438,7 +1538,7 @@ namespace PlaywrightNative.WebKit
 
                 if (!response.HasValue || !response.Value.TryGetProperty("dataURL", out JsonElement dataUrlElement))
                 {
-                    throw new PlaywrightNativeException("Page.snapshotRect returned no data.");
+                    throw new PlaywrightException("Page.snapshotRect returned no data.");
                 }
 
                 byte[] bytes = ScreenshotEncode.RecodeIfNeeded(
@@ -1484,7 +1584,7 @@ namespace PlaywrightNative.WebKit
             type = ScreenshotValidate.ResolveType(path, type);
             ScreenshotValidate.EnsureQuality(type, quality);
             WKTargetSession target = _targetSession
-                ?? throw new PlaywrightNativeException("Cannot take a screenshot: the page has no active target session.");
+                ?? throw new PlaywrightException("Cannot take a screenshot: the page has no active target session.");
 
             int? resolvedQuality = ScreenshotValidate.ResolvedQuality(type, quality);
             bool cssScale = ScreenshotScaleHelper.IsCss(scale);
@@ -1527,7 +1627,7 @@ namespace PlaywrightNative.WebKit
 
             if (!response.HasValue || !response.Value.TryGetProperty("dataURL", out JsonElement dataUrlElement))
             {
-                throw new PlaywrightNativeException("Page.snapshotRect returned no data.");
+                throw new PlaywrightException("Page.snapshotRect returned no data.");
             }
 
             byte[] bytes = ScreenshotEncode.RecodeIfNeeded(
@@ -1623,8 +1723,13 @@ namespace PlaywrightNative.WebKit
         /// <inheritdoc/>
         public async Task ApplyMergedExtraHttpHeadersAsync()
         {
+            // Stamp the handshake proxy before protocol apply so WebSocket upgrades
+            // (which ignore Network.setExtraHTTPHeaders on WebKit 2276 / macOS) still
+            // pick up page/context ExtraHTTPHeaders even if the session command fails.
+            _context?.UpdateHandshakeExtraHeaders(_extraHttpHeaders);
+
             WKTargetSession target = _targetSession
-                ?? throw new PlaywrightNativeException("Cannot set extra HTTP headers: the page has no active target session.");
+                ?? throw new PlaywrightException("Cannot set extra HTTP headers: the page has no active target session.");
             await ApplyExtraHttpHeadersOnAsync(target).ConfigureAwait(false);
             if (_provisionalSession != null && !ReferenceEquals(_provisionalSession, target))
             {
@@ -1632,7 +1737,6 @@ namespace PlaywrightNative.WebKit
             }
 
             await ApplyWorkerExtraHeadersAsync().ConfigureAwait(false);
-            _context?.UpdateHandshakeExtraHeaders(_extraHttpHeaders);
             if (_networkManager != null)
             {
                 await _networkManager.UpdateInterceptionAsync().ConfigureAwait(false);
@@ -1663,12 +1767,15 @@ namespace PlaywrightNative.WebKit
         /// <inheritdoc/>
         public async Task SetViewportSizeAsync(int width, int height)
         {
+            // Official page.setViewportSize always sets screen = viewport
+            // (packages/playwright-core/src/server/page.ts), so orientation and
+            // screen.orientation.type follow the new aspect ratio.
             await SetEmulatedViewportAsync(
                 width,
                 height,
                 _emulatedDeviceScaleFactor,
                 _emulatedIsMobile,
-                _independentScreen ?? new ScreenSize { Width = width, Height = height },
+                new ScreenSize { Width = width, Height = height },
                 rememberIndependentScreen: false).ConfigureAwait(false);
         }
 
@@ -1742,7 +1849,10 @@ namespace PlaywrightNative.WebKit
             // about:blank newPage can finish load before Page.loadEventFired is
             // subscribed. Seed from document.readyState so waitForLoadState
             // resolves immediately when the document is already complete.
-            await LoadStateSeed.TryFromDocumentAsync(this, RecordLifecycle).ConfigureAwait(false);
+            // Raise public Load/DOMContentLoaded before recording so waitForEvent
+            // observers are queued ahead of waitForLoadState (same order as
+            // OnLoadEventFired / OnDomContentEventFired).
+            await LoadStateSeed.TryFromDocumentAsync(this, RecordLifecycleFromDocumentSeed).ConfigureAwait(false);
             await LifecycleWaiter.WaitAsync(
                 SnapshotLifecycle,
                 handler => LifecycleChanged += handler,
@@ -1754,10 +1864,15 @@ namespace PlaywrightNative.WebKit
         /// <inheritdoc/>
         public Task<IJSHandle> WaitForFunctionAsync(string expression, object arg = default, float? pollingInterval = default, float? timeout = default)
         {
+            // Poll with a sync !!() check. WebKit Runtime.evaluate does not reliably
+            // honor awaitPromise, so an async IIFE truthiness probe can hang until the
+            // session command timeout (and blow past page.ariaSnapshot timeouts on macOS).
+            // BuildPredicateExpression already boxes sync predicates as { v } / null.
+            float? resolvedTimeout = timeout ?? DefaultTimeout;
             return WaitForFunctionHelper.WaitAsync(
                 async wrapped =>
                 {
-                    bool truthy = await EvaluateExpressionAsync<bool>("(async () => !!(await Promise.resolve(" + wrapped + ")))()").ConfigureAwait(false);
+                    bool truthy = await EvaluateExpressionAsync<bool>("!!(" + wrapped + ")").ConfigureAwait(false);
                     if (!truthy)
                     {
                         return null;
@@ -1770,7 +1885,7 @@ namespace PlaywrightNative.WebKit
                 },
                 expression,
                 pollingInterval,
-                timeout,
+                resolvedTimeout,
                 () => EvaluateExpressionAsync("new Promise(r => requestAnimationFrame(() => r(true)))"));
         }
 
@@ -1815,7 +1930,40 @@ namespace PlaywrightNative.WebKit
             string visibility = default)
         {
             WaitForSelectorName.Validate(waitFor, visibility);
-            return WaitForSelectorHelper.WaitAsync(sel => QueryActionAsync(sel, strict), selector, state, timeout);
+            bool strictSelectors = strict ?? (Context is IHasStrictSelectors s && s.StrictSelectors);
+
+            // Frame-control selectors (enter-frame / pierce / any-frame) must go
+            // through FrameSelector via QueryActionAsync — AtomicSelectorRead runs
+            // in-page CSS only and would hang ShouldNotAllowLeadingEnterFrame.
+            Func<string, Task<bool?>> readVisibility = FrameSelector.ContainsControl(selector)
+                ? null
+                : async sel =>
+                {
+                    // Document-scoped DomVisibility — never callFunctionOn a
+                    // loading=lazy iframe objectId (Darwin WaitForSelector hang).
+                    // Do not swallow strict-mode violations — that turned
+                    // ShouldFailPageWaitForSelectorInStrictMode into a 30s wait.
+                    try
+                    {
+                        return await AtomicSelectorRead.IsVisibleAsync(
+                                expression => EvaluateAsync<JsonElement?>(expression),
+                                sel,
+                                strictSelectors)
+                            .ConfigureAwait(false);
+                    }
+                    catch (PlaywrightException ex) when (
+                        ex.Message == null
+                        || !ex.Message.Contains("strict mode violation", StringComparison.Ordinal))
+                    {
+                        return null;
+                    }
+                };
+            return WaitForSelectorHelper.WaitAsync(
+                sel => QueryActionAsync(sel, strict),
+                selector,
+                state,
+                timeout,
+                readVisibilityBySelectorAsync: readVisibility);
         }
 
         /// <inheritdoc/>
@@ -1901,18 +2049,52 @@ namespace PlaywrightNative.WebKit
         /// </summary>
         /// <param name="popup">The new page.</param>
         internal void FirePopupOpened(WKPage popup)
-            => PopupOpenedHelper.EmitWhenReady(popup, popup.PrepareForPopupReportAsync(), ready => Popup?.Invoke(this, ready));
+            => PopupOpenedHelper.EmitWhenReady(
+                popup,
+                popup.PrepareAndReportPopupAsync(),
+                ready => Popup?.Invoke(this, ready));
 
         /// <summary>
         /// Marks this page as reported on the context <c>page</c> event.
         /// </summary>
         /// <returns><see langword="true"/> when this is the first report.</returns>
         internal bool TryMarkReportedAsNew()
-            => Interlocked.Exchange(ref _reportedAsNew, 1) == 0;
+        {
+            if (Interlocked.Exchange(ref _reportedAsNew, 1) != 0)
+            {
+                return false;
+            }
+
+            _reportedAsNewTcs.TrySetResult(true);
+            return true;
+        }
+
+        /// <summary>
+        /// Emits the context <c>page</c> event at most once. Mark and emit are atomic
+        /// so a concurrent binding cannot run between mark and <c>Page.Invoke</c>
+        /// (<c>page|binding</c> vs <c>binding|page</c>).
+        /// </summary>
+        /// <param name="emit">Raises <c>BrowserContext.Page</c> for this page.</param>
+        internal void ReportAsNewOnce(Action emit)
+        {
+            lock (_reportAsNewLock)
+            {
+                if (_reportedAsNew != 0)
+                {
+                    _reportedAsNewTcs.TrySetResult(true);
+                    return;
+                }
+
+                _reportedAsNew = 1;
+                emit?.Invoke();
+                _reportedAsNewTcs.TrySetResult(true);
+            }
+        }
 
         /// <summary>
         /// Official <c>reportAsNew</c> for popups: wait until init finishes, and if
-        /// the main frame is still empty wait for the first real URL.
+        /// the main frame is still the initial empty document wait for the first
+        /// non-initial URL (including <c>about:blank</c>, matching Chromium).
         /// </summary>
         /// <returns>A task that completes when the popup can be reported.</returns>
         internal async Task PrepareForPopupReportAsync()
@@ -1929,7 +2111,7 @@ namespace PlaywrightNative.WebKit
                 return;
             }
 
-            if (_closed || !PopupOpenedHelper.IsBlankUrl(_mainFrameUrl))
+            if (_closed || !PopupOpenedHelper.IsInitialEmptyDocumentUrl(_mainFrameUrl))
             {
                 return;
             }
@@ -1939,6 +2121,44 @@ namespace PlaywrightNative.WebKit
                     _closedTcs.Task,
                     Task.Delay(5_000))
                 .ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// After the first non-initial commit, wait briefly for <c>window.open(url)</c>
+        /// to replace <c>about:blank</c> with the destination URL.
+        /// </summary>
+        /// <returns>A task that completes when the URL is ready or the wait ends.</returns>
+        internal async Task WaitForNonBlankPopupUrlAsync()
+        {
+            if (_closed || !PopupOpenedHelper.IsBlankUrl(_mainFrameUrl))
+            {
+                return;
+            }
+
+            await Task.WhenAny(
+                    _firstNonBlankNavigationTcs.Task,
+                    _closedTcs.Task,
+                    Task.Delay(2_000))
+                .ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Prepares popup URL state then raises context <c>page</c> (Video attach)
+        /// before opener <c>popup</c> observers run. Always reports, including when
+        /// the popup closed during prepare (javascript: + immediate close).
+        /// </summary>
+        /// <returns>A task that completes when the page is ready to emit.</returns>
+        internal async Task PrepareAndReportPopupAsync()
+        {
+            await PrepareForPopupReportAsync().ConfigureAwait(false);
+            if (!_closed)
+            {
+                await WaitForNonBlankPopupUrlAsync().ConfigureAwait(false);
+            }
+
+            // Closed popups must still raise BrowserContext.Page — otherwise
+            // WaitForPageAsync hangs (ConsoleEventShouldWorkInPopup2).
+            ReportPopupAsNewOnce();
         }
 
         /// <summary>
@@ -2136,7 +2356,7 @@ namespace PlaywrightNative.WebKit
             {
                 await Task.WhenAll(cancels).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
         }
@@ -2247,8 +2467,14 @@ namespace PlaywrightNative.WebKit
             {
                 described = await _targetSession.SendAsync("DOM.describeNode", new { objectId }).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
+                return (null, null);
+            }
+            catch (TimeoutException)
+            {
+                // Unloaded lazy iframes can stall DOM.describeNode until the session
+                // command timeout; treat as "no content frame" for ContentFrameAsync.
                 return (null, null);
             }
 
@@ -2294,7 +2520,7 @@ namespace PlaywrightNative.WebKit
             WKFrame parent = frame.ParentFrame;
             if (parent == null || frame.IsDetached || _targetSession == null)
             {
-                throw new PlaywrightNativeException("Frame has been detached.");
+                throw new PlaywrightException("Frame has been detached.");
             }
 
             WKExecutionContext context = await WaitForFrameContextAsync(parent).ConfigureAwait(false);
@@ -2307,12 +2533,12 @@ namespace PlaywrightNative.WebKit
                     executionContextId = context.ContextId,
                 }).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException ex)
+            catch (PlaywrightException ex)
             {
                 if (ex.Message.Contains("detached", StringComparison.OrdinalIgnoreCase)
                     || ex.Message.Contains("not found", StringComparison.OrdinalIgnoreCase))
                 {
-                    throw new PlaywrightNativeException("Frame has been detached.");
+                    throw new PlaywrightException("Frame has been detached.");
                 }
 
                 throw;
@@ -2321,25 +2547,25 @@ namespace PlaywrightNative.WebKit
             parent = frame.ParentFrame;
             if (parent == null || frame.IsDetached)
             {
-                throw new PlaywrightNativeException("Frame has been detached.");
+                throw new PlaywrightException("Frame has been detached.");
             }
 
             if (result == null || !result.Value.TryGetProperty("object", out JsonElement remote))
             {
-                throw new PlaywrightNativeException("Frame has been detached.");
+                throw new PlaywrightException("Frame has been detached.");
             }
 
             if (remote.TryGetProperty("subtype", out JsonElement subtype)
                 && subtype.ValueKind == JsonValueKind.String
                 && string.Equals(subtype.GetString(), "null", StringComparison.Ordinal))
             {
-                throw new PlaywrightNativeException("Frame has been detached.");
+                throw new PlaywrightException("Frame has been detached.");
             }
 
             IElementHandle handle = WrapElement(context, remote);
             if (handle == null)
             {
-                throw new PlaywrightNativeException("Frame has been detached.");
+                throw new PlaywrightException("Frame has been detached.");
             }
 
             return handle;
@@ -2445,7 +2671,7 @@ namespace PlaywrightNative.WebKit
         internal Task SetUserAgentAsync(string userAgent)
         {
             WKTargetSession target = _targetSession
-                ?? throw new PlaywrightNativeException("Cannot override the user agent: the page has no active target session.");
+                ?? throw new PlaywrightException("Cannot override the user agent: the page has no active target session.");
 
             return target.SendAsync("Page.overrideUserAgent", new { value = userAgent ?? string.Empty });
         }
@@ -2458,32 +2684,72 @@ namespace PlaywrightNative.WebKit
         internal async Task SetTimezoneAsync(string timezoneId)
         {
             WKTargetSession target = _targetSession
-                ?? throw new PlaywrightNativeException("Cannot override the timezone: the page has no active target session.");
+                ?? throw new PlaywrightException("Cannot override the timezone: the page has no active target session.");
 
             try
             {
                 await target.SendAsync("Page.setTimeZone", new { timeZone = timezoneId ?? string.Empty }).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException ex) when (
+            catch (PlaywrightException ex) when (
                 ex.Message.Contains("timezone", StringComparison.OrdinalIgnoreCase)
                 || ex.Message.Contains("time zone", StringComparison.OrdinalIgnoreCase)
                 || ex.Message.Contains("timeZone", StringComparison.Ordinal))
             {
-                throw new PlaywrightNativeException("Invalid timezone ID: " + timezoneId);
+                throw new PlaywrightException("Invalid timezone ID: " + timezoneId);
             }
         }
 
         /// <summary>
         /// Emulates offline network conditions via <c>Network.setEmulateOfflineState</c>.
+        /// Mirrors upstream <c>wkPage._updateState</c>: push to the live target and
+        /// any provisional session so about:blank / data: / COOP navigations keep
+        /// <c>navigator.onLine</c> (ShouldEmulateNavigatorOnLineAcrossNavigations).
         /// </summary>
         /// <param name="offline">Whether the page should appear offline.</param>
         /// <returns>A task that completes when the emulation has been applied.</returns>
-        internal Task SetOfflineAsync(bool offline)
+        internal async Task SetOfflineAsync(bool offline)
         {
-            WKTargetSession target = _targetSession
-                ?? throw new PlaywrightNativeException("Cannot emulate offline: the page has no active target session.");
+            _emulatedOffline = offline;
+            WKTargetSession target = _targetSession;
+            WKTargetSession provisional = _provisionalSession;
+            if (target == null && provisional == null)
+            {
+                throw new PlaywrightException("Cannot emulate offline: the page has no active target session.");
+            }
 
-            return target.SendAsync("Network.setEmulateOfflineState", new { offline });
+            bool applied = false;
+            PlaywrightException lastError = null;
+            if (target != null)
+            {
+                try
+                {
+                    await target.SendAsync("Network.setEmulateOfflineState", new { offline }).ConfigureAwait(false);
+                    applied = true;
+                }
+                catch (PlaywrightException ex)
+                {
+                    lastError = ex;
+                }
+            }
+
+            if (provisional != null && !ReferenceEquals(provisional, target))
+            {
+                try
+                {
+                    await provisional.SendAsync("Network.setEmulateOfflineState", new { offline })
+                        .ConfigureAwait(false);
+                    applied = true;
+                }
+                catch (PlaywrightException ex)
+                {
+                    lastError = ex;
+                }
+            }
+
+            if (!applied && lastError != null)
+            {
+                throw lastError;
+            }
         }
 
         /// <summary>
@@ -2494,7 +2760,7 @@ namespace PlaywrightNative.WebKit
         internal Task SetTouchEmulationEnabledAsync(bool enabled)
         {
             WKTargetSession target = _targetSession
-                ?? throw new PlaywrightNativeException("Cannot emulate touch: the page has no active target session.");
+                ?? throw new PlaywrightException("Cannot emulate touch: the page has no active target session.");
 
             return target.SendAsync("Page.setTouchEmulationEnabled", new { enabled });
         }
@@ -2509,7 +2775,7 @@ namespace PlaywrightNative.WebKit
         internal Task ApplySafariOverrideSettingsAsync(bool isMobile)
         {
             WKTargetSession target = _targetSession
-                ?? throw new PlaywrightNativeException("Cannot apply Safari settings: the page has no active target session.");
+                ?? throw new PlaywrightException("Cannot apply Safari settings: the page has no active target session.");
 
             return ApplySafariOverrideSettingsOnAsync(target, isMobile);
         }
@@ -2552,7 +2818,7 @@ namespace PlaywrightNative.WebKit
             {
                 await target.SendAsync("Page.overrideSetting", new { setting, value }).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
         }
@@ -2565,7 +2831,7 @@ namespace PlaywrightNative.WebKit
         internal Task SetBypassCSPAsync(bool enabled)
         {
             WKTargetSession target = _targetSession
-                ?? throw new PlaywrightNativeException("Cannot bypass CSP: the page has no active target session.");
+                ?? throw new PlaywrightException("Cannot bypass CSP: the page has no active target session.");
 
             return target.SendAsync("Page.setBypassCSP", new { enabled });
         }
@@ -2588,7 +2854,7 @@ namespace PlaywrightNative.WebKit
                 Dictionary<string, string> merged = ExtraHttpHeaders.Merged(_context, _extraHttpHeaders);
                 await target.SendAsync("Network.setExtraHTTPHeaders", new { headers = merged ?? new Dictionary<string, string>() }).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
         }
@@ -2679,9 +2945,6 @@ namespace PlaywrightNative.WebKit
             ScreenSize screenSize = null,
             bool rememberIndependentScreen = true)
         {
-            WKTargetSession target = _targetSession
-                ?? throw new PlaywrightNativeException("Cannot set the viewport size: the page has no active target session.");
-
             _emulatedDeviceScaleFactor = deviceScaleFactor;
             _emulatedIsMobile = isMobile;
             if (rememberIndependentScreen)
@@ -2689,6 +2952,13 @@ namespace PlaywrightNative.WebKit
                 _independentScreen = screenSize;
             }
 
+            _viewportSize = new PageViewportSizeResult { Width = width, Height = height };
+
+            // Page-proxy device metrics do not need the inner target. Screen size
+            // does (Page.setScreenSizeOverride). Darwin can recycle the initial
+            // target between InitializedTask and ApplyContextChrome — wait briefly
+            // for a session, then fall back to proxy-only metrics rather than
+            // failing NewPageAsync (ShouldDisableJavascript).
             Task deviceMetricsTask = _session.SendAsync("Emulation.setDeviceMetricsOverride", new
             {
                 width,
@@ -2697,13 +2967,25 @@ namespace PlaywrightNative.WebKit
                 deviceScaleFactor,
             });
 
+            WKTargetSession target = _targetSession;
+            if (target == null)
+            {
+                for (int i = 0; i < 50 && target == null; i++)
+                {
+                    await Task.Delay(10).ConfigureAwait(false);
+                    target = _targetSession;
+                }
+            }
+
             int screenWidth = screenSize?.Width ?? width;
             int screenHeight = screenSize?.Height ?? height;
-            Task screenSizeTask = target.SendAsync("Page.setScreenSizeOverride", new
-            {
-                width = screenWidth,
-                height = screenHeight,
-            });
+            Task screenSizeTask = target == null
+                ? Task.CompletedTask
+                : target.SendAsync("Page.setScreenSizeOverride", new
+                {
+                    width = screenWidth,
+                    height = screenHeight,
+                });
 
             if (isMobile)
             {
@@ -2717,8 +2999,6 @@ namespace PlaywrightNative.WebKit
             {
                 await Task.WhenAll(deviceMetricsTask, screenSizeTask).ConfigureAwait(false);
             }
-
-            _viewportSize = new PageViewportSizeResult { Width = width, Height = height };
         }
 
         /// <summary>
@@ -2872,83 +3152,17 @@ namespace PlaywrightNative.WebKit
                 throw PageClosedException();
             }
 
-            TaskCompletionSource<bool> loadTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
-            TaskCompletionSource<bool> domTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
-            TaskCompletionSource<bool> commitTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
-            string previousUrl;
-            bool sameDocumentHash;
-
-            lock (_navigationLock)
-            {
-                previousUrl = _mainFrameUrl;
-                sameDocumentHash = IsSameDocumentHashNavigation(previousUrl, url);
-
-                if (_pendingLoadTcs != null || _pendingDomContentTcs != null || _pendingCommitTcs != null)
-                {
-                    if (_pendingNavigationCommitted)
-                    {
-                        _pendingLoadTcs?.TrySetResult(true);
-                        _pendingDomContentTcs?.TrySetResult(true);
-                    }
-                    else
-                    {
-                        PlaywrightNativeException interrupted = new(
-                            "page.goto: Navigation to \"" + _pendingNavigationUrl +
-                            "\" is interrupted by another navigation to \"" + url + "\"");
-                        _pendingLoadTcs?.TrySetException(interrupted);
-                        _pendingDomContentTcs?.TrySetException(interrupted);
-                        _pendingCommitTcs?.TrySetException(interrupted);
-                    }
-                }
-
-                _pendingLoadTcs = loadTcs;
-                _pendingDomContentTcs = domTcs;
-                _pendingCommitTcs = commitTcs;
-                _pendingNavigationCommitted = false;
-                _pendingRedirectTarget = null;
-                _pendingRedirectSource = null;
-                _harRedirectInProgress = false;
-                _lastCompetingNavigationUrl = null;
-                _provisionalSwapCommitted = false;
-                _awaitingReplacementTarget = false;
-                _lifecycleEvents.Clear();
-                if (sameDocumentHash)
-                {
-                    _mainFrameUrl = url ?? _mainFrameUrl;
-                    _frameManager.MainFrame.Url = _mainFrameUrl;
-                }
-                else
-                {
-                    _frameManager.MainFrame.ClearLifecycleEvents();
-                }
-
-                _pendingNavigationUrl = url;
-                _navigationStartUrl = previousUrl;
-                _emittedPendingNavigationRequest = false;
-                _emittedPendingNavigationFinished = false;
-                _firstPendingNavigationRequest = null;
-            }
-
-            string frameId = _frameManager.MainFrame?.FrameId ?? _mainFrameId;
-            object parameters = string.IsNullOrEmpty(referer)
-                ? (object)new { url, pageProxyId = _pageProxyId, frameId }
-                : new { url, pageProxyId = _pageProxyId, frameId, referrer = referer };
-
             int timeoutMs = (int)(timeout ?? _defaultNavigationTimeout);
             if (timeoutMs <= 0)
             {
                 timeoutMs = Timeout.Infinite;
             }
 
-            TaskCompletionSource<bool> waitTcs = waitUntil == WaitUntilState.Commit
-                ? commitTcs
-                : waitUntil == WaitUntilState.DOMContentLoaded
-                    ? domTcs
-                    : loadTcs;
-
             // Official reportAsNew waits until a popup's first real URL has committed.
             // Navigating a noopener popup away from an in-flight document load (e.g.
-            // /one-style.html → cross-process) kills MiniBrowser; wait for that load.
+            // /one-style.html → cross-process) kills MiniBrowser; wait for that load
+            // BEFORE arming goto waiters so the popup's first commit cannot look like
+            // a competing navigation for the not-yet-sent empty.html goto.
             if (_opener != null)
             {
                 if (PopupOpenedHelper.IsBlankUrl(_mainFrameUrl))
@@ -2978,15 +3192,135 @@ namespace PlaywrightNative.WebKit
                         await _session.SendAsync("Target.activate", new { targetId = _targetSession.TargetId })
                             .ConfigureAwait(false);
                     }
-                    catch (PlaywrightNativeException)
+                    catch (PlaywrightException)
                     {
                     }
                 }
             }
 
+            TaskCompletionSource<bool> loadTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            TaskCompletionSource<bool> domTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            TaskCompletionSource<bool> commitTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            string previousUrl;
+            bool sameDocumentHash;
+            TaskCompletionSource<bool> interruptedLoad = null;
+            TaskCompletionSource<bool> interruptedDom = null;
+            TaskCompletionSource<bool> interruptedCommit = null;
+            PlaywrightException interruptedException = null;
+
+            lock (_navigationLock)
+            {
+                previousUrl = _mainFrameUrl;
+                sameDocumentHash = IsSameDocumentHashNavigation(previousUrl, url);
+
+                if (_pendingLoadTcs != null || _pendingDomContentTcs != null || _pendingCommitTcs != null)
+                {
+                    if (_pendingNavigationCommitted)
+                    {
+                        _pendingLoadTcs?.TrySetResult(true);
+                        _pendingDomContentTcs?.TrySetResult(true);
+                    }
+                    else
+                    {
+                        // Defer TrySetException until after await Task.Yield() below so
+                        // this NavigateAsync returns a Task to the caller first. The
+                        // competing GoTo is often started from a hanging route callback
+                        // as `anotherPromise = page.GoToAsync(...)`; faulting before
+                        // that assignment leaves anotherPromise null
+                        // (ShouldFailWhenReplacedByAnotherNavigation).
+                        interruptedException = new PlaywrightException(
+                            "page.goto: Navigation to \"" + _pendingNavigationUrl +
+                            "\" is interrupted by another navigation to \"" + url + "\"");
+                        interruptedLoad = _pendingLoadTcs;
+                        interruptedDom = _pendingDomContentTcs;
+                        interruptedCommit = _pendingCommitTcs;
+                    }
+                }
+
+                _pendingLoadTcs = loadTcs;
+                _pendingDomContentTcs = domTcs;
+                _pendingCommitTcs = commitTcs;
+                _pendingNavigationCommitted = false;
+                _pendingRedirectTarget = null;
+                _pendingRedirectSource = null;
+                _pendingContinueOverrideSourceUrl = null;
+                _harRedirectInProgress = false;
+                _lastCompetingNavigationUrl = null;
+                _provisionalSwapCommitted = false;
+                _awaitingReplacementTarget = false;
+                _lifecycleEvents.Clear();
+                if (sameDocumentHash)
+                {
+                    _mainFrameUrl = url ?? _mainFrameUrl;
+                    _frameManager.MainFrame.Url = _mainFrameUrl;
+                }
+                else
+                {
+                    _frameManager.MainFrame.ClearLifecycleEvents();
+                }
+
+                _pendingNavigationUrl = url;
+                _navigationStartUrl = previousUrl;
+                _emittedPendingNavigationRequest = false;
+                _emittedPendingNavigationFinished = false;
+                _firstPendingNavigationRequest = null;
+            }
+
+            if (interruptedException != null)
+            {
+                // Yield before TrySetException so this NavigateAsync returns a Task
+                // to the caller first. Route callbacks assign
+                // `anotherPromise = page.GoToAsync(...)` from that return; ThreadPool
+                // QueueUserWorkItem still raced CatchAsync on Darwin under suite load
+                // (ShouldFailWhenReplacedByAnotherNavigation anotherPromise null).
+                PlaywrightException fault = interruptedException;
+                TaskCompletionSource<bool> prevLoad = interruptedLoad;
+                TaskCompletionSource<bool> prevDom = interruptedDom;
+                TaskCompletionSource<bool> prevCommit = interruptedCommit;
+                await Task.Yield();
+                prevLoad?.TrySetException(fault);
+                prevDom?.TrySetException(fault);
+                prevCommit?.TrySetException(fault);
+            }
+
+            string frameId = _frameManager.MainFrame?.FrameId ?? _mainFrameId;
+            object parameters = string.IsNullOrEmpty(referer)
+                ? (object)new { url, pageProxyId = _pageProxyId, frameId }
+                : new { url, pageProxyId = _pageProxyId, frameId, referrer = referer };
+
+            TaskCompletionSource<bool> waitTcs = waitUntil == WaitUntilState.Commit
+                ? commitTcs
+                : waitUntil == WaitUntilState.DOMContentLoaded
+                    ? domTcs
+                    : loadTcs;
+
             Task<JsonElement?> sendTask = _browser.Session.SendAsync("Playwright.navigate", parameters);
 
             JsonElement? result = null;
+
+            // Navigate to about:blank from blank or file:: Darwin WebKit can
+            // wedge Playwright.navigate so the post-RPC readyState seed never
+            // runs. Race a settle delay in the WhenAny loop and seed only if
+            // navigate is still open (immediate seed races the document swap).
+            // Track the seed task so CA2025 is satisfied before NavigateAsync
+            // returns. blank→blank alone was insufficient — file→about:blank
+            // hung the full NUnit budget on macOS CI
+            // (ShouldNavigateFromFileUrlToAboutBlank). Do not arm for arbitrary
+            // http→blank navigations.
+            bool navigateToBlank = PopupOpenedHelper.IsBlankUrl(url);
+            bool blankOrFileToBlank = navigateToBlank
+                && (PopupOpenedHelper.IsBlankUrl(previousUrl)
+                    || (!string.IsNullOrEmpty(previousUrl)
+                        && previousUrl.StartsWith("file:", StringComparison.OrdinalIgnoreCase)));
+            CancellationTokenSource blankWedgeProbeCts = null;
+            Task blankWedgeProbe = new TaskCompletionSource<bool>(
+                TaskCreationOptions.RunContinuationsAsynchronously).Task;
+            Task blankWedgeSeedTask = Task.CompletedTask;
+            if (blankOrFileToBlank)
+            {
+                blankWedgeProbeCts = new CancellationTokenSource();
+                blankWedgeProbe = Task.Delay(2_000, blankWedgeProbeCts.Token);
+            }
 
             using CancellationTokenSource cts = timeoutMs == Timeout.Infinite
                 ? new CancellationTokenSource()
@@ -2997,7 +3331,22 @@ namespace PlaywrightNative.WebKit
             {
                 while (true)
                 {
-                    Task completed = await Task.WhenAny(sendTask, waitTcs.Task, timeoutTask).ConfigureAwait(false);
+                    Task completed = await Task.WhenAny(sendTask, waitTcs.Task, timeoutTask, blankWedgeProbe)
+                        .ConfigureAwait(false);
+                    if (blankOrFileToBlank && completed == blankWedgeProbe)
+                    {
+                        blankWedgeProbe = new TaskCompletionSource<bool>(
+                            TaskCreationOptions.RunContinuationsAsynchronously).Task;
+                        if (!sendTask.IsCompleted && !waitTcs.Task.IsCompleted)
+                        {
+                            int wedgeSeedGeneration = Interlocked.Increment(ref _lifecycleSeedGeneration);
+                            blankWedgeSeedTask = SeedLifecycleFromReadyStateAfterDataNavigationAsync(
+                                wedgeSeedGeneration);
+                        }
+
+                        continue;
+                    }
+
                     if (completed == timeoutTask)
                     {
                         throw NavigationTimeout.Exceeded(
@@ -3009,6 +3358,30 @@ namespace PlaywrightNative.WebKit
 
                     if (waitTcs.Task.IsFaulted || waitTcs.Task.IsCanceled)
                     {
+                        if (IsHarRedirectPending()
+                            && IsWaitFaultSupersededCancel(waitTcs.Task))
+                        {
+                            // HAR redirect cancelled the prior document waiter —
+                            // re-arm lifecycle waiters for the redirect target.
+                            lock (_navigationLock)
+                            {
+                                loadTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                                domTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                                commitTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                                _pendingLoadTcs = loadTcs;
+                                _pendingDomContentTcs = domTcs;
+                                _pendingCommitTcs = commitTcs;
+                                _pendingNavigationCommitted = false;
+                            }
+
+                            waitTcs = waitUntil == WaitUntilState.Commit
+                                ? commitTcs
+                                : waitUntil == WaitUntilState.DOMContentLoaded
+                                    ? domTcs
+                                    : loadTcs;
+                            continue;
+                        }
+
                         await ThrowIfCancelledByRendererAsync(waitTcs.Task, url).ConfigureAwait(false);
                         await RethrowNavigationWaitAsync(waitTcs.Task, url).ConfigureAwait(false);
                     }
@@ -3059,6 +3432,28 @@ namespace PlaywrightNative.WebKit
 
                             if (waitTcs.Task.IsFaulted || waitTcs.Task.IsCanceled)
                             {
+                                if (IsHarRedirectPending()
+                                    && IsWaitFaultSupersededCancel(waitTcs.Task))
+                                {
+                                    lock (_navigationLock)
+                                    {
+                                        loadTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                                        domTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                                        commitTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                                        _pendingLoadTcs = loadTcs;
+                                        _pendingDomContentTcs = domTcs;
+                                        _pendingCommitTcs = commitTcs;
+                                        _pendingNavigationCommitted = false;
+                                    }
+
+                                    waitTcs = waitUntil == WaitUntilState.Commit
+                                        ? commitTcs
+                                        : waitUntil == WaitUntilState.DOMContentLoaded
+                                            ? domTcs
+                                            : loadTcs;
+                                    continue;
+                                }
+
                                 await ThrowIfCancelledByRendererAsync(waitTcs.Task, url).ConfigureAwait(false);
                                 await RethrowNavigationWaitAsync(waitTcs.Task, url).ConfigureAwait(false);
                             }
@@ -3082,6 +3477,19 @@ namespace PlaywrightNative.WebKit
                         break;
                     }
 
+                    // blank→blank often skips Page.frameNavigated / loadEventFired on
+                    // Darwin WebKit after persistent relaunch. Seed from readyState when
+                    // the navigate RPC finished but lifecycle waiters are still open.
+                    // Do not synchronously complete Load waiters here — that races the
+                    // in-flight document swap and surfaces "Execution context was
+                    // destroyed" on the next evaluate (macOS CI regression on tip
+                    // 495d8c0). Seed uses a non-blocking context lookup instead.
+                    if (PopupOpenedHelper.IsBlankUrl(url))
+                    {
+                        int seedGeneration = Interlocked.Increment(ref _lifecycleSeedGeneration);
+                        _ = SeedLifecycleFromReadyStateAfterDataNavigationAsync(seedGeneration);
+                    }
+
                     Task lifecycle = await Task.WhenAny(waitTcs.Task, timeoutTask).ConfigureAwait(false);
                     if (lifecycle != waitTcs.Task)
                     {
@@ -3092,12 +3500,38 @@ namespace PlaywrightNative.WebKit
                             timeoutMs);
                     }
 
-                    await ThrowIfCancelledByRendererAsync(waitTcs.Task, url).ConfigureAwait(false);
-                    await RethrowNavigationWaitAsync(waitTcs.Task, url).ConfigureAwait(false);
+                    if (waitTcs.Task.IsFaulted || waitTcs.Task.IsCanceled)
+                    {
+                        if (IsHarRedirectPending()
+                            && IsWaitFaultSupersededCancel(waitTcs.Task))
+                        {
+                            lock (_navigationLock)
+                            {
+                                loadTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                                domTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                                commitTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                                _pendingLoadTcs = loadTcs;
+                                _pendingDomContentTcs = domTcs;
+                                _pendingCommitTcs = commitTcs;
+                                _pendingNavigationCommitted = false;
+                            }
+
+                            waitTcs = waitUntil == WaitUntilState.Commit
+                                ? commitTcs
+                                : waitUntil == WaitUntilState.DOMContentLoaded
+                                    ? domTcs
+                                    : loadTcs;
+                            continue;
+                        }
+
+                        await ThrowIfCancelledByRendererAsync(waitTcs.Task, url).ConfigureAwait(false);
+                        await RethrowNavigationWaitAsync(waitTcs.Task, url).ConfigureAwait(false);
+                    }
+
                     break;
                 }
             }
-            catch (PlaywrightNativeException ex) when (ex is not NavigationException)
+            catch (PlaywrightException ex) when (ex is not NavigationException)
             {
                 if (HasDownloadForUrl(url))
                 {
@@ -3112,6 +3546,35 @@ namespace PlaywrightNative.WebKit
                     || !ex.Message.Contains("Download is starting", StringComparison.Ordinal)))
             {
                 throw new NavigationException("Download is starting", url, ex);
+            }
+            finally
+            {
+                if (blankWedgeProbeCts != null)
+                {
+                    try
+                    {
+                        await blankWedgeProbeCts.CancelAsync().ConfigureAwait(false);
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                    }
+
+                    blankWedgeProbeCts.Dispose();
+                }
+
+                try
+                {
+                    await blankWedgeSeedTask.ConfigureAwait(false);
+                }
+                catch (PlaywrightException)
+                {
+                }
+                catch (ObjectDisposedException)
+                {
+                }
+                catch (OperationCanceledException)
+                {
+                }
             }
 
             if (waitUntil == WaitUntilState.NetworkIdle)
@@ -3134,6 +3597,12 @@ namespace PlaywrightNative.WebKit
             {
                 ApplyRequestedNavigationUrl(NavigationTimeout.PreserveUserInfo(url, _mainFrameUrl));
             }
+
+            // Darwin ITP requires first-party user interaction with an origin before
+            // a later cross-site iframe requestStorageAccess can reach MiniBrowser's
+            // auto-accept panel. Record it here so GoTo(set-cookie) satisfies the
+            // requirement before the test navigates away (WebKit blog How-To #1).
+            await RecordFirstPartyUserInteractionIfNeededAsync().ConfigureAwait(false);
 
             return result;
         }
@@ -3163,10 +3632,24 @@ namespace PlaywrightNative.WebKit
                 previousUrl = _mainFrameUrl;
                 if (!allowSameDocument)
                 {
+                    // Reload/cross-document history must re-arm pending navigation
+                    // markers the same way NavigateAsync does. Leaving
+                    // _emittedPendingNavigationRequest true after the prior goto
+                    // makes ShouldSuppressDuplicateNavigationRequest drop the
+                    // reload document response, so ReloadAsync returns the stale
+                    // 200 instead of a fresh 304/200 from the network.
+                    _pendingNavigationUrl = previousUrl;
+                    _emittedPendingNavigationRequest = false;
+                    _emittedPendingNavigationFinished = false;
+                    _firstPendingNavigationRequest = null;
+                    _pendingNavigationCommitted = false;
+                    _pendingRedirectTarget = null;
+                    _pendingRedirectSource = null;
+                    _pendingContinueOverrideSourceUrl = null;
                     _pendingLoadTcs = loadTcs;
                     _pendingDomContentTcs = domTcs;
                     _lifecycleEvents.Clear();
-                    _frameManager.MainFrame.ClearLifecycleEvents();
+                    _frameManager.MainFrame?.ClearLifecycleEvents();
                 }
             }
 
@@ -3294,7 +3777,7 @@ namespace PlaywrightNative.WebKit
                 await target.SendAsync(method).ConfigureAwait(false);
                 return true;
             }
-            catch (PlaywrightNativeException ex) when (ex.Message != null && ex.Message.Contains("Failed to go", StringComparison.OrdinalIgnoreCase))
+            catch (PlaywrightException ex) when (ex.Message != null && ex.Message.Contains("Failed to go", StringComparison.OrdinalIgnoreCase))
             {
                 return false;
             }
@@ -3302,8 +3785,8 @@ namespace PlaywrightNative.WebKit
 
         /// <summary>
         /// Waits until <paramref name="frame"/> has reached <paramref name="state"/>.
-        /// The main frame uses page lifecycle; child frames poll
-        /// <c>document.readyState</c> in that frame's world.
+        /// The main frame uses page lifecycle; child frames use per-frame lifecycle
+        /// events from <c>Page.loadEventFired</c> / <c>Page.domContentEventFired</c>.
         /// </summary>
         /// <param name="frame">The frame to wait on.</param>
         /// <param name="state">The load state to wait for.</param>
@@ -3316,21 +3799,7 @@ namespace PlaywrightNative.WebKit
                 return WaitForLoadStateAsync(state, timeout);
             }
 
-            if (state == LoadState.NetworkIdle)
-            {
-                return frame.WaitForLoadStateAsync(state, timeout, "frame.waitForLoadState");
-            }
-
-            WaitUntilState waitUntil = state == LoadState.DOMContentLoaded
-                ? WaitUntilState.DOMContentLoaded
-                : WaitUntilState.Load;
-            int timeoutMs = TimeoutSettings.TimeoutMs(timeout);
-            if (timeoutMs == System.Threading.Timeout.Infinite)
-            {
-                timeoutMs = int.MaxValue;
-            }
-
-            return WaitForChildFrameReadyAsync(frame, frame.Url, waitUntil, timeoutMs);
+            return frame.WaitForLoadStateAsync(state, timeout, "frame.waitForLoadState");
         }
 
         /// <summary>
@@ -3373,7 +3842,14 @@ namespace PlaywrightNative.WebKit
             try
             {
                 await NavigateChildFrameAsync(frame, url, waitUntil, timeout, referer).ConfigureAwait(false);
-                return captured;
+                if (captured != null)
+                {
+                    return captured;
+                }
+
+                // Response can race past the handler under concurrent subframe gotos
+                // (matching-responses hang-then-release). Fall back to the request map.
+                return FindNavigationResponseForFrame(publicFrame, url);
             }
             finally
             {
@@ -3443,7 +3919,7 @@ namespace PlaywrightNative.WebKit
                         returnByValue = true,
                     });
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
                 catch (ObjectDisposedException)
@@ -3491,8 +3967,48 @@ namespace PlaywrightNative.WebKit
         /// <returns>The deserialized result.</returns>
         internal async Task<T> EvaluateInFrameAsync<T>(WKFrame frame, string expression)
         {
-            WKExecutionContext context = await WaitForFrameContextAsync(frame).ConfigureAwait(false);
-            return await context.EvaluateAsync<T>(expression).ConfigureAwait(false);
+            // Process-swap / COOP can dispose the target session between waiting for a
+            // context and Runtime.evaluate (BrowserContext.Events.Response SetContent on
+            // Linux CI). Retry on the replacement world while the page stays open.
+            for (int attempt = 0; ; attempt++)
+            {
+                try
+                {
+                    WKExecutionContext context = await WaitForFrameContextAsync(frame).ConfigureAwait(false);
+                    return await context.EvaluateAsync<T>(expression).ConfigureAwait(false);
+                }
+                catch (PlaywrightException ex) when (
+                    attempt < 20
+                    && !_closed
+                    && !_closing
+                    && IsRetryableEvaluateFailure(ex))
+                {
+                    // Do not MarkDestroyed / clear maps here. Process-swap already
+                    // ClearExecutionContexts and installs a fresh world. Clearing on
+                    // remapped TargetClosed orphaned the live about:blank popup world
+                    // (mac ShouldExposeFunctionsInPopups / InitScriptOnce).
+                    await Task.Delay(50).ConfigureAwait(false);
+                }
+            }
+
+            static bool IsRetryableEvaluateFailure(PlaywrightException ex)
+            {
+                if (ex == null)
+                {
+                    return false;
+                }
+
+                if (DestroyedContext.IsDestroyedContext(ex))
+                {
+                    return true;
+                }
+
+                string message = ex.Message ?? string.Empty;
+
+                // Do not retry "Execution context is not yet available" — WaitForFrameContextAsync
+                // already polls, and MarkDestroyed on that path clears live popup worlds.
+                return message.Contains("most likely because of a navigation", StringComparison.Ordinal);
+            }
         }
 
         /// <summary>
@@ -3504,28 +4020,170 @@ namespace PlaywrightNative.WebKit
         /// <returns>The deserialized result.</returns>
         internal async Task<T> EvaluateSerializedInFrameAsync<T>(WKFrame frame, string expression)
         {
+            const int maxAttempts = 8;
+            for (int attempt = 0; ; attempt++)
+            {
+                try
+                {
+                    return await EvaluateOnceAsync().ConfigureAwait(false);
+                }
+                catch (PlaywrightException ex) when (attempt < maxAttempts - 1 && IsRetryableFrameEvaluateFailure(ex))
+                {
+                    await Task.Delay(50).ConfigureAwait(false);
+                }
+            }
+
+            async Task<T> EvaluateOnceAsync()
+            {
+                try
+                {
+                    WKExecutionContext context = await WaitForFrameContextAsync(frame).ConfigureAwait(false);
+
+                    // Child-frame requestStorageAccess must run under
+                    // callFunctionOn+emulateUserGesture — Runtime.evaluate's gesture
+                    // flag is not enough after OOPIF load on macOS. Check before the
+                    // serialized-wrap path so RSA is never routed through plain evaluate.
+                    bool needsUserGesture = frame?.ParentFrame != null
+                        && expression != null
+                        && expression.Contains("requestStorageAccess", StringComparison.Ordinal);
+
+                    // Re-assert page activity after the frame context is ready so
+                    // cross-process iframe navigations that steal focus between
+                    // SetContent and evaluate do not leave requestStorageAccess
+                    // without an active page (macOS). Skip immediately before RSA:
+                    // setActiveAndFocused clears transient user activation that
+                    // callFunctionOn+emulateUserGesture is about to grant.
+                    if (frame?.ParentFrame != null && !needsUserGesture)
+                    {
+                        try
+                        {
+                            await _session.SendAsync("Emulation.setActiveAndFocused", new { active = true })
+                                .ConfigureAwait(false);
+                        }
+                        catch (PlaywrightException)
+                        {
+                        }
+                    }
+
+                    if (!needsUserGesture && EvaluateSerialization.CanWrapExpression(expression))
+                    {
+                        JsonElement? wrapped = await context
+                            .EvaluateSerializedRemoteAsync(EvaluateSerialization.WithSerializedResult(expression))
+                            .ConfigureAwait(false);
+                        return EvaluateSerialization.ParseRemote<T>(wrapped);
+                    }
+
+                    JsonElement? remote = needsUserGesture
+                        ? await EvaluateRequestStorageAccessAsync(context, expression, frame).ConfigureAwait(false)
+                        : await context.EvaluateHandleAsync(expression).ConfigureAwait(false);
+                    if (needsUserGesture)
+                    {
+                        // RSA path uses returnByValue:true — parse the primitive directly
+                        // instead of MaterializeAsync (no objectId for boolean results).
+                        return EvaluateSerialization.ParseRemote<T>(remote);
+                    }
+
+                    return await EvaluateSerialization.MaterializeAsync<T>(
+                        remote,
+                        id => context.EvaluateFunctionOnHandleAsync<JsonElement>(id, EvaluateSerialization.SerializeAwaitedJs),
+                        id => context.ReleaseHandleAsync(id)).ConfigureAwait(false);
+                }
+                catch (PlaywrightException ex)
+                {
+                    throw EvaluateSerialization.RewriteException(ex, frameEvaluate: true);
+                }
+            }
+
+            static bool IsRetryableFrameEvaluateFailure(PlaywrightException ex)
+            {
+                if (ex == null)
+                {
+                    return false;
+                }
+
+                if (DestroyedContext.IsDestroyedContext(ex))
+                {
+                    return true;
+                }
+
+                string message = ex.Message ?? string.Empty;
+                return message.Contains("most likely because of a navigation", StringComparison.Ordinal)
+                    || message.Contains("Execution context was destroyed", StringComparison.Ordinal);
+            }
+        }
+
+        /// <summary>
+        /// Evaluates a function with live handle arguments in <paramref name="frame"/>
+        /// and structured-clone parses the result (adopts ElementHandles).
+        /// </summary>
+        /// <typeparam name="T">The result type.</typeparam>
+        /// <param name="frame">The target frame.</param>
+        /// <param name="functionDeclaration">A function declaration.</param>
+        /// <param name="args">Arguments, including live JS handles.</param>
+        /// <returns>The deserialized result.</returns>
+        internal async Task<T> EvaluateFunctionSerializedInFrameAsync<T>(
+            WKFrame frame,
+            string functionDeclaration,
+            params object[] args)
+        {
             try
             {
                 WKExecutionContext context = await WaitForFrameContextAsync(frame).ConfigureAwait(false);
-                if (EvaluateSerialization.CanWrapExpression(expression))
+                if (args != null && args.Length == 1 && args[0] is WKJSHandle handle)
                 {
-                    JsonElement? wrapped = await context
-                        .EvaluateSerializedRemoteAsync(EvaluateSerialization.WithSerializedResult(expression))
+                    string objectId = await context.ResolveHandleObjectIdAsync(handle).ConfigureAwait(false);
+                    JsonElement tagged = await context
+                        .EvaluateFunctionOnHandleAsync<JsonElement>(objectId, functionDeclaration)
                         .ConfigureAwait(false);
-                    return EvaluateSerialization.ParseRemote<T>(wrapped);
+                    return JsonValueHelper.Parse<T>(tagged);
                 }
 
-                JsonElement? remote = await context.EvaluateHandleAsync(expression).ConfigureAwait(false);
-                return await EvaluateSerialization.MaterializeAsync<T>(
-                    remote,
-                    id => context.EvaluateFunctionOnHandleAsync<JsonElement>(id, EvaluateSerialization.SerializeAwaitedJs),
-                    id => context.ReleaseHandleAsync(id)).ConfigureAwait(false);
+                JsonElement? wrapped = await context
+                    .EvaluateFunctionRemoteAsync(functionDeclaration, args)
+                    .ConfigureAwait(false);
+                return EvaluateSerialization.ParseRemote<T>(wrapped);
             }
-            catch (PlaywrightNativeException ex)
+            catch (PlaywrightException ex)
             {
                 throw EvaluateSerialization.RewriteException(ex, frameEvaluate: true);
             }
         }
+
+        /// <summary>
+        /// Nested-handle evaluate in <paramref name="frame"/> using adopt-then-stash
+        /// (WebKit rejects mixed value/objectId <c>callFunctionOn</c> lists).
+        /// </summary>
+        /// <typeparam name="T">The result type.</typeparam>
+        /// <param name="frame">The target frame.</param>
+        /// <param name="handleFn">Prepared handle wrapper function.</param>
+        /// <param name="handleArgs">Prepared handle call arguments.</param>
+        /// <returns>The deserialized result.</returns>
+        internal async Task<T> EvaluatePreparedInFrameAsync<T>(WKFrame frame, string handleFn, object[] handleArgs)
+        {
+            WKExecutionContext context = await WaitForFrameContextAsync(frame).ConfigureAwait(false);
+            await StashAdoptedHandlesAsync(context, handleArgs).ConfigureAwait(false);
+            return await EvaluateSerializedInFrameAsync<T>(
+                frame,
+                EvaluateHandleArg.PreparedExpression(handleFn, handleArgs)).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Adopts foreign ElementHandles into <paramref name="target"/> then parks them
+        /// on <c>globalThis.__pw_eh</c> for the stash-based evaluate path.
+        /// </summary>
+        /// <param name="target">The evaluation world that will revive stashed handles.</param>
+        /// <param name="callArgs">Prepared handle call arguments.</param>
+        /// <returns>A task that completes when handles are stashed.</returns>
+        internal Task StashAdoptedHandlesForEvaluateAsync(WKExecutionContext target, object[] callArgs)
+            => StashAdoptedHandlesAsync(target, callArgs);
+
+        /// <summary>
+        /// Waits for <paramref name="frame"/>'s main-world execution context.
+        /// </summary>
+        /// <param name="frame">The frame whose context is required.</param>
+        /// <returns>The frame execution context.</returns>
+        internal Task<WKExecutionContext> WaitForFrameContextForEvaluateAsync(WKFrame frame)
+            => WaitForFrameContextAsync(frame);
 
         /// <summary>
         /// Evaluates a JavaScript function in <paramref name="frame"/>'s world with arguments.
@@ -3578,6 +4236,15 @@ namespace PlaywrightNative.WebKit
             params object[] args)
         {
             WKExecutionContext context = await WaitForFrameContextAsync(frame).ConfigureAwait(false);
+            if (args != null && args.Length == 1 && args[0] is WKJSHandle handle)
+            {
+                string objectId = await context.ResolveHandleObjectIdAsync(handle).ConfigureAwait(false);
+                JsonElement? adopted = await context
+                    .EvaluateHandleOnHandleAsync(objectId, functionDeclaration)
+                    .ConfigureAwait(false);
+                return WrapRemoteObject(context, adopted);
+            }
+
             JsonElement? handleValue = await context.EvaluateFunctionHandleAsync(functionDeclaration, args)
                 .ConfigureAwait(false);
             return WrapRemoteObject(context, handleValue);
@@ -3655,9 +4322,28 @@ namespace PlaywrightNative.WebKit
                 JsonElement? handleValue = await context
                     .EvaluateHandleAsync($"({ShadowPiercingQuery.QueryFunction})({selectorLiteral})")
                     .ConfigureAwait(false);
-                return WrapWKHandle(context, handleValue) as IElementHandle;
+
+                // Do not callFunctionOn iframe/frame objectIds (Darwin lazy-load wedge).
+                // Detect from the selector — a follow-up evaluate of window.__pwQueryTag
+                // returns a remote object on WebKit and breaks getByTestId.
+                bool initializePreview = !IsFrameElementSelector(selector);
+                return WrapWKHandle(context, handleValue, initializePreview) as IElementHandle;
+
+                static bool IsFrameElementSelector(string value)
+                {
+                    if (string.IsNullOrEmpty(value))
+                    {
+                        return false;
+                    }
+
+                    string trimmed = value.Trim();
+                    return string.Equals(trimmed, "iframe", StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(trimmed, "frame", StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(trimmed, "iframe, frame", StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(trimmed, "frame, iframe", StringComparison.OrdinalIgnoreCase);
+                }
             }
-            catch (PlaywrightNativeException ex) when (PlaywrightNativeException.IsDestroyedContext(ex))
+            catch (PlaywrightException ex) when (PlaywrightNative.Helpers.DestroyedContext.IsDestroyedContext(ex))
             {
                 string frameId = frame?.FrameId;
                 if (!string.IsNullOrEmpty(frameId))
@@ -3684,6 +4370,7 @@ namespace PlaywrightNative.WebKit
         internal async Task<IReadOnlyList<IElementHandle>> QuerySelectorAllInFrameAsync(WKFrame frame, string selector)
         {
             SelectorQuery.EnsureSelector(selector);
+            DomVisibility.ThrowIfUnknownEngine(selector);
             if (FrameSelector.ContainsControl(selector))
             {
                 return await FrameSelector.QueryAllAsync(
@@ -3695,15 +4382,37 @@ namespace PlaywrightNative.WebKit
             WKExecutionContext context = await WaitForFrameContextAsync(frame).ConfigureAwait(false);
             if (CustomSelectors.TryResolve(selector, out CustomSelectorCall call))
             {
-                JsonElement? customArray = await context.EvaluateHandleAsync(call.DocumentQueryAllExpression).ConfigureAwait(false);
-                return await UnwrapElementArrayAsync(context, customArray).ConfigureAwait(false);
+                WKExecutionContext evalContext = context;
+                if (CustomSelectors.ShouldQueryInIsolatedWorld(selector))
+                {
+                    evalContext = await GetUtilityWorldAsync(frame).ConfigureAwait(false) ?? context;
+                }
+
+                JsonElement? customArray = await evalContext.EvaluateHandleAsync(call.DocumentQueryAllExpression).ConfigureAwait(false);
+                return await UnwrapElementArrayAsync(evalContext, customArray, !SkipPreview(selector))
+                    .ConfigureAwait(false);
             }
 
             string selectorLiteral = JsonSerializer.Serialize(selector);
             JsonElement? arrayRemote = await context
                 .EvaluateHandleAsync($"({ShadowPiercingQuery.QueryAllFunction})({selectorLiteral})")
                 .ConfigureAwait(false);
-            return await UnwrapElementArrayAsync(context, arrayRemote).ConfigureAwait(false);
+            return await UnwrapElementArrayAsync(context, arrayRemote, !SkipPreview(selector))
+                .ConfigureAwait(false);
+
+            static bool SkipPreview(string value)
+            {
+                if (string.IsNullOrEmpty(value))
+                {
+                    return false;
+                }
+
+                string trimmed = value.Trim();
+                return string.Equals(trimmed, "iframe", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(trimmed, "frame", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(trimmed, "iframe, frame", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(trimmed, "frame, iframe", StringComparison.OrdinalIgnoreCase);
+            }
         }
 
         /// <summary>
@@ -3712,10 +4421,12 @@ namespace PlaywrightNative.WebKit
         /// </summary>
         /// <param name="context">The execution context that owns the array.</param>
         /// <param name="arrayRemote">The remote array object, or <see langword="null"/>.</param>
+        /// <param name="initializePreview">When false, skip callFunctionOn preview (iframe/frame).</param>
         /// <returns>Handles for the array items that are DOM nodes.</returns>
         internal async Task<IReadOnlyList<IElementHandle>> UnwrapElementArrayAsync(
             WKExecutionContext context,
-            JsonElement? arrayRemote)
+            JsonElement? arrayRemote,
+            bool initializePreview = true)
         {
             string arrayId = RemoteObject.GetObjectId(arrayRemote);
             if (string.IsNullOrEmpty(arrayId))
@@ -3732,7 +4443,7 @@ namespace PlaywrightNative.WebKit
                     JsonElement? item = await context
                         .EvaluateHandleOnHandleAsync(arrayId, "(arr, i) => arr[i]", i)
                         .ConfigureAwait(false);
-                    if (WrapWKHandle(context, item) is IElementHandle element)
+                    if (WrapWKHandle(context, item, initializePreview) is IElementHandle element)
                     {
                         result.Add(element);
                     }
@@ -3778,6 +4489,28 @@ namespace PlaywrightNative.WebKit
             string htmlJsLiteral = JsonSerializer.Serialize(html);
             string expression = $"(() => {{ document.open(); document.write({htmlJsLiteral}); document.close(); }})()";
             await EvaluateInFrameAsync<object>(frame, expression).ConfigureAwait(false);
+
+            // Darwin WebKit does not fire load while an unloaded loading=lazy
+            // iframe is in the document, so setContent waits until the NUnit kill
+            // (ReturnEmptySnapshotWhenIframeIsNotLoaded). Probing those frames
+            // with Runtime.evaluate wedges the session, so decide from the HTML.
+            if (frame.ParentFrame == null
+                && waitUntil != WaitUntilState.Commit
+                && OnlyLazyFrames(html))
+            {
+                RecordLifecycleFromDocumentSeed("DOMContentLoaded");
+                RecordLifecycleFromDocumentSeed("load");
+            }
+
+            // document.open/write/close wipes document-level listeners from init
+            // scripts (context-menu suppress). Re-run user init scripts so right-
+            // click tests still get console events after SetContent.
+            await ReplayUserInitScriptsAsync().ConfigureAwait(false);
+            if (_context != null)
+            {
+                await _context.ReplayInitScriptsOnCurrentDocumentAsync(this).ConfigureAwait(false);
+            }
+
             if (waitUntil == WaitUntilState.Commit)
             {
                 return;
@@ -3791,7 +4524,76 @@ namespace PlaywrightNative.WebKit
                 _ => LoadState.Load,
             };
             await WaitForFrameLoadStateAsync(frame, state, resolvedTimeout).ConfigureAwait(false);
+
+            static bool OnlyLazyFrames(string markup)
+            {
+                if (string.IsNullOrEmpty(markup))
+                {
+                    return false;
+                }
+
+                bool any = false;
+                int index = 0;
+                while (index < markup.Length)
+                {
+                    int iframeAt = markup.IndexOf("<iframe", index, StringComparison.OrdinalIgnoreCase);
+                    int frameAt = markup.IndexOf("<frame", index, StringComparison.OrdinalIgnoreCase);
+                    int found;
+                    bool iframe;
+                    if (iframeAt >= 0 && (frameAt < 0 || iframeAt <= frameAt))
+                    {
+                        found = iframeAt;
+                        iframe = true;
+                    }
+                    else if (frameAt >= 0)
+                    {
+                        found = frameAt;
+                        iframe = false;
+                    }
+                    else
+                    {
+                        break;
+                    }
+
+                    int nameAt = found + (iframe ? 7 : 6);
+                    if (!iframe)
+                    {
+                        char boundary = nameAt < markup.Length ? markup[nameAt] : '\0';
+                        bool frameTag = boundary == '>' || boundary == '/' || char.IsWhiteSpace(boundary);
+                        if (!frameTag)
+                        {
+                            index = nameAt;
+                            continue;
+                        }
+                    }
+
+                    int end = markup.IndexOf('>', found);
+                    if (end < 0)
+                    {
+                        return false;
+                    }
+
+                    any = true;
+                    string tag = markup.Substring(found, end - found);
+                    if (tag.IndexOf("loading", StringComparison.OrdinalIgnoreCase) < 0
+                        || tag.IndexOf("lazy", StringComparison.OrdinalIgnoreCase) < 0)
+                    {
+                        return false;
+                    }
+
+                    index = end + 1;
+                }
+
+                return any;
+            }
         }
+
+        /// <summary>
+        /// Marks that context string init scripts were synced into
+        /// <c>Page.setBootstrapScript</c> before resume.
+        /// </summary>
+        internal void MarkContextInitScriptsInstalledBeforeResume()
+            => _contextInitScriptsInstalledBeforeResume = true;
 
         /// <summary>
         /// Registers a JavaScript source that runs on every new document this page loads,
@@ -3808,7 +4610,16 @@ namespace PlaywrightNative.WebKit
                 throw new ArgumentException("Script cannot be empty.", nameof(script));
             }
 
-            _initScripts.Add(script);
+            lock (_initScriptsLock)
+            {
+                _initScripts.Add(script);
+            }
+
+            // Upstream addInitScript only updates Page.setBootstrapScript. Evaluating
+            // here would double-run with ContextInitScriptSet.EvaluateOnCurrentAsync
+            // (context,context) and with navigation bootstrap (clock 2x, init callbacks
+            // never matching exact counts). Current-document coverage is explicit:
+            // EvaluateOnCurrentAsync, ExposeFunction's EvaluateInAllFrames, Replay*.
             await SyncBootstrapScriptAsync().ConfigureAwait(false);
         }
 
@@ -3819,7 +4630,13 @@ namespace PlaywrightNative.WebKit
         /// <returns>A task that completes when evaluation has been attempted.</returns>
         internal async Task ReplayUserInitScriptsAsync()
         {
-            foreach (string script in _initScripts)
+            string[] scripts;
+            lock (_initScriptsLock)
+            {
+                scripts = _initScripts.ToArray();
+            }
+
+            foreach (string script in scripts)
             {
                 if (string.IsNullOrEmpty(script) || script == WebKitFormDataScript.Source)
                 {
@@ -3830,7 +4647,7 @@ namespace PlaywrightNative.WebKit
                 {
                     await EvaluateInAllFramesAsync(script).ConfigureAwait(false);
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
                 catch (TimeoutException)
@@ -3847,7 +4664,13 @@ namespace PlaywrightNative.WebKit
         /// <returns>A task that completes once the bootstrap script has been updated.</returns>
         internal async Task RemoveInitScriptInternalAsync(string script)
         {
-            if (string.IsNullOrEmpty(script) || !_initScripts.Remove(script))
+            bool removed;
+            lock (_initScriptsLock)
+            {
+                removed = !string.IsNullOrEmpty(script) && _initScripts.Remove(script);
+            }
+
+            if (!removed)
             {
                 return;
             }
@@ -3856,7 +4679,7 @@ namespace PlaywrightNative.WebKit
             {
                 await SyncBootstrapScriptAsync().ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
         }
@@ -3889,7 +4712,7 @@ namespace PlaywrightNative.WebKit
 
             if (_handleBindings.ContainsKey(name) || !_exposedFunctions.TryAdd(name, handler))
             {
-                throw new PlaywrightNativeException(PageBindingScript.AlreadyRegisteredFunction(name));
+                throw new PlaywrightException(PageBindingScript.AlreadyRegisteredFunction(name));
             }
 
             await EnsureBindingInfrastructureAsync().ConfigureAwait(false);
@@ -3919,7 +4742,7 @@ namespace PlaywrightNative.WebKit
 
             if (!_exposedFunctions.TryAdd(name, handler))
             {
-                throw new PlaywrightNativeException(PageBindingScript.AlreadyRegisteredFunction(name));
+                throw new PlaywrightException(PageBindingScript.AlreadyRegisteredFunction(name));
             }
 
             _evaluateCallbackNames[name] = 0;
@@ -3947,7 +4770,7 @@ namespace PlaywrightNative.WebKit
 
             if (!_exposedFunctions.TryAdd(name, handler))
             {
-                throw new PlaywrightNativeException(PageBindingScript.AlreadyRegisteredFunction(name));
+                throw new PlaywrightException(PageBindingScript.AlreadyRegisteredFunction(name));
             }
 
             await EnsureBindingInfrastructureAsync().ConfigureAwait(false);
@@ -4007,7 +4830,7 @@ namespace PlaywrightNative.WebKit
 
             if (_exposedFunctions.ContainsKey(name) || !_handleBindings.TryAdd(name, handler))
             {
-                throw new PlaywrightNativeException(PageBindingScript.AlreadyRegisteredFunction(name));
+                throw new PlaywrightException(PageBindingScript.AlreadyRegisteredFunction(name));
             }
 
             await EnsureBindingInfrastructureAsync().ConfigureAwait(false);
@@ -4104,11 +4927,19 @@ namespace PlaywrightNative.WebKit
 
             foreach (WKFrame frame in _frameManager.Frames)
             {
+                // Unloaded loading=lazy iframes may appear in Frames without a
+                // usable context. WaitForFrameContextAsync wedges Darwin WebKit
+                // for the session timeout (ReturnEmptySnapshotWhenIframeIsNotLoaded).
+                if (!TryGetFrameContext(frame, out _))
+                {
+                    continue;
+                }
+
                 try
                 {
                     await EvaluateInFrameAsync<object>(frame, expression).ConfigureAwait(false);
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
                 catch (TimeoutException)
@@ -4134,26 +4965,41 @@ namespace PlaywrightNative.WebKit
         internal async Task InstallBindingInfrastructureAsync()
         {
             WKTargetSession target = _targetSession
-                ?? throw new PlaywrightNativeException("Inner target session is not yet available — the page has not finished initializing.");
+                ?? throw new PlaywrightException("Inner target session is not yet available — the page has not finished initializing.");
             await target.SendAsync("Runtime.addBinding", new { name = PageBindingScript.ChannelName }).ConfigureAwait(false);
             await AddInitScriptInternalAsync(PageBindingScript.InitScript).ConfigureAwait(false);
             await EvaluateInAllFramesAsync(PageBindingScript.InitScript).ConfigureAwait(false);
         }
 
         /// <summary>
-        /// Adds a <c>&lt;script&gt;</c> tag to the page by URL or inline content. For URL
-        /// scripts, waits for the <c>load</c> event to fire; inline scripts execute
-        /// synchronously via <c>script.text</c>.
+        /// Adds a <c>&lt;script&gt;</c> tag to the main frame by URL or inline content.
         /// </summary>
         /// <param name="url">External script URL. Mutually exclusive with <paramref name="content"/>.</param>
         /// <param name="content">Inline script body. Mutually exclusive with <paramref name="url"/>.</param>
         /// <param name="type">Optional <c>type</c> attribute (e.g. <c>module</c>).</param>
         /// <returns>A task that completes once the script has loaded/executed.</returns>
-        internal async Task<IElementHandle> AddScriptTagAsync(string url = null, string content = null, string type = null)
+        internal Task<IElementHandle> AddScriptTagAsync(string url = null, string content = null, string type = null)
+            => AddScriptTagInFrameAsync(_frameManager.MainFrame, url, content, type);
+
+        /// <summary>
+        /// Injects a script tag into <paramref name="frame"/> (not always the main frame).
+        /// For URL scripts, waits for the <c>load</c> event; inline scripts execute via
+        /// <c>script.text</c>.
+        /// </summary>
+        /// <param name="frame">Target frame.</param>
+        /// <param name="url">External script URL. Mutually exclusive with <paramref name="content"/>.</param>
+        /// <param name="content">Inline script body. Mutually exclusive with <paramref name="url"/>.</param>
+        /// <param name="type">Optional <c>type</c> attribute (e.g. <c>module</c>).</param>
+        /// <returns>A handle to the injected <c>script</c> element.</returns>
+        internal async Task<IElementHandle> AddScriptTagInFrameAsync(
+            WKFrame frame,
+            string url = null,
+            string content = null,
+            string type = null)
         {
             if (string.IsNullOrEmpty(url) && string.IsNullOrEmpty(content))
             {
-                throw new PlaywrightNativeException(AddScriptTagHelper.MissingOptionsMessage);
+                throw new PlaywrightException(AddScriptTagHelper.MissingOptionsMessage);
             }
 
             if (!string.IsNullOrEmpty(url) && !string.IsNullOrEmpty(content))
@@ -4191,10 +5037,11 @@ namespace PlaywrightNative.WebKit
                             document.head.appendChild(script);
                             return true;
                         }})()";
-                        await EvaluateExpressionAsync(inject).ConfigureAwait(false);
-                        await WaitForSentinelAsync(sentinel, "Failed to load script at " + url).ConfigureAwait(false);
-                        IElementHandle handle = await EvaluateElementHandleAsync($"window[{elementLiteral}]").ConfigureAwait(false);
-                        await EvaluateExpressionAsync(
+                        await EvaluateInFrameAsync<object>(frame, inject).ConfigureAwait(false);
+                        await WaitForSentinelInFrameAsync(frame, sentinel, "Failed to load script at " + url).ConfigureAwait(false);
+                        IElementHandle handle = await EvaluateElementHandleInFrameAsync(frame, $"window[{elementLiteral}]").ConfigureAwait(false);
+                        await EvaluateInFrameAsync<object>(
+                            frame,
                             $"(() => {{ delete window[{sentinelLiteral}]; delete window[{elementLiteral}]; }})()").ConfigureAwait(false);
                         return handle;
                     }
@@ -4211,10 +5058,10 @@ namespace PlaywrightNative.WebKit
                             throw error;
                         return script;
                     }})()";
-                    IElementHandle contentHandle = await EvaluateElementHandleAsync(expression).ConfigureAwait(false);
+                    IElementHandle contentHandle = await EvaluateElementHandleInFrameAsync(frame, expression).ConfigureAwait(false);
 
                     // Official extra round-trip so async CSP console errors can win the race.
-                    await EvaluateExpressionAsync("true").ConfigureAwait(false);
+                    await EvaluateInFrameAsync<object>(frame, "true").ConfigureAwait(false);
                     return contentHandle;
                 }).ConfigureAwait(false);
         }
@@ -4231,7 +5078,7 @@ namespace PlaywrightNative.WebKit
         {
             if (string.IsNullOrEmpty(url) && string.IsNullOrEmpty(content))
             {
-                throw new PlaywrightNativeException(AddStyleTagHelper.MissingOptionsMessage);
+                throw new PlaywrightException(AddStyleTagHelper.MissingOptionsMessage);
             }
 
             if (!string.IsNullOrEmpty(url) && !string.IsNullOrEmpty(content))
@@ -4270,16 +5117,31 @@ namespace PlaywrightNative.WebKit
                             $"(() => {{ delete window[{sentinelLiteral}]; delete window[{elementLiteral}]; }})()").ConfigureAwait(false);
                         return handle;
                     }
+                    else
+                    {
+                        // Match AddScriptTag inline content: return the STYLE element
+                        // from one evaluateHandle. The prior sentinel+onload poll added
+                        // extra callFunctionOn traffic that wedged Darwin under suite
+                        // load (mac shard2 ShouldReturnStyleElementHandle). CSP-blocked
+                        // inline styles still lose via RaceWithCspError's console drain.
+                        string contentLiteral = JsonSerializer.Serialize(content);
+                        string expression = $@"(() => {{
+                            const style = document.createElement('style');
+                            style.type = 'text/css';
+                            style.appendChild(document.createTextNode({contentLiteral}));
+                            let error = null;
+                            style.onerror = e => error = e;
+                            document.head.appendChild(style);
+                            if (error)
+                                throw error;
+                            return style;
+                        }})()";
+                        IElementHandle styleHandle = await EvaluateElementHandleAsync(expression).ConfigureAwait(false);
 
-                    string contentLiteral = JsonSerializer.Serialize(content);
-                    string expression = $@"(() => {{
-                        const style = document.createElement('style');
-                        style.type = 'text/css';
-                        style.appendChild(document.createTextNode({contentLiteral}));
-                        document.head.appendChild(style);
-                        return style;
-                    }})()";
-                    return await EvaluateElementHandleAsync(expression).ConfigureAwait(false);
+                        // Official extra round-trip so async CSP console errors can win.
+                        await EvaluateExpressionAsync("true").ConfigureAwait(false);
+                        return styleHandle;
+                    }
                 }).ConfigureAwait(false);
         }
 
@@ -4295,9 +5157,30 @@ namespace PlaywrightNative.WebKit
                 ?? throw new InvalidOperationException("Page has no target session.");
 
             // Do not await: Page.crash kills the renderer before an ack arrives.
-            // Crash is raised from Inspector.targetCrashed (if present), main-target
-            // teardown, or page-proxy destruction.
+            // Crash is raised from Inspector.targetCrashed (if present),
+            // Target.targetDestroyed(crashed:true), main-target teardown, or
+            // page-proxy destruction. Fall back if the protocol stays silent.
             _ = session.SendAsync("Page.crash");
+            async Task EnsureCrashReportedAsync()
+            {
+                // Official relies on Target.targetDestroyed({crashed:true}). Some builds
+                // destroy the page proxy without that flag; wait briefly then synthesize.
+                try
+                {
+                    await Task.Delay(750).ConfigureAwait(false);
+                }
+                catch (ObjectDisposedException)
+                {
+                    return;
+                }
+
+                if (!_crashed && _crashRequested && !_closed)
+                {
+                    FireCrash();
+                }
+            }
+
+            _ = EnsureCrashReportedAsync();
             return Task.CompletedTask;
         }
 
@@ -4340,7 +5223,7 @@ namespace PlaywrightNative.WebKit
             DisposeTargetSession(ref _targetSession);
             DisposeTargetSession(ref _provisionalSession);
 
-            _initializedTcs.TrySetException(PageClosedException(" closed before initialization completed."));
+            _initializedTcs.TrySetException(PageClosedException());
 
             lock (_navigationLock)
             {
@@ -4353,13 +5236,18 @@ namespace PlaywrightNative.WebKit
             }
 
             _reportAsNewNavigationTcs.TrySetResult(true);
-            _closedTcs.TrySetResult(true);
+
+            // Close must precede _closedTcs. CloseAsync may observe _closed mid-DidClose
+            // (set above) once Playwright.closePage ACKs; it waits on _closedTcs so the
+            // Close event is visible before CloseAsync returns.
             Close?.Invoke(this, this);
+            _closedTcs.TrySetResult(true);
         }
 
         /// <summary>
-        /// Official <c>handleProvisionalLoadFailed</c>: an initial popup/page load
-        /// that fails before <see cref="InitializedTask"/> must unblock waiters.
+        /// Official <c>handleProvisionalLoadFailed</c>: fails the in-flight
+        /// cross-process navigation (or the initial page load when still
+        /// initializing).
         /// </summary>
         /// <param name="errorText">The protocol error string.</param>
         internal void HandleProvisionalLoadFailed(string errorText)
@@ -4367,9 +5255,33 @@ namespace PlaywrightNative.WebKit
             if (!_initializedTcs.Task.IsCompleted)
             {
                 _initializedTcs.TrySetException(
-                    new PlaywrightNativeException(
+                    new PlaywrightException(
                         string.IsNullOrEmpty(errorText) ? "Initial load failed" : errorText));
+                return;
             }
+
+            // Bad TLS (and other terminal provisional failures) often arrive
+            // with no provisional session. Click auto-wait still holds willCheck
+            // retains; release them or page.click hangs until the test timeout.
+            if (!string.IsNullOrEmpty(errorText) && !IsSupersededNavigationFailure(errorText))
+            {
+                _frameManager.Signals.OnTerminalDocumentNavigationFailed();
+            }
+
+            if (_provisionalSession == null)
+            {
+                return;
+            }
+
+            string reason = string.IsNullOrEmpty(errorText) ? "Navigation failed" : errorText;
+            if (reason.Contains("cancelled", StringComparison.OrdinalIgnoreCase)
+                || reason.Contains("canceled", StringComparison.OrdinalIgnoreCase))
+            {
+                reason += "; maybe frame was detached?";
+            }
+
+            _awaitingReplacementTarget = false;
+            FailPendingWithReason(reason, _pendingNavigationUrl);
         }
 
         /// <summary>
@@ -4512,18 +5424,43 @@ namespace PlaywrightNative.WebKit
                 return;
             }
 
+            // Suppressed duplicates (COOP / process-swap) must only complete the
+            // public pending navigation. Falling back to the suppressed request
+            // itself re-emits requestfinished after pending was cleared.
             WKRequest publicRequest = request.SuppressPageEvents
-                ? _firstPendingNavigationRequest ?? request
+                ? _firstPendingNavigationRequest
                 : request;
-            if (ReferenceEquals(publicRequest, _firstPendingNavigationRequest)
+            if (publicRequest == null)
+            {
+                return;
+            }
+
+            // Redirect hops complete before the final document request. Do not
+            // treat them as the pending navigation requestfinished; that flag
+            // would swallow the hop DONE under process-swap races
+            // (ShouldSupportRedirects: foo gets GET,302 without DONE).
+            bool redirectHop = publicRequest.Response != null
+                && ResponseHeaders.IsRedirectStatus(publicRequest.Response.Status);
+
+            if (!redirectHop
+                && ReferenceEquals(publicRequest, _firstPendingNavigationRequest)
                 && _emittedPendingNavigationFinished)
+            {
+                return;
+            }
+
+            if (!publicRequest.TryMarkPageFinishedRaised())
             {
                 return;
             }
 
             if (request.SuppressPageEvents)
             {
-                _emittedPendingNavigationFinished = true;
+                if (!redirectHop)
+                {
+                    _emittedPendingNavigationFinished = true;
+                }
+
                 publicRequest.MarkFinished();
                 TrackInflight(publicRequest, started: false);
                 RequestFinished?.Invoke(this, publicRequest);
@@ -4531,7 +5468,8 @@ namespace PlaywrightNative.WebKit
                 return;
             }
 
-            if (ReferenceEquals(request, _firstPendingNavigationRequest))
+            if (!redirectHop
+                && ReferenceEquals(request, _firstPendingNavigationRequest))
             {
                 _emittedPendingNavigationFinished = true;
             }
@@ -4574,7 +5512,10 @@ namespace PlaywrightNative.WebKit
         /// <c>route.continue</c> / <c>fallback</c> changes a document URL.
         /// </summary>
         /// <param name="request">The continued navigation request.</param>
-        internal void NoteContinuedNavigation(WKRequest request)
+        /// <param name="originalUrl">
+        /// URL before continue overrides (DocumentUrl / pre-override Url).
+        /// </param>
+        internal void NoteContinuedNavigation(WKRequest request, string originalUrl = null)
         {
             if (request == null || !request.IsNavigationRequest || string.IsNullOrEmpty(request.Url))
             {
@@ -4588,16 +5529,37 @@ namespace PlaywrightNative.WebKit
                     return;
                 }
 
+                // ApplyContinueOverrides rewrites Request.Url (and ContinuedUrl) to the
+                // override target before this runs. Match the in-flight GoTo via identity,
+                // the pre-override URL, or an unset first-pending slot — otherwise
+                // ShouldOverrideRequestUrl leaves the waiter armed on /foo while the
+                // continued document loads /global-var.html (NUnit 30s hang).
+                string pending = NavigationTimeout.WithoutHash(_pendingNavigationUrl);
+                string original = NavigationTimeout.WithoutHash(
+                    !string.IsNullOrEmpty(originalUrl) ? originalUrl : request.DocumentUrl);
+                string target = NavigationTimeout.WithoutHash(
+                    !string.IsNullOrEmpty(request.ContinuedUrl) ? request.ContinuedUrl : request.Url);
                 bool isCurrent = ReferenceEquals(request, _firstPendingNavigationRequest)
                     || string.Equals(
                         NavigationTimeout.WithoutHash(request.Url),
-                        NavigationTimeout.WithoutHash(_pendingNavigationUrl),
+                        pending,
                         StringComparison.Ordinal)
                     || string.Equals(
                         NavigationTimeout.WithoutHash(request.ContinuedUrl),
-                        NavigationTimeout.WithoutHash(_pendingNavigationUrl),
-                        StringComparison.Ordinal);
+                        pending,
+                        StringComparison.Ordinal)
+                    || string.Equals(original, pending, StringComparison.Ordinal);
                 if (!isCurrent && _firstPendingNavigationRequest == null)
+                {
+                    isCurrent = true;
+                }
+
+                // Any document continue-with-URL while a goto waiter is armed must
+                // retarget that waiter. Matching only by identity raced request
+                // creation on WebKit and left ~1/3 of OverrideRequestUrl runs hung.
+                if (!isCurrent
+                    && !string.IsNullOrEmpty(request.ContinuedUrl)
+                    && !string.Equals(original, target, StringComparison.Ordinal))
                 {
                     isCurrent = true;
                 }
@@ -4607,8 +5569,45 @@ namespace PlaywrightNative.WebKit
                     return;
                 }
 
-                _pendingNavigationUrl = request.Url;
-                _pendingRedirectTarget = request.Url;
+                // Keep the pending waiter on the original Playwright.navigate URL so a
+                // late FrameNavigated for /foo still commits. Track the override as the
+                // redirect target (like an HTTP redirect). Retargeting pending to the
+                // override made /foo look like a competing navigation (quick interrupt)
+                // or, when ignored, left GoTo hung if WebKit never emits a second commit.
+                string sourceForOverride = original;
+                if (string.IsNullOrEmpty(sourceForOverride))
+                {
+                    sourceForOverride = pending;
+                }
+
+                if (!string.IsNullOrEmpty(target)
+                    && !string.IsNullOrEmpty(sourceForOverride)
+                    && !string.Equals(sourceForOverride, target, StringComparison.Ordinal))
+                {
+                    if (string.IsNullOrEmpty(pending)
+                        || string.Equals(pending, target, StringComparison.Ordinal))
+                    {
+                        _pendingNavigationUrl = !string.IsNullOrEmpty(originalUrl)
+                            ? originalUrl
+                            : (!string.IsNullOrEmpty(request.DocumentUrl)
+                                ? request.DocumentUrl
+                                : _pendingNavigationUrl);
+                    }
+
+                    _pendingRedirectTarget = request.Url;
+                    _pendingRedirectSource = request;
+                    _pendingContinueOverrideSourceUrl = !string.IsNullOrEmpty(originalUrl)
+                        ? originalUrl
+                        : (!string.IsNullOrEmpty(request.DocumentUrl)
+                            ? request.DocumentUrl
+                            : _pendingNavigationUrl);
+                    _lastCompetingNavigationUrl = null;
+                }
+                else
+                {
+                    _pendingNavigationUrl = request.Url;
+                    _pendingRedirectTarget = request.Url;
+                }
             }
         }
 
@@ -4638,7 +5637,15 @@ namespace PlaywrightNative.WebKit
                     return;
                 }
 
-                if (_harRedirectInProgress
+                // Cross-process HTTP redirects (reload/goto) cancel the original
+                // document with "Frame load interrupted" / "cancelled". Keep the
+                // pending waiter armed for the redirect target — same as HAR
+                // redirectNavigation — instead of failing Reload/GoTo early.
+                bool redirectInFlight = _harRedirectInProgress
+                    || !string.IsNullOrEmpty(redirectUrl)
+                    || (request.Response != null
+                        && ResponseHeaders.IsRedirectStatus(request.Response.Status));
+                if (redirectInFlight
                     && (string.IsNullOrEmpty(request.FailureText)
                         || IsSupersededNavigationFailure(request.FailureText)))
                 {
@@ -4669,8 +5676,24 @@ namespace PlaywrightNative.WebKit
                     reason = "Download is starting";
                 }
 
+                reason = WebKitNavigationErrors.Normalize(reason);
+
                 if (IsSupersededNavigationFailure(reason))
                 {
+                    // Redirect / HAR redirectNavigation cancelled this document while
+                    // a replacement navigation is expected — keep waiters armed.
+                    // Check this before competing-URL rewriting: FindCompeting may
+                    // still see the pre-redirect URL (theverge.com) and would
+                    // otherwise fall through and fail the goto that should wait
+                    // for www.theverge.com (ShouldGoForwardToRedirectedNavigation).
+                    if (redirectInFlight
+                        || _harRedirectInProgress
+                        || !string.IsNullOrEmpty(redirectUrl)
+                        || !string.IsNullOrEmpty(_pendingRedirectTarget))
+                    {
+                        return;
+                    }
+
                     string startUrl = NavigationTimeout.WithoutHash(_navigationStartUrl);
                     string competing = _lastCompetingNavigationUrl;
                     if (string.IsNullOrEmpty(competing)
@@ -4681,14 +5704,24 @@ namespace PlaywrightNative.WebKit
                     }
 
                     if (!string.IsNullOrEmpty(competing)
-                        && !string.Equals(competing, pendingUrl, StringComparison.Ordinal))
+                        && !string.Equals(competing, pendingUrl, StringComparison.Ordinal)
+                        && !string.Equals(competing, redirectUrl, StringComparison.Ordinal))
                     {
                         reason = "page.goto: Navigation to \"" + pendingUrl +
                             "\" is interrupted by another navigation to \"" + competing + "\"";
                     }
+                    else
+                    {
+                        // Superseded without a recorded Location / competitor yet:
+                        // cross-process reload redirects often report "Frame load
+                        // interrupted" on empty.html before OnResponseReceived sets
+                        // _pendingRedirectTarget. Keep Reload/GoTo waiters armed.
+                        return;
+                    }
                 }
 
                 NavigationException exception = new(reason, errorUrl);
+                _awaitingReplacementTarget = false;
                 _pendingLoadTcs?.TrySetException(exception);
                 _pendingDomContentTcs?.TrySetException(exception);
                 _pendingCommitTcs?.TrySetException(exception);
@@ -4716,11 +5749,22 @@ namespace PlaywrightNative.WebKit
         /// <param name="waitAfter">When <see langword="false"/>, skip the wait.</param>
         /// <param name="timeout">Click timeout in milliseconds.</param>
         /// <param name="action">The pointer action.</param>
+        /// <param name="expectNavigation">
+        /// When <see langword="true"/>, lengthen the WebKit empty poll for form/link clicks.
+        /// </param>
         /// <returns>A task that completes when the action and wait finish.</returns>
-        internal Task RunWithSignalsAsync(bool waitAfter, float? timeout, Func<Task> action)
+        internal Task RunWithSignalsAsync(bool waitAfter, float? timeout, Func<Task> action, bool expectNavigation = false)
             => ActionSignals.RunAsync(
                 _frameManager.Signals,
-                () => Task.CompletedTask,
+                () =>
+                {
+                    // Official Chromium uses Page.enable as input epilogue so
+                    // frameRequestedNavigation from the last input is flushed
+                    // before auto-wait. WebKit needs the same for
+                    // willCheckNavigationPolicy (ShouldWorkWithGotoFollowingClick).
+                    WKTargetSession target = _targetSession;
+                    return target == null ? Task.CompletedTask : target.SendAsync("Page.enable");
+                },
                 waitAfter,
                 timeout,
                 action,
@@ -4734,7 +5778,8 @@ namespace PlaywrightNative.WebKit
 
                     _frameManager.FrameCommittedSameDocumentNavigation(_frameManager.MainFrame.FrameId, url);
                     _mainFrameUrl = _frameManager.MainFrame.Url;
-                });
+                },
+                expectNavigation);
 
         private static void DisposeTargetSession(ref WKTargetSession session)
         {
@@ -4777,12 +5822,90 @@ namespace PlaywrightNative.WebKit
                     || reason.Contains("cancelled", StringComparison.OrdinalIgnoreCase)
                     || reason.Contains("canceled", StringComparison.OrdinalIgnoreCase));
 
+        private static bool IsWaitFaultSupersededCancel(Task waitTask)
+        {
+            Exception inner = waitTask?.Exception?.GetBaseException() ?? waitTask?.Exception?.InnerException;
+            return IsSupersededNavigationFailure(inner?.Message);
+        }
+
         private static bool IsCompetingUrl(string requestUrl, string pendingUrl, string startUrl)
         {
             return !string.IsNullOrEmpty(requestUrl)
-                && !string.Equals(requestUrl, pendingUrl, StringComparison.Ordinal)
-                && !string.Equals(requestUrl, startUrl, StringComparison.Ordinal)
+                && !IsSameNavigationDestination(requestUrl, pendingUrl)
+                && !IsSameNavigationDestination(requestUrl, startUrl)
                 && !requestUrl.Equals("about:blank", StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
+        /// True when <paramref name="a"/> and <paramref name="b"/> are the same
+        /// navigation destination, including WebKit's trailing-slash canonicalization
+        /// (<c>http://host</c> vs <c>http://host/</c>) and whitespace-only
+        /// differences in <c>data:</c> URLs (MiniBrowser may re-serialize markup).
+        /// </summary>
+        private static bool IsSameNavigationDestination(string a, string b)
+        {
+            if (string.IsNullOrEmpty(a) || string.IsNullOrEmpty(b))
+            {
+                return false;
+            }
+
+            if (string.Equals(a, b, StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            // WebKit often commits with a trailing slash after the requested URL.
+            // That is the same navigation, not a competing document (SOCKS proxy /
+            // TLS renegotiation fixtures were false-interrupted as "/path" → "/path/").
+            string aTrim = a.TrimEnd('/');
+            string bTrim = b.TrimEnd('/');
+            if (!string.IsNullOrEmpty(aTrim)
+                && string.Equals(aTrim, bTrim, StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            // data: navigations: WebKit may rewrite newlines to spaces in the
+            // committed URL. Treat whitespace-equivalent payloads as the same
+            // document (mouse/touch input tests use inline data: HTML).
+            if (a.StartsWith("data:", StringComparison.OrdinalIgnoreCase)
+                && b.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+            {
+                string aNorm = CollapseWhitespace(a);
+                string bNorm = CollapseWhitespace(b);
+                return string.Equals(aNorm, bNorm, StringComparison.Ordinal);
+            }
+
+            return false;
+        }
+
+        private static string CollapseWhitespace(string value)
+        {
+            if (string.IsNullOrEmpty(value))
+            {
+                return value;
+            }
+
+            System.Text.StringBuilder sb = new(value.Length);
+            bool pendingSpace = false;
+            foreach (char c in value)
+            {
+                if (char.IsWhiteSpace(c))
+                {
+                    pendingSpace = true;
+                    continue;
+                }
+
+                if (pendingSpace && sb.Length > 0)
+                {
+                    sb.Append(' ');
+                }
+
+                pendingSpace = false;
+                sb.Append(c);
+            }
+
+            return sb.ToString();
         }
 
         private static bool IsSameDocumentHashNavigation(string currentUrl, string nextUrl)
@@ -4806,7 +5929,7 @@ namespace PlaywrightNative.WebKit
             {
                 return await sendTask.ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException ex) when (ex is not NavigationException)
+            catch (PlaywrightException ex) when (ex is not NavigationException)
             {
                 throw new NavigationException(ex.Message, url, ex);
             }
@@ -4818,7 +5941,7 @@ namespace PlaywrightNative.WebKit
             {
                 await waitTask.ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException ex) when (ex is not NavigationException)
+            catch (PlaywrightException ex) when (ex is not NavigationException)
             {
                 throw new NavigationException(ex.Message, url, ex);
             }
@@ -4927,7 +6050,7 @@ namespace PlaywrightNative.WebKit
         {
             if (Context is IHasExposedFunctionNames contextNames && contextNames.HasExposedFunction(name))
             {
-                throw new PlaywrightNativeException(PageBindingScript.AlreadyRegisteredInBrowserContext(name));
+                throw new PlaywrightException(PageBindingScript.AlreadyRegisteredInBrowserContext(name));
             }
         }
 
@@ -4953,7 +6076,22 @@ namespace PlaywrightNative.WebKit
                 return;
             }
 
-            throw new PlaywrightNativeException(
+            // HAR redirectNavigation / server redirects supersede the original URL
+            // with the Location target. That is expected continuation, not a
+            // competing navigation (ShouldGoForwardToRedirectedNavigation).
+            string redirectTarget;
+            lock (_navigationLock)
+            {
+                redirectTarget = NavigationTimeout.WithoutHash(_pendingRedirectTarget);
+            }
+
+            if (!string.IsNullOrEmpty(redirectTarget)
+                && string.Equals(competing, redirectTarget, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            throw new PlaywrightException(
                 "page.goto: Navigation to \"" + pendingUrl +
                 "\" is interrupted by another navigation to \"" + competing + "\"");
         }
@@ -4985,9 +6123,36 @@ namespace PlaywrightNative.WebKit
             return FindCompetingNavigationUrl(pendingUrl, startUrl);
         }
 
+        private bool IsContinueOverrideSourceCommit(string committedUrl)
+        {
+            if (string.IsNullOrEmpty(committedUrl))
+            {
+                return false;
+            }
+
+            string sourceUrl = NavigationTimeout.WithoutHash(_pendingContinueOverrideSourceUrl);
+            if (string.IsNullOrEmpty(sourceUrl) && _pendingRedirectSource != null)
+            {
+                sourceUrl = NavigationTimeout.WithoutHash(_pendingRedirectSource.DocumentUrl);
+            }
+
+            return !string.IsNullOrEmpty(sourceUrl)
+                && IsSameNavigationDestination(committedUrl, sourceUrl);
+        }
+
         private void MaybeInterruptPendingNavigation(WKRequest request)
         {
             if (request == null)
+            {
+                return;
+            }
+
+            // Only document navigations can interrupt a goto. Subresources
+            // (Stylesheet/Script/…) from the previous page must not become
+            // _lastCompetingNavigationUrl (ShouldNotTreatNavigationsAsNewPopups:
+            // popup goto empty.html was interrupted by one-style.css).
+            if (!request.IsNavigationRequest
+                && !NetworkRequestEvents.IsDocumentNavigation(request.ResourceType))
             {
                 return;
             }
@@ -5008,9 +6173,17 @@ namespace PlaywrightNative.WebKit
                 }
 
                 string pendingUrl = NavigationTimeout.WithoutHash(_pendingNavigationUrl);
-                if (string.Equals(requestUrl, pendingUrl, StringComparison.Ordinal)
-                    || string.Equals(requestUrl, NavigationTimeout.WithoutHash(_navigationStartUrl), StringComparison.Ordinal))
+                if (IsSameNavigationDestination(requestUrl, pendingUrl)
+                    || IsSameNavigationDestination(requestUrl, NavigationTimeout.WithoutHash(_navigationStartUrl)))
                 {
+                    // Adopt the canonicalized URL (e.g. trailing slash) so later
+                    // commit/load matching sees the same destination.
+                    if (!string.Equals(requestUrl, pendingUrl, StringComparison.Ordinal)
+                        && IsSameNavigationDestination(requestUrl, pendingUrl))
+                    {
+                        _pendingNavigationUrl = requestUrl;
+                    }
+
                     return;
                 }
 
@@ -5028,14 +6201,30 @@ namespace PlaywrightNative.WebKit
                     return;
                 }
 
+                // Original document URL of a route.continue({ url }) override —
+                // not a competing navigation.
+                string continueSource = NavigationTimeout.WithoutHash(_pendingContinueOverrideSourceUrl);
+                if (string.IsNullOrEmpty(continueSource) && _pendingRedirectSource != null)
+                {
+                    continueSource = NavigationTimeout.WithoutHash(_pendingRedirectSource.DocumentUrl);
+                }
+
+                if (!string.IsNullOrEmpty(continueSource)
+                    && IsSameNavigationDestination(requestUrl, continueSource))
+                {
+                    return;
+                }
+
                 if (request.WKRedirectedFrom != null)
                 {
                     return;
                 }
 
-                // Same-origin document requests during an in-flight goto are usually
-                // redirect continuations. Renderer interrupts are reported as
-                // "Load request cancelled" and rewritten in NavigateAsync.
+                // Record the competitor now; do not fail the waiter until the
+                // competing document commits (OnFrameNavigated) or the original
+                // request is cancelled (FailPendingNavigationIfNeeded). Failing
+                // here left page.Url on the pre-goto document (JsRedirect flake:
+                // interrupt thrown while still on /a instead of /c).
                 _lastCompetingNavigationUrl = requestUrl;
             }
         }
@@ -5095,10 +6284,9 @@ namespace PlaywrightNative.WebKit
                 return _lastCompetingNavigationUrl;
             }
 
-            string fallback = null;
             foreach (IRequest request in _requests.Snapshot())
             {
-                if (request == null)
+                if (request == null || !request.IsNavigationRequest)
                 {
                     continue;
                 }
@@ -5109,15 +6297,10 @@ namespace PlaywrightNative.WebKit
                     continue;
                 }
 
-                if (request.IsNavigationRequest)
-                {
-                    return requestUrl;
-                }
-
-                fallback ??= requestUrl;
+                return requestUrl;
             }
 
-            return fallback;
+            return null;
         }
 
         private void ApplyRequestedNavigationUrl(string url)
@@ -5156,7 +6339,9 @@ namespace PlaywrightNative.WebKit
                     return;
                 }
 
+                reason = WebKitNavigationErrors.Normalize(reason);
                 NavigationException exception = new(reason, url);
+                _awaitingReplacementTarget = false;
                 _pendingLoadTcs?.TrySetException(exception);
                 _pendingDomContentTcs?.TrySetException(exception);
                 _pendingCommitTcs?.TrySetException(exception);
@@ -5246,7 +6431,7 @@ namespace PlaywrightNative.WebKit
                     await EvaluateAsync<object>("1").ConfigureAwait(false);
                     return;
                 }
-                catch (PlaywrightNativeException ex) when (
+                catch (PlaywrightException ex) when (
                     ex.Message != null
                     && (ex.Message.Contains("Missing injected script", StringComparison.OrdinalIgnoreCase)
                         || ex.Message.Contains("execution context", StringComparison.OrdinalIgnoreCase)))
@@ -5263,7 +6448,8 @@ namespace PlaywrightNative.WebKit
                 return null;
             }
 
-            IResponse found = null;
+            IResponse exact = null;
+            IResponse hashOnly = null;
             foreach (IRequest request in _requests.Snapshot())
             {
                 if (request == null
@@ -5280,43 +6466,207 @@ namespace PlaywrightNative.WebKit
                 }
 
                 if (string.Equals(response.Url, url, StringComparison.Ordinal)
-                    || string.Equals(request.Url, url, StringComparison.Ordinal)
-                    || (response.Url != null && response.Url.StartsWith(url, StringComparison.Ordinal)))
+                    || string.Equals(request.Url, url, StringComparison.Ordinal))
                 {
-                    found = response;
+                    exact = response;
+                    continue;
+                }
+
+                // Allow a hash-only suffix (same document), but never a query-string
+                // match — otherwise /page would wrongly resolve to /page?foo from a
+                // later history entry (bfcache goBack/goForward).
+                if (hashOnly == null
+                    && response.Url != null
+                    && response.Url.StartsWith(url, StringComparison.Ordinal)
+                    && response.Url.Length > url.Length
+                    && response.Url[url.Length] == '#')
+                {
+                    hashOnly = response;
                 }
             }
 
-            return found;
+            return exact ?? hashOnly;
         }
 
         private async Task SyncBootstrapScriptAsync()
         {
-            WKTargetSession target = _targetSession
-                ?? throw new PlaywrightNativeException("Inner target session is not yet available — the page has not finished initializing.");
-            await SyncBootstrapScriptOnAsync(target).ConfigureAwait(false);
+            // NewPage applies context init scripts after InitializedTask. Darwin can
+            // recycle the initial target in that gap (same race as SetEmulatedViewportAsync),
+            // leaving _targetSession null while InitializedTask is already completed —
+            // or swapping the session under a live setBootstrapScript (zombie target →
+            // lost response until the 20s command timeout, which eats the NUnit 30s
+            // budget on AddInitScriptAsyncShouldPassArg). Keep polling / retrying, and
+            // bound each attempt to the remaining poll window so a zombie cannot burn
+            // the full command timeout.
+            //
+            // When DidClose wins the race (pageProxyDestroyed during NewPage chrome
+            // apply), soft-return like EvaluateOnCurrentAsync / NewWKPageAsync's
+            // InitializedTask tolerance — throwing here fails NewPage itself
+            // (ShouldFailWithoutCredentials on macOS CI) after init scripts were
+            // already added to the in-memory list.
+            DateTime deadline = DateTime.UtcNow.AddSeconds(5);
+            Exception lastError = null;
+            while (DateTime.UtcNow < deadline && !_closed)
+            {
+                Task init = _initializedTcs.Task;
+                if (init.IsFaulted || init.IsCanceled)
+                {
+                    break;
+                }
+
+                WKTargetSession target = _targetSession;
+                if (target == null || target.IsDisposed)
+                {
+                    // Always delay: once InitializedTask has succeeded, WhenAny(init, …)
+                    // would spin without yielding.
+                    await Task.Delay(50).ConfigureAwait(false);
+                    continue;
+                }
+
+                TimeSpan remaining = deadline - DateTime.UtcNow;
+                if (remaining <= TimeSpan.Zero)
+                {
+                    break;
+                }
+
+                // Cap a single zombie attempt so we can retry on a replacement session
+                // inside the 5s window. Live targets normally ack in milliseconds.
+                TimeSpan attemptBudget = remaining > TimeSpan.FromSeconds(1.5)
+                    ? TimeSpan.FromSeconds(1.5)
+                    : remaining;
+                Task send = SyncBootstrapScriptOnAsync(target);
+                Task finished = await Task.WhenAny(send, Task.Delay(attemptBudget)).ConfigureAwait(false);
+                if (finished == send)
+                {
+                    try
+                    {
+                        await send.ConfigureAwait(false);
+                        return;
+                    }
+                    catch (TimeoutException ex)
+                    {
+                        lastError = ex;
+                    }
+                    catch (TargetClosedException ex)
+                    {
+                        lastError = ex;
+                    }
+                    catch (PlaywrightException ex) when (
+                        ex.Message != null
+                        && (ex.Message.Contains("Target closed", StringComparison.OrdinalIgnoreCase)
+                            || ex.Message.Contains("Session closed", StringComparison.OrdinalIgnoreCase)
+                            || ex.Message.Contains("browser has been closed", StringComparison.OrdinalIgnoreCase)
+                            || ex.Message.Contains("context or browser has been closed", StringComparison.OrdinalIgnoreCase)))
+                    {
+                        lastError = ex;
+                    }
+                }
+                else
+                {
+                    lastError = new TimeoutException(
+                        "Page.setBootstrapScript did not respond before the bootstrap sync deadline.");
+
+                    // Observe the abandoned attempt so a late TimeoutException is not
+                    // an unobserved task failure; a replacement target may succeed next.
+                    _ = send.ContinueWith(
+                        static t => _ = t.Exception,
+                        CancellationToken.None,
+                        TaskContinuationOptions.OnlyOnFaulted,
+                        TaskScheduler.Default);
+                }
+
+                await Task.Delay(50).ConfigureAwait(false);
+            }
+
+            if (_closed)
+            {
+                return;
+            }
+
+            if (lastError != null)
+            {
+                throw new PlaywrightException(
+                    "Inner target session became unavailable while updating Page.setBootstrapScript.",
+                    lastError);
+            }
+
+            throw new PlaywrightException("Inner target session is not yet available — the page has not finished initializing.");
         }
 
         private Task SyncBootstrapScriptOnAsync(WKTargetSession target)
-            => target.SendAsync("Page.setBootstrapScript", new { source = AddInitScriptHelper.CombineBootstrap(_initScripts) });
+        {
+            // Snapshot under lock: concurrent ExposeBinding/AddInitScript can mutate
+            // _initScripts while CombineBootstrap enumerates (exposeBinding parallel).
+            string[] scripts;
+            lock (_initScriptsLock)
+            {
+                scripts = _initScripts.ToArray();
+            }
+
+            return target.SendAsync("Page.setBootstrapScript", new { source = AddInitScriptHelper.CombineBootstrap(scripts) });
+        }
 
         private async Task<IElementHandle> EvaluateElementHandleAsync(string expression)
         {
             WKExecutionContext context = RequireExecutionContext();
             JsonElement? handleValue = await context.EvaluateHandleAsync(expression).ConfigureAwait(false);
-            return WrapRemoteObject(context, handleValue) as IElementHandle;
+
+            // Skip fire-and-forget InitializePreviewAsync (callFunctionOn + awaitPromise).
+            // AddStyleTag content handles + caller EvaluateAsync have wedged Darwin the
+            // same way AddScriptTag / loading=lazy iframes do (mac shard2 30s hangs).
+            return WrapWKHandle(context, handleValue, initializePreview: false) as IElementHandle;
         }
 
-        private async Task WaitForSentinelAsync(string sentinel, string errorMessage)
+        private async Task<IElementHandle> EvaluateElementHandleInFrameAsync(WKFrame frame, string expression)
+        {
+            WKExecutionContext context = await WaitForFrameContextAsync(frame).ConfigureAwait(false);
+            JsonElement? handleValue = await context.EvaluateHandleAsync(expression).ConfigureAwait(false);
+
+            // Skip fire-and-forget InitializePreviewAsync (callFunctionOn + awaitPromise).
+            // Concurrent preview + caller EvaluateAsync has wedged Darwin WebKit sessions
+            // the same way loading=lazy iframe handles do.
+            return WrapWKHandle(context, handleValue, initializePreview: false) as IElementHandle;
+        }
+
+        private Task WaitForSentinelAsync(string sentinel, string errorMessage)
+            => WaitForSentinelInFrameAsync(_frameManager.MainFrame, sentinel, errorMessage);
+
+        private async Task WaitForSentinelInFrameAsync(
+            WKFrame frame,
+            string sentinel,
+            string errorMessage,
+            int? timeoutMs = null)
         {
             string sentinelLiteral = JsonSerializer.Serialize(sentinel);
             string expression = $"window[{sentinelLiteral}]";
 
             // Poll the in-page sentinel: 0 = pending, 1 = loaded, 2 = error.
-            using System.Threading.CancellationTokenSource cts = new((int)_defaultNavigationTimeout);
+            // Race each evaluate against the remaining budget so a hung
+            // Runtime.evaluate cannot outlive timeoutMs (Darwin suite load).
+            int timeout = timeoutMs ?? (int)_defaultNavigationTimeout;
+            System.Diagnostics.Stopwatch sw = System.Diagnostics.Stopwatch.StartNew();
             while (true)
             {
-                int state = await EvaluateExpressionAsync<int>(expression).ConfigureAwait(false);
+                long remainingMs = timeout - sw.ElapsedMilliseconds;
+                if (remainingMs <= 0)
+                {
+                    throw new TimeoutException(errorMessage + " (timed out)");
+                }
+
+                Task<int> evalTask = EvaluateInFrameAsync<int>(frame, expression);
+                Task finished = await Task.WhenAny(evalTask, Task.Delay((int)Math.Min(remainingMs, int.MaxValue)))
+                    .ConfigureAwait(false);
+                if (finished != evalTask)
+                {
+                    _ = evalTask.ContinueWith(
+                        t => _ = t.Exception,
+                        System.Threading.CancellationToken.None,
+                        TaskContinuationOptions.OnlyOnFaulted,
+                        TaskScheduler.Default);
+                    throw new TimeoutException(errorMessage + " (timed out)");
+                }
+
+                int state = await evalTask.ConfigureAwait(false);
                 if (state == 1)
                 {
                     return;
@@ -5324,10 +6674,10 @@ namespace PlaywrightNative.WebKit
 
                 if (state == 2)
                 {
-                    throw new PlaywrightNativeException(errorMessage);
+                    throw new PlaywrightException(errorMessage);
                 }
 
-                if (cts.IsCancellationRequested)
+                if (sw.ElapsedMilliseconds >= timeout)
                 {
                     throw new TimeoutException(errorMessage + " (timed out)");
                 }
@@ -5368,7 +6718,7 @@ namespace PlaywrightNative.WebKit
                 && nodeSubtype.ValueKind == JsonValueKind.String
                 && nodeSubtype.GetString() == "node")
             {
-                return new WKElementHandle(context, objectId, this, "JSHandle@node");
+                return new WKElementHandle(context, objectId, this, "JSHandle@node", initializePreview: true);
             }
 
             return new WKJSHandle(context, objectId, this, preview);
@@ -5376,35 +6726,87 @@ namespace PlaywrightNative.WebKit
 
         private async Task<T> EvaluatePreparedAsync<T>(string handleFn, object[] handleArgs)
         {
-            await EvaluateHandleArg.StashRemoteHandlesAsync(handleArgs).ConfigureAwait(false);
-            return await EvaluateSerializedAsync<T>(
-                EvaluateHandleArg.PreparedExpression(handleFn, handleArgs)).ConfigureAwait(false);
+            // Nested handle trees still use the stash path: WebKit rejects mixed
+            // value/objectId Runtime.callFunctionOn argument lists. Adopt foreign
+            // ElementHandles into the target world before stashing.
+            try
+            {
+                await Task.Yield();
+                WKExecutionContext context = await WaitForMainExecutionContextAsync().ConfigureAwait(false);
+                await StashAdoptedHandlesAsync(context, handleArgs).ConfigureAwait(false);
+                return await EvaluateSerializedAsync<T>(
+                    EvaluateHandleArg.PreparedExpression(handleFn, handleArgs)).ConfigureAwait(false);
+            }
+            catch (PlaywrightException ex)
+            {
+                throw EvaluateSerialization.RewriteException(ex);
+            }
+        }
+
+        /// <summary>
+        /// Parks remote handles on <c>globalThis.__pw_eh</c> in the target world,
+        /// adopting ElementHandles that were created in another same-origin context.
+        /// </summary>
+        private async Task StashAdoptedHandlesAsync(WKExecutionContext target, object[] callArgs)
+        {
+            foreach ((IJSHandle handle, string key) in EvaluateHandleArg.EnumerateStashSlots(callArgs))
+            {
+                if (handle is not WKJSHandle wk || string.IsNullOrEmpty(wk.ObjectId))
+                {
+                    continue;
+                }
+
+                if (wk.ExecutionContext != null && wk.ExecutionContext.ContextId == target.ContextId)
+                {
+                    await wk.EvaluateAsync<bool>(EvaluateHandleArg.StashFunction, key).ConfigureAwait(false);
+                    continue;
+                }
+
+                if (wk.AsElement() == null)
+                {
+                    throw new PlaywrightException(DispatchEventScript.DifferentContextMessage);
+                }
+
+                string adoptedId = await target.AdoptElementObjectIdAsync(wk.ObjectId).ConfigureAwait(false);
+                await target
+                    .EvaluateFunctionOnHandleAsync<bool>(adoptedId, EvaluateHandleArg.StashFunction, key)
+                    .ConfigureAwait(false);
+            }
         }
 
         private async Task<T> EvaluateSerializedAsync<T>(string expression)
         {
             try
             {
-                // Yield so callers can subscribe to page events (waitForEvent)
-                // before the evaluate is sent — Node's event loop does this
-                // automatically between `page.evaluate(...)` and `await waitForEvent`.
-                await Task.Yield();
                 WKExecutionContext context = await WaitForMainExecutionContextAsync().ConfigureAwait(false);
                 if (EvaluateSerialization.CanWrapExpression(expression))
                 {
+                    // Yield so callers can subscribe to page events (waitForEvent)
+                    // before the evaluate is sent — Node's event loop does this
+                    // automatically between `page.evaluate(...)` and `await waitForEvent`.
+                    await Task.Yield();
                     JsonElement? wrapped = await context
                         .EvaluateSerializedRemoteAsync(EvaluateSerialization.WithSerializedResult(expression))
                         .ConfigureAwait(false);
                     return EvaluateSerialization.ParseRemote<T>(wrapped);
                 }
 
-                JsonElement? remote = await context.EvaluateHandleAsync(expression).ConfigureAwait(false);
+                // Thenables (async evaluate / Promise): start Runtime.evaluate before
+                // Yield so Clock.RunForAsync racing after `Task t = page.EvaluateAsync(...)`
+                // sees fake timers already scheduled. Materialize/awaitPromise still runs
+                // after Yield so waitForEvent can attach while the thenable is in flight —
+                // matching Node. Yield-before-send let RunFor finish with no pending
+                // timers, then evaluate scheduled setTimeout that never fired
+                // (ReplacesGlobalPerformanceNow callFunctionOn 20s on Darwin).
+                Task<JsonElement?> handleTask = context.EvaluateHandleAsync(expression);
+                await Task.Yield();
+                JsonElement? remote = await handleTask.ConfigureAwait(false);
                 return await EvaluateSerialization.MaterializeAsync<T>(
                     remote,
                     id => context.EvaluateFunctionOnHandleAsync<JsonElement>(id, EvaluateSerialization.SerializeAwaitedJs),
                     id => context.ReleaseHandleAsync(id)).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException ex)
+            catch (PlaywrightException ex)
             {
                 throw EvaluateSerialization.RewriteException(ex);
             }
@@ -5412,18 +6814,53 @@ namespace PlaywrightNative.WebKit
 
         private async Task<T> EvaluateFunctionSerializedAsync<T>(string expression, object arg)
         {
-            WKExecutionContext context = await WaitForMainExecutionContextAsync().ConfigureAwait(false);
-            JsonElement? remote = await context.EvaluateFunctionHandleAsync(expression, arg).ConfigureAwait(false);
-            string objectId = RemoteObject.GetObjectId(remote);
-            if (!string.IsNullOrEmpty(objectId))
+            try
             {
+                await Task.Yield();
+                WKExecutionContext context = await WaitForMainExecutionContextAsync().ConfigureAwait(false);
+
+                // Primitive / unserializable EvaluateHandle results are ImmediateJSHandle
+                // (no objectId). WebKit rejects {value}/{unserializableValue} on
+                // callFunctionOn with executionContextId — inline via tree revive.
+                if (arg is ImmediateJSHandle immediate)
+                {
+                    if (!EvaluateHandleArg.TryPrepareHandleCall(
+                            expression,
+                            immediate,
+                            out string handleFn,
+                            out object[] handleArgs))
+                    {
+                        throw new PlaywrightException(DispatchEventScript.DifferentContextMessage);
+                    }
+
+                    return await EvaluatePreparedAsync<T>(handleFn, handleArgs).ConfigureAwait(false);
+                }
+
+                // WebKit accepts objectId arguments only on the objectId-bound form of
+                // Runtime.callFunctionOn (not executionContextId). Adopt into this world
+                // then evaluate with the handle as `this`/first argument.
+                if (arg is not WKJSHandle handle)
+                {
+                    throw new PlaywrightException(DispatchEventScript.DifferentContextMessage);
+                }
+
+                string objectId = await context.ResolveHandleObjectIdAsync(handle).ConfigureAwait(false);
+                string wrapped =
+                    "function () {" +
+                    "  const s = (" + EvaluateSerialization.SerializeJs + ");" +
+                    "  const v = (" + expression + ").apply(null, arguments);" +
+                    "  if (v && typeof v.then === 'function') return v.then(s);" +
+                    "  return s(v);" +
+                    "}";
                 JsonElement tagged = await context
-                    .EvaluateFunctionOnHandleAsync<JsonElement>(objectId, EvaluateSerialization.SerializeJs)
+                    .EvaluateFunctionOnHandleAsync<JsonElement>(objectId, wrapped)
                     .ConfigureAwait(false);
                 return JsonValueHelper.Parse<T>(tagged);
             }
-
-            return EvaluateSerialization.ParseRemote<T>(remote);
+            catch (PlaywrightException ex)
+            {
+                throw EvaluateSerialization.RewriteException(ex);
+            }
         }
 
         /// <summary>
@@ -5462,11 +6899,45 @@ namespace PlaywrightNative.WebKit
             }
         }
 
+        private async Task PauseInternalAsync()
+        {
+            if (_closed || _closing)
+            {
+                throw new PlaywrightException("page.pause: Page has been closed.");
+            }
+
+            int timeoutMs = TimeoutSettings.TimeoutMs(DefaultTimeout);
+            if (timeoutMs == System.Threading.Timeout.Infinite)
+            {
+                while (!_closed && !_closing)
+                {
+                    await Task.Delay(50).ConfigureAwait(false);
+                }
+
+                return;
+            }
+
+            System.Diagnostics.Stopwatch sw = System.Diagnostics.Stopwatch.StartNew();
+            while (!_closed && !_closing)
+            {
+                if (sw.ElapsedMilliseconds >= timeoutMs)
+                {
+                    throw new TimeoutException(
+                        "page.pause: Timeout " + timeoutMs.ToString(System.Globalization.CultureInfo.InvariantCulture) + "ms exceeded.");
+                }
+
+                await Task.Delay(20).ConfigureAwait(false);
+            }
+        }
+
         private TargetClosedException PageClosedException(string suffix = null)
         {
+            // Match Chromium / official Playwright: callers assert the stable
+            // DriverMessages string, not a page-proxy-id-specific message.
+            // Suffixes (e.g. " closed during navigation.") are kept as detail.
             string message = string.IsNullOrEmpty(suffix)
-                ? $"Page {_pageProxyId} is closed"
-                : $"Page {_pageProxyId}{suffix}";
+                ? DriverMessages.BrowserOrContextClosedExceptionMessage
+                : DriverMessages.BrowserOrContextClosedExceptionMessage + suffix;
             return ClosedTarget.Exception(message, _closeReason);
         }
 
@@ -5494,11 +6965,11 @@ namespace PlaywrightNative.WebKit
             ThrowIfClosed();
             if (_crashed)
             {
-                throw new PlaywrightNativeException("Target crashed");
+                throw new PlaywrightException("Target crashed");
             }
 
             WKExecutionContext ctx = _executionContext
-                ?? throw new PlaywrightNativeException("Execution context is not yet available — the page has not finished initializing.");
+                ?? throw new PlaywrightException("Execution context is not yet available — the page has not finished initializing.");
             return ctx;
         }
 
@@ -5508,7 +6979,7 @@ namespace PlaywrightNative.WebKit
             {
                 return await run().ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException ex) when (
+            catch (PlaywrightException ex) when (
                 ex.Message != null
                 && (ex.Message.Contains("Missing injected script", StringComparison.Ordinal)
                     || ex.Message.Contains("Execution context was destroyed", StringComparison.Ordinal)
@@ -5535,6 +7006,7 @@ namespace PlaywrightNative.WebKit
             _executionContext = null;
             _frameContexts.Clear();
             _utilityContexts.Clear();
+            _recentBindingInvocations.Clear();
         }
 
         private async Task EnsureUtilityWorldAsync(WKTargetSession target)
@@ -5548,7 +7020,7 @@ namespace PlaywrightNative.WebKit
             {
                 await target.SendAsync("Page.createUserWorld", new { name = UtilityWorldName }).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
         }
@@ -5614,36 +7086,32 @@ namespace PlaywrightNative.WebKit
             }
 
             string frameId = frame.FrameId
-                ?? throw new PlaywrightNativeException("Cannot navigate a frame without a protocol id.");
-
-            if (!string.IsNullOrEmpty(frameId))
-            {
-                _frameContexts.TryRemove(frameId, out _);
-            }
-
-            object parameters = string.IsNullOrEmpty(referer)
-                ? (object)new { url, pageProxyId = _pageProxyId, frameId }
-                : new { url, pageProxyId = _pageProxyId, frameId, referrer = referer };
-
-            await _browser.Session.SendAsync("Playwright.navigate", parameters).ConfigureAwait(false);
+                ?? throw new PlaywrightException("Cannot navigate a frame without a protocol id.");
 
             int timeoutMs = (int)(timeout ?? _defaultNavigationTimeout);
+            if (timeoutMs <= 0)
+            {
+                timeoutMs = Timeout.Infinite;
+            }
+
             WaitUntilState childWait = waitUntil == WaitUntilState.NetworkIdle
                 ? WaitUntilState.Load
                 : waitUntil;
-            await WaitForChildFrameReadyAsync(frame, url, childWait, timeoutMs).ConfigureAwait(false);
-            if (waitUntil == WaitUntilState.NetworkIdle)
-            {
-                await frame.WaitForLoadStateAsync(LoadState.NetworkIdle, timeoutMs, "frame.goto").ConfigureAwait(false);
-            }
-        }
+            string targetLifecycle = WaitUntilMapping.ToLifecycleEvent(childWait);
 
-        private async Task WaitForChildFrameReadyAsync(
-            WKFrame frame,
-            string url,
-            WaitUntilState waitUntil,
-            int timeoutMs)
-        {
+            static bool HasLifecycle(WKFrame targetFrame, string name)
+            {
+                foreach (string fired in targetFrame.LifecycleEvents)
+                {
+                    if (string.Equals(fired, name, StringComparison.Ordinal))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            }
+
             static bool UrlMatches(string current, string target)
             {
                 if (string.IsNullOrEmpty(current) || string.IsNullOrEmpty(target))
@@ -5651,65 +7119,204 @@ namespace PlaywrightNative.WebKit
                     return false;
                 }
 
-                return current.Contains(target, StringComparison.Ordinal)
-                    || target.Contains(current, StringComparison.Ordinal)
-                    || string.Equals(current, target, StringComparison.OrdinalIgnoreCase);
+                string currentUrl = NavigationTimeout.WithoutHash(current);
+                string targetUrl = NavigationTimeout.WithoutHash(target);
+                return string.Equals(currentUrl, targetUrl, StringComparison.OrdinalIgnoreCase);
             }
 
-            using System.Threading.CancellationTokenSource cts = new(timeoutMs);
-            while (!cts.IsCancellationRequested)
+            TaskCompletionSource<bool> lifecycleTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            bool navigationSettled = false;
+            bool sawTargetLifecycle = false;
+
+            void OnLifecycle(string name)
             {
-                if (frame.IsDetached)
+                if (name != targetLifecycle)
                 {
-                    throw new PlaywrightNativeException("frame was detached");
+                    return;
                 }
 
-                if (UrlMatches(frame.Url, url))
+                if (!navigationSettled)
+                {
+                    // Lifecycle can fire while Playwright.navigate is still awaiting.
+                    sawTargetLifecycle = true;
+                    return;
+                }
+
+                if (UrlMatches(frame.Url, url)
+                    || string.Equals(targetLifecycle, "commit", StringComparison.Ordinal))
+                {
+                    lifecycleTcs.TrySetResult(true);
+                }
+            }
+
+            void OnDetached(WKFrame detached)
+            {
+                if (ReferenceEquals(detached, frame))
+                {
+                    lifecycleTcs.TrySetException(new PlaywrightException("frame was detached"));
+                }
+            }
+
+            void OnNavigated(WKFrame navigated)
+            {
+                if (!ReferenceEquals(navigated, frame) || !navigationSettled)
+                {
+                    return;
+                }
+
+                if (string.Equals(targetLifecycle, "commit", StringComparison.Ordinal)
+                    && UrlMatches(frame.Url, url))
+                {
+                    lifecycleTcs.TrySetResult(true);
+                    return;
+                }
+
+                // Keep waiting on the latest document after a client redirect.
+                if (HasLifecycle(frame, targetLifecycle) && UrlMatches(frame.Url, url))
+                {
+                    lifecycleTcs.TrySetResult(true);
+                }
+            }
+
+            // Subscribe before Playwright.navigate so load between navigate return
+            // and the wait starting cannot be lost (Chromium GoToFrameAsync pattern).
+            frame.LifecycleChanged += OnLifecycle;
+            _frameManager.FrameDetached += OnDetached;
+            _frameManager.FrameNavigated += OnNavigated;
+
+            try
+            {
+                if (!string.IsNullOrEmpty(frameId))
+                {
+                    _frameContexts.TryRemove(frameId, out _);
+                }
+
+                object parameters = string.IsNullOrEmpty(referer)
+                    ? (object)new { url, pageProxyId = _pageProxyId, frameId }
+                    : new { url, pageProxyId = _pageProxyId, frameId, referrer = referer };
+                Task<JsonElement?> navigateTask = _browser.Session.SendAsync("Playwright.navigate", parameters);
+
+                // Race Playwright.navigate with the navigation timeout. A hanging
+                // server can keep the command outstanding; official progress.race
+                // aborts the whole goto, not just the lifecycle wait.
+                if (timeoutMs != Timeout.Infinite)
                 {
                     try
                     {
-                        string readyState = await EvaluateInFrameAsync<string>(frame, "document.readyState").ConfigureAwait(false);
-                        bool reached = waitUntil == WaitUntilState.DOMContentLoaded
-                            ? readyState == "interactive" || readyState == "complete"
-                            : readyState == "complete";
-                        if (reached)
-                        {
-                            return;
-                        }
+                        await navigateTask.WaitAsync(TimeSpan.FromMilliseconds(timeoutMs)).ConfigureAwait(false);
                     }
-                    catch (PlaywrightNativeException)
+                    catch (TimeoutException)
                     {
-                        // New document context is not ready yet.
+                        throw NavigationTimeout.Exceeded(
+                            "frame.goto",
+                            url,
+                            NavigationTimeout.WaitUntilName(waitUntil),
+                            timeoutMs);
+                    }
+                }
+                else
+                {
+                    await navigateTask.ConfigureAwait(false);
+                }
+
+                navigationSettled = true;
+
+                if (frame.IsDetached)
+                {
+                    throw new PlaywrightException("frame was detached");
+                }
+
+                bool lifecycleReady =
+                    (sawTargetLifecycle || HasLifecycle(frame, targetLifecycle))
+                    && (string.Equals(targetLifecycle, "commit", StringComparison.Ordinal)
+                        || UrlMatches(frame.Url, url));
+
+                if (!lifecycleReady)
+                {
+                    if (timeoutMs != Timeout.Infinite)
+                    {
+                        using CancellationTokenSource cts = new(timeoutMs);
+                        cts.Token.Register(
+                            () => lifecycleTcs.TrySetException(
+                                NavigationTimeout.Exceeded(
+                                    "frame.goto",
+                                    url,
+                                    NavigationTimeout.WaitUntilName(waitUntil),
+                                    timeoutMs)));
+                        await lifecycleTcs.Task.ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        await lifecycleTcs.Task.ConfigureAwait(false);
                     }
                 }
 
-                try
+                if (waitUntil == WaitUntilState.NetworkIdle)
                 {
-                    await Task.Delay(50, cts.Token).ConfigureAwait(false);
-                }
-                catch (TaskCanceledException)
-                {
-                    break;
+                    float? networkIdleTimeout = timeoutMs == Timeout.Infinite
+                        ? 0
+                        : timeoutMs;
+                    await frame.WaitForLoadStateAsync(
+                        LoadState.NetworkIdle,
+                        networkIdleTimeout,
+                        "frame.goto").ConfigureAwait(false);
                 }
             }
-
-            if (frame.IsDetached)
+            finally
             {
-                throw new PlaywrightNativeException("frame was detached");
+                frame.LifecycleChanged -= OnLifecycle;
+                _frameManager.FrameDetached -= OnDetached;
+                _frameManager.FrameNavigated -= OnNavigated;
+            }
+        }
+
+        private IResponse FindNavigationResponseForFrame(IFrame frame, string url)
+        {
+            if (frame == null || string.IsNullOrEmpty(url))
+            {
+                return null;
             }
 
-            throw NavigationTimeout.Exceeded(
-                "frame.goto",
-                url,
-                NavigationTimeout.WaitUntilName(waitUntil),
-                timeoutMs);
+            IResponse exact = null;
+            foreach (IRequest request in _requests.Snapshot())
+            {
+                if (request == null
+                    || (!request.IsNavigationRequest
+                        && !NetworkRequestEvents.IsDocumentNavigation(request.ResourceType)))
+                {
+                    continue;
+                }
+
+                if (!ReferenceEquals(request.Frame, frame))
+                {
+                    continue;
+                }
+
+                IResponse response = request.ExistingResponse;
+                if (response == null)
+                {
+                    continue;
+                }
+
+                if (string.Equals(response.Url, url, StringComparison.Ordinal)
+                    || string.Equals(request.Url, url, StringComparison.Ordinal)
+                    || string.Equals(
+                        NavigationTimeout.WithoutHash(response.Url),
+                        NavigationTimeout.WithoutHash(url),
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    exact = response;
+                }
+            }
+
+            return exact;
         }
 
         private Task<WKExecutionContext> WaitForMainExecutionContextAsync()
         {
             if (_crashed)
             {
-                throw new PlaywrightNativeException("Target crashed");
+                throw new PlaywrightException("Target crashed");
             }
 
             WKFrame main = _frameManager.MainFrame;
@@ -5727,12 +7334,17 @@ namespace PlaywrightNative.WebKit
             {
                 if (_crashed)
                 {
-                    throw new PlaywrightNativeException("Target crashed");
+                    throw new PlaywrightException("Target crashed");
                 }
 
                 if (_closed || _closing)
                 {
                     throw PageClosedException();
+                }
+
+                if (frame != null && frame.IsDetached)
+                {
+                    throw new PlaywrightException("Frame was detached");
                 }
 
                 if (TryGetFrameContext(frame, out WKExecutionContext context))
@@ -5748,7 +7360,12 @@ namespace PlaywrightNative.WebKit
                 throw PageClosedException();
             }
 
-            throw new PlaywrightNativeException("Execution context is not yet available — the frame has not finished initializing.");
+            if (frame != null && frame.IsDetached)
+            {
+                throw new PlaywrightException("Frame was detached");
+            }
+
+            throw new PlaywrightException("Execution context is not yet available — the frame has not finished initializing.");
         }
 
         private bool TryGetFrameContext(WKFrame frame, out WKExecutionContext context)
@@ -5791,6 +7408,43 @@ namespace PlaywrightNative.WebKit
             }
 
             LifecycleChanged?.Invoke(name);
+        }
+
+        /// <summary>
+        /// Seeds lifecycle from <c>document.readyState</c> while preserving the
+        /// public event-before-waiter ordering used by protocol load handlers.
+        /// </summary>
+        /// <param name="name">Lifecycle event name.</param>
+        private void RecordLifecycleFromDocumentSeed(string name)
+        {
+            if (name == "load")
+            {
+                bool already;
+                lock (_lifecycleEvents)
+                {
+                    already = _lifecycleEvents.Contains("load");
+                }
+
+                if (!already)
+                {
+                    Load?.Invoke(this, this);
+                }
+            }
+            else if (name == "DOMContentLoaded")
+            {
+                bool already;
+                lock (_lifecycleEvents)
+                {
+                    already = _lifecycleEvents.Contains("DOMContentLoaded");
+                }
+
+                if (!already)
+                {
+                    DOMContentLoaded?.Invoke(this, this);
+                }
+            }
+
+            RecordLifecycle(name);
         }
 
         private void OnMainFrameLifecycle(string name)
@@ -5844,7 +7498,7 @@ namespace PlaywrightNative.WebKit
             return WrapWKHandle(context, handleValue) as IElementHandle;
         }
 
-        private IJSHandle WrapWKHandle(WKExecutionContext context, JsonElement? handleValue)
+        private IJSHandle WrapWKHandle(WKExecutionContext context, JsonElement? handleValue, bool initializePreview = true)
         {
             if (handleValue == null)
             {
@@ -5876,7 +7530,7 @@ namespace PlaywrightNative.WebKit
                 && nodeSubtype.ValueKind == JsonValueKind.String
                 && nodeSubtype.GetString() == "node")
             {
-                return new WKElementHandle(context, objectId, this, "JSHandle@node");
+                return new WKElementHandle(context, objectId, this, "JSHandle@node", initializePreview);
             }
 
             return new WKJSHandle(context, objectId, this, preview);
@@ -5887,7 +7541,7 @@ namespace PlaywrightNative.WebKit
             IElementHandle handle = await QuerySelectorAsync(selector).ConfigureAwait(false);
             if (handle == null)
             {
-                throw new PlaywrightNativeException($"No node found for selector: {selector}");
+                throw new PlaywrightException($"No node found for selector: {selector}");
             }
 
             return handle;
@@ -5898,7 +7552,11 @@ namespace PlaywrightNative.WebKit
             switch (method)
             {
                 case "Target.targetCreated":
-                    OnTargetCreated(parameters?.Deserialize<WKTargetCreatedPayload>());
+                    // Upstream awaits frame Console.enable inside async _onTargetCreated so
+                    // Darwin frame-session builds do not race console.warn (service-worker
+                    // block) past enable. Fire-and-forget the async handler; page/provisional
+                    // targets still initialize via InitializeAndMaybeResumeAsync.
+                    _ = OnTargetCreatedAsync(parameters?.Deserialize<WKTargetCreatedPayload>());
                     break;
                 case "Target.dispatchMessageFromTarget":
                     OnDispatchMessageFromTarget(parameters);
@@ -5921,7 +7579,7 @@ namespace PlaywrightNative.WebKit
             }
         }
 
-        private void OnTargetCreated(WKTargetCreatedPayload payload)
+        private async Task OnTargetCreatedAsync(WKTargetCreatedPayload payload)
         {
             WKTargetInfo info = payload?.TargetInfo;
             if (info == null || string.IsNullOrEmpty(info.TargetId))
@@ -5933,20 +7591,37 @@ namespace PlaywrightNative.WebKit
 
             // WebKit reports both page and frame targets under the page proxy. Only page
             // targets drive the main/provisional session. Frame targets (e.g. the
-            // "frame-*" target the macOS-14 build emits) must be ignored here — falling
-            // through to the page path would dispose the live main session and orphan any
-            // in-flight command, producing a 30s hang. Mirrors upstream wkPage._onTargetCreated,
-            // which returns early for targetInfo.type === 'frame'. Frame sessions are not
-            // yet modelled in this port, so we simply skip them.
+            // "frame-*" target the macOS-14 build emits) must not fall through to the page
+            // path — that would dispose the live main session and orphan in-flight commands.
+            // On enableFrameSessions builds, adopt them as Console-only WKFrameSession
+            // (upstream wkPage._onTargetCreated + WKFrame) and await Console.enable.
             if (string.Equals(info.Type, "frame", StringComparison.Ordinal))
             {
-                _logger?.LogDebug("Ignoring frame target {TargetId} reported under the page proxy", targetId);
+                if (EnableFrameSessions)
+                {
+                    await AdoptFrameSessionAsync(targetId).ConfigureAwait(false);
+                }
+                else
+                {
+                    _logger?.LogDebug("Ignoring frame target {TargetId} reported under the page proxy", targetId);
+                }
+
                 return;
             }
 
+            OnPageOrProvisionalTargetCreated(info, targetId);
+        }
+
+        private void OnPageOrProvisionalTargetCreated(WKTargetInfo info, string targetId)
+        {
+            // Upstream wkPage asserts only page targets under the page proxy; dedicated
+            // workers are owned by the Worker domain (Worker.workerCreated), not Target.
+            // Handling Target worker targets (including Target.resume) races
+            // Worker.initialized / Console and can stall page console delivery while a
+            // worker is alive — observed as 30s timeouts on macOS CI.
             if (string.Equals(info.Type, "worker", StringComparison.Ordinal))
             {
-                OnWorkerTargetCreated(info, info.IsPaused);
+                _logger?.LogDebug("Ignoring worker target {TargetId}; workers use the Worker domain", targetId);
                 return;
             }
 
@@ -5999,37 +7674,13 @@ namespace PlaywrightNative.WebKit
                     _targetSession.MessageReceived -= OnInnerMessage;
                     _targetSession.Dispose();
                     ClearWorkers();
+                    ClearFrameSessions();
                     ClearExecutionContexts();
                 }
 
                 _targetSession = target;
                 _ = InitializeAndMaybeResumeAsync(target, isMain: true, isPaused);
             }
-        }
-
-        private void OnWorkerTargetCreated(WKTargetInfo info, bool isPaused)
-        {
-            WKTargetSession pageSession = _targetSession ?? _provisionalSession;
-            if (pageSession == null)
-            {
-                return;
-            }
-
-            string targetId = info.TargetId;
-            WKWorkerSession session = new(_session, pageSession, _browser.Connection, targetId);
-            WKWorker worker = new(session, targetId, info.Url);
-            if (!_workers.TryAdd(targetId, worker))
-            {
-                session.Dispose();
-                return;
-            }
-
-            worker.ExceptionThrown += (_, error) => RaisePageError(error);
-            WebKitWorker created = GetOrCreateWorker(worker);
-            Worker?.Invoke(this, created);
-#pragma warning disable CA2025 // Worker session is retained on WKWorker until NotifyClosed
-            _ = InitializeWorkerAsync(worker, pageSession, isPaused);
-#pragma warning restore CA2025
         }
 
         private void OnWorkerDomainCreated(JsonElement? parameters)
@@ -6052,6 +7703,35 @@ namespace PlaywrightNative.WebKit
             WKTargetSession pageSession = _targetSession ?? _provisionalSession;
             if (pageSession == null)
             {
+                // Target recycle can clear the session for a beat while a blob
+                // worker is born (ShouldEmitCreatedAndDestroyedEvents). Retry
+                // briefly so we do not drop Worker.workerCreated.
+                _ = AdoptWorkerWhenSessionReadyAsync(workerId, url);
+                return;
+            }
+
+            AdoptWorker(workerId, url, pageSession);
+        }
+
+        private async Task AdoptWorkerWhenSessionReadyAsync(string workerId, string url)
+        {
+            for (int i = 0; i < 50; i++)
+            {
+                WKTargetSession pageSession = _targetSession ?? _provisionalSession;
+                if (pageSession != null)
+                {
+                    AdoptWorker(workerId, url, pageSession);
+                    return;
+                }
+
+                await Task.Delay(10).ConfigureAwait(false);
+            }
+        }
+
+        private void AdoptWorker(string workerId, string url, WKTargetSession pageSession)
+        {
+            if (string.IsNullOrEmpty(workerId) || pageSession == null)
+            {
                 return;
             }
 
@@ -6067,7 +7747,7 @@ namespace PlaywrightNative.WebKit
             WebKitWorker domainWorker = GetOrCreateWorker(worker);
             Worker?.Invoke(this, domainWorker);
 #pragma warning disable CA2025 // Worker session is retained on WKWorker until NotifyClosed
-            _ = InitializeWorkerAsync(worker, pageSession, resumeTarget: false);
+            _ = InitializeWorkerAsync(worker, pageSession);
 #pragma warning restore CA2025
         }
 
@@ -6109,13 +7789,145 @@ namespace PlaywrightNative.WebKit
 
         private void ClearWorkers()
         {
-            foreach (System.Collections.Generic.KeyValuePair<string, WKWorker> entry in _workers)
-            {
-                entry.Value.NotifyClosed();
-            }
-
+            // Snapshot first: NotifyClosed must not race concurrent Worker.workerTerminated.
+            List<WKWorker> closing = new List<WKWorker>(_workers.Values);
             _workers.Clear();
             _directWorkers.Clear();
+            foreach (WKWorker worker in closing)
+            {
+                worker.NotifyClosed();
+            }
+        }
+
+        private void ClearFrameSessions()
+        {
+            foreach (System.Collections.Generic.KeyValuePair<string, WKFrameSession> entry in _frameSessions)
+            {
+                entry.Value.Dispose();
+            }
+
+            _frameSessions.Clear();
+        }
+
+        /// <summary>
+        /// Returns <see langword="true"/> when every adopted frame session has finished
+        /// <c>Console.enable</c>. Empty means not ready yet (initial page create).
+        /// </summary>
+        /// <returns>Whether frame console domains are ready.</returns>
+        private bool FrameConsolesReady()
+        {
+            if (_frameSessions.IsEmpty)
+            {
+                return false;
+            }
+
+            foreach (System.Collections.Generic.KeyValuePair<string, WKFrameSession> entry in _frameSessions)
+            {
+                if (!entry.Value.IsInitialized)
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        private void AdoptFrameSession(string targetId)
+        {
+            _ = AdoptFrameSessionAsync(targetId);
+        }
+
+        private async Task AdoptFrameSessionAsync(string targetId)
+        {
+            if (string.IsNullOrEmpty(targetId))
+            {
+                return;
+            }
+
+            if (!_frameSessions.TryGetValue(targetId, out WKFrameSession frameSession))
+            {
+                WKTargetSession session = new(_session, _browser.Connection, targetId);
+                frameSession = new(
+                    session,
+                    _logger,
+                    OnConsoleMessageAdded,
+                    OnConsoleRepeatCountUpdated);
+                if (!_frameSessions.TryAdd(targetId, frameSession))
+                {
+                    frameSession.Dispose();
+                    if (!_frameSessions.TryGetValue(targetId, out frameSession))
+                    {
+                        return;
+                    }
+                }
+            }
+
+            // Upstream awaits initialize and swallows errors; frame targets can appear
+            // before the page session finishes getResourceTree. Do not Target.resume
+            // frame sessions here — upstream only resumes page/provisional targets, and
+            // enable-then-resume deadlocks when Console.enable needs an unpaused target.
+            try
+            {
+                await frameSession.InitializeAsync().ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogDebug(ex, "Frame Console.enable failed for {TargetId}", targetId);
+            }
+        }
+
+        private async Task InitializeFrameSessionsAsync(JsonElement? tree)
+        {
+            if (!tree.HasValue
+                || !tree.Value.TryGetProperty("frameTree", out JsonElement frameTree)
+                || frameTree.ValueKind != JsonValueKind.Object)
+            {
+                return;
+            }
+
+            List<Task> pending = new();
+            CollectFrameSessionInitializers(frameTree, pending);
+            if (pending.Count > 0)
+            {
+                await Task.WhenAll(pending).ConfigureAwait(false);
+            }
+        }
+
+        private void CollectFrameSessionInitializers(JsonElement frameTree, List<Task> pending)
+        {
+            if (frameTree.TryGetProperty("frame", out JsonElement frame)
+                && frame.ValueKind == JsonValueKind.Object
+                && frame.TryGetProperty("id", out JsonElement idEl)
+                && idEl.ValueKind == JsonValueKind.String)
+            {
+                string frameId = idEl.GetString();
+                if (!string.IsNullOrEmpty(frameId))
+                {
+                    // Upstream looks up sessions as `frame-${frame.id}`.
+                    string targetId = "frame-" + frameId;
+                    if (!_frameSessions.ContainsKey(targetId))
+                    {
+                        AdoptFrameSession(targetId);
+                    }
+
+                    if (_frameSessions.TryGetValue(targetId, out WKFrameSession session))
+                    {
+                        pending.Add(session.InitializeAsync());
+                    }
+                }
+            }
+
+            if (frameTree.TryGetProperty("childFrames", out JsonElement children)
+                && children.ValueKind == JsonValueKind.Array)
+            {
+                foreach (JsonElement child in children.EnumerateArray())
+                {
+                    if (child.ValueKind == JsonValueKind.Object)
+                    {
+                        CollectFrameSessionInitializers(child, pending);
+                    }
+                }
+            }
         }
 
         private Dictionary<string, string> WorkerExtraHeaders()
@@ -6153,19 +7965,19 @@ namespace PlaywrightNative.WebKit
                     await worker.Session.SendAsync("Network.enable").ConfigureAwait(false);
                     await worker.Session.SendAsync("Network.setExtraHTTPHeaders", new { headers }).ConfigureAwait(false);
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
             }
         }
 
-        private async Task InitializeWorkerAsync(WKWorker worker, WKTargetSession pageSession, bool resumeTarget)
+        private async Task InitializeWorkerAsync(WKWorker worker, WKTargetSession pageSession)
         {
             try
             {
                 // Worker.initialized unpauses the worker; Runtime.enable must be in-flight
                 // at the same time or the enable response never arrives. Mirrors upstream
-                // wkWorkers Promise.all([Runtime.enable, Worker.initialized]).
+                // wkWorkers Promise.all([Runtime.enable, Console.enable, Worker.initialized]).
                 Task enableTask = worker.InitializeAsync();
                 Task initializedTask = pageSession != null
                     ? pageSession.SendAsync("Worker.initialized", new { workerId = worker.WorkerId })
@@ -6179,19 +7991,19 @@ namespace PlaywrightNative.WebKit
                         await worker.Session.SendAsync("Network.enable").ConfigureAwait(false);
                         await worker.Session.SendAsync("Network.setExtraHTTPHeaders", new { headers = workerHeaders }).ConfigureAwait(false);
                     }
-                    catch (PlaywrightNativeException)
+                    catch (PlaywrightException)
                     {
                     }
-                }
-
-                if (resumeTarget)
-                {
-                    await _session.SendAsync("Target.resume", new { targetId = worker.WorkerId }).ConfigureAwait(false);
                 }
             }
             catch (Exception ex)
             {
                 _logger?.LogDebug(ex, "Worker initialize failed for {WorkerId}", worker.WorkerId);
+            }
+            finally
+            {
+                // Unblock EvaluateAsync even when init fails — otherwise callers hang.
+                worker.MarkReady();
             }
         }
 
@@ -6375,6 +8187,13 @@ namespace PlaywrightNative.WebKit
 
             await InitializeTargetAsync(target, isMain).ConfigureAwait(false);
 
+            // If session init already faulted InitializedTask, do not overwrite it
+            // after before-resume / resume.
+            if (_initializedTcs.Task.IsFaulted || _initializedTcs.Task.IsCanceled)
+            {
+                return;
+            }
+
             WKBrowserContext owner = OwnerContext as WKBrowserContext ?? _context;
             if (owner != null)
             {
@@ -6382,13 +8201,31 @@ namespace PlaywrightNative.WebKit
                 {
                     await owner.ApplyEmulationToPageAsync(this).ConfigureAwait(false);
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
+                }
+
+                // NewPage / inferred popups (Opener == null): install context string
+                // init scripts before Target.resume. Protocol popups already installed
+                // them in ApplyEmulationToPageAsync above.
+                if (_opener == null)
+                {
+                    try
+                    {
+                        await owner.ApplyInitScriptsBeforeResumeAsync(this).ConfigureAwait(false);
+                    }
+                    catch (PlaywrightException)
+                    {
+                    }
                 }
             }
 
             if (!isPaused)
             {
+                // Re-assert focus after init so requestStorageAccess sees an
+                // active/focused document (macOS WebKit rejects otherwise).
+                await EnsureActiveAndFocusedAsync().ConfigureAwait(false);
+                CompleteInitializedIfCurrentMain(target);
                 return;
             }
 
@@ -6412,9 +8249,524 @@ namespace PlaywrightNative.WebKit
                 {
                     await ReplayExposedBindingsAsync().ConfigureAwait(false);
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
+            }
+
+            await EnsureActiveAndFocusedAsync().ConfigureAwait(false);
+            CompleteInitializedIfCurrentMain(target);
+        }
+
+        /// <summary>
+        /// Upstream <c>_initializePageProxySession</c>: enable dialogs, mark the page
+        /// active/focused for automation, apply HTTP credentials, and update the
+        /// emulated viewport (including <c>Emulation.setOrientationOverride</c>).
+        /// </summary>
+        /// <returns>A task that completes when page-proxy session setup finishes.</returns>
+        private async Task InitializePageProxySessionAsync()
+        {
+            // Match upstream Promise.all([Dialog.enable, Emulation.setActiveAndFocused,
+            // setJavaScriptEnabled, _updateViewport]).
+            Task dialogTask = _session.SendAsync("Dialog.enable");
+            Task focusTask = EnsureActiveAndFocusedAsync();
+            Task viewportTask = ApplyEmulatedViewportFromContextAsync();
+            Task jsTask = Task.CompletedTask;
+            WKBrowserContext jsContext = _context ?? OwnerContext as WKBrowserContext;
+            if (jsContext != null && jsContext.IsJavaScriptDisabled)
+            {
+                // Upstream disables JS during page-proxy init (before resume) so
+                // bootstrap / about:blank scripts never run. Applying only in
+                // ApplyContextChrome races page init on Darwin.
+                jsTask = _session.SendAsync("Emulation.setJavaScriptEnabled", new { enabled = false });
+            }
+
+            await Task.WhenAll(dialogTask, focusTask, viewportTask, jsTask).ConfigureAwait(false);
+            _dialogEnabled = true;
+
+            // Official always applies auth credentials during page-proxy
+            // init, including empty ones so 401s do not hang on a dialog.
+            await ApplyAuthCredentialsAsync().ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Official <c>_updateViewport</c> during page-proxy init so
+        /// <c>deviceOrientationOverride</c> is set before the first document and
+        /// process creation parameters pick it up on navigations.
+        /// </summary>
+        /// <returns>A task that completes when the override is applied or skipped.</returns>
+        private async Task ApplyEmulatedViewportFromContextAsync()
+        {
+            // Page.setScreenSizeOverride needs Page.enable on the target session; that
+            // runs later in InitializeTargetAsync. Here only send page-proxy Emulation
+            // commands (device metrics + orientation) so orientation is set early.
+            WKBrowserContext context = _context ?? OwnerContext as WKBrowserContext;
+            int width;
+            int height;
+            float deviceScaleFactor;
+            bool isMobile;
+
+            if (_viewportSize != null)
+            {
+                width = _viewportSize.Width;
+                height = _viewportSize.Height;
+                deviceScaleFactor = _emulatedDeviceScaleFactor;
+                isMobile = _emulatedIsMobile;
+            }
+            else if (context != null)
+            {
+                ViewportSize viewport = WindowOpenViewport ?? context.EmulatedViewport;
+                if (viewport == null
+                    && !context.EmulatedDeviceScaleFactor.HasValue
+                    && !context.IsMobile
+                    && context.EmulatedScreenSize == null)
+                {
+                    return;
+                }
+
+                width = viewport?.Width ?? ViewportSizeHelper.Default.Width;
+                height = viewport?.Height ?? ViewportSizeHelper.Default.Height;
+                deviceScaleFactor = context.EmulatedDeviceScaleFactor ?? 1;
+                isMobile = context.IsMobile;
+                _emulatedDeviceScaleFactor = deviceScaleFactor;
+                _emulatedIsMobile = isMobile;
+                if (context.EmulatedScreenSize != null)
+                {
+                    _independentScreen = context.EmulatedScreenSize;
+                }
+
+                _viewportSize = new PageViewportSizeResult { Width = width, Height = height };
+            }
+            else
+            {
+                return;
+            }
+
+            Task deviceMetricsTask = _session.SendAsync("Emulation.setDeviceMetricsOverride", new
+            {
+                width,
+                height,
+                fixedLayout = isMobile,
+                deviceScaleFactor,
+            });
+
+            if (isMobile)
+            {
+                int angle = width > height ? 90 : 0;
+                await Task.WhenAll(
+                    deviceMetricsTask,
+                    _session.SendAsync("Emulation.setOrientationOverride", new { angle })).ConfigureAwait(false);
+            }
+            else
+            {
+                await deviceMetricsTask.ConfigureAwait(false);
+            }
+        }
+
+        /// <summary>
+        /// Re-applies <c>Page.setScreenSizeOverride</c> on a target session
+        /// (official <c>_initializeSessionMayThrow</c>).
+        /// </summary>
+        /// <param name="target">Target session to configure.</param>
+        /// <returns>A task that completes when the override is sent or skipped.</returns>
+        private async Task ApplyScreenSizeOverrideOnAsync(WKTargetSession target)
+        {
+            if (target == null || _viewportSize == null)
+            {
+                return;
+            }
+
+            int screenWidth = _independentScreen?.Width ?? _viewportSize.Width;
+            int screenHeight = _independentScreen?.Height ?? _viewportSize.Height;
+            await target.SendAsync("Page.setScreenSizeOverride", new
+            {
+                width = screenWidth,
+                height = screenHeight,
+            }).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Activates the page target (when present) and sends
+        /// <c>Emulation.setActiveAndFocused</c> so WebKit treats the page as
+        /// focused/active (required for <c>document.requestStorageAccess()</c> on macOS).
+        /// </summary>
+        /// <returns>A task that completes when the command is acknowledged or safely ignored.</returns>
+        private async Task EnsureActiveAndFocusedAsync()
+        {
+            // macOS WebKit gates requestStorageAccess on an active, focused page.
+            // Upstream relies on setActiveAndFocused at page-proxy init; activating
+            // the target first matches BringToFront and re-applies activity state
+            // after cross-process iframe navigations steal focus.
+            WKTargetSession target = _targetSession;
+            if (target != null)
+            {
+                try
+                {
+                    await _session.SendAsync("Target.activate", new { targetId = target.TargetId })
+                        .ConfigureAwait(false);
+                }
+                catch (PlaywrightException)
+                {
+                }
+            }
+
+            try
+            {
+                await _session.SendAsync("Emulation.setActiveAndFocused", new { active = true })
+                    .ConfigureAwait(false);
+            }
+            catch (PlaywrightException ex)
+            {
+                // Older or exotic builds may lack the command; do not fail page init.
+                _logger?.LogDebug(ex, "Emulation.setActiveAndFocused failed for page proxy {PageProxyId}", _pageProxyId);
+            }
+        }
+
+        /// <summary>
+        /// On macOS, delivers a one-shot page-proxy Input click after a successful
+        /// http(s) main-frame navigation so Resource Load Statistics records
+        /// first-party user interaction for that host. Required for a subsequent
+        /// cross-site <c>document.requestStorageAccess()</c> under ITP. WebKit
+        /// counts click/tap/form entry only — modifier-only keys do not qualify.
+        /// Focus is saved and restored so load-time focus (e.g. keyboard.html) and
+        /// frameset aria <c>[active]</c> are not permanently altered.
+        /// </summary>
+        /// <returns>A task that completes when the gesture has been sent or skipped.</returns>
+        private async Task RecordFirstPartyUserInteractionIfNeededAsync()
+        {
+            if (!RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+            {
+                return;
+            }
+
+            string url = _mainFrameUrl;
+            if (string.IsNullOrEmpty(url)
+                || !Uri.TryCreate(url, UriKind.Absolute, out Uri uri)
+                || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps)
+                || string.IsNullOrEmpty(uri.Host))
+            {
+                return;
+            }
+
+            string host = uri.Host;
+            lock (_firstPartyInteractionHosts)
+            {
+                if (!_firstPartyInteractionHosts.Add(host))
+                {
+                    return;
+                }
+            }
+
+            try
+            {
+                // Frameset documents fill the viewport with child frames; a (1,1)
+                // click focuses a child and permanently skews aria [active].
+                // Evaluating documentElement.tagName is unreliable on Darwin
+                // (context can still resolve to a child / HTML), so detect
+                // structurally: after GoTo load, framesets always have children.
+                // RSA first-party visits (set-cookie.html) have none, so they
+                // still receive the pulse. Leave the host unmarked so a later
+                // non-framed navigation can record ITP.
+                WKFrame mainFrame = _frameManager.MainFrame;
+                if (mainFrame != null)
+                {
+                    foreach (WKFrame frame in _frameManager.Frames)
+                    {
+                        if (ReferenceEquals(frame.ParentFrame, mainFrame))
+                        {
+                            lock (_firstPartyInteractionHosts)
+                            {
+                                _firstPartyInteractionHosts.Remove(host);
+                            }
+
+                            return;
+                        }
+                    }
+                }
+
+                WKTargetSession target = _targetSession;
+
+                // Trusted Input form entry — JS-only input does not update ITP
+                // interaction. Prefer typing over a (1,1) mouse click: clicks fire
+                // document 'click' listeners (view-scale mobile tests count them).
+                // Save/restore activeElement so pages that focus on load
+                // (keyboard.html) keep their intended focus for key events.
+                if (target != null)
+                {
+                    try
+                    {
+                        await target.SendAsync(
+                                "Runtime.evaluate",
+                                new
+                                {
+                                    expression =
+                                        "(() => { try {" +
+                                        " window.__pwItpPrevActive = document.activeElement;" +
+                                        " const i = document.createElement('input');" +
+                                        " i.id = '__pw_itp_pulse';" +
+                                        " i.setAttribute('aria-hidden', 'true');" +
+                                        " i.style.cssText = 'position:fixed;left:-9999px;top:0;width:1px;height:1px;opacity:0;pointer-events:none';" +
+                                        " document.documentElement.appendChild(i);" +
+                                        " i.focus({ preventScroll: true });" +
+                                        "} catch (_) {} return true; })()",
+                                    returnByValue = true,
+                                })
+                            .ConfigureAwait(false);
+                    }
+                    catch (PlaywrightException)
+                    {
+                    }
+                }
+
+                // Page-proxy keyDown with text + target insertText — same trusted
+                // path as WKRawKeyboard for form entry (ITP How-To #1).
+                await _session.SendAsync(
+                        "Input.dispatchKeyEvent",
+                        new
+                        {
+                            type = "keyDown",
+                            modifiers = 0,
+                            windowsVirtualKeyCode = 32,
+                            code = "Space",
+                            key = " ",
+                            text = " ",
+                            unmodifiedText = " ",
+                        })
+                    .ConfigureAwait(false);
+                if (target != null)
+                {
+                    try
+                    {
+                        await target.SendAsync("Page.insertText", new { text = " " }).ConfigureAwait(false);
+                    }
+                    catch (PlaywrightException)
+                    {
+                    }
+                }
+
+                await _session.SendAsync(
+                        "Input.dispatchKeyEvent",
+                        new
+                        {
+                            type = "keyUp",
+                            modifiers = 0,
+                            windowsVirtualKeyCode = 32,
+                            code = "Space",
+                            key = " ",
+                        })
+                    .ConfigureAwait(false);
+
+                // RLS hadUserInteraction is already recorded; restoring focus does not clear it.
+                if (target != null)
+                {
+                    try
+                    {
+                        await target.SendAsync(
+                                "Runtime.evaluate",
+                                new
+                                {
+                                    expression =
+                                        "(() => { try {" +
+                                        " document.getElementById('__pw_itp_pulse')?.remove();" +
+                                        " const prev = window.__pwItpPrevActive;" +
+                                        " delete window.__pwItpPrevActive;" +
+                                        " if (prev && typeof prev.focus === 'function') prev.focus({ preventScroll: true });" +
+                                        "} catch (_) {} return true; })()",
+                                    returnByValue = true,
+                                })
+                            .ConfigureAwait(false);
+                    }
+                    catch (PlaywrightException)
+                    {
+                    }
+                }
+            }
+            catch (PlaywrightException ex)
+            {
+                _logger?.LogDebug(ex, "First-party ITP interaction pulse failed for {Host}", host);
+                lock (_firstPartyInteractionHosts)
+                {
+                    _firstPartyInteractionHosts.Remove(host);
+                }
+            }
+            catch (TimeoutException ex)
+            {
+                _logger?.LogDebug(ex, "First-party ITP interaction pulse timed out for {Host}", host);
+                lock (_firstPartyInteractionHosts)
+                {
+                    _firstPartyInteractionHosts.Remove(host);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Runs <c>document.requestStorageAccess</c> via UtilityScript
+        /// <c>callFunctionOn</c> + <c>emulateUserGesture</c>, with a page-proxy
+        /// Input pulse immediately before CFO so Darwin OOPIF transient
+        /// activation is live. First-party ITP interaction for the embedee host
+        /// is recorded on main-frame <see cref="GoToAsync(string, WaitUntilState, float?, string)"/>
+        /// (see <see cref="RecordFirstPartyUserInteractionIfNeededAsync"/>). Do not
+        /// grant <c>storageAccess</c> (Chromium-only in upstream) and do not invoke
+        /// RSA from a click-handler first (burns Darwin's one-shot panel). Frame-*
+        /// sessions are Console-only — never send Input there. Do not call
+        /// <c>Emulation.setActiveAndFocused</c> here (clears activation).
+        /// </summary>
+        /// <param name="context">Child-frame execution context.</param>
+        /// <param name="expression">
+        /// Raw function expression containing <c>requestStorageAccess</c>
+        /// (not pre-invoked via <c>InvokeIfFunction</c>).
+        /// </param>
+        /// <param name="frame">The child frame being evaluated.</param>
+        /// <returns>The remote result object.</returns>
+        private async Task<JsonElement?> EvaluateRequestStorageAccessAsync(
+            WKExecutionContext context,
+            string expression,
+            WKFrame frame)
+        {
+            // Upstream WebKit permission map does not include storageAccess —
+            // MiniBrowser auto-accepts the panel under emulateUserGesture. Do not
+            // grantPermissions(storageAccess); that is Chromium-only.
+
+            // Foreground without setActiveAndFocused (clears transient activation).
+            WKTargetSession target = _targetSession;
+            if (target != null)
+            {
+                try
+                {
+                    await _session.SendAsync("Target.activate", new { targetId = target.TargetId })
+                        .ConfigureAwait(false);
+                }
+                catch (PlaywrightException)
+                {
+                }
+            }
+
+            string rsaExpression = !string.IsNullOrEmpty(expression)
+                    && expression.Contains("requestStorageAccess", StringComparison.Ordinal)
+                ? expression
+                : "() => document.requestStorageAccess().then(() => true, e => false)";
+
+            // Pulse immediately before CFO (inside EvaluateHandleWithUserGestureAsync)
+            // so Darwin OOPIF activation is live when RSA runs under emulateUserGesture.
+            return await context.EvaluateHandleWithUserGestureAsync(
+                    rsaExpression,
+                    () => PulseTrustedGestureOnFrameAsync(frame))
+                .ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Dispatches a trusted page-proxy mouse click on the iframe element so
+        /// macOS WebKit grants transient activation inside the OOPIF for
+        /// <c>document.requestStorageAccess()</c>. Does not call in-page
+        /// <c>window.focus()</c> (that breaks <c>document.hasFocus()</c>).
+        /// </summary>
+        /// <param name="frame">The child frame about to evaluate.</param>
+        /// <returns>A task that completes when the gesture has been sent or skipped.</returns>
+        private async Task PulseTrustedGestureOnFrameAsync(WKFrame frame)
+        {
+            WKFrame parent = frame?.ParentFrame;
+            if (parent == null)
+            {
+                return;
+            }
+
+            double x = 20;
+            double y = 20;
+            try
+            {
+                WKExecutionContext parentContext = await WaitForFrameContextAsync(parent).ConfigureAwait(false);
+
+                // Focus the iframe element (no gesture flag) then read its center
+                // for the page-proxy click that arms OOPIF transient activation.
+                const string rectExpression = @"(() => {
+  const el = document.querySelector('iframe, frame');
+  if (!el) return '20,20';
+  if (typeof el.focus === 'function') el.focus();
+  const r = el.getBoundingClientRect();
+  if (!r.width || !r.height) return '20,20';
+  return (r.left + (r.width / 2)) + ',' + (r.top + (r.height / 2));
+})()";
+                object rectParams = parentContext.ContextId != 0
+                    ? new
+                    {
+                        expression = rectExpression,
+                        contextId = parentContext.ContextId,
+                        returnByValue = true,
+                        emulateUserGesture = false,
+                    }
+                    : (object)new
+                    {
+                        expression = rectExpression,
+                        returnByValue = true,
+                        emulateUserGesture = false,
+                    };
+                JsonElement? rectResponse = await parentContext.Session.SendAsync("Runtime.evaluate", rectParams)
+                    .ConfigureAwait(false);
+                string raw = null;
+                if (rectResponse.HasValue
+                    && rectResponse.Value.TryGetProperty("result", out JsonElement rectResult)
+                    && rectResult.TryGetProperty("value", out JsonElement rectValue)
+                    && rectValue.ValueKind == JsonValueKind.String)
+                {
+                    raw = rectValue.GetString();
+                }
+
+                if (!string.IsNullOrEmpty(raw))
+                {
+                    string[] parts = raw.Split(',');
+                    if (parts.Length >= 2
+                        && double.TryParse(
+                            parts[0],
+                            System.Globalization.NumberStyles.Float,
+                            System.Globalization.CultureInfo.InvariantCulture,
+                            out double parsedX)
+                        && double.TryParse(
+                            parts[1],
+                            System.Globalization.NumberStyles.Float,
+                            System.Globalization.CultureInfo.InvariantCulture,
+                            out double parsedY))
+                    {
+                        x = parsedX;
+                        y = parsedY;
+                    }
+                }
+            }
+            catch (PlaywrightException ex)
+            {
+                _logger?.LogDebug(ex, "Trusted gesture rect failed for requestStorageAccess on {PageProxyId}", _pageProxyId);
+            }
+            catch (JsonException ex)
+            {
+                _logger?.LogDebug(ex, "Trusted gesture rect failed for requestStorageAccess on {PageProxyId}", _pageProxyId);
+            }
+            catch (TimeoutException ex)
+            {
+                _logger?.LogDebug(ex, "Trusted gesture rect failed for requestStorageAccess on {PageProxyId}", _pageProxyId);
+            }
+
+            try
+            {
+                // Page-proxy only — frame-* Input never ACKs on Darwin 2251.
+                await _session.SendAsync(
+                    "Input.dispatchMouseEvent",
+                    new { type = "move", button = "none", x, y, modifiers = 0, buttons = 0 })
+                    .ConfigureAwait(false);
+                await _session.SendAsync(
+                    "Input.dispatchMouseEvent",
+                    new { type = "down", button = "left", x, y, modifiers = 0, buttons = 1, clickCount = 1 })
+                    .ConfigureAwait(false);
+                await _session.SendAsync(
+                    "Input.dispatchMouseEvent",
+                    new { type = "up", button = "left", x, y, modifiers = 0, buttons = 0, clickCount = 1 })
+                    .ConfigureAwait(false);
+            }
+            catch (PlaywrightException ex)
+            {
+                _logger?.LogDebug(ex, "Trusted gesture pulse failed for requestStorageAccess on {PageProxyId}", _pageProxyId);
+            }
+            catch (TimeoutException ex)
+            {
+                _logger?.LogDebug(ex, "Trusted gesture pulse timed out for requestStorageAccess on {PageProxyId}", _pageProxyId);
             }
         }
 
@@ -6430,7 +8782,7 @@ namespace PlaywrightNative.WebKit
             }
         }
 
-        private void OnMainTargetDestroyed(string targetId)
+        private void OnMainTargetDestroyed(string targetId, bool crashed = false)
         {
             if (_targetSession != null && _targetSession.TargetId == targetId)
             {
@@ -6442,8 +8794,9 @@ namespace PlaywrightNative.WebKit
                 _targetSession.Dispose();
                 _targetSession = null;
                 ClearWorkers();
+                ClearFrameSessions();
                 ClearExecutionContexts();
-                if (_crashRequested)
+                if (crashed || _crashRequested)
                 {
                     FireCrash();
                 }
@@ -6459,6 +8812,22 @@ namespace PlaywrightNative.WebKit
             }
         }
 
+        /// <summary>
+        /// Whether this page should report <c>navigator.onLine === false</c>.
+        /// Combines page-level SetOffline with the owning context option.
+        /// </summary>
+        /// <returns><see langword="true"/> when offline emulation is active.</returns>
+        private bool ShouldEmulateOffline()
+        {
+            if (_emulatedOffline)
+            {
+                return true;
+            }
+
+            WKBrowserContext owner = OwnerContext as WKBrowserContext ?? _context as WKBrowserContext;
+            return owner != null && owner.IsOffline;
+        }
+
         private async Task InitializeProvisionalTargetAsync(WKTargetSession target)
         {
             try
@@ -6470,6 +8839,24 @@ namespace PlaywrightNative.WebKit
                 await ApplySafariOverrideSettingsOnAsync(target, isMobile).ConfigureAwait(false);
                 JsonElement? tree = await target.SendAsync("Page.getResourceTree").ConfigureAwait(false);
                 _provisionalMainFrameId = ReadMainFrameId(tree);
+
+                // Mirror main-target init: Console before Runtime so sync pageerrors
+                // during provisional document parse are delivered on Darwin.
+                if (EnableFrameSessions)
+                {
+                    await InitializeFrameSessionsAsync(tree).ConfigureAwait(false);
+                }
+                else
+                {
+                    try
+                    {
+                        await target.SendAsync("Console.enable").ConfigureAwait(false);
+                    }
+                    catch (PlaywrightException)
+                    {
+                    }
+                }
+
                 await target.SendAsync("Runtime.enable").ConfigureAwait(false);
                 await EnsureUtilityWorldAsync(target).ConfigureAwait(false);
                 if (_bindingReady != null || !_exposedFunctions.IsEmpty || !_handleBindings.IsEmpty)
@@ -6490,9 +8877,53 @@ namespace PlaywrightNative.WebKit
                     await enabledManager.UpdateInterceptionAsync().ConfigureAwait(false);
                 }
 
+                // Upstream _initializeSessionMayThrow applies offline on provisional
+                // sessions so about:blank / data: / COOP swaps keep navigator.onLine.
+                if (ShouldEmulateOffline())
+                {
+                    try
+                    {
+                        await target.SendAsync("Network.setEmulateOfflineState", new { offline = true })
+                            .ConfigureAwait(false);
+                    }
+                    catch (PlaywrightException)
+                    {
+                    }
+                }
+
+                // Upstream provisional init runs full _initializeSession, including Worker.enable
+                // so Worker.workerCreated keeps working after COOP / process-swap commit.
+                try
+                {
+                    await target.SendAsync("Worker.enable").ConfigureAwait(false);
+                }
+                catch (PlaywrightException)
+                {
+                }
+
                 await ApplyExtraHttpHeadersOnAsync(target).ConfigureAwait(false);
                 await SyncBootstrapScriptOnAsync(target).ConfigureAwait(false);
                 await ApplyBypassCspOnAsync(target).ConfigureAwait(false);
+
+                // Upstream _initializeSessionMayThrow also sets file-chooser interception on
+                // provisional sessions. Cross-process navigations (localhost ↔ 127.0.0.1)
+                // promote this session to main; without re-enable, Page.fileChooserOpened
+                // never fires after the swap (page-filechooser "listener added before
+                // navigation").
+                await target.SendAsync("Page.setInterceptFileChooserDialog", new { enabled = true })
+                    .ConfigureAwait(false);
+                await ApplyScreenSizeOverrideOnAsync(target).ConfigureAwait(false);
+
+                // Upstream provisional init uses full _initializeSession, which reapplies
+                // emulated media so COOP / process-swap navigations keep reducedMotion,
+                // colorScheme, and forcedColors (page-emulate-media after "reload").
+                AdoptContextMedia();
+                await ApplyEmulatedMediaToSessionAsync(target).ConfigureAwait(false);
+
+                // Orientation lives on the page-proxy session; process-swap navigations
+                // recreate the target without re-running page-proxy init, so re-assert
+                // Emulation.setOrientationOverride (screen.orientation after cross-process).
+                await ApplyEmulatedViewportFromContextAsync().ConfigureAwait(false);
             }
 #pragma warning disable RCS1075
             catch (Exception)
@@ -6513,23 +8944,11 @@ namespace PlaywrightNative.WebKit
 
             try
             {
-                // Dialog lives on the page-proxy session (upstream _initializePageProxySession).
+                // Dialog / focus / auth live on the page-proxy session
+                // (upstream _initializePageProxySession). Run once per page.
                 if (isMain && !_dialogEnabled)
                 {
-                    await _session.SendAsync("Dialog.enable").ConfigureAwait(false);
-                    _dialogEnabled = true;
-                    try
-                    {
-                        await _session.SendAsync("Emulation.setActiveAndFocused", new { active = true })
-                            .ConfigureAwait(false);
-                    }
-                    catch (PlaywrightNativeException)
-                    {
-                    }
-
-                    // Official always applies auth credentials during page-proxy
-                    // init, including empty ones so 401s do not hang on a dialog.
-                    await ApplyAuthCredentialsAsync().ConfigureAwait(false);
+                    await InitializePageProxySessionAsync().ConfigureAwait(false);
                 }
 
                 // Order mirrors upstream wkPage.ts: Page.enable + getResourceTree first so
@@ -6546,6 +8965,18 @@ namespace PlaywrightNative.WebKit
                 JsonElement? tree = await target.SendAsync("Page.getResourceTree").ConfigureAwait(false);
                 CaptureResourceTree(tree);
                 CompletePendingAfterTargetReplacement();
+
+                // Enable Console before Runtime so sync throws during the first
+                // document parse (data: <script>throw…) are not missed. On
+                // frame-session Darwin builds Console lives on frame targets.
+                if (EnableFrameSessions)
+                {
+                    await InitializeFrameSessionsAsync(tree).ConfigureAwait(false);
+                }
+                else
+                {
+                    await target.SendAsync("Console.enable").ConfigureAwait(false);
+                }
 
                 await target.SendAsync("Runtime.enable").ConfigureAwait(false);
                 await EnsureUtilityWorldAsync(target).ConfigureAwait(false);
@@ -6572,31 +9003,32 @@ namespace PlaywrightNative.WebKit
                     await enabledManager.UpdateInterceptionAsync().ConfigureAwait(false);
                 }
 
-                await ApplyExtraHttpHeadersOnAsync(target).ConfigureAwait(false);
-
-                // On the frame-session builds (WebKit 2245–2255, e.g. the macOS-14 2251)
-                // build) the Console domain lives on the per-frame sessions, not the page
-                // session — sending Console.enable here yields "'Console' domain was not
-                // found". Upstream wkPage gates Console.enable behind !enableFrameSessions
-                // for exactly this reason; mirror that. (We don't model frame sessions yet,
-                // so Console events are simply unavailable on those builds for now.)
-                if (!EnableFrameSessions)
+                // Upstream _initializeSessionMayThrow: offline must land on the session
+                // that will become current (main or after process-swap).
+                if (ShouldEmulateOffline())
                 {
-                    await target.SendAsync("Console.enable").ConfigureAwait(false);
+                    try
+                    {
+                        await target.SendAsync("Network.setEmulateOfflineState", new { offline = true })
+                            .ConfigureAwait(false);
+                    }
+                    catch (PlaywrightException)
+                    {
+                    }
                 }
+
+                await ApplyExtraHttpHeadersOnAsync(target).ConfigureAwait(false);
+                await ApplyScreenSizeOverrideOnAsync(target).ConfigureAwait(false);
 
                 AdoptContextMedia();
                 await ApplyEmulatedMediaToSessionAsync(target).ConfigureAwait(false);
 
-                // Only signal the page-level InitializedTask if THIS target is still the
-                // active main session. WebKit can recycle the initial target before our
-                // init sequence finishes (observed on macOS-14 CI), in which case a fresh
-                // OnTargetCreated has already disposed us and started a new init that will
-                // complete InitializedTask itself.
-                if (isMain && ReferenceEquals(_targetSession, target))
-                {
-                    _initializedTcs.TrySetResult(true);
-                }
+                // Do not complete InitializedTask here. NewPage awaits it then runs
+                // ApplyInitScriptsAsync; if that races ahead of
+                // ApplyInitScriptsBeforeResumeAsync, string scripts are installed twice
+                // into Page.setBootstrapScript (ShouldBeCallableFromInsideAddInitScript
+                // sees "context,context,page" on reload). InitializedTask is signaled
+                // at the end of InitializeAndMaybeResumeAsync after before-resume.
             }
             catch (Exception ex)
             {
@@ -6609,6 +9041,19 @@ namespace PlaywrightNative.WebKit
                 {
                     _initializedTcs.TrySetException(ex);
                 }
+            }
+        }
+
+        /// <summary>
+        /// Completes <see cref="InitializedTask"/> after before-resume init scripts
+        /// so NewPage cannot race a second string-script install into bootstrap.
+        /// </summary>
+        /// <param name="target">The main target that finished init.</param>
+        private void CompleteInitializedIfCurrentMain(WKTargetSession target)
+        {
+            if (ReferenceEquals(_targetSession, target))
+            {
+                _initializedTcs.TrySetResult(true);
             }
         }
 
@@ -6866,8 +9311,18 @@ namespace PlaywrightNative.WebKit
                 string current = NavigationTimeout.WithoutHash(_mainFrameUrl);
                 string pending = NavigationTimeout.WithoutHash(_pendingNavigationUrl);
                 string redirect = NavigationTimeout.WithoutHash(_pendingRedirectTarget);
-                if (string.IsNullOrEmpty(current)
-                    || current.Equals("about:blank", StringComparison.OrdinalIgnoreCase))
+                if (string.IsNullOrEmpty(current))
+                {
+                    return;
+                }
+
+                // about:blank→about:blank must complete (persistent relaunch goto).
+                // Skip only when the document is still blank but the pending target
+                // is a real URL (commit has not reached the destination yet).
+                if (current.Equals("about:blank", StringComparison.OrdinalIgnoreCase)
+                    && !pending.Equals("about:blank", StringComparison.OrdinalIgnoreCase)
+                    && (string.IsNullOrEmpty(redirect)
+                        || !redirect.Equals("about:blank", StringComparison.OrdinalIgnoreCase)))
                 {
                     return;
                 }
@@ -6927,6 +9382,12 @@ namespace PlaywrightNative.WebKit
                 return;
             }
 
+            if (_frameSessions.TryGetValue(targetId, out WKFrameSession frameSession))
+            {
+                frameSession.Session.DispatchInboundMessage(rawJson);
+                return;
+            }
+
             _logger?.LogDebug("Dropping dispatchMessageFromTarget for unknown target {TargetId}", targetId);
         }
 
@@ -6956,6 +9417,10 @@ namespace PlaywrightNative.WebKit
             WKTargetSession oldSession = _targetSession;
             _targetSession = _provisionalSession;
             _provisionalSession = null;
+
+            // Upstream wkWorkers.setSession clears workers when the committed session
+            // swaps in (cross-process / COOP navigations).
+            ClearWorkers();
 
             // Drop the execution context — a new Runtime.executionContextCreated will
             // arrive on the now-main session.
@@ -7003,6 +9468,45 @@ namespace PlaywrightNative.WebKit
                 oldSession.MessageReceived -= OnInnerMessage;
                 oldSession.Dispose();
             }
+
+            // Cross-process commit resets screen.orientation on macOS WebKit unless
+            // page-proxy Emulation.setOrientationOverride is re-asserted after swap.
+            _ = ReapplyEmulationAfterProvisionalCommitAsync();
+        }
+
+        private async Task ReapplyEmulationAfterProvisionalCommitAsync()
+        {
+            try
+            {
+                await ApplyEmulatedViewportFromContextAsync().ConfigureAwait(false);
+                WKTargetSession target = _targetSession;
+                if (target != null)
+                {
+                    await ApplyScreenSizeOverrideOnAsync(target).ConfigureAwait(false);
+                }
+
+                // Page.overrideUserAgent is bound to the previous target; re-apply
+                // an explicit context UA, or re-run the macOS Safari-token default.
+                WKBrowserContext ctx = _context ?? OwnerContext as WKBrowserContext;
+                if (ctx != null)
+                {
+                    string userAgent = ((IHasUserAgent)ctx).UserAgent;
+                    if (!string.IsNullOrEmpty(userAgent))
+                    {
+                        await SetUserAgentAsync(userAgent).ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        await ctx.ReapplyDefaultSafariUserAgentAsync(this).ConfigureAwait(false);
+                    }
+                }
+            }
+#pragma warning disable RCS1075
+            catch (Exception)
+#pragma warning restore RCS1075
+            {
+                // Emulation reapply is best-effort; navigation already committed.
+            }
         }
 
         private void OnTargetDestroyed(JsonElement? parameters)
@@ -7014,10 +9518,25 @@ namespace PlaywrightNative.WebKit
             }
 
             string targetId = idEl.GetString();
+            bool crashed = false;
+            if (parameters.Value.TryGetProperty("crashed", out JsonElement crashedEl))
+            {
+                crashed = crashedEl.ValueKind == JsonValueKind.True
+                    || (crashedEl.ValueKind == JsonValueKind.Number && crashedEl.TryGetInt32(out int flag) && flag != 0)
+                    || (crashedEl.ValueKind == JsonValueKind.String
+                        && bool.TryParse(crashedEl.GetString(), out bool parsed)
+                        && parsed);
+            }
 
             if (!string.IsNullOrEmpty(targetId) && _workers.TryRemove(targetId, out WKWorker worker))
             {
                 worker.NotifyClosed();
+                return;
+            }
+
+            if (!string.IsNullOrEmpty(targetId) && _frameSessions.TryRemove(targetId, out WKFrameSession frameSession))
+            {
+                frameSession.Dispose();
                 return;
             }
 
@@ -7028,10 +9547,21 @@ namespace PlaywrightNative.WebKit
                 _provisionalSession = null;
 
                 // Official HAR redirectNavigation starts a second document load.
-                // WebKit drops the first cross-process provisional; that is not
-                // a failed goto — wait for the restarted navigation instead.
-                if (!IsHarRedirectPending())
+                // WebKit also drops the first cross-process provisional during a
+                // normal HTTP redirect (reload/goto). That is not a failed
+                // navigation — wait for the replacement target instead.
+                //
+                // Do not treat _awaitingReplacementTarget as "expect another
+                // target": that flag means we are waiting for THIS provisional
+                // to commit. If it is destroyed without commit, the navigation
+                // failed (e.g. proxy-bypass connection drop) and goto must
+                // reject rather than hang until timeout.
+                bool expectReplacement = IsHarRedirectPending()
+                    || _harRedirectInProgress
+                    || !string.IsNullOrEmpty(_pendingRedirectTarget);
+                if (!expectReplacement)
                 {
+                    _awaitingReplacementTarget = false;
                     FailPendingWithReason("Navigation failed", _pendingNavigationUrl);
                 }
 
@@ -7042,7 +9572,8 @@ namespace PlaywrightNative.WebKit
             // triggers a process swap. The replacement comes in as a fresh non-provisional
             // Target.targetCreated, but in the gap between destroy and create we must
             // tear down the current session so stale events from it stop dispatching.
-            OnMainTargetDestroyed(targetId);
+            // Official wkPage: Target.targetDestroyed with crashed:true → page._didCrash().
+            OnMainTargetDestroyed(targetId, crashed);
         }
 
         private void OnInnerMessage(string method, JsonElement? parameters)
@@ -7067,11 +9598,14 @@ namespace PlaywrightNative.WebKit
                 case "Page.didCheckNavigationPolicy":
                     OnDidCheckNavigationPolicy(parameters);
                     break;
+                case "Page.frameScheduledNavigation":
+                    OnFrameScheduledNavigation(parameters);
+                    break;
                 case "Page.loadEventFired":
                     OnLoadEventFired(parameters);
                     break;
                 case "Page.domContentEventFired":
-                    OnDomContentEventFired();
+                    OnDomContentEventFired(parameters);
                     break;
                 case "Runtime.executionContextCreated":
                     OnExecutionContextCreated(parameters);
@@ -7089,12 +9623,15 @@ namespace PlaywrightNative.WebKit
                     OnConsoleRepeatCountUpdated(parameters);
                     break;
                 case "Runtime.consoleAPICalled":
-                    // macOS-14 WebKit 2251 uses per-frame Console sessions, so
-                    // Console.enable is not sent on the page target. Runtime is
-                    // enabled there and still delivers consoleAPICalled.
-                    if (EnableFrameSessions)
+                    // Frame-session Darwin builds deliver console via Console.messageAdded on
+                    // WKFrameSession once enable completes. While any frame Console.enable is
+                    // still in flight (or no frame session exists yet), Runtime.consoleAPICalled
+                    // on the page session is a fallback so sync warns are not lost
+                    // (BlocksServiceWorkerRegistration). Skip once frames are ready to avoid
+                    // duplicate PageEventConsole deliveries.
+                    if (EnableFrameSessions && !FrameConsolesReady())
                     {
-                        OnConsoleAPICalled(parameters);
+                        OnRuntimeConsoleApiCalled(parameters);
                     }
 
                     break;
@@ -7127,7 +9664,7 @@ namespace PlaywrightNative.WebKit
             }
 
             _crashed = true;
-            PlaywrightNativeException crashed = new PlaywrightNativeException("page.goto: Page crashed");
+            PlaywrightException crashed = new PlaywrightException("page.goto: Page crashed");
             lock (_navigationLock)
             {
                 _pendingLoadTcs?.TrySetException(crashed);
@@ -7165,7 +9702,7 @@ namespace PlaywrightNative.WebKit
                     multiple = await element.EvaluateAsync<bool>("e => !!e.multiple").ConfigureAwait(false);
                 }
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
             catch (InvalidOperationException)
@@ -7191,7 +9728,13 @@ namespace PlaywrightNative.WebKit
                 && previewParams.ValueKind == JsonValueKind.Array)
             {
                 string fromParams = RemoteObject.JoinConsoleArgs(previewParams);
-                if (!string.IsNullOrEmpty(fromParams))
+
+                // Prefer parameter previews (PageEventConsole object/window text). When
+                // Darwin only exposes object-id handles, JoinConsoleArgs can yield
+                // JSHandle@ placeholders — keep protocol message.text instead so exact
+                // waits like BlocksServiceWorkerRegistration still match.
+                if (!string.IsNullOrEmpty(fromParams)
+                    && !fromParams.StartsWith("JSHandle@", StringComparison.Ordinal))
                 {
                     text = fromParams;
                 }
@@ -7325,54 +9868,140 @@ namespace PlaywrightNative.WebKit
             IDialogHost host = (_ownerContext ?? (IBrowserContext)_context) as IDialogHost;
             EventHandler<IDialog> pageDialog = Dialog;
             bool contextHasListeners = host != null && host.HasDialogListeners();
-            pageDialog?.Invoke(this, dialog);
-            host?.RaiseDialog(dialog);
-            PageDialogTracker.AutoDismissIfNeeded(dialog, pageDialog, contextHasListeners);
+
+            // Listeners already attached: raise immediately (DialogAccept under
+            // Windows suite load starved Task.Run while Click waited on alert).
+            if (pageDialog != null || contextHasListeners)
+            {
+                _dialogTracker.TryMarkEmitted();
+                pageDialog?.Invoke(this, dialog);
+                host?.RaiseDialog(dialog);
+                return;
+            }
+
+            PageDialogTracker.ScheduleOpen(() =>
+            {
+                EventHandler<IDialog> deferredPageDialog = Dialog;
+                bool deferredContextHasListeners = host != null && host.HasDialogListeners();
+
+                // A waitForEvent('dialog') may have already claimed this open via
+                // OpenDialog replay while ScheduleOpen was deferred.
+                if (!_dialogTracker.TryMarkEmitted())
+                {
+                    return;
+                }
+
+                deferredPageDialog?.Invoke(this, dialog);
+                host?.RaiseDialog(dialog);
+                PageDialogTracker.AutoDismissIfNeeded(dialog, deferredPageDialog, deferredContextHasListeners);
+            });
         }
 
         private void EmitDialogClosed(IDialog dialog) => DialogClosed?.Invoke(this, dialog);
 
-        private void OnConsoleAPICalled(JsonElement? parameters)
+        private void RaiseConsole(IConsoleMessage message)
+        {
+            if (message == null)
+            {
+                return;
+            }
+
+            _consoleLog.Add(message);
+            _pageListeners.Console.Emit(this, message);
+        }
+
+        private void OnRuntimeConsoleApiCalled(JsonElement? parameters)
         {
             if (!parameters.HasValue)
             {
                 return;
             }
 
-            JsonElement payload = parameters.Value;
-            string type = payload.TryGetProperty("type", out JsonElement typeEl) ? typeEl.GetString() : "log";
-            JsonElement? argsElement = payload.TryGetProperty("args", out JsonElement argsEl) ? argsEl : (JsonElement?)null;
-            string text = argsElement.HasValue
-                ? RemoteObject.JoinConsoleArgs(argsElement.Value)
-                : string.Empty;
-            string location = RemoteObject.FormatStackLocation(payload);
-            IReadOnlyCollection<IJSHandle> args = ConsoleArgs.Wrap(
-                argsElement,
-                remote => _executionContext == null ? null : WrapRemoteObject(_executionContext, remote));
-            double timestamp = payload.TryGetProperty("timestamp", out JsonElement tsEl) && tsEl.TryGetDouble(out double ts)
-                ? ts
-                : 0;
-            RaiseConsole(new ConsoleMessage(type, text, location, CompatCollections.AsList(args), this, timestamp));
-        }
+            ConsoleMessage message = WorkerConsole.Parse(
+                parameters.Value,
+                remote =>
+                {
+                    string objectId = RemoteObject.GetObjectId(remote);
+                    if (string.IsNullOrEmpty(objectId) || _executionContext == null)
+                    {
+                        return null;
+                    }
 
-        private void RaiseConsole(IConsoleMessage message)
-        {
-            _consoleLog.Add(message);
-            _pageListeners.Console.Emit(this, message);
+                    return WrapRemoteObject(_executionContext, remote);
+                },
+                this);
+            if (message == null || string.IsNullOrEmpty(message.Text))
+            {
+                return;
+            }
+
+            _lastConsoleMessage = message;
+            _lastConsoleRepeatCount = 1;
+            RaiseConsole(message);
         }
 
         private void RaisePageError(PageErrorEventArgs error, WebErrorLocation location = null)
         {
             LastPageErrorLocation = location ?? new WebErrorLocation();
-            _pageErrors.Add(error.ToString());
-            PageError?.Invoke(this, error.ToString());
+            string text = error.ToString();
+
+            // Console javascript errors and Runtime.exceptionThrown can both fire for
+            // the same sync throw (especially after enabling Runtime.exceptionThrown
+            // as a Darwin frame-session fallback). Drop near-duplicate raises.
+            long now = Environment.TickCount64;
+            if (!string.IsNullOrEmpty(text)
+                && string.Equals(text, _lastPageErrorText, StringComparison.Ordinal)
+                && now - _lastPageErrorTicks < 1000)
+            {
+                return;
+            }
+
+            _lastPageErrorText = text;
+            _lastPageErrorTicks = now;
+            _pageErrors.Add(text);
+            PageError?.Invoke(this, text);
         }
 
         private void OnExceptionThrown(JsonElement? parameters)
         {
             // Official wkPage maps Console javascript errors to pageerror and does
             // not also raise from Runtime.exceptionThrown (avoids duplicate entries).
-            _ = parameters;
+            // On frame-session Darwin builds, Console.enable can still race past sync
+            // throws in navigating documents (data: inline <script>throw). Raise from
+            // Runtime.exceptionThrown as a fallback; RaisePageError dedups.
+            if (!EnableFrameSessions)
+            {
+                _ = parameters;
+                return;
+            }
+
+            if (!parameters.HasValue
+                || !parameters.Value.TryGetProperty("exceptionDetails", out JsonElement details))
+            {
+                return;
+            }
+
+            PageErrorEventArgs error = PageErrorText.FromExceptionDetails(details);
+            string url = details.TryGetProperty("url", out JsonElement urlEl)
+                && urlEl.ValueKind == JsonValueKind.String
+                ? urlEl.GetString()
+                : string.Empty;
+            int line = details.TryGetProperty("lineNumber", out JsonElement lineEl)
+                && lineEl.TryGetInt32(out int ln)
+                ? ln
+                : 0;
+            int column = details.TryGetProperty("columnNumber", out JsonElement colEl)
+                && colEl.TryGetInt32(out int cn)
+                ? cn
+                : 0;
+            RaisePageError(
+                error,
+                new WebErrorLocation
+                {
+                    Url = url ?? string.Empty,
+                    Line = line,
+                    Column = column,
+                });
         }
 
         private void OnFrameAttached(JsonElement? parameters)
@@ -7384,7 +10013,9 @@ namespace PlaywrightNative.WebKit
 
             JsonElement payload = parameters.Value;
             string frameId = payload.TryGetProperty("frameId", out JsonElement idEl) ? idEl.GetString() : null;
-            string parentFrameId = payload.TryGetProperty("parentFrameId", out JsonElement parentEl) ? parentEl.GetString() : null;
+            string parentFrameId = payload.TryGetProperty("parentFrameId", out JsonElement parentEl)
+                ? parentEl.GetString()
+                : (payload.TryGetProperty("parentId", out JsonElement parentIdEl) ? parentIdEl.GetString() : null);
             _frameManager.FrameAttachedToTarget(frameId, parentFrameId);
         }
 
@@ -7443,7 +10074,32 @@ namespace PlaywrightNative.WebKit
                 ? parentEl.GetString()
                 : (payload.TryGetProperty("parentFrameId", out JsonElement pfEl) ? pfEl.GetString() : null);
 
+            // Clear page-level lifecycle before FrameCommittedNavigation releases
+            // click SignalBarrier. Otherwise waitForLoadState can observe the
+            // previous document's "load" and resolve as clickload before Page.Load.
+            // Use the same lock as RecordLifecycle / SnapshotLifecycle.
+            if (string.IsNullOrEmpty(parentId)
+                || string.Equals(id, _mainFrameId, StringComparison.Ordinal)
+                || string.Equals(id, _frameManager.MainFrame.FrameId, StringComparison.Ordinal))
+            {
+                lock (_lifecycleEvents)
+                {
+                    _lifecycleEvents.Clear();
+                }
+            }
+
             _frameManager.FrameCommittedNavigation(id, url, name, parentId);
+
+            // Do not call EnsureActiveAndFocusedAsync on child-frame commits: that
+            // makes document.hasFocus() true inside newly attached iframes before
+            // FocusAsync (ShouldChangeFocusedIframe). requestStorageAccess re-asserts
+            // activity from the evaluate / BringToFront paths instead.
+            if (string.IsNullOrEmpty(parentId)
+                || string.Equals(id, _mainFrameId, StringComparison.Ordinal))
+            {
+                _recentBindingInvocations.Clear();
+            }
+
             if (!string.IsNullOrEmpty(id) && (_mainFrameId == null || id == _mainFrameId || id == _frameManager.MainFrame.FrameId))
             {
                 _mainFrameId = _frameManager.MainFrame.FrameId;
@@ -7471,25 +10127,356 @@ namespace PlaywrightNative.WebKit
 
                     string pendingUrl = NavigationTimeout.WithoutHash(_pendingNavigationUrl);
                     if (string.IsNullOrEmpty(pendingUrl)
-                        || string.Equals(committedUrl, pendingUrl, StringComparison.Ordinal))
+                        || IsSameNavigationDestination(committedUrl, pendingUrl))
                     {
+                        if (!string.IsNullOrEmpty(committedUrl)
+                            && !string.Equals(committedUrl, pendingUrl, StringComparison.Ordinal))
+                        {
+                            _pendingNavigationUrl = committedUrl;
+                        }
+
                         _pendingNavigationCommitted = true;
                         commitTcs = _pendingCommitTcs;
                         _pendingCommitTcs = null;
                     }
-                    else if (!string.Equals(committedUrl, NavigationTimeout.WithoutHash(_navigationStartUrl), StringComparison.Ordinal))
+                    else if (_pendingNavigationCommitted)
+                    {
+                        // Client / meta redirect after the goto target already
+                        // committed: keep Load/NetworkIdle waiters armed so
+                        // official timeout messaging wins (child-redirect.html).
+                        _pendingNavigationUrl = committedUrl;
+                    }
+                    else if (!string.IsNullOrEmpty(_pendingContinueOverrideSourceUrl))
+                    {
+                        // route.continue({ url }) is in flight: commits for the original
+                        // navigate URL or intermediate override documents must not be
+                        // treated as competing navigations (ShouldOverrideRequestUrl).
+                        if (IsContinueOverrideSourceCommit(committedUrl)
+                            || IsSameNavigationDestination(
+                                committedUrl,
+                                NavigationTimeout.WithoutHash(_pendingRedirectTarget)))
+                        {
+                            _pendingNavigationCommitted = true;
+                            commitTcs = _pendingCommitTcs;
+                            _pendingCommitTcs = null;
+                            if (IsSameNavigationDestination(
+                                committedUrl,
+                                NavigationTimeout.WithoutHash(_pendingRedirectTarget)))
+                            {
+                                _pendingNavigationUrl = committedUrl;
+                                _pendingRedirectTarget = null;
+                            }
+                        }
+                    }
+                    else if (!IsSameNavigationDestination(committedUrl, NavigationTimeout.WithoutHash(_navigationStartUrl)))
                     {
                         _lastCompetingNavigationUrl = committedUrl;
+
+                        // JS redirect (or other competing document) committed while
+                        // a goto was still waiting — surface the official interrupt
+                        // instead of letting a later load resolve the waiter.
+                        if (!_harRedirectInProgress
+                            && (_pendingLoadTcs != null
+                                || _pendingDomContentTcs != null
+                                || _pendingCommitTcs != null))
+                        {
+                            PlaywrightException interrupted = new(
+                                "page.goto: Navigation to \"" + pendingUrl +
+                                "\" is interrupted by another navigation to \"" + committedUrl + "\"");
+                            _pendingLoadTcs?.TrySetException(interrupted);
+                            _pendingDomContentTcs?.TrySetException(interrupted);
+                            _pendingCommitTcs?.TrySetException(interrupted);
+                            _pendingLoadTcs = null;
+                            _pendingDomContentTcs = null;
+                            _pendingCommitTcs = null;
+                            _pendingNavigationUrl = null;
+                            _pendingContinueOverrideSourceUrl = null;
+                            _pendingNavigationCommitted = false;
+                        }
                     }
                 }
 
                 commitTcs?.TrySetResult(true);
-                if (!PopupOpenedHelper.IsBlankUrl(_mainFrameUrl))
+                if (!PopupOpenedHelper.IsInitialEmptyDocumentUrl(_mainFrameUrl))
                 {
                     _firstNonInitialNavigationTcs.TrySetResult(true);
                 }
 
+                if (!PopupOpenedHelper.IsBlankUrl(_mainFrameUrl))
+                {
+                    _firstNonBlankNavigationTcs.TrySetResult(true);
+                }
+
                 MarkReportAsNewNavigation(_mainFrameUrl);
+
+                // data: navigations skip Network.* events. On some Darwin WebKit
+                // builds Page.loadEventFired can also race past waiter arming; seed
+                // load/DOMContentLoaded from readyState after commit. Same for
+                // about:blank→about:blank (persistent relaunch) when a NavigateAsync
+                // waiter is armed — SetContent does not arm _pendingLoadTcs.
+                bool seedBlankPending;
+                lock (_navigationLock)
+                {
+                    seedBlankPending = _pendingLoadTcs != null
+                        && PopupOpenedHelper.IsBlankUrl(_mainFrameUrl)
+                        && PopupOpenedHelper.IsBlankUrl(_pendingNavigationUrl);
+                }
+
+                if ((!string.IsNullOrEmpty(_mainFrameUrl)
+                        && _mainFrameUrl.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+                    || seedBlankPending)
+                {
+                    int seedGeneration = Interlocked.Increment(ref _lifecycleSeedGeneration);
+                    _ = SeedLifecycleFromReadyStateAfterDataNavigationAsync(seedGeneration);
+                }
+                else
+                {
+                    Interlocked.Increment(ref _lifecycleSeedGeneration);
+                }
+
+                // Match Chromium Page: re-assert file-chooser interception on each new
+                // main document so listeners subscribed before a navigation still work
+                // after same-process navigations that recreate page state.
+                WKTargetSession interceptTarget = _targetSession;
+                if (interceptTarget != null && !interceptTarget.IsDisposed)
+                {
+                    _ = SendFileChooserInterceptIgnoreClosedAsync(interceptTarget);
+                }
+            }
+        }
+
+        private async Task SendFileChooserInterceptIgnoreClosedAsync(WKTargetSession target)
+        {
+            try
+            {
+                await target.SendAsync("Page.setInterceptFileChooserDialog", new { enabled = true })
+                    .ConfigureAwait(false);
+            }
+            catch (PlaywrightException)
+            {
+            }
+            catch (InvalidOperationException)
+            {
+            }
+        }
+
+        private async Task SeedLifecycleFromReadyStateAfterDataNavigationAsync(int seedGeneration)
+        {
+            try
+            {
+                for (int attempt = 0; attempt < 40; attempt++)
+                {
+                    if (Volatile.Read(ref _lifecycleSeedGeneration) != seedGeneration)
+                    {
+                        return;
+                    }
+
+                    // Non-blocking context lookup — WaitForMainExecutionContextAsync
+                    // (5s × 40 attempts) hangs blank→blank GoTo past the NUnit budget
+                    // when the page target is recycling its execution context.
+                    if (!TryGetFrameContext(_frameManager.MainFrame, out WKExecutionContext seedContext)
+                        || seedContext == null)
+                    {
+                        await Task.Delay(25).ConfigureAwait(false);
+                        continue;
+                    }
+
+                    string readyState;
+                    try
+                    {
+                        readyState = await seedContext.EvaluateAsync<string>("document.readyState")
+                            .ConfigureAwait(false);
+                    }
+                    catch (PlaywrightException)
+                    {
+                        await Task.Delay(25).ConfigureAwait(false);
+                        continue;
+                    }
+
+                    if (Volatile.Read(ref _lifecycleSeedGeneration) != seedGeneration)
+                    {
+                        return;
+                    }
+
+                    // Only seed the document that started this poll — later HTTP
+                    // navigations clear lifecycle and must not be completed by a
+                    // leftover about:/data: seed task.
+                    //
+                    // file→about:blank: pending is blank while _mainFrameUrl is still
+                    // the file URL until frameNavigated. Do not bail — keep polling
+                    // until the blank document commits or the exhaust path force-
+                    // completes (ShouldNavigateFromFileUrlToAboutBlank). Limit that
+                    // pending-only path to blank/file start URLs so http→blank is
+                    // unchanged.
+                    string url = _mainFrameUrl;
+                    bool allowBlankSeed;
+                    bool pendingBlankFromBlankOrFile;
+                    lock (_navigationLock)
+                    {
+                        bool pendingBlank = _pendingLoadTcs != null
+                            && PopupOpenedHelper.IsBlankUrl(_pendingNavigationUrl);
+                        string startUrl = _navigationStartUrl;
+                        bool startBlankOrFile = PopupOpenedHelper.IsBlankUrl(startUrl)
+                            || (!string.IsNullOrEmpty(startUrl)
+                                && startUrl.StartsWith("file:", StringComparison.OrdinalIgnoreCase));
+                        pendingBlankFromBlankOrFile = pendingBlank && startBlankOrFile;
+                        allowBlankSeed = pendingBlank
+                            && PopupOpenedHelper.IsBlankUrl(url);
+                    }
+
+                    if (string.IsNullOrEmpty(url)
+                        || (!url.StartsWith("data:", StringComparison.OrdinalIgnoreCase)
+                            && !allowBlankSeed
+                            && !pendingBlankFromBlankOrFile))
+                    {
+                        return;
+                    }
+
+                    if (!allowBlankSeed
+                        && !url.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+                    {
+                        // Pending about:blank but document URL not updated yet —
+                        // wait for commit or fall through to the exhaust settle.
+                        await Task.Delay(25).ConfigureAwait(false);
+                        continue;
+                    }
+
+                    if (string.Equals(readyState, "interactive", StringComparison.Ordinal)
+                        || string.Equals(readyState, "complete", StringComparison.Ordinal))
+                    {
+                        RecordLifecycleFromDocumentSeed("DOMContentLoaded");
+                        TaskCompletionSource<bool> domTcs;
+                        TaskCompletionSource<bool> commitTcs = null;
+                        lock (_navigationLock)
+                        {
+                            if (Volatile.Read(ref _lifecycleSeedGeneration) != seedGeneration)
+                            {
+                                return;
+                            }
+
+                            // blank→blank with a wedged Playwright.navigate must mark
+                            // committed + complete commit waiters so NavigateAsync can
+                            // leave WhenAny without awaiting the stuck send.
+                            if (_pendingDomContentTcs != null
+                                && PopupOpenedHelper.IsBlankUrl(_mainFrameUrl)
+                                && PopupOpenedHelper.IsBlankUrl(_pendingNavigationUrl))
+                            {
+                                _pendingNavigationCommitted = true;
+                                commitTcs = _pendingCommitTcs;
+                                _pendingCommitTcs = null;
+                            }
+
+                            domTcs = _pendingDomContentTcs;
+                            _pendingDomContentTcs = null;
+                        }
+
+                        commitTcs?.TrySetResult(true);
+                        domTcs?.TrySetResult(true);
+                    }
+
+                    if (string.Equals(readyState, "complete", StringComparison.Ordinal))
+                    {
+                        RecordLifecycleFromDocumentSeed("load");
+                        TaskCompletionSource<bool> loadTcs;
+                        TaskCompletionSource<bool> commitTcs = null;
+                        lock (_navigationLock)
+                        {
+                            if (Volatile.Read(ref _lifecycleSeedGeneration) != seedGeneration)
+                            {
+                                return;
+                            }
+
+                            if (_pendingLoadTcs != null
+                                && PopupOpenedHelper.IsBlankUrl(_mainFrameUrl)
+                                && PopupOpenedHelper.IsBlankUrl(_pendingNavigationUrl))
+                            {
+                                _pendingNavigationCommitted = true;
+                                commitTcs = _pendingCommitTcs;
+                                _pendingCommitTcs = null;
+                            }
+
+                            loadTcs = _pendingLoadTcs;
+                            _pendingLoadTcs = null;
+                        }
+
+                        commitTcs?.TrySetResult(true);
+                        loadTcs?.TrySetResult(true);
+                        return;
+                    }
+
+                    await Task.Delay(25).ConfigureAwait(false);
+                }
+
+                // blank destination / data:: if readyState polling never saw a usable
+                // context (Darwin target recycle under suite load), still complete
+                // waiters after the settle window so GoTo cannot hang for the full
+                // navigation timeout / NUnit budget. Delayed (~1s) — unlike
+                // sync-complete-on-RPC which raced the document swap. data: was
+                // previously excluded and hung TouchscreenTapFiresEvent on macOS CI.
+                // Pending about:blank from blank/file start covers wedged
+                // file→about:blank (navigate RPC and/or load waiters stuck).
+                if (Volatile.Read(ref _lifecycleSeedGeneration) != seedGeneration)
+                {
+                    return;
+                }
+
+                TaskCompletionSource<bool> exhaustedLoad;
+                TaskCompletionSource<bool> exhaustedDom;
+                TaskCompletionSource<bool> exhaustedCommit;
+                lock (_navigationLock)
+                {
+                    bool pendingBlank = _pendingLoadTcs != null
+                        && PopupOpenedHelper.IsBlankUrl(_pendingNavigationUrl);
+                    string startUrl = _navigationStartUrl;
+                    bool startBlankOrFile = PopupOpenedHelper.IsBlankUrl(startUrl)
+                        || (!string.IsNullOrEmpty(startUrl)
+                            && startUrl.StartsWith("file:", StringComparison.OrdinalIgnoreCase));
+                    bool allowBlankSeed = pendingBlank
+                        && (PopupOpenedHelper.IsBlankUrl(_mainFrameUrl) || startBlankOrFile);
+                    bool allowDataSeed = _pendingLoadTcs != null
+                        && ((!string.IsNullOrEmpty(_mainFrameUrl)
+                                && _mainFrameUrl.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+                            || (!string.IsNullOrEmpty(_pendingNavigationUrl)
+                                && _pendingNavigationUrl.StartsWith("data:", StringComparison.OrdinalIgnoreCase)));
+                    if (!allowBlankSeed && !allowDataSeed)
+                    {
+                        return;
+                    }
+
+                    // file→about:blank with a wedged navigate never emits
+                    // frameNavigated — promote the pending blank URL so callers
+                    // observe about:blank after GoTo completes.
+                    if (allowBlankSeed
+                        && !PopupOpenedHelper.IsBlankUrl(_mainFrameUrl)
+                        && !string.IsNullOrEmpty(_pendingNavigationUrl))
+                    {
+                        _mainFrameUrl = _pendingNavigationUrl;
+                        if (_frameManager.MainFrame != null)
+                        {
+                            _frameManager.MainFrame.Url = _mainFrameUrl;
+                        }
+                    }
+
+                    _pendingNavigationCommitted = true;
+                    exhaustedLoad = _pendingLoadTcs;
+                    exhaustedDom = _pendingDomContentTcs;
+                    exhaustedCommit = _pendingCommitTcs;
+                    _pendingLoadTcs = null;
+                    _pendingDomContentTcs = null;
+                    _pendingCommitTcs = null;
+                }
+
+                RecordLifecycleFromDocumentSeed("DOMContentLoaded");
+                RecordLifecycleFromDocumentSeed("load");
+                exhaustedCommit?.TrySetResult(true);
+                exhaustedDom?.TrySetResult(true);
+                exhaustedLoad?.TrySetResult(true);
+            }
+            catch (PlaywrightException)
+            {
+            }
+            catch (ObjectDisposedException)
+            {
             }
         }
 
@@ -7516,15 +10503,50 @@ namespace PlaywrightNative.WebKit
                 return;
             }
 
-            bool cancel = parameters.HasValue
-                && parameters.Value.TryGetProperty("cancel", out JsonElement cancelEl)
-                && cancelEl.ValueKind == JsonValueKind.True;
+            bool cancel = false;
+            if (parameters.HasValue && parameters.Value.TryGetProperty("cancel", out JsonElement cancelEl))
+            {
+                cancel = cancelEl.ValueKind == JsonValueKind.True
+                    || (cancelEl.ValueKind == JsonValueKind.Number && cancelEl.TryGetInt32(out int n) && n != 0)
+                    || (cancelEl.ValueKind == JsonValueKind.String
+                        && (string.Equals(cancelEl.GetString(), "true", StringComparison.OrdinalIgnoreCase)
+                            || string.Equals(cancelEl.GetString(), "1", StringComparison.Ordinal)));
+            }
+
             if (!cancel)
             {
                 return;
             }
 
-            _frameManager.Signals.OnMainFrameNavigated();
+            // Upstream frameAbortedNavigation → InternalNavigation releases the
+            // click SignalBarrier. Release only one retain — clearing all would
+            // drop a concurrent real form navigation's retain when a speculative
+            // willCheck is cancelled (ShouldWorkWithGotoFollowingClick).
+            _frameManager.Signals.OnNavigationAborted();
+        }
+
+        private void OnFrameScheduledNavigation(JsonElement? parameters)
+        {
+            if (!parameters.HasValue)
+            {
+                return;
+            }
+
+            JsonElement payload = parameters.Value;
+            bool targetIsCurrentFrame = payload.TryGetProperty("targetIsCurrentFrame", out JsonElement currentEl)
+                && currentEl.ValueKind == JsonValueKind.True;
+            if (!targetIsCurrentFrame)
+            {
+                return;
+            }
+
+            string frameId = null;
+            if (payload.TryGetProperty("frameId", out JsonElement frameIdEl))
+            {
+                frameId = frameIdEl.GetString();
+            }
+
+            _frameManager.FrameRequestedNavigation(frameId);
         }
 
         private void OnNavigatedWithinDocument(JsonElement? parameters)
@@ -7585,33 +10607,144 @@ namespace PlaywrightNative.WebKit
                 frameId = frameIdEl.GetString();
             }
 
-            // WebKit fires Page.loadEventFired for every frame. IPage.Load is
-            // main-frame only (page-event-load.spec.ts / playwright#15086).
-            if (!string.IsNullOrEmpty(frameId)
-                && frameId != _mainFrameId
-                && frameId != _frameManager.MainFrame.FrameId)
+            // Upstream wkPage.ts: Page.loadEventFired → frameLifecycleEvent(frameId, 'load')
+            // for every frame. IPage.Load stays main-frame only (playwright#15086).
+            bool isMainFrame = string.IsNullOrEmpty(frameId)
+                || string.Equals(frameId, _mainFrameId, StringComparison.Ordinal)
+                || string.Equals(frameId, _frameManager.MainFrame?.FrameId, StringComparison.Ordinal);
+            if (!isMainFrame)
             {
+                WKFrame child = _frameManager.FrameById(frameId);
+                child?.OnLifecycleEvent("load");
                 return;
             }
 
+            if (!string.IsNullOrEmpty(frameId))
+            {
+                WKFrame main = _frameManager.FrameById(frameId) ?? _frameManager.MainFrame;
+                main?.OnLifecycleEvent("load");
+            }
+            else
+            {
+                _frameManager.MainFrame?.OnLifecycleEvent("load");
+            }
+
             TaskCompletionSource<bool> tcs;
+            Exception loadError = null;
             lock (_navigationLock)
             {
                 tcs = _pendingLoadTcs;
                 _pendingLoadTcs = null;
+
+                // If a competing document won (JS redirect overrides url-bar goto),
+                // do not resolve the original waiter as success on this load.
+                string pendingUrl = NavigationTimeout.WithoutHash(_pendingNavigationUrl);
+                string currentUrl = NavigationTimeout.WithoutHash(_mainFrameUrl);
+                string redirectUrl = NavigationTimeout.WithoutHash(_pendingRedirectTarget);
+                if (tcs != null
+                    && !string.IsNullOrEmpty(pendingUrl)
+                    && !_pendingNavigationCommitted
+                    && !_harRedirectInProgress
+                    && !string.IsNullOrEmpty(currentUrl)
+                    && !IsSameNavigationDestination(currentUrl, pendingUrl)
+                    && !IsSameNavigationDestination(currentUrl, redirectUrl)
+                    && !IsContinueOverrideSourceCommit(currentUrl)
+                    && !currentUrl.Equals("about:blank", StringComparison.OrdinalIgnoreCase))
+                {
+                    string competing = !string.IsNullOrEmpty(_lastCompetingNavigationUrl)
+                        ? _lastCompetingNavigationUrl
+                        : currentUrl;
+                    loadError = new PlaywrightException(
+                        "page.goto: Navigation to \"" + pendingUrl +
+                        "\" is interrupted by another navigation to \"" + competing + "\"");
+                    _pendingDomContentTcs?.TrySetException(loadError);
+                    _pendingCommitTcs?.TrySetException(loadError);
+                    _pendingDomContentTcs = null;
+                    _pendingCommitTcs = null;
+                    _pendingNavigationUrl = null;
+                    _pendingNavigationCommitted = false;
+                }
             }
 
-            // Fire the public event first so user handlers run before the awaiter
-            // resuming on TrySetResult sees the task complete. Otherwise, the threadpool
-            // continuation can resume the test's await before Load.Invoke finishes on
-            // the transport thread — racing the assertion.
-            Load?.Invoke(this, this);
-            RecordLifecycle("load");
-            tcs?.TrySetResult(true);
+            // Capture before offload: readyState seed may have already raised Load.
+            bool alreadyRecorded;
+            lock (_lifecycleEvents)
+            {
+                alreadyRecorded = _lifecycleEvents.Contains("load");
+            }
+
+            // Raise public Load + record lifecycle off the transport reader thread.
+            // OnMessage dispatches synchronously; running Load.Invoke (and any
+            // waitForEvent / user handlers) on that thread deadlocks the pipe when a
+            // handler does sync-over-async protocol I/O (macOS WebKit CI: mass 30s
+            // timeouts). Keep raise-before-record ordering inside the worker.
+            ThreadPool.QueueUserWorkItem(_ =>
+            {
+                if (!alreadyRecorded)
+                {
+                    Load?.Invoke(this, this);
+                }
+
+                RecordLifecycle("load");
+
+                // Drop stale pending-navigation markers once the main frame has loaded so
+                // later same-URL navigations (reload, iframe) are not treated as duplicates
+                // of the completed goto.
+                lock (_navigationLock)
+                {
+                    _pendingNavigationUrl = null;
+                    _emittedPendingNavigationRequest = false;
+                    _emittedPendingNavigationFinished = false;
+                    _firstPendingNavigationRequest = null;
+                    _pendingNavigationCommitted = false;
+                    _pendingRedirectTarget = null;
+                    _pendingRedirectSource = null;
+                    _pendingContinueOverrideSourceUrl = null;
+                }
+
+                if (loadError != null)
+                {
+                    tcs?.TrySetException(loadError);
+                }
+                else
+                {
+                    tcs?.TrySetResult(true);
+                }
+            });
         }
 
-        private void OnDomContentEventFired()
+        private void OnDomContentEventFired(JsonElement? parameters)
         {
+            string frameId = null;
+            if (parameters.HasValue
+                && parameters.Value.TryGetProperty("frameId", out JsonElement frameIdEl)
+                && frameIdEl.ValueKind == JsonValueKind.String)
+            {
+                frameId = frameIdEl.GetString();
+            }
+
+            // Upstream: Page.domContentEventFired → frameLifecycleEvent(frameId,
+            // 'domcontentloaded') for every frame. Page DOMContentLoaded is main only.
+            bool isMainFrame = string.IsNullOrEmpty(frameId)
+                || string.Equals(frameId, _mainFrameId, StringComparison.Ordinal)
+                || string.Equals(frameId, _frameManager.MainFrame?.FrameId, StringComparison.Ordinal);
+            if (!isMainFrame)
+            {
+                WKFrame child = _frameManager.FrameById(frameId);
+                child?.OnLifecycleEvent("DOMContentLoaded");
+                return;
+            }
+
+            if (!string.IsNullOrEmpty(frameId))
+            {
+                WKFrame main = _frameManager.FrameById(frameId) ?? _frameManager.MainFrame;
+                main?.OnLifecycleEvent("DOMContentLoaded");
+            }
+            else
+            {
+                _frameManager.MainFrame?.OnLifecycleEvent("DOMContentLoaded");
+            }
+
             TaskCompletionSource<bool> tcs;
             lock (_navigationLock)
             {
@@ -7619,9 +10752,22 @@ namespace PlaywrightNative.WebKit
                 _pendingDomContentTcs = null;
             }
 
-            DOMContentLoaded?.Invoke(this, this);
-            RecordLifecycle("DOMContentLoaded");
-            tcs?.TrySetResult(true);
+            bool alreadyRecorded;
+            lock (_lifecycleEvents)
+            {
+                alreadyRecorded = _lifecycleEvents.Contains("DOMContentLoaded");
+            }
+
+            ThreadPool.QueueUserWorkItem(_ =>
+            {
+                if (!alreadyRecorded)
+                {
+                    DOMContentLoaded?.Invoke(this, this);
+                }
+
+                RecordLifecycle("DOMContentLoaded");
+                tcs?.TrySetResult(true);
+            });
         }
 
         private void OnExecutionContextCreated(JsonElement? parameters)
@@ -7664,6 +10810,11 @@ namespace PlaywrightNative.WebKit
             if (string.IsNullOrEmpty(frameId))
             {
                 frameId = _mainFrameId;
+            }
+
+            if (_closed || _targetSession == null)
+            {
+                return;
             }
 
             WKExecutionContext created = new WKExecutionContext(_targetSession, contextId);
@@ -7757,6 +10908,37 @@ namespace PlaywrightNative.WebKit
             }
         }
 
+        /// <summary>
+        /// Fires context <c>page</c> for a popup before an exposeFunction / binding
+        /// callback so official ordering stays <c>page|binding</c>.
+        /// </summary>
+        private void ReportPopupAsNewOnce()
+        {
+            // Do not require <see cref="_opener"/> — Darwin WebKit sometimes omits
+            // protocol openerId for window.open, and inferred siblings leave Opener
+            // null. ReportAsNewOnce makes this a no-op for already-reported pages
+            // (including context.newPage) after Page has already been raised.
+            WKBrowserContext context = _context ?? OwnerContext as WKBrowserContext;
+            context?.ReportPopupAsNew(this);
+        }
+
+        /// <summary>
+        /// Fires context <c>page</c> for a popup before an exposeFunction / binding
+        /// callback so official ordering stays <c>page|binding</c>.
+        /// </summary>
+        private void ReportPopupBeforeBinding() => ReportPopupAsNewOnce();
+
+        /// <summary>
+        /// Waits for popup URL commit then raises context <c>page</c> before the
+        /// exposeFunction handler runs (<c>page|binding</c>). Returns without
+        /// reporting when the popup closed before it was ready (do not dispatch).
+        /// </summary>
+        /// <returns>A task that completes when the page event has been raised or skipped.</returns>
+        private async Task ReportPopupBeforeBindingAsync()
+        {
+            await PrepareAndReportPopupAsync().ConfigureAwait(false);
+        }
+
         private void OnBindingCalled(JsonElement? parameters)
         {
             if (!parameters.HasValue)
@@ -7838,7 +11020,16 @@ namespace PlaywrightNative.WebKit
                     return true;
                 }
 
-                Task<object> invoked = CoalesceBindingInvocationAsync(argument, args, handler);
+                // Official popup.spec: context "page" precedes exposeFunction callback.
+                // Prefer async dispatch when the page event has not fired yet so we can
+                // await the first non-blank URL without blocking the transport thread.
+                if (_reportedAsNew == 0)
+                {
+                    return false;
+                }
+
+                ReportPopupBeforeBinding();
+                Task<object> invoked = CoalesceBindingInvocationAsync(contextId, argument, args, handler);
                 _ = Task.Run(() => DeliverInvokedBindingAsync(invoked, contextId, seq));
                 return true;
             }
@@ -7850,36 +11041,94 @@ namespace PlaywrightNative.WebKit
         }
 
         private Task<object> CoalesceBindingInvocationAsync(
+            int contextId,
             string argument,
             JsonElement[] args,
             Func<JsonElement[], Task<object>> handler)
         {
-            // After a WebKit process-swap, one page-side call can emit two
-            // Runtime.bindingCalled events with the same seq envelope. Key
-            // the payload (name + seq + args) so legitimate repeats of the
-            // same exposeFunction — official clock timers — still run.
-            string key = argument ?? string.Empty;
+            // After a WebKit process-swap (and on some frame-session builds), one
+            // page-side call can emit two Runtime.bindingCalled events with the
+            // same seq envelope but different executionContextIds (main vs
+            // isolated world) on the SAME frame. Key by frame + payload so those
+            // duplicates share one host invocation, while identical calls from
+            // different frames (addInitScript callbacks in main + child both
+            // restart seq at 1 with the same args) each invoke the handler.
+            // Delivering the result to each contextId still happens at the call
+            // site. Clear the map on navigation so a new document restarting seq
+            // at 1 is not coalesced with the previous document's identical call.
+            string key = ResolveBindingCoalesceKey(contextId, argument);
             long now = DateTime.UtcNow.Ticks;
-            if (_recentBindingInvocations.TryGetValue(key, out (long Ticks, Task<object> Task) recent)
-                && now - recent.Ticks < TimeSpan.FromMilliseconds(100).Ticks)
+            lock (_bindingCoalesceLock)
             {
-                return recent.Task;
+                if (_recentBindingInvocations.TryGetValue(key, out (long Ticks, Task<object> Task) recent)
+                    && now - recent.Ticks < TimeSpan.FromMilliseconds(100).Ticks)
+                {
+                    return recent.Task;
+                }
+
+                Task<object> invoked = handler(args);
+                _recentBindingInvocations[key] = (now, invoked);
+                if (_recentBindingInvocations.Count > 64)
+                {
+                    foreach (KeyValuePair<string, (long Ticks, Task<object> Task)> entry in _recentBindingInvocations)
+                    {
+                        if (now - entry.Value.Ticks >= TimeSpan.FromMilliseconds(100).Ticks)
+                        {
+                            _recentBindingInvocations.TryRemove(entry.Key, out _);
+                        }
+                    }
+                }
+
+                return invoked;
+            }
+        }
+
+        /// <summary>
+        /// Builds the coalesce map key for a binding call. Same-frame main/utility
+        /// duplicates share a key; distinct frames do not.
+        /// </summary>
+        /// <param name="contextId">The <c>Runtime.bindingCalled</c> context id.</param>
+        /// <param name="argument">The JSON binding envelope.</param>
+        /// <returns>A coalesce key scoped to the originating frame when known.</returns>
+        private string ResolveBindingCoalesceKey(int contextId, string argument)
+        {
+            string frameScope = ResolveBindingFrameScope(contextId);
+            return frameScope + "\n" + (argument ?? string.Empty);
+        }
+
+        /// <summary>
+        /// Maps a binding <paramref name="contextId"/> to a stable frame scope so
+        /// main-world and utility-world contexts of the same frame coalesce, while
+        /// sibling frames stay distinct.
+        /// </summary>
+        /// <param name="contextId">Execution context id from the binding event.</param>
+        /// <returns>A frame-scoped or context-scoped identity string.</returns>
+        private string ResolveBindingFrameScope(int contextId)
+        {
+            if (contextId == 0)
+            {
+                return "ctx:0";
             }
 
-            Task<object> invoked = handler(args);
-            _recentBindingInvocations[key] = (now, invoked);
-            if (_recentBindingInvocations.Count > 64)
+            foreach (KeyValuePair<string, WKExecutionContext> entry in _frameContexts)
             {
-                foreach (KeyValuePair<string, (long Ticks, Task<object> Task)> entry in _recentBindingInvocations)
+                if (entry.Value != null && entry.Value.ContextId == contextId)
                 {
-                    if (now - entry.Value.Ticks >= TimeSpan.FromMilliseconds(100).Ticks)
-                    {
-                        _recentBindingInvocations.TryRemove(entry.Key, out _);
-                    }
+                    return "frame:" + entry.Key;
                 }
             }
 
-            return invoked;
+            foreach (KeyValuePair<string, WKExecutionContext> entry in _utilityContexts)
+            {
+                if (entry.Value != null && entry.Value.ContextId == contextId)
+                {
+                    return "frame:" + entry.Key;
+                }
+            }
+
+            // Unknown context: prefer contextId so distinct frames never share an
+            // invocation when frame maps are incomplete (safer than under-firing).
+            return "ctx:" + contextId.ToString(System.Globalization.CultureInfo.InvariantCulture);
         }
 
         private async Task DeliverInvokedBindingAsync(Task<object> invoked, int contextId, long seq)
@@ -7916,8 +11165,15 @@ namespace PlaywrightNative.WebKit
                         return;
                     }
 
+                    // Official popup.spec: context "page" precedes exposeFunction callback.
+                    await ReportPopupBeforeBindingAsync().ConfigureAwait(false);
+                    if (_closed)
+                    {
+                        return;
+                    }
+
                     WKTargetSession target = _targetSession
-                        ?? throw new PlaywrightNativeException("Inner target session is not yet available.");
+                        ?? throw new PlaywrightException("Inner target session is not yet available.");
                     WKExecutionContext context = new WKExecutionContext(target, contextId);
                     JsonElement? handleValue = await context.EvaluateHandleAsync(PageBindingScript.TakeHandleExpression(seq)).ConfigureAwait(false);
                     IJSHandle jsHandle = WrapRemoteObject(context, handleValue);
@@ -7935,6 +11191,13 @@ namespace PlaywrightNative.WebKit
                 if (!_exposedFunctions.TryGetValue(functionName ?? string.Empty, out Func<JsonElement[], Task<object>> handler))
                 {
                     await DeliverBindingErrorAsync(contextId, seq, $"No handler registered for '{functionName}'").ConfigureAwait(false);
+                    return;
+                }
+
+                // Official popup.spec: context "page" precedes exposeFunction callback.
+                await ReportPopupBeforeBindingAsync().ConfigureAwait(false);
+                if (_closed)
+                {
                     return;
                 }
 
@@ -8002,12 +11265,52 @@ namespace PlaywrightNative.WebKit
                     returnByValue = true,
                 }).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 // Best-effort delivery — the execution context may have been destroyed by a
                 // navigation between the call and the response.
             }
         }
+
+        private async Task<T> RunAndWaitInternalAsync<T>(Func<Task> action, Task<T> waitTask)
+        {
+            if (action == null)
+            {
+                throw new ArgumentNullException(nameof(action));
+            }
+
+            Task actionTask = action();
+            T result = await waitTask.ConfigureAwait(false);
+            await actionTask.ConfigureAwait(false);
+            return result;
+        }
+
+        private Task<IRequest> WaitForRequestFinishedInternalAsync(
+            string urlString,
+            Regex urlRegex,
+            Func<IRequest, bool> predicate,
+            float? timeout)
+            => WaitForEventAsync(
+                PageEvent.RequestFinished,
+                r => predicate != null
+                    ? predicate(r)
+                    : UrlMatcher.Matches(r.Url, urlString, urlRegex, null, NavigationUrl.ContextBase(Context)),
+                timeout);
+
+        private Task DispatchEventInternalAsync(string selector, string type, object eventInit, float? timeout, bool? strict)
+            => DispatchEventAction.RunAsync(
+                EvaluateDispatchBoolAsync,
+                selector,
+                type,
+                eventInit,
+                timeout,
+                strict ?? (Context is IHasStrictSelectors s && s.StrictSelectors),
+                "page.dispatchEvent");
+
+        private Task<bool> EvaluateDispatchBoolAsync(string script, object arg)
+            => arg == null
+                ? EvaluateSerializedAsync<bool>(script)
+                : EvaluateFunctionSerializedAsync<bool>(script, arg);
 
         private Task<IElementHandle> QueryActionAsync(string selector)
             => QueryActionAsync(selector, default);
@@ -8020,9 +11323,22 @@ namespace PlaywrightNative.WebKit
                 strict ?? (Context is IHasStrictSelectors s && s.StrictSelectors));
 
 #pragma warning disable SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
-        Task IPage.AddLocatorHandlerAsync(ILocator locator, Func<ILocator, Task> handler, PageAddLocatorHandlerOptions options) => Task.CompletedTask;
+        Task IPage.AddLocatorHandlerAsync(ILocator locator, Func<ILocator, Task> handler, PageAddLocatorHandlerOptions options)
+        {
+            LocatorHandlers.Add(this, locator, handler, options?.Times, options?.NoWaitAfter);
+            return Task.CompletedTask;
+        }
 
-        Task IPage.AddLocatorHandlerAsync(ILocator locator, Func<Task> handler, PageAddLocatorHandlerOptions options) => Task.CompletedTask;
+        Task IPage.AddLocatorHandlerAsync(ILocator locator, Func<Task> handler, PageAddLocatorHandlerOptions options)
+        {
+            if (handler == null)
+            {
+                throw new ArgumentNullException(nameof(handler));
+            }
+
+            LocatorHandlers.Add(this, locator, _ => handler(), options?.Times, options?.NoWaitAfter);
+            return Task.CompletedTask;
+        }
 
         Task<IElementHandle> IPage.AddScriptTagAsync(PageAddScriptTagOptions options)
             => AddScriptTagAsync(options?.Url, options?.Path, options?.Content, options?.Type);
@@ -8030,17 +11346,18 @@ namespace PlaywrightNative.WebKit
         Task<IElementHandle> IPage.AddStyleTagAsync(PageAddStyleTagOptions options)
             => AddStyleTagAsync(options?.Url, options?.Path, options?.Content);
 
-        Task<string> IPage.AriaSnapshotAsync(PageAriaSnapshotOptions options) => Task.FromResult<string>(default!);
+        Task<string> IPage.AriaSnapshotAsync(PageAriaSnapshotOptions options)
+            => PageAriaSnapshot.CaptureAsync(this, options);
 
         Task IPage.CancelPickLocatorAsync() => Task.CompletedTask;
 
         Task IPage.CheckAsync(string selector, PageCheckOptions options)
-            => CheckAsync(selector, options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, default, options?.Strict);
+            => CheckAsync(selector, options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, ActionScrollBridge.FromScrollOption(options?.Scroll), options?.Strict);
 
         Task IPage.ClickAsync(string selector, PageClickOptions options)
         {
             PageClickOptions o = options;
-            return ClickAsync(selector, o?.Button ?? default, o?.ClickCount, o?.Delay, o?.Position, o?.Modifiers, o?.Force, o?.NoWaitAfter, o?.Timeout, o?.Trial, default, null, o?.Strict);
+            return ClickAsync(selector, o?.Button ?? default, o?.ClickCount, o?.Delay, o?.Position, o?.Modifiers, o?.Force, o?.NoWaitAfter, o?.Timeout, o?.Trial, ActionScrollBridge.FromScrollOption(o?.Scroll), (o as PlaywrightNative.Compat.LegacyPageClickOptions)?.Steps, o?.Strict);
         }
 
         Task IPage.CloseAsync(PageCloseOptions options)
@@ -8048,14 +11365,28 @@ namespace PlaywrightNative.WebKit
             return CloseAsync(options?.RunBeforeUnload, options?.Reason);
         }
 
-        Task<IReadOnlyList<IConsoleMessage>> IPage.ConsoleMessagesAsync(PageConsoleMessagesOptions options) => ConsoleMessagesAsync(options?.Filter ?? default);
+        Task<IReadOnlyList<IConsoleMessage>> IPage.ConsoleMessagesAsync(PageConsoleMessagesOptions options)
+            => ConsoleMessagesAsync(options?.Filter ?? ConsoleMessagesFilter.SinceNavigation);
 
         Task IPage.DblClickAsync(string selector, PageDblClickOptions options)
-            => DblClickAsync(selector, options?.Button ?? default, options?.Delay, options?.Position, options?.Modifiers, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, default, options?.Strict);
+            => DblClickAsync(selector, options?.Button ?? default, options?.Delay, options?.Position, options?.Modifiers, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, ActionScrollBridge.FromScrollOption(options?.Scroll), options?.Strict);
 
-        Task IPage.DispatchEventAsync(string selector, string type, object eventInit, PageDispatchEventOptions options) => Task.CompletedTask;
+        Task IPage.DispatchEventAsync(string selector, string type, object eventInit, PageDispatchEventOptions options)
+            => DispatchEventInternalAsync(selector, type, eventInit, options?.Timeout, options?.Strict);
 
-        Task IPage.DragAndDropAsync(string source, string target, PageDragAndDropOptions options) => Task.CompletedTask;
+        Task IPage.DragAndDropAsync(string source, string target, PageDragAndDropOptions options)
+            => DragAndDropAsync(
+                source,
+                target,
+                options?.SourcePosition == null ? null : new Position { X = options.SourcePosition.X, Y = options.SourcePosition.Y },
+                options?.TargetPosition == null ? null : new Position { X = options.TargetPosition.X, Y = options.TargetPosition.Y },
+                options?.Force,
+                options?.NoWaitAfter,
+                options?.Timeout,
+                options?.Trial,
+                options?.Steps,
+                ActionScrollBridge.FromScrollOption(options?.Scroll),
+                options?.Strict);
 
         async Task IPage.EmulateMediaAsync(PageEmulateMediaOptions options)
         {
@@ -8068,29 +11399,99 @@ namespace PlaywrightNative.WebKit
             await EmulateMediaAsync(options.ReducedMotion, options.ForcedColors, options.Contrast).ConfigureAwait(false);
         }
 
-        Task<JsonElement?> IPage.EvalOnSelectorAllAsync(string selector, string expression, object arg) => Task.FromResult<JsonElement?>(default!);
+        async Task<JsonElement?> IPage.EvalOnSelectorAllAsync(string selector, string expression, object arg)
+        {
+            if (FrameSelector.ContainsControl(selector))
+            {
+                return await FrameSelector.EvalOnAllAsync<JsonElement?>(MainFrame, null, selector, expression, arg).ConfigureAwait(false);
+            }
 
-        Task<T> IPage.EvalOnSelectorAllAsync<T>(string selector, string expression, object arg) => Task.FromResult<T>(default!);
+            return await EvalOnSelector.OnArrayAsync<JsonElement?>(
+                EvaluateHandleAsync(EvalOnSelector.DocumentQuerySelectorAllExpression(selector)),
+                expression,
+                arg).ConfigureAwait(false);
+        }
 
-        Task<JsonElement?> IPage.EvalOnSelectorAsync(string selector, string expression, object arg) => Task.FromResult<JsonElement?>(default!);
+        Task<T> IPage.EvalOnSelectorAllAsync<T>(string selector, string expression, object arg)
+        {
+            if (FrameSelector.ContainsControl(selector))
+            {
+                return FrameSelector.EvalOnAllAsync<T>(MainFrame, null, selector, expression, arg);
+            }
 
-        Task<T> IPage.EvalOnSelectorAsync<T>(string selector, string expression, object arg, PageEvalOnSelectorOptions options) => Task.FromResult<T>(default!);
+            return EvalOnSelector.OnArrayAsync<T>(
+                EvaluateHandleAsync(EvalOnSelector.DocumentQuerySelectorAllExpression(selector)),
+                expression,
+                arg);
+        }
 
-        Task<IAsyncDisposable> IPage.ExposeBindingAsync(string name, Action callback) => Task.FromResult<IAsyncDisposable>(default!);
+        Task<JsonElement?> IPage.EvalOnSelectorAsync(string selector, string expression, object arg)
+            => EvalOnSelector.OnHandleAsync<JsonElement?>(QuerySelectorAsync(selector), selector, expression, arg, "page.$eval");
 
-        Task<IAsyncDisposable> IPage.ExposeBindingAsync(string name, Action<BindingSource> callback) => Task.FromResult<IAsyncDisposable>(default!);
+        Task<T> IPage.EvalOnSelectorAsync<T>(string selector, string expression, object arg, PageEvalOnSelectorOptions options)
+            => EvalOnSelector.OnHandleAsync<T>(
+                QueryActionAsync(selector, options?.Strict),
+                selector,
+                expression,
+                arg,
+                "page.$eval");
 
-        Task<IAsyncDisposable> IPage.ExposeBindingAsync<T>(string name, Action<BindingSource, T> callback) => Task.FromResult<IAsyncDisposable>(default!);
+        Task<IAsyncDisposable> IPage.ExposeBindingAsync(string name, Action callback)
+            => ExposeFunctionAsync(name, callback);
 
-        Task<IAsyncDisposable> IPage.ExposeBindingAsync<T1, T2, T3, TResult>(string name, Func<BindingSource, T1, T2, T3, TResult> callback) => Task.FromResult<IAsyncDisposable>(default!);
+        Task<IAsyncDisposable> IPage.ExposeBindingAsync(string name, Action<BindingSource> callback)
+        {
+            if (callback == null)
+            {
+                throw new ArgumentNullException(nameof(callback));
+            }
 
-        Task<IAsyncDisposable> IPage.ExposeBindingAsync<T1, T2, T3, T4, TResult>(string name, Func<BindingSource, T1, T2, T3, T4, TResult> callback) => Task.FromResult<IAsyncDisposable>(default!);
+            return InstallExposedAsync(name, PageExposeBinder.WrapBinding<object>(Context, this, source =>
+            {
+                callback(source);
+                return null;
+            }));
+        }
+
+        Task<IAsyncDisposable> IPage.ExposeBindingAsync<T>(string name, Action<BindingSource, T> callback)
+        {
+            if (callback == null)
+            {
+                throw new ArgumentNullException(nameof(callback));
+            }
+
+            return InstallExposedAsync(name, PageExposeBinder.WrapBinding<T, object>(Context, this, (source, arg) =>
+            {
+                callback(source, arg);
+                return null;
+            }));
+        }
+
+        Task<IAsyncDisposable> IPage.ExposeBindingAsync<T1, T2, T3, TResult>(string name, Func<BindingSource, T1, T2, T3, TResult> callback)
+        {
+            if (callback == null)
+            {
+                throw new ArgumentNullException(nameof(callback));
+            }
+
+            return InstallExposedAsync(name, PageExposeBinder.WrapBinding(Context, this, callback));
+        }
+
+        Task<IAsyncDisposable> IPage.ExposeBindingAsync<T1, T2, T3, T4, TResult>(string name, Func<BindingSource, T1, T2, T3, T4, TResult> callback)
+        {
+            if (callback == null)
+            {
+                throw new ArgumentNullException(nameof(callback));
+            }
+
+            return InstallExposedAsync(name, PageExposeBinder.WrapBinding(Context, this, callback));
+        }
 
         Task IPage.FillAsync(string selector, string value, PageFillOptions options)
             => FillAsync(selector, value, options?.NoWaitAfter, options?.Timeout, options?.Force, default, options?.Strict);
 
         Task IPage.FocusAsync(string selector, PageFocusOptions options)
-            => FocusAsync(selector, options?.Timeout, default, options?.Strict);
+            => FocusAsync(selector, options?.Timeout, (options as PlaywrightNative.Compat.LegacyPageFocusOptions)?.Scroll ?? default, options?.Strict);
 
         IFrame IPage.Frame(string name) => FrameLookup.ByName(Frames, name);
 
@@ -8100,59 +11501,107 @@ namespace PlaywrightNative.WebKit
 
         IFrame IPage.FrameByUrl(Func<string, bool> url) => FrameByUrl(null, null, url);
 
-        IFrameLocator IPage.FrameLocator(string selector) => null!;
+        IFrameLocator IPage.FrameLocator(string selector) => new FrameLocator(MainFrame, selector);
 
         Task<string> IPage.GetAttributeAsync(string selector, string name, PageGetAttributeOptions options)
             => GetAttributeAsync(selector, name, options?.Timeout, options?.Strict);
 
-        ILocator IPage.GetByAltText(string text, PageGetByAltTextOptions options) => null!;
+        ILocator IPage.GetByAltText(string text, PageGetByAltTextOptions options)
+            => Locator.FromScript(MainFrame, GetByAllScript.FindAllByAttribute, "alt", text, options?.Exact ?? false);
 
-        ILocator IPage.GetByAltText(Regex text, PageGetByAltTextOptions options) => null!;
+        ILocator IPage.GetByAltText(Regex text, PageGetByAltTextOptions options)
+            => Locator.FromScript(
+                MainFrame,
+                GetByAllScript.FindAllByAttributeRegex,
+                "alt",
+                GetByAllScript.Pattern(text),
+                GetByAllScript.Flags(text));
 
-        ILocator IPage.GetByLabel(string text, PageGetByLabelOptions options) => null!;
+        ILocator IPage.GetByLabel(string text, PageGetByLabelOptions options)
+            => Locator.FromScript(MainFrame, GetByAllScript.FindAllByLabel, text, options?.Exact ?? false);
 
-        ILocator IPage.GetByLabel(Regex text, PageGetByLabelOptions options) => null!;
+        ILocator IPage.GetByLabel(Regex text, PageGetByLabelOptions options)
+            => Locator.FromScript(
+                MainFrame,
+                GetByAllScript.FindAllByLabelRegex,
+                GetByAllScript.Pattern(text),
+                GetByAllScript.Flags(text));
 
-        ILocator IPage.GetByPlaceholder(string text, PageGetByPlaceholderOptions options) => null!;
+        ILocator IPage.GetByPlaceholder(string text, PageGetByPlaceholderOptions options)
+            => Locator.FromScript(MainFrame, GetByAllScript.FindAllByAttribute, "placeholder", text, options?.Exact ?? false);
 
-        ILocator IPage.GetByPlaceholder(Regex text, PageGetByPlaceholderOptions options) => null!;
+        ILocator IPage.GetByPlaceholder(Regex text, PageGetByPlaceholderOptions options)
+            => Locator.FromScript(
+                MainFrame,
+                GetByAllScript.FindAllByAttributeRegex,
+                "placeholder",
+                GetByAllScript.Pattern(text),
+                GetByAllScript.Flags(text));
 
-        ILocator IPage.GetByRole(AriaRole role, PageGetByRoleOptions options) => null!;
+        ILocator IPage.GetByRole(AriaRole role, PageGetByRoleOptions options)
+            => new Locator(MainFrame, RoleSelector.Build(
+                role.ToRoleString(),
+                options?.Name ?? options?.NameString,
+                options?.Exact,
+                options?.Checked,
+                options?.Disabled,
+                options?.Expanded,
+                options?.IncludeHidden,
+                options?.Level,
+                options?.Pressed,
+                options?.Selected,
+                options?.Description ?? options?.DescriptionString,
+                options?.DescriptionRegex,
+                options?.NameRegex));
 
-        ILocator IPage.GetByTestId(string testId) => null!;
+        ILocator IPage.GetByTestId(string testId) => new Locator(MainFrame, GetBySelectorScript.TestIdSelector(testId));
 
-        ILocator IPage.GetByTestId(Regex testId) => null!;
+        ILocator IPage.GetByTestId(Regex testId)
+            => Locator.FromScript(
+                MainFrame,
+                GetByAllScript.FindAllByAttributeRegex,
+                GetBySelectorScript.TestIdAttributeName(),
+                GetByAllScript.Pattern(testId),
+                GetByAllScript.Flags(testId));
 
-        ILocator IPage.GetByText(string text, PageGetByTextOptions options) => null!;
+        ILocator IPage.GetByText(string text, PageGetByTextOptions options)
+            => Locator.FromScript(MainFrame, GetByAllScript.FindAllByText, text, options?.Exact ?? false);
 
-        ILocator IPage.GetByText(Regex text, PageGetByTextOptions options) => null!;
+        ILocator IPage.GetByText(Regex text, PageGetByTextOptions options)
+            => Locator.FromScript(
+                MainFrame,
+                GetByAllScript.FindAllByTextRegex,
+                GetByAllScript.Pattern(text),
+                GetByAllScript.Flags(text));
 
-        ILocator IPage.GetByTitle(string text, PageGetByTitleOptions options) => null!;
+        ILocator IPage.GetByTitle(string text, PageGetByTitleOptions options)
+            => Locator.FromScript(MainFrame, GetByAllScript.FindAllByAttribute, "title", text, options?.Exact ?? false);
 
-        ILocator IPage.GetByTitle(Regex text, PageGetByTitleOptions options) => null!;
+        ILocator IPage.GetByTitle(Regex text, PageGetByTitleOptions options)
+            => Locator.FromScript(
+                MainFrame,
+                GetByAllScript.FindAllByAttributeRegex,
+                "title",
+                GetByAllScript.Pattern(text),
+                GetByAllScript.Flags(text));
 
         Task<IResponse> IPage.GoBackAsync(PageGoBackOptions options)
-        {
-            PageGoBackOptions o = options;
-            return GoBackAsync(o.WaitUntil ?? default, o.Timeout);
-        }
+            => GoBackAsync(options?.WaitUntil ?? default, options?.Timeout);
 
         Task<IResponse> IPage.GoForwardAsync(PageGoForwardOptions options)
-        {
-            PageGoForwardOptions o = options;
-            return GoForwardAsync(o.WaitUntil ?? default, o.Timeout);
-        }
+            => GoForwardAsync(options?.WaitUntil ?? default, options?.Timeout);
 
         Task<IResponse> IPage.GotoAsync(string url, PageGotoOptions options)
+            => GoToAsync(url, options?.WaitUntil ?? default, options?.Timeout, options?.Referer);
+
+        async Task IPage.HideHighlightAsync()
         {
-            PageGotoOptions o = options;
-            return GoToAsync(url, o.WaitUntil ?? default, o.Timeout, o.Referer);
+            PageHighlights.Clear(this);
+            await EvaluateAsync(ElementStateScript.HideAllHighlightsFunction).ConfigureAwait(false);
         }
 
-        Task IPage.HideHighlightAsync() => Task.CompletedTask;
-
         Task IPage.HoverAsync(string selector, PageHoverOptions options)
-            => HoverAsync(selector, options?.Position, options?.Modifiers, options?.Force, options?.Timeout, options?.Trial, default, options?.Strict);
+            => HoverAsync(selector, options?.Position, options?.Modifiers, options?.Force, options?.Timeout, options?.Trial, ActionScrollBridge.FromScrollOption(options?.Scroll), options?.Strict);
 
         Task<string> IPage.InnerHTMLAsync(string selector, PageInnerHTMLOptions options)
             => InnerHTMLAsync(selector, options?.Timeout, options?.Strict);
@@ -8160,7 +11609,13 @@ namespace PlaywrightNative.WebKit
         Task<string> IPage.InnerTextAsync(string selector, PageInnerTextOptions options)
             => InnerTextAsync(selector, options?.Timeout, options?.Strict);
 
-        Task<string> IPage.InputValueAsync(string selector, PageInputValueOptions options) => Task.FromResult<string>(default!);
+        Task<string> IPage.InputValueAsync(string selector, PageInputValueOptions options)
+            => ElementQuery.WaitQueryAsync(
+                sel => QueryActionAsync(sel, options?.Strict),
+                selector,
+                h => h.InputValueAsync(options?.Timeout),
+                options?.Timeout,
+                "page.inputValue");
 
         Task<bool> IPage.IsCheckedAsync(string selector, PageIsCheckedOptions options)
             => IsCheckedAsync(selector, options?.Timeout, options?.Strict);
@@ -8180,11 +11635,24 @@ namespace PlaywrightNative.WebKit
         Task<bool> IPage.IsVisibleAsync(string selector, PageIsVisibleOptions options)
             => IsVisibleAsync(selector, options?.Timeout, options?.Strict);
 
-        ILocator IPage.Locator(string selector, PageLocatorOptions options) => null!;
+        ILocator IPage.Locator(string selector, PageLocatorOptions options)
+        {
+            ILocator result = new Locator(MainFrame, selector);
+            options ??= new PageLocatorOptions();
+            return SelectorQuery.ApplyOptions(
+                result,
+                options.Has,
+                options.HasText ?? options.HasTextString,
+                options.HasTextRegex,
+                options.HasNot,
+                options.HasNotText ?? options.HasNotTextString,
+                options.HasNotTextRegex);
+        }
 
-        Task IPage.PauseAsync() => Task.CompletedTask;
+        Task IPage.PauseAsync() => PauseInternalAsync();
 
-        Task<byte[]> IPage.PdfAsync(PagePdfOptions options) => Task.FromResult<byte[]>(default!);
+        Task<byte[]> IPage.PdfAsync(PagePdfOptions options)
+            => throw new NotSupportedException("PDF generation is only supported for Headless Chromium");
 
         Task<ILocator> IPage.PickLocatorAsync() => Task.FromResult<ILocator>(default!);
 
@@ -8195,12 +11663,13 @@ namespace PlaywrightNative.WebKit
             => QueryActionAsync(selector, options?.Strict);
 
         Task<IResponse> IPage.ReloadAsync(PageReloadOptions options)
-        {
-            PageReloadOptions o = options;
-            return ReloadAsync(o.WaitUntil ?? default, o.Timeout);
-        }
+            => ReloadAsync(options?.WaitUntil ?? default, options?.Timeout);
 
-        Task IPage.RemoveLocatorHandlerAsync(ILocator locator) => Task.CompletedTask;
+        Task IPage.RemoveLocatorHandlerAsync(ILocator locator)
+        {
+            LocatorHandlers.Remove(this, locator);
+            return Task.CompletedTask;
+        }
 
         Task<IAsyncDisposable> IPage.RouteAsync(string url, Action<IRoute> handler, PageRouteOptions options)
             => RegisterRouteAsync(() => RouteAsync(url, handler, options?.Times));
@@ -8220,43 +11689,90 @@ namespace PlaywrightNative.WebKit
         Task<IAsyncDisposable> IPage.RouteAsync(Func<string, bool> url, Func<IRoute, Task> handler, PageRouteOptions options)
             => RegisterRouteAsync(() => RouteAsync(url, handler, options?.Times));
 
-        Task IPage.RouteFromHARAsync(string har, PageRouteFromHAROptions options) => Task.CompletedTask;
+        Task IPage.RouteFromHARAsync(string har, PageRouteFromHAROptions options)
+            => HarPlayback.InstallAsync(this, har, options);
 
-        Task IPage.RouteWebSocketAsync(string url, Action<IWebSocketRoute> handler) => Task.CompletedTask;
+        Task IPage.RouteWebSocketAsync(string url, Action<IWebSocketRoute> handler)
+            => WebSocketRouter.InstallAsync(this, url, handler);
 
-        Task IPage.RouteWebSocketAsync(Regex url, Action<IWebSocketRoute> handler) => Task.CompletedTask;
+        Task IPage.RouteWebSocketAsync(Regex url, Action<IWebSocketRoute> handler)
+            => WebSocketRouter.InstallAsync(this, url, handler);
 
-        Task IPage.RouteWebSocketAsync(Func<string, bool> url, Action<IWebSocketRoute> handler) => Task.CompletedTask;
+        Task IPage.RouteWebSocketAsync(Func<string, bool> url, Action<IWebSocketRoute> handler)
+            => WebSocketRouter.InstallAsync(this, url, handler);
 
-        Task<IConsoleMessage> IPage.RunAndWaitForConsoleMessageAsync(Func<Task> action, PageRunAndWaitForConsoleMessageOptions options) => Task.FromResult<IConsoleMessage>(default!);
+        Task<IConsoleMessage> IPage.RunAndWaitForConsoleMessageAsync(Func<Task> action, PageRunAndWaitForConsoleMessageOptions options)
+            => RunAndWaitInternalAsync(
+                action,
+                WaitForEventAsync(PageEvent.Console, options?.Predicate, options?.Timeout));
 
-        Task<IDownload> IPage.RunAndWaitForDownloadAsync(Func<Task> action, PageRunAndWaitForDownloadOptions options) => Task.FromResult<IDownload>(default!);
+        Task<IDownload> IPage.RunAndWaitForDownloadAsync(Func<Task> action, PageRunAndWaitForDownloadOptions options)
+            => RunAndWaitInternalAsync(
+                action,
+                WaitForEventAsync(PageEvent.Download, options?.Predicate, options?.Timeout));
 
-        Task<IFileChooser> IPage.RunAndWaitForFileChooserAsync(Func<Task> action, PageRunAndWaitForFileChooserOptions options) => Task.FromResult<IFileChooser>(default!);
+        Task<IFileChooser> IPage.RunAndWaitForFileChooserAsync(Func<Task> action, PageRunAndWaitForFileChooserOptions options)
+            => RunAndWaitInternalAsync(
+                action,
+                FileChooserWaitHelper.WaitAsync(this, options?.Predicate, options?.Timeout));
 
-        Task<IResponse> IPage.RunAndWaitForNavigationAsync(Func<Task> action, PageRunAndWaitForNavigationOptions options) => Task.FromResult<IResponse>(default!);
+        Task<IResponse> IPage.RunAndWaitForNavigationAsync(Func<Task> action, PageRunAndWaitForNavigationOptions options)
+            => RunAndWaitInternalAsync(
+                action,
+                WaitForNavigationAsync(
+                    options?.Url ?? options?.UrlString,
+                    options?.UrlRegex,
+                    options?.UrlFunc,
+                    options?.Timeout,
+                    options?.WaitUntil ?? default));
 
-        Task<IPage> IPage.RunAndWaitForPopupAsync(Func<Task> action, PageRunAndWaitForPopupOptions options) => Task.FromResult<IPage>(default!);
+        Task<IPage> IPage.RunAndWaitForPopupAsync(Func<Task> action, PageRunAndWaitForPopupOptions options)
+            => RunAndWaitInternalAsync(
+                action,
+                WaitForEventAsync(PageEvent.Popup, options?.Predicate, options?.Timeout));
 
-        Task<IRequest> IPage.RunAndWaitForRequestAsync(Func<Task> action, string urlOrPredicate, PageRunAndWaitForRequestOptions options) => Task.FromResult<IRequest>(default!);
+        Task<IRequest> IPage.RunAndWaitForRequestAsync(Func<Task> action, string urlOrPredicate, PageRunAndWaitForRequestOptions options)
+            => RunAndWaitInternalAsync(action, WaitForRequestAsync(urlOrPredicate, null, null, options?.Timeout));
 
-        Task<IRequest> IPage.RunAndWaitForRequestAsync(Func<Task> action, Regex urlOrPredicate, PageRunAndWaitForRequestOptions options) => Task.FromResult<IRequest>(default!);
+        Task<IRequest> IPage.RunAndWaitForRequestAsync(Func<Task> action, Regex urlOrPredicate, PageRunAndWaitForRequestOptions options)
+            => RunAndWaitInternalAsync(action, WaitForRequestAsync(null, urlOrPredicate, null, options?.Timeout));
 
-        Task<IRequest> IPage.RunAndWaitForRequestAsync(Func<Task> action, Func<IRequest, bool> urlOrPredicate, PageRunAndWaitForRequestOptions options) => Task.FromResult<IRequest>(default!);
+        Task<IRequest> IPage.RunAndWaitForRequestAsync(Func<Task> action, Func<IRequest, bool> urlOrPredicate, PageRunAndWaitForRequestOptions options)
+            => RunAndWaitInternalAsync(action, WaitForRequestAsync(null, null, urlOrPredicate, options?.Timeout));
 
-        Task<IRequest> IPage.RunAndWaitForRequestFinishedAsync(Func<Task> action, PageRunAndWaitForRequestFinishedOptions options) => Task.FromResult<IRequest>(default!);
+        Task<IRequest> IPage.RunAndWaitForRequestFinishedAsync(Func<Task> action, PageRunAndWaitForRequestFinishedOptions options)
+            => RunAndWaitInternalAsync(action, WaitForRequestFinishedInternalAsync(null, null, options?.Predicate, options?.Timeout));
 
-        Task<IResponse> IPage.RunAndWaitForResponseAsync(Func<Task> action, string urlOrPredicate, PageRunAndWaitForResponseOptions options) => Task.FromResult<IResponse>(default!);
+        Task<IResponse> IPage.RunAndWaitForResponseAsync(Func<Task> action, string urlOrPredicate, PageRunAndWaitForResponseOptions options)
+            => RunAndWaitInternalAsync(action, WaitForResponseAsync(urlOrPredicate, null, null, options?.Timeout));
 
-        Task<IResponse> IPage.RunAndWaitForResponseAsync(Func<Task> action, Regex urlOrPredicate, PageRunAndWaitForResponseOptions options) => Task.FromResult<IResponse>(default!);
+        Task<IResponse> IPage.RunAndWaitForResponseAsync(Func<Task> action, Regex urlOrPredicate, PageRunAndWaitForResponseOptions options)
+            => RunAndWaitInternalAsync(action, WaitForResponseAsync(null, urlOrPredicate, null, options?.Timeout));
 
-        Task<IResponse> IPage.RunAndWaitForResponseAsync(Func<Task> action, Func<IResponse, bool> urlOrPredicate, PageRunAndWaitForResponseOptions options) => Task.FromResult<IResponse>(default!);
+        Task<IResponse> IPage.RunAndWaitForResponseAsync(Func<Task> action, Func<IResponse, bool> urlOrPredicate, PageRunAndWaitForResponseOptions options)
+            => RunAndWaitInternalAsync(action, WaitForResponseAsync(null, null, urlOrPredicate, options?.Timeout));
 
-        Task<IWebSocket> IPage.RunAndWaitForWebSocketAsync(Func<Task> action, PageRunAndWaitForWebSocketOptions options) => Task.FromResult<IWebSocket>(default!);
+        Task<IWebSocket> IPage.RunAndWaitForWebSocketAsync(Func<Task> action, PageRunAndWaitForWebSocketOptions options)
+            => RunAndWaitInternalAsync(action, WaitForEventAsync(PageEvent.WebSocket, options?.Predicate, options?.Timeout));
 
-        Task<IWorker> IPage.RunAndWaitForWorkerAsync(Func<Task> action, PageRunAndWaitForWorkerOptions options) => Task.FromResult<IWorker>(default!);
+        Task<IWorker> IPage.RunAndWaitForWorkerAsync(Func<Task> action, PageRunAndWaitForWorkerOptions options)
+            => RunAndWaitInternalAsync(action, WaitForEventAsync(PageEvent.Worker, options?.Predicate, options?.Timeout));
 
-        Task<byte[]> IPage.ScreenshotAsync(PageScreenshotOptions options) => Task.FromResult<byte[]>(default!);
+        Task<byte[]> IPage.ScreenshotAsync(PageScreenshotOptions options)
+            => ScreenshotAsync(
+                options?.Path,
+                options?.Type ?? EnumCompat.UndefinedScreenshotType,
+                options?.Quality,
+                options?.FullPage,
+                options?.Clip,
+                options?.OmitBackground,
+                options?.Timeout,
+                options?.Scale?.ToString(),
+                options?.Animations?.ToString(),
+                options?.Caret?.ToString(),
+                options?.Style,
+                options?.Mask,
+                options?.MaskColor);
 
         Task<IReadOnlyList<string>> IPage.SelectOptionAsync(string selector, string values, PageSelectOptionOptions options)
             => AsReadOnlyListAsync(SelectOptionAsync(selector, values, options?.NoWaitAfter, options?.Timeout, options?.Force, options?.Strict));
@@ -8278,14 +11794,11 @@ namespace PlaywrightNative.WebKit
 
         Task IPage.SetCheckedAsync(string selector, bool checkedState, PageSetCheckedOptions options)
             => checkedState
-                ? CheckAsync(selector, options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, default, options?.Strict)
-                : UncheckAsync(selector, options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, default, options?.Strict);
+                ? CheckAsync(selector, options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, ActionScrollBridge.FromScrollOption(options?.Scroll), options?.Strict)
+                : UncheckAsync(selector, options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, ActionScrollBridge.FromScrollOption(options?.Scroll), options?.Strict);
 
         Task IPage.SetContentAsync(string html, PageSetContentOptions options)
-        {
-            PageSetContentOptions o = options;
-            return SetContentAsync(html, o.Timeout, o.WaitUntil ?? default);
-        }
+            => SetContentAsync(html, options?.Timeout, options?.WaitUntil ?? default);
 
         void IPage.SetDefaultNavigationTimeout(float timeout)
         {
@@ -8310,10 +11823,10 @@ namespace PlaywrightNative.WebKit
             => SetInputFilesAsync(selector, files, options?.NoWaitAfter, options?.Timeout, options?.Strict);
 
         Task IPage.SetInputFilesAsync(string selector, IEnumerable<FilePayload> files, PageSetInputFilesOptions options)
-            => SetInputFilesAsync(selector, files, options?.NoWaitAfter, options?.Timeout, default, default, options?.Strict);
+            => SetInputFilesAsync(selector, files, options?.NoWaitAfter, options?.Timeout, force: null, default, options?.Strict);
 
         Task IPage.TapAsync(string selector, PageTapOptions options)
-            => TapAsync(selector, options?.Position, options?.Modifiers, options?.NoWaitAfter, options?.Force, options?.Timeout, options?.Trial, default, options?.Strict);
+            => TapAsync(selector, options?.Position, options?.Modifiers, options?.NoWaitAfter, options?.Force, options?.Timeout, options?.Trial, ActionScrollBridge.FromScrollOption(options?.Scroll), options?.Strict);
 
         Task<string> IPage.TextContentAsync(string selector, PageTextContentOptions options)
             => TextContentAsync(selector, options?.Timeout, options?.Strict);
@@ -8322,10 +11835,10 @@ namespace PlaywrightNative.WebKit
             => TypeAsync(selector, text, options?.Delay, options?.NoWaitAfter, options?.Timeout, null, default, options?.Strict);
 
         Task IPage.UncheckAsync(string selector, PageUncheckOptions options)
-            => UncheckAsync(selector, options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, default, options?.Strict);
+            => UncheckAsync(selector, options?.Position, options?.Force, options?.NoWaitAfter, options?.Timeout, options?.Trial, ActionScrollBridge.FromScrollOption(options?.Scroll), options?.Strict);
 
         Task IPage.UnrouteAllAsync(PageUnrouteAllOptions options)
-            => UnrouteAllAsync();
+            => UnrouteAllAsync(UnrouteBehaviorBridge.FromOfficial(options?.Behavior));
 
         Task IPage.UnrouteAsync(string url, Action<IRoute> handler)
             => UnrouteAsync(url, handler);
@@ -8345,13 +11858,14 @@ namespace PlaywrightNative.WebKit
         Task IPage.UnrouteAsync(Func<string, bool> url, Func<IRoute, Task> handler)
             => UnrouteAsync(url, handler);
 
-        Task<IConsoleMessage> IPage.WaitForConsoleMessageAsync(PageWaitForConsoleMessageOptions options) => Task.FromResult<IConsoleMessage>(default!);
+        Task<IConsoleMessage> IPage.WaitForConsoleMessageAsync(PageWaitForConsoleMessageOptions options)
+            => WaitForEventAsync(PageEvent.Console, options?.Predicate, options?.Timeout);
 
         Task<IDownload> IPage.WaitForDownloadAsync(PageWaitForDownloadOptions options)
             => WaitForDownloadAsync(options?.Timeout);
 
         Task<IFileChooser> IPage.WaitForFileChooserAsync(PageWaitForFileChooserOptions options)
-            => WaitForFileChooserAsync(options?.Timeout);
+            => WaitForFileChooserAsync(options?.Timeout, (options as PlaywrightNative.Compat.LegacyPageWaitForFileChooserOptions)?.CancellationToken ?? default);
 
         Task<IJSHandle> IPage.WaitForFunctionAsync(string expression, object arg, PageWaitForFunctionOptions options)
             => WaitForFunctionAsync(expression, arg, options?.PollingInterval, options?.Timeout);
@@ -8363,9 +11877,10 @@ namespace PlaywrightNative.WebKit
         }
 
         Task<IResponse> IPage.WaitForNavigationAsync(PageWaitForNavigationOptions options)
-            => WaitForNavigationAsync(options?.Url, null, null, options?.Timeout, options?.WaitUntil ?? default);
+            => WaitForNavigationAsync(options?.Url, options?.UrlRegex, options?.UrlFunc, options?.Timeout, options?.WaitUntil ?? default);
 
-        Task<IPage> IPage.WaitForPopupAsync(PageWaitForPopupOptions options) => Task.FromResult<IPage>(default!);
+        Task<IPage> IPage.WaitForPopupAsync(PageWaitForPopupOptions options)
+            => WaitForEventAsync(PageEvent.Popup, options?.Predicate, options?.Timeout);
 
         Task<IRequest> IPage.WaitForRequestAsync(string urlOrPredicate, PageWaitForRequestOptions options)
             => WaitForRequestAsync(urlOrPredicate, null, null, options?.Timeout);
@@ -8376,7 +11891,8 @@ namespace PlaywrightNative.WebKit
         Task<IRequest> IPage.WaitForRequestAsync(Func<IRequest, bool> urlOrPredicate, PageWaitForRequestOptions options)
             => WaitForRequestAsync(null, null, urlOrPredicate, options?.Timeout);
 
-        Task<IRequest> IPage.WaitForRequestFinishedAsync(PageWaitForRequestFinishedOptions options) => Task.FromResult<IRequest>(default!);
+        Task<IRequest> IPage.WaitForRequestFinishedAsync(PageWaitForRequestFinishedOptions options)
+            => WaitForRequestFinishedInternalAsync(null, null, options?.Predicate, options?.Timeout);
 
         Task<IResponse> IPage.WaitForResponseAsync(string urlOrPredicate, PageWaitForResponseOptions options)
             => WaitForResponseAsync(urlOrPredicate, null, null, options?.Timeout);
@@ -8399,9 +11915,11 @@ namespace PlaywrightNative.WebKit
         Task IPage.WaitForURLAsync(Func<string, bool> url, PageWaitForURLOptions options)
             => WaitForURLAsync(null, null, url, options?.Timeout, options?.WaitUntil ?? default);
 
-        Task<IWebSocket> IPage.WaitForWebSocketAsync(PageWaitForWebSocketOptions options) => Task.FromResult<IWebSocket>(default!);
+        Task<IWebSocket> IPage.WaitForWebSocketAsync(PageWaitForWebSocketOptions options)
+            => WaitForEventAsync(PageEvent.WebSocket, options?.Predicate, options?.Timeout);
 
-        Task<IWorker> IPage.WaitForWorkerAsync(PageWaitForWorkerOptions options) => Task.FromResult<IWorker>(default!);
+        Task<IWorker> IPage.WaitForWorkerAsync(PageWaitForWorkerOptions options)
+            => WaitForEventAsync(PageEvent.Worker, options?.Predicate, options?.Timeout);
 
         private static async Task<IReadOnlyList<string>> AsReadOnlyListAsync(Task<IReadOnlyCollection<string>> task)
         {

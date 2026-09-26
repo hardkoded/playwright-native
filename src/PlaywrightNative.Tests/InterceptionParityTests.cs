@@ -20,6 +20,7 @@ using System.Globalization;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.Helpers;
 using PlaywrightNative.NUnit;
@@ -276,21 +277,21 @@ namespace PlaywrightNative.Tests
         [Timeout(TestConstants.DefaultTestTimeout)]
         public void ShouldThrowOnUnbalancedGlobBraces()
         {
-            Exception unmatchedOpen = Assert.Throws<PlaywrightNativeException>(() => UrlMatcher.GlobToRegexPattern("{foo"));
+            Exception unmatchedOpen = Assert.Throws<PlaywrightException>(() => UrlMatcher.GlobToRegexPattern("{foo"));
             Assert.That(unmatchedOpen.Message, Does.Contain("Invalid glob pattern \"{foo\": unmatched '{'"));
-            Exception unmatchedClose = Assert.Throws<PlaywrightNativeException>(() => UrlMatcher.GlobToRegexPattern("}foo"));
+            Exception unmatchedClose = Assert.Throws<PlaywrightException>(() => UrlMatcher.GlobToRegexPattern("}foo"));
             Assert.That(unmatchedClose.Message, Does.Contain("Invalid glob pattern \"}foo\": unmatched '}'"));
             Assert.That(
-                Assert.Throws<PlaywrightNativeException>(() => UrlMatcher.GlobToRegexPattern("http://*/foo{")).Message,
+                Assert.Throws<PlaywrightException>(() => UrlMatcher.GlobToRegexPattern("http://*/foo{")).Message,
                 Does.Contain("unmatched '{'"));
             Assert.That(
-                Assert.Throws<PlaywrightNativeException>(() => UrlMatcher.GlobToRegexPattern("**/*.png?{")).Message,
+                Assert.Throws<PlaywrightException>(() => UrlMatcher.GlobToRegexPattern("**/*.png?{")).Message,
                 Does.Contain("unmatched '{'"));
             Assert.That(
-                Assert.Throws<PlaywrightNativeException>(() => UrlMatcher.GlobToRegexPattern("https://example.com/{a")).Message,
+                Assert.Throws<PlaywrightException>(() => UrlMatcher.GlobToRegexPattern("https://example.com/{a")).Message,
                 Does.Contain("unmatched '{'"));
             Assert.That(
-                Assert.Throws<PlaywrightNativeException>(() => UrlMatcher.GlobToRegexPattern("{{foo}")).Message,
+                Assert.Throws<PlaywrightException>(() => UrlMatcher.GlobToRegexPattern("{{foo}")).Message,
                 Does.Contain("nested '{' is not supported"));
             Assert.DoesNotThrow(() => UrlMatcher.GlobToRegexPattern("\\{foo"));
             Assert.DoesNotThrow(() => UrlMatcher.GlobToRegexPattern("foo\\}"));

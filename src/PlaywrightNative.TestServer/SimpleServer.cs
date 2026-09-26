@@ -5,7 +5,9 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.WebSockets;
+using System.Security.Authentication;
 using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -13,8 +15,11 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Features;
+using Microsoft.AspNetCore.Server.Kestrel.Core;
+using Microsoft.AspNetCore.Server.Kestrel.Https;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.FileProviders;
+using Microsoft.Extensions.Primitives;
 
 namespace PlaywrightNative.TestServer
 {
@@ -24,6 +29,7 @@ namespace PlaywrightNative.TestServer
 
         private readonly IDictionary<string, Action<HttpContext>> _subscribers;
         private readonly IDictionary<string, Action<HttpContext>> _requestWaits;
+        private readonly ConcurrentDictionary<string, int> _arrivedRequestCounts;
         private readonly IDictionary<string, RequestDelegate> _routes;
         private readonly IDictionary<string, (string username, string password)> _auths;
         private readonly IDictionary<string, string> _csp;
@@ -53,6 +59,7 @@ namespace PlaywrightNative.TestServer
         {
             _subscribers = new ConcurrentDictionary<string, Action<HttpContext>>();
             _requestWaits = new ConcurrentDictionary<string, Action<HttpContext>>();
+            _arrivedRequestCounts = new ConcurrentDictionary<string, int>(StringComparer.Ordinal);
             _routes = new ConcurrentDictionary<string, RequestDelegate>();
             _auths = new ConcurrentDictionary<string, (string username, string password)>();
             _csp = new ConcurrentDictionary<string, string>();
@@ -167,7 +174,27 @@ namespace PlaywrightNative.TestServer
                         }
                         if (TryGetRequestWait(context, out var requestWait))
                         {
+                            // Defer waiter until after the route handler's sync preamble
+                            // (RequestAborted.Register) so Abort/RST cannot race registration
+                            // (ShouldAbortRequestsWhenBrowserContextCloses on Windows).
+                            string deferredRouteKey = (context.Request.Path.Value ?? string.Empty)
+                                + (context.Request.QueryString.HasValue ? context.Request.QueryString.Value : string.Empty);
+                            if (_routes.TryGetValue(deferredRouteKey, out var deferredHandler)
+                                || _routes.TryGetValue(context.Request.Path.Value ?? string.Empty, out deferredHandler))
+                            {
+                                Task handlerTask = deferredHandler(context);
+                                requestWait(context);
+                                await handlerTask.ConfigureAwait(false);
+                                return;
+                            }
+
                             requestWait(context);
+                        }
+                        else
+                        {
+                            // No waiter yet — buffer so a racing WaitForRequest after
+                            // frame.GoToAsync still observes this arrival.
+                            RecordArrivedRequest(context);
                         }
                         string routeKey = (context.Request.Path.Value ?? string.Empty)
                             + (context.Request.QueryString.HasValue ? context.Request.QueryString.Value : string.Empty);
@@ -265,11 +292,41 @@ namespace PlaywrightNative.TestServer
                             if (!string.IsNullOrEmpty(certificatePath))
                             {
                                 string certificatePassword = Environment.GetEnvironmentVariable("PLAYWRIGHT_TEST_CERT_PASSWORD");
-                                listenOptions.UseHttps(Path.GetFullPath(certificatePath), certificatePassword);
+                                X509Certificate2 certificate = LoadHttpsCertificate(certificatePath, certificatePassword);
+
+                                // Prefer TLS 1.3 (HAR/securityDetails assert it) but
+                                // also offer 1.2. Kestrel SslProtocols.Tls13 alone
+                                // fails the handshake on WebKit/mac ("An SSL error
+                                // has occurred"), which breaks every HTTPS cookie
+                                // third-party parity test. With both versions
+                                // offered, capable clients still negotiate 1.3;
+                                // WebKit/mac that cannot complete Kestrel's TLS 1.3
+                                // falls back to 1.2 (and empty securityConnection
+                                // protocol still defaults to TLS 1.3 for HAR).
+                                // Keep HTTP/1.1-only to avoid h2 ALPN quirks.
+                                listenOptions.Protocols = HttpProtocols.Http1;
+                                listenOptions.UseHttps(new HttpsConnectionAdapterOptions
+                                {
+                                    ServerCertificate = certificate,
+                                    SslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13,
+                                });
                             }
                             else
                             {
-                                listenOptions.UseHttps("testCert.cer");
+                                // Prefer the tracked PEM fixtures / sibling PFX over
+                                // Kestrel's UseHttps("testCert.cer"), which breaks on
+                                // CI when only a public DER from `dotnet dev-certs`
+                                // is present (no private key → TLS EOF).
+                                string defaultCer = Path.Combine(contentRoot, "testCert.cer");
+                                X509Certificate2 fallback = LoadHttpsCertificate(
+                                    File.Exists(defaultCer) ? defaultCer : contentRoot,
+                                    certificatePassword: "playwright");
+                                listenOptions.Protocols = HttpProtocols.Http1;
+                                listenOptions.UseHttps(new HttpsConnectionAdapterOptions
+                                {
+                                    ServerCertificate = fallback,
+                                    SslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13,
+                                });
                             }
                         });
                     }
@@ -285,6 +342,76 @@ namespace PlaywrightNative.TestServer
         public void SetAuth(string path, string username, string password) => _auths.Add(path, (username, password));
 
         public void SetCSP(string path, string csp) => _csp.Add(path, csp);
+
+        /// <summary>
+        /// Loads a TLS server certificate. CI exports <c>key.pfx</c> (password
+        /// <c>playwright</c>) via <c>dotnet dev-certs https -ep</c>. A public-only
+        /// DER <c>testCert.cer</c> cannot terminate TLS (browsers see
+        /// <c>ERR_CONNECTION_CLOSED</c>). Prefer PKCS12; rematerialize PEM into a
+        /// password-protected PKCS12 with <see cref="X509KeyStorageFlags.EphemeralKeySet"/>
+        /// on Windows so Kestrel/SslStream can use the key.
+        /// </summary>
+        /// <param name="certificatePath">Path from <c>PLAYWRIGHT_TEST_CERT_PATH</c>.</param>
+        /// <param name="certificatePassword">Optional PKCS12 password.</param>
+        /// <returns>A certificate with a private key suitable for Kestrel HTTPS.</returns>
+        private static X509Certificate2 LoadHttpsCertificate(string certificatePath, string certificatePassword)
+        {
+            string fullPath = Path.GetFullPath(certificatePath);
+            string extension = Path.GetExtension(fullPath);
+            string pfxPassword = string.IsNullOrEmpty(certificatePassword)
+                ? "playwright"
+                : certificatePassword;
+
+            // File-based PKCS12: Exportable is enough. EphemeralKeySet is reserved
+            // for in-memory PEM rematerialization on Windows (macOS/Linux reject it).
+            X509KeyStorageFlags fileFlags = X509KeyStorageFlags.Exportable;
+            if (extension.Equals(".pfx", StringComparison.OrdinalIgnoreCase)
+                || extension.Equals(".p12", StringComparison.OrdinalIgnoreCase))
+            {
+                return X509CertificateLoader.LoadPkcs12FromFile(
+                    fullPath,
+                    certificatePassword ?? pfxPassword,
+                    fileFlags);
+            }
+
+            string directory = Directory.Exists(fullPath)
+                ? fullPath
+                : (Path.GetDirectoryName(fullPath) ?? ".");
+            string siblingPfx = Path.Combine(directory, "key.pfx");
+            if (File.Exists(siblingPfx))
+            {
+                return X509CertificateLoader.LoadPkcs12FromFile(siblingPfx, pfxPassword, fileFlags);
+            }
+
+            string pemCert = Path.Combine(directory, "playwright-test.pem");
+            string pemKey = Path.Combine(directory, "playwright-test-key.pem");
+            if (File.Exists(pemCert) && File.Exists(pemKey))
+            {
+                X509KeyStorageFlags pemFlags = X509KeyStorageFlags.Exportable;
+                if (OperatingSystem.IsWindows())
+                {
+                    // Without EphemeralKeySet, Windows SslStream aborts the
+                    // handshake (unexpected EOF / ERR_CONNECTION_CLOSED).
+                    pemFlags |= X509KeyStorageFlags.EphemeralKeySet;
+                }
+
+                X509Certificate2 pem = X509Certificate2.CreateFromPemFile(pemCert, pemKey);
+                // Password-protected export is reliable across .NET/Windows;
+                // empty-password PKCS12 often yields an unusable private key.
+                byte[] pfxBytes = pem.Export(X509ContentType.Pkcs12, pfxPassword);
+                return X509CertificateLoader.LoadPkcs12(pfxBytes, pfxPassword, pemFlags);
+            }
+
+            X509Certificate2 publicOnly = X509CertificateLoader.LoadCertificateFromFile(fullPath);
+            if (!publicOnly.HasPrivateKey)
+            {
+                throw new InvalidOperationException(
+                    "HTTPS certificate at '" + fullPath + "' has no private key. " +
+                    "Provide key.pfx or playwright-test.pem + playwright-test-key.pem.");
+            }
+
+            return publicOnly;
+        }
 
         public Task StartAsync() => _webHost.StartAsync();
 
@@ -302,6 +429,7 @@ namespace PlaywrightNative.TestServer
             _csp.Clear();
             _subscribers.Clear();
             _requestWaits.Clear();
+            _arrivedRequestCounts.Clear();
             GzipRoutes.Clear();
             _onceWebSocket = null;
             _onceWebSocketAsync = null;
@@ -367,6 +495,7 @@ namespace PlaywrightNative.TestServer
             await _webSocketAcceptGate.WaitAsync().ConfigureAwait(false);
             WebSocket webSocket;
             Stream raw;
+            OfficialServerWebSocket official;
             Action<WebSocket> once;
             Func<WebSocket, Task> onceAsync;
             bool waiting;
@@ -374,14 +503,40 @@ namespace PlaywrightNative.TestServer
             {
                 TaskCompletionSource<HttpRequest> requestWaiter = _webSocketRequestWait;
                 _webSocketRequestWait = null;
+                // Keep the live request: the upgrade holds the connection open
+                // until the test finishes reading headers (WS handshake).
                 requestWaiter?.TrySetResult(context.Request);
                 waiting = _webSocketWait != null;
-                (webSocket, raw) = await UpgradeToWebSocketAsync(context).ConfigureAwait(false);
-                NotifyWebSocket(new OfficialServerWebSocket(webSocket, raw));
                 once = _onceWebSocket;
                 onceAsync = _onceWebSocketAsync;
                 _onceWebSocket = null;
                 _onceWebSocketAsync = null;
+                (webSocket, raw) = await UpgradeToWebSocketAsync(context).ConfigureAwait(false);
+
+                // Legacy OnceWebSocketConnection handlers need System.Net.WebSockets.WebSocket.
+                // Give them ManagedWebSocket exclusively — do not also run raw-frame receive
+                // on the same stream.
+                bool legacyHandler = once != null || onceAsync != null;
+                if (legacyHandler && webSocket == null && raw != null)
+                {
+                    string subProtocol = FirstRequestedProtocol(context);
+                    webSocket = WebSocket.CreateFromStream(
+                        raw,
+                        isServer: true,
+                        string.IsNullOrEmpty(subProtocol) ? null : subProtocol,
+                        Timeout.InfiniteTimeSpan);
+                    official = new OfficialServerWebSocket(webSocket);
+                }
+                else if (raw != null)
+                {
+                    official = new OfficialServerWebSocket(raw);
+                }
+                else
+                {
+                    official = new OfficialServerWebSocket(webSocket);
+                }
+
+                NotifyWebSocket(official);
                 if (once != null)
                 {
                     once(webSocket);
@@ -395,7 +550,7 @@ namespace PlaywrightNative.TestServer
             if (onceAsync != null)
             {
                 await onceAsync(webSocket).ConfigureAwait(false);
-                if (webSocket.State == WebSocketState.Open)
+                if (webSocket != null && webSocket.State == WebSocketState.Open)
                 {
                     await ReceiveLoopAsync(webSocket, sendCloseMessage: false, CancellationToken.None).ConfigureAwait(false);
                 }
@@ -405,29 +560,31 @@ namespace PlaywrightNative.TestServer
 
             if (once != null)
             {
-                await WaitUntilDisconnectedAsync(webSocket).ConfigureAwait(false);
+                if (webSocket != null)
+                {
+                    await WaitUntilDisconnectedAsync(webSocket).ConfigureAwait(false);
+                }
+                else
+                {
+                    await official.WaitUntilClosedAsync().ConfigureAwait(false);
+                }
+
                 return;
             }
 
             if (waiting)
             {
-                await WaitUntilDisconnectedAsync(webSocket).ConfigureAwait(false);
+                // OfficialServerWebSocket owns the connection via raw frames / listeners.
+                await official.WaitUntilClosedAsync().ConfigureAwait(false);
                 return;
             }
 
             if (!string.IsNullOrEmpty(_sendOnWebSocketConnection))
             {
-                await webSocket.SendAsync(
-                    new ArraySegment<byte>(Encoding.UTF8.GetBytes(_sendOnWebSocketConnection)),
-                    WebSocketMessageType.Text,
-                    true,
-                    CancellationToken.None).ConfigureAwait(false);
+                official.Send(_sendOnWebSocketConnection);
             }
 
-            await ReceiveLoopAsync(
-                webSocket,
-                context.Request.Headers["User-Agent"].ToString().Contains("Firefox"),
-                CancellationToken.None).ConfigureAwait(false);
+            await official.WaitUntilClosedAsync().ConfigureAwait(false);
         }
 
         internal async Task<(WebSocket Socket, Stream Stream)> UpgradeToWebSocketAsync(HttpContext context)
@@ -446,12 +603,13 @@ namespace PlaywrightNative.TestServer
                 }
 
                 Stream stream = await upgrade.UpgradeAsync().ConfigureAwait(false);
-                WebSocket socket = WebSocket.CreateFromStream(
-                    stream,
-                    isServer: true,
-                    string.IsNullOrEmpty(subProtocol) ? null : subProtocol,
-                    TimeSpan.FromSeconds(30));
-                return (socket, stream);
+
+                // Return the raw upgraded stream without wrapping ManagedWebSocket.
+                // Sharing the stream with CreateFromStream lets ManagedWebSocket abort
+                // the connection during client-initiated application close codes
+                // (macOS WebKit then reports error + close 1006 instead of a clean
+                // echo). OfficialServerWebSocket owns the raw frames instead.
+                return (null, stream);
             }
 
             WebSocket accepted = string.IsNullOrEmpty(subProtocol)
@@ -496,19 +654,93 @@ namespace PlaywrightNative.TestServer
 
         public async Task<T> WaitForRequest<T>(string path, Func<HttpRequest, T> selector)
         {
-            var taskCompletion = new TaskCompletionSource<T>();
+            var taskCompletion = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
             _requestWaits[path] = context =>
             {
-                taskCompletion.SetResult(selector(context.Request));
+                T result = selector(context.Request);
+                // Kestrel pools and resets (and may dispose) the request once
+                // the connection finishes, so a live reference captured here
+                // can throw ObjectDisposedException or read empty/wrong values
+                // by the time the caller awaits this task. Snapshot now.
+                if (result is IHeaderDictionary headers)
+                {
+                    result = (T)(object)SnapshotHeaders(headers);
+                }
+                else if (result is HttpRequest liveRequest)
+                {
+                    result = (T)(object)new SnapshotHttpRequest(liveRequest);
+                }
+
+                taskCompletion.TrySetResult(result);
             };
 
-            var request = await taskCompletion.Task;
+            var request = await taskCompletion.Task.ConfigureAwait(false);
             _requestWaits.Remove(path);
 
             return request;
         }
 
-        public Task WaitForRequest(string path) => WaitForRequest(path, _ => true);
+        public Task WaitForRequest(string path)
+        {
+            // WebKit can deliver the document request after frame.GoToAsync starts
+            // but before this waiter is registered (frame-goto matching-responses).
+            // Consume a buffered arrival so the test does not hang forever.
+            if (TryConsumeArrivedRequest(path))
+            {
+                return Task.CompletedTask;
+            }
+
+            TaskCompletionSource<bool> taskCompletion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            _requestWaits[path] = _ => taskCompletion.TrySetResult(true);
+
+            if (TryConsumeArrivedRequest(path))
+            {
+                _requestWaits.Remove(path);
+                return Task.CompletedTask;
+            }
+
+            return AwaitAndClearWaitAsync(path, taskCompletion.Task);
+        }
+
+        private async Task AwaitAndClearWaitAsync(string path, Task waitTask)
+        {
+            try
+            {
+                await waitTask.ConfigureAwait(false);
+            }
+            finally
+            {
+                _requestWaits.Remove(path);
+            }
+        }
+
+        private bool TryConsumeArrivedRequest(string path)
+        {
+            while (true)
+            {
+                if (!_arrivedRequestCounts.TryGetValue(path, out int count) || count <= 0)
+                {
+                    return false;
+                }
+
+                if (_arrivedRequestCounts.TryUpdate(path, count - 1, count))
+                {
+                    return true;
+                }
+            }
+        }
+
+        private void RecordArrivedRequest(HttpContext context)
+        {
+            string path = context.Request.Path.Value ?? string.Empty;
+            string pathAndQuery = path
+                + (context.Request.QueryString.HasValue ? context.Request.QueryString.Value.ToString() : string.Empty);
+            _arrivedRequestCounts.AddOrUpdate(pathAndQuery, 1, static (_, n) => n + 1);
+            if (!string.Equals(pathAndQuery, path, StringComparison.Ordinal))
+            {
+                _arrivedRequestCounts.AddOrUpdate(path, 1, static (_, n) => n + 1);
+            }
+        }
 
         /// <summary>
         /// Official <c>server.waitForWebSocketConnectionRequest()</c>.
@@ -640,6 +872,7 @@ namespace PlaywrightNative.TestServer
             private readonly TaskCompletionSource<bool> _done =
                 new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
             private OfficialServerWebSocket _socket;
+            private bool _httpResponseWritten;
 
             internal UpgradeConnection(HttpContext context, SimpleServer server)
             {
@@ -671,7 +904,12 @@ namespace PlaywrightNative.TestServer
                 {
                     (WebSocket webSocket, Stream stream) = await _server.UpgradeToWebSocketAsync(_context)
                         .ConfigureAwait(false);
-                    _socket = new OfficialServerWebSocket(webSocket, stream);
+
+                    // Prefer raw-stream ownership so client close codes (e.g. 3002) are
+                    // echoed without ManagedWebSocket aborting the handshake on macOS WebKit.
+                    _socket = stream != null
+                        ? new OfficialServerWebSocket(stream)
+                        : new OfficialServerWebSocket(webSocket);
                     _server.NotifyWebSocket(_socket);
                     return;
                 }
@@ -682,6 +920,7 @@ namespace PlaywrightNative.TestServer
 
             /// <summary>
             /// Writes an HTTP response status line and headers, then finishes the response.
+            /// Official <c>socket.write</c> of a raw HTTP rejection (e.g. 403).
             /// </summary>
             /// <param name="raw">A raw HTTP/1.1 response, including the status line.</param>
             /// <returns>A task that completes when the response has been written.</returns>
@@ -695,11 +934,22 @@ namespace PlaywrightNative.TestServer
                     {
                         _context.Response.StatusCode = status;
                     }
+
+                    if (parts.Length >= 3 && !string.IsNullOrEmpty(parts[2]))
+                    {
+                        // Preserve reason phrase when Kestrel exposes it via the response feature.
+                        IHttpResponseFeature responseFeature = _context.Features.Get<IHttpResponseFeature>();
+                        if (responseFeature != null)
+                        {
+                            responseFeature.ReasonPhrase = parts[2].Trim();
+                        }
+                    }
                 }
 
                 _context.Response.Headers.ContentLength = 0;
                 _context.Response.Headers["Connection"] = "close";
                 await _context.Response.CompleteAsync().ConfigureAwait(false);
+                _httpResponseWritten = true;
             }
 
             /// <summary>
@@ -733,7 +983,14 @@ namespace PlaywrightNative.TestServer
                 try
                 {
                     _socket?.Destroy();
-                    _context.Abort();
+
+                    // After a normal HTTP rejection (WriteAsync), do not Abort the
+                    // connection — that races WebKit into status 0 / "Connection
+                    // reset by peer" instead of the written 403 Forbidden.
+                    if (!_httpResponseWritten && !_context.Response.HasStarted)
+                    {
+                        _context.Abort();
+                    }
                 }
                 catch (ObjectDisposedException)
                 {
@@ -743,6 +1000,158 @@ namespace PlaywrightNative.TestServer
                 }
 
                 _done.TrySetResult(true);
+            }
+        }
+
+        private static HeaderDictionary SnapshotHeaders(IHeaderDictionary headers)
+        {
+            // Must stay case-insensitive: callers look up "user-agent" while the
+            // wire name is often "User-Agent". A default Dictionary comparer
+            // would make HeaderDictionary indexer miss and return empty.
+            Dictionary<string, StringValues> copy = new Dictionary<string, StringValues>(StringComparer.OrdinalIgnoreCase);
+            foreach (KeyValuePair<string, StringValues> pair in headers)
+            {
+                copy[pair.Key] = pair.Value;
+            }
+
+            return new HeaderDictionary(copy);
+        }
+
+        /// <summary>
+        /// Immutable view of an <see cref="HttpRequest"/> taken while the
+        /// Kestrel feature collection is still alive. Callers that retain a
+        /// request from <see cref="WaitForRequest{T}"/> or
+        /// <see cref="WaitForWebSocketConnectionRequest"/> must not touch the
+        /// live ASP.NET request after the response completes.
+        /// </summary>
+        private sealed class SnapshotHttpRequest : HttpRequest
+        {
+            private readonly HeaderDictionary _headers;
+            private readonly string _method;
+            private readonly PathString _path;
+            private readonly PathString _pathBase;
+            private readonly QueryString _queryString;
+            private readonly string _scheme;
+            private readonly string _protocol;
+            private readonly HostString _host;
+            private readonly bool _isHttps;
+            private readonly string _contentType;
+            private readonly long? _contentLength;
+            private readonly QueryCollection _query;
+
+            public SnapshotHttpRequest(HttpRequest source)
+            {
+                _headers = SnapshotHeaders(source.Headers);
+                _method = source.Method;
+                _path = source.Path;
+                _pathBase = source.PathBase;
+                _queryString = source.QueryString;
+                _scheme = source.Scheme;
+                _protocol = source.Protocol;
+                _host = source.Host;
+                _isHttps = source.IsHttps;
+                _contentType = source.ContentType;
+                _contentLength = source.ContentLength;
+                Dictionary<string, StringValues> queryCopy = new Dictionary<string, StringValues>(StringComparer.OrdinalIgnoreCase);
+                foreach (KeyValuePair<string, StringValues> pair in source.Query)
+                {
+                    queryCopy[pair.Key] = pair.Value;
+                }
+
+                _query = new QueryCollection(queryCopy);
+            }
+
+            public override HttpContext HttpContext => throw new NotSupportedException();
+
+            public override string Method
+            {
+                get => _method;
+                set => throw new NotSupportedException();
+            }
+
+            public override string Scheme
+            {
+                get => _scheme;
+                set => throw new NotSupportedException();
+            }
+
+            public override bool IsHttps
+            {
+                get => _isHttps;
+                set => throw new NotSupportedException();
+            }
+
+            public override HostString Host
+            {
+                get => _host;
+                set => throw new NotSupportedException();
+            }
+
+            public override PathString PathBase
+            {
+                get => _pathBase;
+                set => throw new NotSupportedException();
+            }
+
+            public override PathString Path
+            {
+                get => _path;
+                set => throw new NotSupportedException();
+            }
+
+            public override QueryString QueryString
+            {
+                get => _queryString;
+                set => throw new NotSupportedException();
+            }
+
+            public override IQueryCollection Query
+            {
+                get => _query;
+                set => throw new NotSupportedException();
+            }
+
+            public override string Protocol
+            {
+                get => _protocol;
+                set => throw new NotSupportedException();
+            }
+
+            public override IHeaderDictionary Headers => _headers;
+
+            public override IRequestCookieCollection Cookies
+            {
+                get => throw new NotSupportedException();
+                set => throw new NotSupportedException();
+            }
+
+            public override long? ContentLength
+            {
+                get => _contentLength;
+                set => throw new NotSupportedException();
+            }
+
+            public override string ContentType
+            {
+                get => _contentType;
+                set => throw new NotSupportedException();
+            }
+
+            public override Stream Body
+            {
+                get => Stream.Null;
+                set => throw new NotSupportedException();
+            }
+
+            public override bool HasFormContentType => false;
+
+            public override Task<IFormCollection> ReadFormAsync(CancellationToken cancellationToken = default)
+                => Task.FromResult<IFormCollection>(FormCollection.Empty);
+
+            public override IFormCollection Form
+            {
+                get => FormCollection.Empty;
+                set => throw new NotSupportedException();
             }
         }
     }

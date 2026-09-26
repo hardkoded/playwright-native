@@ -20,6 +20,7 @@ using System.IO;
 using System.Reflection;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -113,7 +114,7 @@ namespace PlaywrightNative.Helpers
         {
             if (time < MinDateMilliseconds || time > MaxDateMilliseconds)
             {
-                throw new PlaywrightNativeException("Invalid date: " + FormatNumber(time));
+                throw new PlaywrightException("Invalid date: " + FormatNumber(time));
             }
 
             return time;
@@ -129,7 +130,7 @@ namespace PlaywrightNative.Helpers
             if (double.IsNaN(time) || double.IsInfinity(time)
                 || time < MinDateMilliseconds || time > MaxDateMilliseconds)
             {
-                throw new PlaywrightNativeException("Invalid date: " + FormatNumber(time));
+                throw new PlaywrightException("Invalid date: " + FormatNumber(time));
             }
 
             return (long)time;
@@ -144,12 +145,12 @@ namespace PlaywrightNative.Helpers
         {
             if (string.IsNullOrWhiteSpace(time))
             {
-                throw new PlaywrightNativeException("Invalid date: (empty)");
+                throw new PlaywrightException("Invalid date: (empty)");
             }
 
             if (!DateTime.TryParse(time, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out DateTime parsed))
             {
-                throw new PlaywrightNativeException("Invalid date: " + time);
+                throw new PlaywrightException("Invalid date: " + time);
             }
 
             return ToUnixMilliseconds(parsed);
@@ -170,7 +171,7 @@ namespace PlaywrightNative.Helpers
 
             if (!TicksPattern.IsMatch(ticks))
             {
-                throw new PlaywrightNativeException("Clock only understands numbers, 'mm:ss' and 'hh:mm:ss'");
+                throw new PlaywrightException("Clock only understands numbers, 'mm:ss' and 'hh:mm:ss'");
             }
 
             string[] parts = ticks.Split(':');
@@ -180,7 +181,7 @@ namespace PlaywrightNative.Helpers
                 int parsed = int.Parse(parts[i], CultureInfo.InvariantCulture);
                 if (parsed >= 60)
                 {
-                    throw new PlaywrightNativeException("Invalid time " + ticks);
+                    throw new PlaywrightException("Invalid time " + ticks);
                 }
 
                 seconds += parsed * (long)Math.Pow(60, parts.Length - i - 1);
@@ -193,7 +194,7 @@ namespace PlaywrightNative.Helpers
         {
             Assembly assembly = typeof(ClockScript).Assembly;
             using Stream stream = assembly.GetManifestResourceStream("PlaywrightNative.Helpers.clockSource.js")
-                ?? throw new PlaywrightNativeException("Bundled Playwright clock source is missing.");
+                ?? throw new PlaywrightException("Bundled Playwright clock source is missing.");
             using StreamReader reader = new StreamReader(stream);
             return reader.ReadToEnd();
         }

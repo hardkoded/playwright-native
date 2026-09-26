@@ -20,6 +20,7 @@ using System.Globalization;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -129,14 +130,14 @@ namespace PlaywrightNative.Helpers
 
                 if (!await IsConnectedAsync(handle).ConfigureAwait(false))
                 {
-                    throw new PlaywrightNativeException(ClickAction.NotAttachedMessage);
+                    throw new PlaywrightException(ClickAction.NotAttachedMessage);
                 }
 
                 log.Append("  - waiting for element to be stable\n");
                 string stable = await CheckStableAsync(handle).ConfigureAwait(false);
                 if (stable == ResultNotConnected)
                 {
-                    throw new PlaywrightNativeException(ClickAction.NotAttachedMessage);
+                    throw new PlaywrightException(ClickAction.NotAttachedMessage);
                 }
 
                 if (stable != ResultOk)
@@ -149,7 +150,7 @@ namespace PlaywrightNative.Helpers
                 string result = await scrollAsync().ConfigureAwait(false);
                 if (result == ResultNotConnected)
                 {
-                    throw new PlaywrightNativeException(ClickAction.NotAttachedMessage);
+                    throw new PlaywrightException(ClickAction.NotAttachedMessage);
                 }
 
                 if (result == ResultNotVisible)
@@ -199,7 +200,7 @@ namespace PlaywrightNative.Helpers
                     return result;
                 }
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 if (!await IsConnectedAsync(handle).ConfigureAwait(false))
                 {
@@ -216,7 +217,7 @@ namespace PlaywrightNative.Helpers
             {
                 return await handle.EvaluateAsync<bool>(ClickAction.IsConnectedFunction).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 return false;
             }

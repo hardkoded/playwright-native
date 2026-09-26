@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 
@@ -80,7 +81,7 @@ namespace PlaywrightNative.Tests
                 "<iframe srcdoc=\"<button>B</button>\"></iframe>" +
                 "</section>").ConfigureAwait(false);
 
-            PlaywrightNativeException ex = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException ex = Assert.CatchAsync<PlaywrightException>(
                 () => page.Locator("section").FrameLocator("iframe").Locator("button").ClickAsync());
 
             Assert.That(ex, Is.Not.Null);

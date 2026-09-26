@@ -374,7 +374,7 @@
     "expectations": ["FAIL"]
   },
   {
-    "testIdPattern": "[direct/page-content-and-media.cs] PdfAsyncShouldReturnPdfBytes",
+    "testIdPattern": "[page-set-content.spec.ts] PdfAsyncShouldReturnPdfBytes",
     "platforms": ["darwin", "linux", "win32"],
     "parameters": ["webkit"],
     "expectations": ["SKIP"],

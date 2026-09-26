@@ -31,6 +31,7 @@ namespace PlaywrightNative.WebKit
     {
         private readonly WKPage _page;
         private readonly object _gate = new();
+        private Task _deliverChain = Task.CompletedTask;
         private Func<ScreencastFrame, Task> _onFrame;
         private ScreencastVideoWriter _video;
         private ScreencastVideoWriter _artifactsVideo;
@@ -51,7 +52,7 @@ namespace PlaywrightNative.WebKit
             {
                 if (_started)
                 {
-                    throw new PlaywrightNativeException("Screencast is already started");
+                    throw new PlaywrightException("Screencast is already started");
                 }
 
                 _started = true;
@@ -86,7 +87,7 @@ namespace PlaywrightNative.WebKit
 
                 _ownsProtocol = true;
             }
-            catch (PlaywrightNativeException ex) when (ex.Message != null && ex.Message.Contains("Already screencasting", StringComparison.OrdinalIgnoreCase))
+            catch (PlaywrightException ex) when (ex.Message != null && ex.Message.Contains("Already screencasting", StringComparison.OrdinalIgnoreCase))
             {
                 // recordVideo already started the page-proxy screencast. Official
                 // multiplexes clients; attach to the existing stream.
@@ -142,7 +143,7 @@ namespace PlaywrightNative.WebKit
                 {
                     throw;
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
             }
@@ -174,7 +175,7 @@ namespace PlaywrightNative.WebKit
             => ScreencastOverlay.ShowChapterAsync(_page, title, description, duration);
 
         /// <inheritdoc/>
-        public Task<IAsyncDisposable> ShowActionsAsync(float? duration = default, AnnotatePosition position = default, int fontSize = default, ScreencastCursor cursor = default)
+        public Task<IAsyncDisposable> ShowActionsAsync(float? duration = default, AnnotatePosition position = EnumCompat.UndefinedAnnotatePosition, int fontSize = default, ScreencastCursor cursor = EnumCompat.UndefinedScreencastCursor)
         {
             ScreencastActions.Show(_page, duration, position, fontSize, cursor);
             return Task.FromResult<IAsyncDisposable>(new HideOnDispose(this));
@@ -289,49 +290,80 @@ namespace PlaywrightNative.WebKit
             _ = DeliverFrameAsync(frame, jpeg);
         }
 
-        private async Task DeliverFrameAsync(ScreencastFrame frame, byte[] jpeg)
+        private Task DeliverFrameAsync(ScreencastFrame frame, byte[] jpeg)
         {
-            Func<ScreencastFrame, Task> onFrame;
-            ScreencastVideoWriter video;
-            ScreencastVideoWriter artifacts;
-            int generation;
+            // Serialize delivery + ack so an async OnFrame callback applies
+            // backpressure (upstream awaits the listener before acking). Fire-
+            // and-forget OnMessage handlers must not overlap.
+            Task previous;
+            TaskCompletionSource<bool> done = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
             lock (_gate)
             {
-                if (!_started)
-                {
-                    return;
-                }
-
-                onFrame = _onFrame;
-                video = _video;
-                artifacts = _artifactsVideo;
-                generation = _generation;
+                previous = _deliverChain;
+                _deliverChain = done.Task;
             }
 
-            video?.Write(jpeg);
-            artifacts?.Write(jpeg);
+            return DeliverFrameCoreAsync(previous, done, frame, jpeg);
+        }
+
+        private async Task DeliverFrameCoreAsync(
+            Task previous,
+            TaskCompletionSource<bool> done,
+            ScreencastFrame frame,
+            byte[] jpeg)
+        {
             try
             {
-                if (onFrame != null)
+                await previous.ConfigureAwait(false);
+
+                Func<ScreencastFrame, Task> onFrame;
+                ScreencastVideoWriter video;
+                ScreencastVideoWriter artifacts;
+                int generation;
+                bool ownsProtocol;
+                lock (_gate)
                 {
-                    await onFrame(frame).ConfigureAwait(false);
+                    if (!_started)
+                    {
+                        return;
+                    }
+
+                    onFrame = _onFrame;
+                    video = _video;
+                    artifacts = _artifactsVideo;
+                    generation = _generation;
+                    ownsProtocol = _ownsProtocol;
+                }
+
+                video?.Write(jpeg);
+                artifacts?.Write(jpeg);
+                try
+                {
+                    if (onFrame != null)
+                    {
+                        await onFrame(frame).ConfigureAwait(false);
+                    }
+                }
+                finally
+                {
+                    if (ownsProtocol)
+                    {
+                        try
+                        {
+                            await _page.Session.SendAsync("Screencast.screencastFrameAck", new { generation }).ConfigureAwait(false);
+                        }
+                        catch (TargetClosedException)
+                        {
+                        }
+                        catch (PlaywrightException)
+                        {
+                        }
+                    }
                 }
             }
             finally
             {
-                if (_ownsProtocol)
-                {
-                    try
-                    {
-                        await _page.Session.SendAsync("Screencast.screencastFrameAck", new { generation }).ConfigureAwait(false);
-                    }
-                    catch (TargetClosedException)
-                    {
-                    }
-                    catch (PlaywrightNativeException)
-                    {
-                    }
-                }
+                done.TrySetResult(true);
             }
         }
 
@@ -361,11 +393,17 @@ namespace PlaywrightNative.WebKit
 
 #pragma warning disable SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
         Task<IAsyncDisposable> IScreencast.ShowActionsAsync(ScreencastShowActionsOptions options)
-            => ShowActionsAsync(options?.Duration, options?.Position ?? default, options?.FontSize ?? 0, options?.Cursor ?? default);
+            => ShowActionsAsync(
+                options?.Duration,
+                options?.Position ?? EnumCompat.UndefinedAnnotatePosition,
+                options?.FontSize ?? 0,
+                options?.Cursor ?? EnumCompat.UndefinedScreencastCursor);
 
-        Task IScreencast.ShowChapterAsync(string title, ScreencastShowChapterOptions options) => Task.CompletedTask;
+        Task IScreencast.ShowChapterAsync(string title, ScreencastShowChapterOptions options)
+            => ShowChapterAsync(title, options?.Description, options?.Duration);
 
-        Task<IAsyncDisposable> IScreencast.ShowOverlayAsync(string html, ScreencastShowOverlayOptions options) => Task.FromResult<IAsyncDisposable>(default!);
+        Task<IAsyncDisposable> IScreencast.ShowOverlayAsync(string html, ScreencastShowOverlayOptions options)
+            => ShowOverlayAsync(html, options?.Duration);
 
         Task<IAsyncDisposable> IScreencast.StartAsync(ScreencastStartOptions options)
             => StartAsync(

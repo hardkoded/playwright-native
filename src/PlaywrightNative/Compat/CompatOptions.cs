@@ -54,13 +54,21 @@ namespace PlaywrightNative.Compat
         /// <summary>Legacy wait-for string (visible/hidden/attached/detached).</summary>
         public string WaitFor
         {
-            set => base.State = WaitForSelectorName.ToOfficialState(value);
+            set
+            {
+                WaitForSelectorName.Validate(value, null);
+                base.State = WaitForSelectorName.ToOfficialState(value);
+            }
         }
 
         /// <summary>Legacy visibility string (visible/hidden).</summary>
         public string Visibility
         {
-            set => base.State = WaitForSelectorName.ToOfficialState(value, value);
+            set
+            {
+                WaitForSelectorName.Validate(null, value);
+                base.State = WaitForSelectorName.ToOfficialState(value, value);
+            }
         }
     }
 
@@ -76,13 +84,21 @@ namespace PlaywrightNative.Compat
         /// <summary>Legacy wait-for string.</summary>
         public string WaitFor
         {
-            set => base.State = WaitForSelectorName.ToOfficialState(value);
+            set
+            {
+                WaitForSelectorName.Validate(value, null);
+                base.State = WaitForSelectorName.ToOfficialState(value);
+            }
         }
 
         /// <summary>Legacy visibility string.</summary>
         public string Visibility
         {
-            set => base.State = WaitForSelectorName.ToOfficialState(value, value);
+            set
+            {
+                WaitForSelectorName.Validate(null, value);
+                base.State = WaitForSelectorName.ToOfficialState(value, value);
+            }
         }
     }
 
@@ -154,16 +170,17 @@ namespace PlaywrightNative.Compat
     {
         /// <summary>Function argument.</summary>
         public object Arg { get; set; }
+
+        /// <summary>Abort signal (PlaywrightNative-only).</summary>
+        public AbortSignal Signal { get; set; }
+
+        /// <summary>Polling interval in milliseconds.</summary>
+        public float? PollingInterval { get; set; }
     }
 
-    /// <summary>Legacy persistent-context launch options with regex HAR URL filter alias.</summary>
+    /// <summary>Legacy persistent-context launch options.</summary>
     public class LegacyBrowserTypeLaunchPersistentContextOptions : Microsoft.Playwright.BrowserTypeLaunchPersistentContextOptions
     {
-        /// <summary>Legacy HAR URL glob filter (PlaywrightNative-only).</summary>
-        public new string RecordHarUrlFilter { get; set; }
-
-        /// <summary>Legacy HAR URL regex filter (PlaywrightNative-only).</summary>
-        public new System.Text.RegularExpressions.Regex RecordHarUrlFilterRegex { get; set; }
     }
 
     /// <summary>Legacy locator click options with abort signal and mouse steps.</summary>
@@ -172,15 +189,58 @@ namespace PlaywrightNative.Compat
         /// <summary>Abort signal (PlaywrightNative-only).</summary>
         public AbortSignal Signal { get; set; }
 
-        /// <summary>Scroll-into-view mode.</summary>
-        public new ActionScroll Scroll { get; set; }
+        /// <summary>Scroll-into-view mode. Writes through to the official <c>Scroll</c>.</summary>
+        public new ActionScroll Scroll
+        {
+            get => ActionScrollBridge.FromScrollOption(base.Scroll);
+            set => base.Scroll = ActionScrollBridge.ToScrollOption(value);
+        }
+    }
+
+    /// <summary>Legacy locator assertion options with abort signal.</summary>
+    public class LegacyLocatorAssertionsToBeVisibleOptions : Microsoft.Playwright.LocatorAssertionsToBeVisibleOptions
+    {
+        /// <summary>Abort signal (PlaywrightNative-only).</summary>
+        public AbortSignal Signal { get; set; }
+    }
+
+    /// <summary>Legacy locator text assertion options with abort signal.</summary>
+    public class LegacyLocatorAssertionsToHaveTextOptions : Microsoft.Playwright.LocatorAssertionsToHaveTextOptions
+    {
+        /// <summary>Abort signal (PlaywrightNative-only).</summary>
+        public AbortSignal Signal { get; set; }
+    }
+
+    /// <summary>Legacy locator count assertion options with abort signal.</summary>
+    public class LegacyLocatorAssertionsToHaveCountOptions : Microsoft.Playwright.LocatorAssertionsToHaveCountOptions
+    {
+        /// <summary>Abort signal (PlaywrightNative-only).</summary>
+        public AbortSignal Signal { get; set; }
+    }
+
+    /// <summary>Legacy aria-snapshot assertion options with abort signal.</summary>
+    public class LegacyLocatorAssertionsToMatchAriaSnapshotOptions : Microsoft.Playwright.LocatorAssertionsToMatchAriaSnapshotOptions
+    {
+        /// <summary>Abort signal (PlaywrightNative-only).</summary>
+        public AbortSignal Signal { get; set; }
+    }
+
+    /// <summary>Legacy page URL assertion options with abort signal.</summary>
+    public class LegacyPageAssertionsToHaveURLOptions : Microsoft.Playwright.PageAssertionsToHaveURLOptions
+    {
+        /// <summary>Abort signal (PlaywrightNative-only).</summary>
+        public AbortSignal Signal { get; set; }
     }
 
     /// <summary>Legacy locator hover options with scroll mode.</summary>
     public class LegacyLocatorHoverOptions : Microsoft.Playwright.LocatorHoverOptions
     {
-        /// <summary>Scroll-into-view mode.</summary>
-        public new ActionScroll Scroll { get; set; }
+        /// <summary>Scroll-into-view mode. Writes through to the official <c>Scroll</c>.</summary>
+        public new ActionScroll Scroll
+        {
+            get => ActionScrollBridge.FromScrollOption(base.Scroll);
+            set => base.Scroll = ActionScrollBridge.ToScrollOption(value);
+        }
     }
 
     /// <summary>Legacy page drag-and-drop options with scroll mode and steps.</summary>
@@ -252,5 +312,8 @@ namespace PlaywrightNative.Compat
     {
         internal static WaitForSelectorState? ToOfficialState(object value, string visibility = null)
             => Helpers.WaitForSelectorName.ToOfficialState(value, visibility);
+
+        internal static void Validate(string waitFor, string visibility)
+            => Helpers.WaitForSelectorName.Validate(waitFor, visibility);
     }
 }

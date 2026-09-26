@@ -22,6 +22,8 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
+using BrowserContextRouteFromHAROptions = Microsoft.Playwright.BrowserContextRouteFromHAROptions;
+using PageRouteFromHAROptions = Microsoft.Playwright.PageRouteFromHAROptions;
 
 namespace PlaywrightNative.Helpers
 {
@@ -119,6 +121,56 @@ namespace PlaywrightNative.Helpers
 
             Store store = Store.Load(har, notFound);
             return page.RouteAsync("**/*", route => MatchAsync(store, url, route));
+        }
+
+        /// <summary>
+        /// Official options-bag entry for context <c>routeFromHAR</c>.
+        /// </summary>
+        internal static Task InstallAsync(IBrowserContext context, string har, BrowserContextRouteFromHAROptions options)
+        {
+            options ??= new BrowserContextRouteFromHAROptions();
+            HarNotFound notFound = options.NotFound == Microsoft.Playwright.HarNotFound.Fallback
+                ? HarNotFound.Fallback
+                : HarNotFound.Abort;
+            if (options.Update == true)
+            {
+                Regex urlRegex = options.UrlRegex;
+                string url = options.Url ?? options.UrlString;
+                HarMode mode = options.UpdateMode ?? default;
+                RouteFromHarUpdateContentPolicy content = options.UpdateContent ?? default;
+                return urlRegex != null
+                    ? HarRecorder.StartForRouteAsync(context, har, urlRegex, mode, content)
+                    : HarRecorder.StartForRouteAsync(context, har, url, mode, content);
+            }
+
+            return options.UrlRegex != null
+                ? InstallAsync(context, har, options.UrlRegex, notFound)
+                : InstallAsync(context, har, options.Url ?? options.UrlString, notFound);
+        }
+
+        /// <summary>
+        /// Official options-bag entry for page <c>routeFromHAR</c>.
+        /// </summary>
+        internal static Task InstallAsync(IPage page, string har, PageRouteFromHAROptions options)
+        {
+            options ??= new PageRouteFromHAROptions();
+            HarNotFound notFound = options.NotFound == Microsoft.Playwright.HarNotFound.Fallback
+                ? HarNotFound.Fallback
+                : HarNotFound.Abort;
+            if (options.Update == true)
+            {
+                Regex urlRegex = options.UrlRegex;
+                string url = options.Url ?? options.UrlString;
+                HarMode mode = options.UpdateMode ?? default;
+                RouteFromHarUpdateContentPolicy content = options.UpdateContent ?? default;
+                return urlRegex != null
+                    ? HarRecorder.StartForRouteAsync(page, har, urlRegex, mode, content)
+                    : HarRecorder.StartForRouteAsync(page, har, url, mode, content);
+            }
+
+            return options.UrlRegex != null
+                ? InstallAsync(page, har, options.UrlRegex, notFound)
+                : InstallAsync(page, har, options.Url ?? options.UrlString, notFound);
         }
 
         private static string Pattern(string url)
@@ -384,6 +436,7 @@ namespace PlaywrightNative.Helpers
                 }
 
                 byte[] postData = null;
+                string postMimeType = null;
                 if (request.TryGetProperty("postData", out JsonElement post)
                     && post.ValueKind == JsonValueKind.Object)
                 {
@@ -392,6 +445,29 @@ namespace PlaywrightNative.Helpers
                         && postText.ValueKind == JsonValueKind.String)
                     {
                         postData = Encoding.UTF8.GetBytes(postText.GetString() ?? string.Empty);
+                    }
+
+                    postMimeType = ReadString(post, "mimeType");
+                }
+
+                if (!string.IsNullOrEmpty(postMimeType)
+                    && HeaderValue(requestHeaders, "content-type") == null)
+                {
+                    requestHeaders.Add(new KeyValuePair<string, string>("content-type", postMimeType));
+                }
+
+                if (HeaderValue(requestHeaders, "content-type") == null
+                    && postData != null
+                    && postData.Length >= 4
+                    && postData[0] == (byte)'-'
+                    && postData[1] == (byte)'-')
+                {
+                    string boundary = MultipartBoundaryFromBody(postData);
+                    if (!string.IsNullOrEmpty(boundary))
+                    {
+                        requestHeaders.Add(new KeyValuePair<string, string>(
+                            "content-type",
+                            "multipart/form-data; boundary=" + boundary));
                     }
                 }
 
@@ -451,10 +527,32 @@ namespace PlaywrightNative.Helpers
                     });
             }
 
-            private static Task<List<KeyValuePair<string, string>>> RequestHeadersAsync(IRequest request)
+            private static async Task<List<KeyValuePair<string, string>>> RequestHeadersAsync(IRequest request)
             {
                 List<KeyValuePair<string, string>> headers = new();
-                if (request?.Headers != null)
+                if (request == null)
+                {
+                    return headers;
+                }
+
+                // Prefer allHeaders so custom fetch headers (HAR disambiguation)
+                // are visible even when the provisional Headers map is incomplete.
+                try
+                {
+                    Dictionary<string, string> all = await request.AllHeadersAsync().ConfigureAwait(false);
+                    if (all != null && all.Count > 0)
+                    {
+                        foreach (KeyValuePair<string, string> header in all)
+                        {
+                            headers.Add(header);
+                        }
+                    }
+                }
+                catch (Microsoft.Playwright.PlaywrightException)
+                {
+                }
+
+                if (headers.Count == 0 && request.Headers != null)
                 {
                     foreach (KeyValuePair<string, string> header in request.Headers)
                     {
@@ -462,7 +560,22 @@ namespace PlaywrightNative.Helpers
                     }
                 }
 
-                return Task.FromResult(headers);
+                if (HeaderValue(headers, "content-type") == null
+                    && request.PostDataBuffer != null
+                    && request.PostDataBuffer.Length >= 4
+                    && request.PostDataBuffer[0] == (byte)'-'
+                    && request.PostDataBuffer[1] == (byte)'-')
+                {
+                    string boundary = MultipartBoundaryFromBody(request.PostDataBuffer);
+                    if (!string.IsNullOrEmpty(boundary))
+                    {
+                        headers.Add(new KeyValuePair<string, string>(
+                            "content-type",
+                            "multipart/form-data; boundary=" + boundary));
+                    }
+                }
+
+                return headers;
             }
 
             private static string ReadString(JsonElement element, string name)
@@ -556,6 +669,16 @@ namespace PlaywrightNative.Helpers
 
                 string boundary = MultipartBoundary(headers);
                 string candidateBoundary = MultipartBoundary(candidate.RequestHeaders);
+                if (string.IsNullOrEmpty(boundary))
+                {
+                    boundary = MultipartBoundaryFromBody(postData);
+                }
+
+                if (string.IsNullOrEmpty(candidateBoundary))
+                {
+                    candidateBoundary = MultipartBoundaryFromBody(candidate.PostData);
+                }
+
                 if (string.IsNullOrEmpty(boundary) || string.IsNullOrEmpty(candidateBoundary))
                 {
                     return false;
@@ -566,8 +689,36 @@ namespace PlaywrightNative.Helpers
                 return string.Equals(left, right, StringComparison.Ordinal);
             }
 
+            /// <summary>
+            /// Reads the multipart boundary from the first <c>--…</c> line when
+            /// <c>Content-Type</c> omitted <c>boundary=</c> (common on Chromium
+            /// intercepted request header maps).
+            /// </summary>
+            private static string MultipartBoundaryFromBody(byte[] body)
+            {
+                if (body == null || body.Length < 4 || body[0] != (byte)'-' || body[1] != (byte)'-')
+                {
+                    return null;
+                }
+
+                int end = 2;
+                while (end < body.Length && body[end] != (byte)'\r' && body[end] != (byte)'\n')
+                {
+                    end++;
+                }
+
+                if (end <= 2)
+                {
+                    return null;
+                }
+
+                return Encoding.UTF8.GetString(body, 2, end - 2);
+            }
+
             private static int CountMatchingHeaders(List<KeyValuePair<string, string>> harHeaders, List<KeyValuePair<string, string>> headers)
             {
+                // Case-insensitive name:value keys (official uses toLowerCase;
+                // CA1308 requires ToUpperInvariant here).
                 HashSet<string> set = new(StringComparer.Ordinal);
                 foreach (KeyValuePair<string, string> header in headers)
                 {

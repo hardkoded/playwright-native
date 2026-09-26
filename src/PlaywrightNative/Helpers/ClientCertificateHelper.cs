@@ -16,10 +16,12 @@
  */
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -117,7 +119,7 @@ namespace PlaywrightNative.Helpers
 
                 if (string.IsNullOrEmpty(certificate.Origin))
                 {
-                    throw new PlaywrightNativeException("clientCertificates.origin is required");
+                    throw new PlaywrightException("clientCertificates.origin is required");
                 }
 
                 bool hasCert = HasBytes(certificate.Cert) || !string.IsNullOrEmpty(certificate.CertPath);
@@ -126,22 +128,22 @@ namespace PlaywrightNative.Helpers
                 bool hasPassphrase = !string.IsNullOrEmpty(certificate.Passphrase);
                 if (!hasCert && !hasKey && !hasPfx && !hasPassphrase)
                 {
-                    throw new PlaywrightNativeException(MissingMaterialMessage);
+                    throw new PlaywrightException(MissingMaterialMessage);
                 }
 
                 if (hasCert && !hasKey)
                 {
-                    throw new PlaywrightNativeException("cert is specified without key");
+                    throw new PlaywrightException("cert is specified without key");
                 }
 
                 if (!hasCert && hasKey)
                 {
-                    throw new PlaywrightNativeException("key is specified without cert");
+                    throw new PlaywrightException("key is specified without cert");
                 }
 
                 if (hasPfx && (hasCert || hasKey))
                 {
-                    throw new PlaywrightNativeException(PfxConflictMessage);
+                    throw new PlaywrightException(PfxConflictMessage);
                 }
             }
         }
@@ -174,8 +176,8 @@ namespace PlaywrightNative.Helpers
         /// When <see langword="true"/>, prefix
         /// <c>Failed to load client certificate:</c>.
         /// </param>
-        /// <returns>A <see cref="PlaywrightNativeException"/>.</returns>
-        internal static PlaywrightNativeException RewriteLoadException(Exception ex, bool forBrowser)
+        /// <returns>A <see cref="PlaywrightException"/>.</returns>
+        internal static PlaywrightException RewriteLoadException(Exception ex, bool forBrowser)
         {
             string rewritten = RewriteLoadMessage(ex);
             if (forBrowser && !rewritten.StartsWith(FailedToLoadPrefix, StringComparison.Ordinal))
@@ -183,7 +185,7 @@ namespace PlaywrightNative.Helpers
                 rewritten = FailedToLoadPrefix + rewritten;
             }
 
-            return new PlaywrightNativeException(rewritten, ex);
+            return new PlaywrightException(rewritten, ex);
         }
 
         /// <summary>
@@ -194,6 +196,14 @@ namespace PlaywrightNative.Helpers
         internal static string RewriteTlsMessage(Exception ex)
         {
             if (ex == null)
+            {
+                return TlsDisconnectedMessage;
+            }
+
+            // Handshake CancelAfter / linked CTS — treat as a clean disconnect so
+            // page.goto still paints the Playwright client-certificate error page
+            // instead of hanging (WebKit TLS1.2 SNI-reject fixtures).
+            if (ex is OperationCanceledException || ex is TimeoutException)
             {
                 return TlsDisconnectedMessage;
             }
@@ -247,7 +257,7 @@ namespace PlaywrightNative.Helpers
                 {
                     return Load(certificate);
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                     throw;
                 }
@@ -281,8 +291,13 @@ namespace PlaywrightNative.Helpers
                 return false;
             }
 
+            // WebKit/mac client-certificate fixtures use local.playwright while
+            // APIRequest rewrites the connect host to localhost; treat them as
+            // the same origin for certificate selection.
+            string requestHost = ClientCertificatesProxy.RewriteToLocalhostIfNeeded(request.Host);
+            string configuredHost = ClientCertificatesProxy.RewriteToLocalhostIfNeeded(configured.Host);
             return string.Equals(request.Scheme, configured.Scheme, StringComparison.OrdinalIgnoreCase)
-                && string.Equals(request.Host, configured.Host, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(requestHost, configuredHost, StringComparison.OrdinalIgnoreCase)
                 && EffectivePort(request) == EffectivePort(configured);
         }
 
@@ -314,7 +329,7 @@ namespace PlaywrightNative.Helpers
                     : X509Certificate2.CreateFromEncryptedPem(certPem, keyPem, certificate.Passphrase);
                 return Normalize(loaded);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 throw;
             }
@@ -349,11 +364,24 @@ namespace PlaywrightNative.Helpers
                 string origin = NormalizeOrigin(certificate.Origin);
                 try
                 {
-                    map[origin] = Load(certificate);
+                    X509Certificate2 loaded = Load(certificate);
+                    map[origin] = loaded;
+
+                    // Darwin CFNetwork may CONNECT as 127.0.0.1 / localhost while
+                    // fixtures register https://local.playwright (and the reverse).
+                    // Alias loopback origins onto the same certificate so the MITM
+                    // still intercepts TLS error-page navigations.
+                    foreach (string alias in LoopbackOriginAliases(origin))
+                    {
+                        if (!map.ContainsKey(alias))
+                        {
+                            map[alias] = loaded;
+                        }
+                    }
                 }
-                catch (PlaywrightNativeException ex)
+                catch (PlaywrightException ex)
                 {
-                    throw new PlaywrightNativeException(
+                    throw new PlaywrightException(
                         FailedToLoadPrefix + StripFailedPrefix(ex.Message),
                         ex);
                 }
@@ -392,7 +420,7 @@ namespace PlaywrightNative.Helpers
 
             if (string.IsNullOrEmpty(path))
             {
-                throw new PlaywrightNativeException(
+                throw new PlaywrightException(
                     "Client certificate must provide " + kind + " bytes or path, or a PFX.");
             }
 
@@ -416,6 +444,32 @@ namespace PlaywrightNative.Helpers
             return string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)
                 ? 443
                 : 80;
+        }
+
+        private static IEnumerable<string> LoopbackOriginAliases(string origin)
+        {
+            if (string.IsNullOrEmpty(origin)
+                || !Uri.TryCreate(origin, UriKind.Absolute, out Uri uri))
+            {
+                yield break;
+            }
+
+            string host = uri.IdnHost;
+
+            // Only expand local.playwright → localhost/127.0.0.1. The reverse would
+            // make a 127.0.0.1-registered cert also match local.playwright and break
+            // fixtures that intentionally omit the client cert on the fake hostname
+            // (BrowserSupportHttp2).
+            if (!string.Equals(host, "local.playwright", StringComparison.OrdinalIgnoreCase))
+            {
+                yield break;
+            }
+
+            int port = EffectivePort(uri);
+            string scheme = uri.Scheme;
+            string portSuffix = ":" + port.ToString(CultureInfo.InvariantCulture);
+            yield return scheme + "://localhost" + portSuffix;
+            yield return scheme + "://127.0.0.1" + portSuffix;
         }
 
         private static bool HasBytes(byte[] bytes) => bytes != null && bytes.Length > 0;
@@ -451,7 +505,7 @@ namespace PlaywrightNative.Helpers
         {
             if (ContainsLegacyPbe(pfx))
             {
-                throw new PlaywrightNativeException(UnsupportedTlsCertificateMessage);
+                throw new PlaywrightException(UnsupportedTlsCertificateMessage);
             }
         }
 

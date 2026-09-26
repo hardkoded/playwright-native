@@ -209,7 +209,7 @@ namespace PlaywrightNative
 
         /// <summary>Run an action and wait for the next file chooser.</summary>
         public static Task<IFileChooser> RunAndWaitForFileChooserAsync(this IPage page, Func<Task> action, float? timeout = default)
-            => RunAndWaitAsync(action, page.WaitForEventAsync(PageEvent.FileChooser, timeout: timeout));
+            => RunAndWaitAsync(action, FileChooserWaitHelper.WaitAsync(page, timeout));
 
         /// <summary>Run an action and wait for the next popup page.</summary>
         public static Task<IPage> RunAndWaitForPopupAsync(this IPage page, Func<Task> action, float? timeout = default)

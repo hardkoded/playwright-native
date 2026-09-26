@@ -66,15 +66,32 @@ namespace PlaywrightNative.Helpers
             _acceptLoop = AcceptLoopAsync();
         }
 
+        private enum BrowserProxyKind
+        {
+            Socks,
+            HttpsConnect,
+            HttpForward,
+        }
+
         /// <summary>
         /// Listening port on 127.0.0.1.
         /// </summary>
         internal int Port { get; }
 
         /// <summary>
-        /// Official <c>proxyOverride</c> passed to the browser.
+        /// Official <c>proxyOverride</c> passed to the browser (SOCKS5).
         /// </summary>
         internal Proxy BrowserProxy { get; }
+
+        /// <summary>
+        /// HTTP CONNECT view of the same listener. Darwin CFNetwork excludes
+        /// loopback from SOCKS5; macOS WebKit uses this instead of
+        /// <see cref="BrowserProxy"/>. Linux keeps SOCKS so HTTP/2 ALPN works.
+        /// </summary>
+        internal Proxy HttpBrowserProxy => new Proxy
+        {
+            Server = "http://127.0.0.1:" + Port.ToString(CultureInfo.InvariantCulture),
+        };
 
         /// <inheritdoc/>
         public void Dispose()
@@ -103,9 +120,13 @@ namespace PlaywrightNative.Helpers
             (_listener as IDisposable)?.Dispose();
             _cts.Dispose();
             GC.KeepAlive(_acceptLoop);
+            HashSet<X509Certificate2> unique = new();
             foreach (X509Certificate2 cert in _certs.Values)
             {
-                cert.Dispose();
+                if (unique.Add(cert))
+                {
+                    cert.Dispose();
+                }
             }
 
             _certs.Clear();
@@ -158,9 +179,35 @@ namespace PlaywrightNative.Helpers
         }
 
         internal static string RewriteToLocalhostIfNeeded(string host)
-            => string.Equals(host, "local.playwright", StringComparison.OrdinalIgnoreCase)
-                ? "localhost"
-                : host;
+        {
+            if (string.IsNullOrEmpty(host))
+            {
+                return host;
+            }
+
+            // Mac WS shim uses distinct fake hosts so HAR / IWebSocket.Url can
+            // restore localhost vs 127.0.0.1 vs ::1 after the proxy hop.
+            // Keep "localhost" as the proxy CONNECT target (Darwin client-cert
+            // fixtures assert ProxiedConnectHost == localhost). Direct TCP in
+            // ConnectOutboundAsync forces AddressFamily.InterNetwork +
+            // IPAddress.Loopback so IPv4-only test listeners still work.
+            if (string.Equals(host, WebKitMacLocaleWebSocketShim.FakeLoopbackHost, StringComparison.OrdinalIgnoreCase))
+            {
+                return "localhost";
+            }
+
+            if (string.Equals(host, WebKitMacLocaleWebSocketShim.FakeIpv4LoopbackHost, StringComparison.OrdinalIgnoreCase))
+            {
+                return "127.0.0.1";
+            }
+
+            if (string.Equals(host, WebKitMacLocaleWebSocketShim.FakeIpv6LoopbackHost, StringComparison.OrdinalIgnoreCase))
+            {
+                return "::1";
+            }
+
+            return host;
+        }
 
         internal static IReadOnlyList<string> ParseAlpnFromClientHello(byte[] buffer)
         {
@@ -287,6 +334,19 @@ namespace PlaywrightNative.Helpers
                     RSASignaturePadding.Pkcs1);
                 request.CertificateExtensions.Add(
                     new X509BasicConstraintsExtension(false, false, 0, false));
+                request.CertificateExtensions.Add(
+                    new X509KeyUsageExtension(
+                        X509KeyUsageFlags.DigitalSignature | X509KeyUsageFlags.KeyEncipherment,
+                        critical: true));
+                request.CertificateExtensions.Add(
+                    new X509EnhancedKeyUsageExtension(
+                        new OidCollection { new Oid("1.3.6.1.5.5.7.3.1") },
+                        critical: true));
+                SubjectAlternativeNameBuilder san = new();
+                san.AddDnsName("localhost");
+                san.AddDnsName("local.playwright");
+                san.AddIpAddress(IPAddress.Loopback);
+                request.CertificateExtensions.Add(san.Build(critical: false));
                 using X509Certificate2 created = request.CreateSelfSigned(
                     DateTimeOffset.UtcNow.AddDays(-1),
                     DateTimeOffset.UtcNow.AddYears(1));
@@ -298,6 +358,10 @@ namespace PlaywrightNative.Helpers
 
         private static bool IsIpAddress(string host)
             => IPAddress.TryParse(host, out _);
+
+        private static bool IsIpv4LoopbackConnectHost(string connectHost)
+            => string.Equals(connectHost, "localhost", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(connectHost, "127.0.0.1", StringComparison.Ordinal);
 
         private static string EscapeHtml(string text)
         {
@@ -314,6 +378,184 @@ namespace PlaywrightNative.Helpers
                 .Replace("'", "&#39;", StringComparison.Ordinal)
                 .Replace("\n", " ", StringComparison.Ordinal)
                 .Replace("\r", " ", StringComparison.Ordinal);
+        }
+
+        private static async Task<BrowserProxyRequest?> NegotiateBrowserProxyAsync(
+            NetworkStream browser,
+            CancellationToken token)
+        {
+            byte[] peek = new byte[1];
+            int n = await browser.ReadAsync(peek.AsMemory(0, 1), token).ConfigureAwait(false);
+            if (n <= 0)
+            {
+                return null;
+            }
+
+            // SOCKS5 version byte vs HTTP method ASCII.
+            if (peek[0] == 0x05)
+            {
+                if (!await SocksHandshakeAfterVersionAsync(browser, peek[0], token).ConfigureAwait(false))
+                {
+                    return null;
+                }
+
+                (string Host, int Port)? socks = await TryReadSocksConnectAsync(browser, token)
+                    .ConfigureAwait(false);
+                return socks == null
+                    ? null
+                    : new BrowserProxyRequest(socks.Value.Host, socks.Value.Port, BrowserProxyKind.Socks, null);
+            }
+
+            return await TryReadHttpProxyRequestAsync(browser, peek[0], token).ConfigureAwait(false);
+        }
+
+        private static async Task<BrowserProxyRequest?> TryReadHttpProxyRequestAsync(
+            Stream stream,
+            byte firstByte,
+            CancellationToken token)
+        {
+            using MemoryStream headerBuffer = new();
+            headerBuffer.WriteByte(firstByte);
+            byte[] chunk = new byte[1024];
+            while (true)
+            {
+                byte[] soFar = headerBuffer.ToArray();
+                string text = Encoding.ASCII.GetString(soFar);
+                if (text.Contains("\r\n\r\n", StringComparison.Ordinal))
+                {
+                    break;
+                }
+
+                if (soFar.Length > 64 * 1024)
+                {
+                    return null;
+                }
+
+                int n = await stream.ReadAsync(chunk.AsMemory(0, chunk.Length), token).ConfigureAwait(false);
+                if (n <= 0)
+                {
+                    return null;
+                }
+
+                await headerBuffer.WriteAsync(chunk.AsMemory(0, n), token).ConfigureAwait(false);
+            }
+
+            byte[] raw = headerBuffer.ToArray();
+            string headerText = Encoding.ASCII.GetString(raw);
+            int headerEnd = headerText.IndexOf("\r\n\r\n", StringComparison.Ordinal);
+            if (headerEnd < 0)
+            {
+                return null;
+            }
+
+            int lineEnd = headerText.IndexOf("\r\n", StringComparison.Ordinal);
+            if (lineEnd <= 0)
+            {
+                return null;
+            }
+
+            string requestLine = headerText.Substring(0, lineEnd);
+            string[] parts = requestLine.Split(' ');
+            if (parts.Length < 2)
+            {
+                return null;
+            }
+
+            string method = parts[0];
+            string target = parts[1];
+            if (string.Equals(method, "CONNECT", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!TryParseHostPort(target, defaultPort: 443, out string host, out int port))
+                {
+                    return null;
+                }
+
+                byte[] ok = Encoding.ASCII.GetBytes("HTTP/1.1 200 Connection Established\r\n\r\n");
+                await stream.WriteAsync(ok, token).ConfigureAwait(false);
+                return new BrowserProxyRequest(host, port, BrowserProxyKind.HttpsConnect, null);
+            }
+
+            // Cleartext absolute-form request: GET http://host/path HTTP/1.1
+            if (!Uri.TryCreate(target, UriKind.Absolute, out Uri absolute)
+                || (absolute.Scheme != Uri.UriSchemeHttp && absolute.Scheme != Uri.UriSchemeHttps))
+            {
+                return null;
+            }
+
+            string pathAndQuery = string.IsNullOrEmpty(absolute.PathAndQuery) ? "/" : absolute.PathAndQuery;
+            string version = parts.Length >= 3 ? parts[2] : "HTTP/1.1";
+            string originLine = method + " " + pathAndQuery + " " + version;
+            byte[] originRequest = Encoding.ASCII.GetBytes(string.Concat(originLine, headerText.AsSpan(lineEnd)));
+            return new BrowserProxyRequest(
+                absolute.IdnHost,
+                absolute.IsDefaultPort ? (absolute.Scheme == Uri.UriSchemeHttps ? 443 : 80) : absolute.Port,
+                BrowserProxyKind.HttpForward,
+                originRequest);
+        }
+
+        private static bool TryParseHostPort(string target, int defaultPort, out string host, out int port)
+        {
+            host = null;
+            port = defaultPort;
+            if (string.IsNullOrEmpty(target))
+            {
+                return false;
+            }
+
+            if (target.StartsWith('['))
+            {
+                int close = target.IndexOf(']');
+                if (close <= 1)
+                {
+                    return false;
+                }
+
+                host = target.Substring(1, close - 1);
+                if (close + 1 < target.Length && target[close + 1] == ':')
+                {
+                    return int.TryParse(target.AsSpan(close + 2), NumberStyles.Integer, CultureInfo.InvariantCulture, out port);
+                }
+
+                return true;
+            }
+
+            int colon = target.LastIndexOf(':');
+            if (colon <= 0)
+            {
+                host = target;
+                return true;
+            }
+
+            host = target.Substring(0, colon);
+            return int.TryParse(target.AsSpan(colon + 1), NumberStyles.Integer, CultureInfo.InvariantCulture, out port);
+        }
+
+        private static async Task<bool> SocksHandshakeAfterVersionAsync(
+            Stream stream,
+            byte version,
+            CancellationToken token)
+        {
+            if (version != 0x05)
+            {
+                return false;
+            }
+
+            int nmethods = await ReadByteAsync(stream, token).ConfigureAwait(false);
+            if (nmethods < 0)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < nmethods; i++)
+            {
+                if (await ReadByteAsync(stream, token).ConfigureAwait(false) < 0)
+                {
+                    return false;
+                }
+            }
+
+            await stream.WriteAsync(new byte[] { 0x05, 0x00 }, token).ConfigureAwait(false);
+            return true;
         }
 
         private static async Task<bool> SocksHandshakeAsync(Stream stream, CancellationToken token)
@@ -453,13 +695,72 @@ namespace PlaywrightNative.Helpers
             return true;
         }
 
+        /// <summary>
+        /// Reads one complete TLS record (ClientHello) so AuthenticateAsServer
+        /// never blocks on a truncated prefix through the Darwin HTTP CONNECT shim.
+        /// </summary>
+        private static async Task<byte[]> ReadTlsClientHelloAsync(Stream browser, CancellationToken token)
+        {
+            byte[] header = new byte[5];
+            if (!await ReadExactAsync(browser, header, token).ConfigureAwait(false))
+            {
+                return null;
+            }
+
+            if (header[0] != 0x16)
+            {
+                // Not TLS — return whatever we have plus a small lookahead so
+                // plaintext tunnels still see the first application bytes.
+                byte[] extra = new byte[16 * 1024];
+                int n = await browser.ReadAsync(extra.AsMemory(0, extra.Length), token).ConfigureAwait(false);
+                if (n <= 0)
+                {
+                    return header;
+                }
+
+                byte[] combined = new byte[5 + n];
+                Buffer.BlockCopy(header, 0, combined, 0, 5);
+                Buffer.BlockCopy(extra, 0, combined, 5, n);
+                return combined;
+            }
+
+            int length = (header[3] << 8) | header[4];
+            if (length < 0 || length > 64 * 1024)
+            {
+                return header;
+            }
+
+            byte[] body = new byte[length];
+            if (!await ReadExactAsync(browser, body, token).ConfigureAwait(false))
+            {
+                return null;
+            }
+
+            byte[] record = new byte[5 + length];
+            Buffer.BlockCopy(header, 0, record, 0, 5);
+            Buffer.BlockCopy(body, 0, record, 5, length);
+            return record;
+        }
+
         private static async Task PipeAsync(Stream a, Stream b, CancellationToken token)
         {
-            Task copyA = a.CopyToAsync(b, token);
-            Task copyB = b.CopyToAsync(a, token);
+            // Half-close aware: wait for the first direction to EOF, then give the
+            // reverse side a grace window to deliver TLS close_notify / HTTP body
+            // before cancelling. Immediate WhenAny+cancel aborted Darwin MITM
+            // pages; pure WhenAll hung keep-alive HttpForward and starved later
+            // navigations (KeepSupportingHttp TargetClosedException pollution).
+            using CancellationTokenSource tunnelCts = CancellationTokenSource.CreateLinkedTokenSource(token);
+            Task copyA = CopyAndShutdownAsync(a, b, tunnelCts.Token);
+            Task copyB = CopyAndShutdownAsync(b, a, tunnelCts.Token);
             try
             {
                 await Task.WhenAny(copyA, copyB).ConfigureAwait(false);
+                Task both = Task.WhenAll(copyA, copyB);
+                Task finished = await Task.WhenAny(both, Task.Delay(500, token)).ConfigureAwait(false);
+                if (finished == both)
+                {
+                    await both.ConfigureAwait(false);
+                }
             }
             catch (IOException)
             {
@@ -469,6 +770,68 @@ namespace PlaywrightNative.Helpers
             }
             catch (OperationCanceledException)
             {
+            }
+            finally
+            {
+                try
+                {
+                    await tunnelCts.CancelAsync().ConfigureAwait(false);
+                }
+                catch (ObjectDisposedException)
+                {
+                }
+            }
+        }
+
+        private static async Task CopyAndShutdownAsync(Stream source, Stream destination, CancellationToken token)
+        {
+            byte[] buffer = new byte[81920];
+            try
+            {
+                while (true)
+                {
+                    int read = await source.ReadAsync(buffer.AsMemory(0, buffer.Length), token)
+                        .ConfigureAwait(false);
+                    if (read == 0)
+                    {
+                        break;
+                    }
+
+                    await destination.WriteAsync(buffer.AsMemory(0, read), token).ConfigureAwait(false);
+                    await destination.FlushAsync(token).ConfigureAwait(false);
+                }
+            }
+            catch (IOException)
+            {
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            finally
+            {
+                try
+                {
+                    if (destination is SslStream ssl)
+                    {
+                        await ssl.ShutdownAsync().ConfigureAwait(false);
+                    }
+                    else if (destination is NetworkStream network)
+                    {
+                        network.Socket?.Shutdown(SocketShutdown.Send);
+                    }
+                }
+                catch (IOException)
+                {
+                }
+                catch (SocketException)
+                {
+                }
+                catch (ObjectDisposedException)
+                {
+                }
             }
         }
 
@@ -756,6 +1119,119 @@ namespace PlaywrightNative.Helpers
             return list;
         }
 
+        private static List<SslApplicationProtocol> ErrorPageAlpn(IReadOnlyList<string> offered)
+        {
+            // Prefer http/1.1 so WebKit does not negotiate h2 for the lightweight
+            // error writer (Broken pipe / hang). When the ClientHello offered only
+            // h2 — common against HTTP/2-only fixtures — echoing only http/1.1
+            // fails ALPN and Chromium reports net::ERR_SOCKET_NOT_CONNECTED
+            // before any error HTML arrives
+            // (BrowserShouldReturnTargetConnectionErrorsWhenUsingHttp2).
+            bool offeredH2 = false;
+            bool offeredHttp11 = false;
+            if (offered != null)
+            {
+                for (int i = 0; i < offered.Count; i++)
+                {
+                    string protocol = offered[i];
+                    if (string.Equals(protocol, "h2", StringComparison.Ordinal))
+                    {
+                        offeredH2 = true;
+                    }
+                    else if (string.Equals(protocol, "http/1.1", StringComparison.Ordinal))
+                    {
+                        offeredHttp11 = true;
+                    }
+                }
+            }
+
+            if (offeredH2 && !offeredHttp11)
+            {
+                return new List<SslApplicationProtocol> { SslApplicationProtocol.Http2 };
+            }
+
+            return new List<SslApplicationProtocol> { SslApplicationProtocol.Http11 };
+        }
+
+        /// <summary>
+        /// Hard-closes an accepted or outbound TCP client so a stalled
+        /// <see cref="SslStream"/> handshake cannot outlive its budget.
+        /// </summary>
+        /// <param name="client">The client to close, or null.</param>
+        private static void ForceCloseTcpClient(TcpClient client)
+        {
+            if (client == null)
+            {
+                return;
+            }
+
+            try
+            {
+                client.Client?.Close();
+            }
+            catch (SocketException)
+            {
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+
+            try
+            {
+                client.Dispose();
+            }
+            catch (SocketException)
+            {
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+        }
+
+        /// <summary>
+        /// Picks the MITM error-page message when the origin handshake exceeds the
+        /// budget. Prefer a faulted <see cref="AuthenticationException"/> so HTTP/2
+        /// self-signed origins still report "self-signed certificate" instead of a
+        /// generic disconnect when ForceClose races certificate validation
+        /// (BrowserShouldReturnTargetConnectionErrorsWhenUsingHttp2).
+        /// </summary>
+        /// <param name="handshakeTask">The outstanding AuthenticateAsClient task.</param>
+        /// <returns>Official Playwright client-certificate error text.</returns>
+        private static async Task<string> ResolveHandshakeTimeoutMessageAsync(Task handshakeTask)
+        {
+            if (handshakeTask == null)
+            {
+                return ClientCertificateHelper.RewriteTlsMessage(new OperationCanceledException());
+            }
+
+            try
+            {
+                Task finished = await Task.WhenAny(
+                    handshakeTask,
+                    Task.Delay(150)).ConfigureAwait(false);
+                if (finished == handshakeTask)
+                {
+                    await handshakeTask.ConfigureAwait(false);
+                }
+            }
+            catch (AuthenticationException ex)
+            {
+                return ClientCertificateHelper.RewriteTlsMessage(ex);
+            }
+            catch (IOException ex)
+            {
+                return ClientCertificateHelper.RewriteTlsMessage(ex);
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+            catch (OperationCanceledException)
+            {
+            }
+
+            return ClientCertificateHelper.RewriteTlsMessage(new OperationCanceledException());
+        }
+
         private async Task AcceptLoopAsync()
         {
             while (!_cts.IsCancellationRequested)
@@ -775,7 +1251,15 @@ namespace PlaywrightNative.Helpers
                 }
                 catch (SocketException)
                 {
-                    return;
+                    // Transient accept errors must not kill the MITM listener —
+                    // Chromium then reports net::ERR_PROXY_CONNECTION_FAILED for
+                    // the rest of the context lifetime.
+                    if (_cts.IsCancellationRequested || Volatile.Read(ref _disposed) != 0)
+                    {
+                        return;
+                    }
+
+                    continue;
                 }
 
                 client.NoDelay = true;
@@ -789,49 +1273,135 @@ namespace PlaywrightNative.Helpers
             try
             {
                 using (client)
-                using (NetworkStream browser = client.GetStream())
                 {
-                    if (!await SocksHandshakeAsync(browser, _cts.Token).ConfigureAwait(false))
+                    // Avoid disposing NetworkStream separately — that RSTs the
+                    // Darwin bypass-shim hop before CFNetwork finishes reading the
+                    // MITM TLS error HTML ("Could not connect to the server").
+                    try
                     {
-                        return;
+                        client.Client.LingerState = new LingerOption(true, 5);
+                    }
+                    catch (SocketException)
+                    {
+                    }
+                    catch (ObjectDisposedException)
+                    {
                     }
 
-                    (string Host, int Port)? dest = await TryReadSocksConnectAsync(browser, _cts.Token)
-                        .ConfigureAwait(false);
+                    NetworkStream browser = client.GetStream();
+                    BrowserProxyRequest? dest =
+                        await NegotiateBrowserProxyAsync(browser, _cts.Token).ConfigureAwait(false);
                     if (dest == null)
                     {
                         return;
                     }
 
-                    string host = dest.Value.Host;
-                    int port = dest.Value.Port;
+                    BrowserProxyRequest request = dest.Value;
                     try
                     {
-                        server = await ConnectOutboundAsync(host, port, _cts.Token).ConfigureAwait(false);
+                        server = await ConnectOutboundAsync(request.Host, request.Port, _cts.Token)
+                            .ConfigureAwait(false);
                     }
-                    catch (Exception)
+                    catch (Exception ex)
                     {
-                        await WriteSocksFailureAsync(browser, _cts.Token).ConfigureAwait(false);
+                        if (request.Kind == BrowserProxyKind.Socks)
+                        {
+                            await WriteSocksFailureAsync(browser, _cts.Token).ConfigureAwait(false);
+                            return;
+                        }
+
+                        if (request.Kind == BrowserProxyKind.HttpsConnect)
+                        {
+                            // CONNECT already returned 200 — wait for the browser
+                            // ClientHello, then paint the TLS error page (same path as
+                            // an origin handshake failure). Closing without a response
+                            // makes Darwin WebKit report "Could not connect".
+                            try
+                            {
+                                byte[] failedHello = await ReadTlsClientHelloAsync(browser, _cts.Token)
+                                    .ConfigureAwait(false);
+                                if (failedHello != null && failedHello.Length > 0 && failedHello[0] == 0x16)
+                                {
+                                    IReadOnlyList<string> failedAlpn =
+                                        ParseAlpnFromClientHello(failedHello) ?? new[] { "http/1.1" };
+                                    PrependStream prefixed = new(browser, failedHello);
+                                    string message = ClientCertificateHelper.RewriteTlsMessage(ex);
+                                    await WriteTlsErrorPageAsync(prefixed, failedAlpn, message)
+                                        .ConfigureAwait(false);
+                                    await HalfCloseAfterErrorPageAsync(client).ConfigureAwait(false);
+                                }
+                            }
+                            catch (IOException)
+                            {
+                            }
+                            catch (ObjectDisposedException)
+                            {
+                            }
+                            catch (OperationCanceledException)
+                            {
+                            }
+                        }
+
                         return;
                     }
 
-                    await WriteSocksSuccessAsync(browser, _cts.Token).ConfigureAwait(false);
+                    if (request.Kind == BrowserProxyKind.Socks)
+                    {
+                        await WriteSocksSuccessAsync(browser, _cts.Token).ConfigureAwait(false);
+                    }
+
                     using NetworkStream origin = server.GetStream();
-                    byte[] first = new byte[16 * 1024];
-                    int n = await browser.ReadAsync(first.AsMemory(0, first.Length), _cts.Token)
-                        .ConfigureAwait(false);
-                    if (n <= 0)
+                    if (request.Kind == BrowserProxyKind.HttpForward)
+                    {
+                        await origin.WriteAsync(request.ForwardRequest, _cts.Token).ConfigureAwait(false);
+                        await PipeAsync(browser, origin, _cts.Token).ConfigureAwait(false);
+                        return;
+                    }
+
+                    // Darwin HTTP CONNECT can deliver a truncated ClientHello prefix
+                    // that blocks AuthenticateAsServer — read a full TLS record there.
+                    // When client certificates will MITM, SOCKS needs the same full
+                    // record: a single partial Read leaves AuthenticateAsServer unable
+                    // to finish the error-page handshake on Windows
+                    // (net::ERR_CONNECTION_ABORTED). Plain SOCKS tunnels keep a single
+                    // buffered read so SslStream can pull any remainder (HTTP/2
+                    // ClientHellos hung under ReadExact without MITM).
+                    byte[] hello;
+                    bool willMitm = TryGetClientCert(request.Host, request.Port, out X509Certificate2 mitmCert);
+                    if (request.Kind == BrowserProxyKind.HttpsConnect || willMitm)
+                    {
+                        hello = await ReadTlsClientHelloAsync(browser, _cts.Token).ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        byte[] first = new byte[16 * 1024];
+                        int n = await browser.ReadAsync(first.AsMemory(0, first.Length), _cts.Token)
+                            .ConfigureAwait(false);
+                        if (n <= 0)
+                        {
+                            return;
+                        }
+
+                        hello = new byte[n];
+                        Buffer.BlockCopy(first, 0, hello, 0, n);
+                    }
+
+                    if (hello == null || hello.Length == 0)
                     {
                         return;
                     }
 
-                    byte[] hello = new byte[n];
-                    Buffer.BlockCopy(first, 0, hello, 0, n);
-                    string originKey = ClientCertificateHelper.NormalizeOrigin(
-                        "https://" + host + ":" + port.ToString(CultureInfo.InvariantCulture));
-                    if (hello[0] == 0x16 && _certs.TryGetValue(originKey, out X509Certificate2 clientCert))
+                    if (hello[0] == 0x16 && willMitm)
                     {
-                        await EstablishTlsTunnelAsync(browser, origin, hello, host, port, clientCert)
+                        await EstablishTlsTunnelAsync(
+                            browser,
+                            origin,
+                            hello,
+                            request.Host,
+                            request.Port,
+                            mitmCert,
+                            client,
+                            server)
                             .ConfigureAwait(false);
                     }
                     else
@@ -864,10 +1434,35 @@ namespace PlaywrightNative.Helpers
 
         private async Task<TcpClient> ConnectOutboundAsync(string host, int port, CancellationToken token)
         {
+            // Upstream resolves the env/user proxy against the CONNECT host
+            // (local.playwright) before rewriting; keep that order so NO_PROXY
+            // localhost entries do not accidentally bypass when the wire host is
+            // the fake Darwin loopback name.
+            Proxy outbound = ResolveOutboundProxy(host, port);
             string connectHost = RewriteToLocalhostIfNeeded(host);
-            Proxy outbound = ResolveOutboundProxy(connectHost, port);
             if (outbound == null || string.IsNullOrEmpty(outbound.Server))
             {
+                // Test HTTPS fixtures bind IPAddress.Loopback (IPv4 only). Darwin
+                // "localhost" often resolves ::1 first; a default dual-mode
+                // TcpClient + ConnectAsync("127.0.0.1") is also unreliable there.
+                // Force an IPv4 socket to Loopback so the MITM reaches the origin
+                // and can paint the TLS error page instead of CFNetwork's
+                // "Could not connect".
+                if (IsIpv4LoopbackConnectHost(connectHost))
+                {
+                    TcpClient ipv4 = new(AddressFamily.InterNetwork) { NoDelay = true };
+                    try
+                    {
+                        await ipv4.ConnectAsync(IPAddress.Loopback, port, token).ConfigureAwait(false);
+                        return ipv4;
+                    }
+                    catch
+                    {
+                        ipv4.Dispose();
+                        throw;
+                    }
+                }
+
                 TcpClient direct = new() { NoDelay = true };
                 try
                 {
@@ -881,7 +1476,8 @@ namespace PlaywrightNative.Helpers
                 }
             }
 
-            string server = outbound.Server;
+            string formatted = ProxySettings.FormatServer(outbound, includeCredentials: false);
+            string server = !string.IsNullOrEmpty(formatted) ? formatted : outbound.Server;
             if (server.IndexOf("://", StringComparison.Ordinal) < 0)
             {
                 server = "http://" + server;
@@ -894,10 +1490,33 @@ namespace PlaywrightNative.Helpers
                     ? 1080
                     : 80)
                 : proxyUri.Port;
-            TcpClient via = new() { NoDelay = true };
+
+            // Same IPv4 force as the direct hop: Windows "localhost" → ::1 while
+            // OfficialTestProxy / env HTTPS_PROXY listeners are IPv4-only, which
+            // surfaces as net::ERR_PROXY_CONNECTION_FAILED after SOCKS success
+            // (BrowserShouldPassWithMatchingCertificates…FromConfigButEnvIsThere).
+            // Bound connect like LocaleHandshakeProxy so a dead outbound proxy
+            // cannot hang the SOCKS accept path under suite load.
+            string proxyHost = proxyUri.IdnHost;
+            TcpClient via = IsIpv4LoopbackConnectHost(proxyHost)
+                ? new TcpClient(AddressFamily.InterNetwork) { NoDelay = true }
+                : new TcpClient() { NoDelay = true };
             try
             {
-                await via.ConnectAsync(proxyUri.IdnHost, proxyPort, token).ConfigureAwait(false);
+                using CancellationTokenSource connectCts =
+                    CancellationTokenSource.CreateLinkedTokenSource(token);
+                connectCts.CancelAfter(TimeSpan.FromSeconds(2));
+                if (IsIpv4LoopbackConnectHost(proxyHost))
+                {
+                    await via.ConnectAsync(IPAddress.Loopback, proxyPort, connectCts.Token)
+                        .ConfigureAwait(false);
+                }
+                else
+                {
+                    await via.ConnectAsync(proxyHost, proxyPort, connectCts.Token)
+                        .ConfigureAwait(false);
+                }
+
                 NetworkStream stream = via.GetStream();
                 if (string.Equals(proxyUri.Scheme, "socks5", StringComparison.OrdinalIgnoreCase)
                     || string.Equals(proxyUri.Scheme, "socks5h", StringComparison.OrdinalIgnoreCase))
@@ -955,7 +1574,9 @@ namespace PlaywrightNative.Helpers
             byte[] clientHello,
             string host,
             int port,
-            X509Certificate2 clientCert)
+            X509Certificate2 clientCert,
+            TcpClient browserClient = null,
+            TcpClient originClient = null)
         {
             IReadOnlyList<string> offered = ParseAlpnFromClientHello(clientHello)
                 ?? new[] { "http/1.1" };
@@ -984,26 +1605,140 @@ namespace PlaywrightNative.Helpers
 
                 try
                 {
-                    await serverTls.AuthenticateAsClientAsync(clientOptions, _cts.Token).ConfigureAwait(false);
+                    // Bound the origin handshake: WebKit can sit forever when the
+                    // server resets mid-TLS (SNI reject / TLS1.2 fixtures) or when
+                    // certificate validation stalls. Upstream surfaces an error page
+                    // instead of hanging page.goto.
+                    // Keep this well under Chromium's SOCKS patience: 750ms still
+                    // loses the tunnel to net::ERR_CONNECTION_ABORTED under Windows
+                    // suite load before WriteTlsErrorPageAsync finishes the MITM
+                    // AuthenticateAsServer
+                    // (BrowserShouldNotHangOnTlsErrorsDuringTls12Handshake).
+                    //
+                    // CancelAfter alone is not enough on Windows: SslStream can keep
+                    // AuthenticateAsClientAsync outstanding past the token cancel
+                    // until the next socket I/O. Hard-close the origin TCP when the
+                    // budget expires and paint immediately without awaiting the
+                    // cancelled handshake unwind / DisposeAsync stall.
+                    //
+                    // 400ms was enough for the TLS1.2 hang fixture but too tight for
+                    // successful client-cert handshakes under Windows suite load
+                    // (BrowserShouldHandleTlsRenegotiationWithClientCertificates →
+                    // ERR_PROXY_CONNECTION_FAILED). 550ms + ForceClose still paints
+                    // the MITM error page before Chromium closes the SOCKS tunnel.
+                    const int handshakeBudgetMs = 550;
+                    using CancellationTokenSource handshakeCts =
+                        CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
+                    handshakeCts.CancelAfter(TimeSpan.FromMilliseconds(handshakeBudgetMs));
+                    using (handshakeCts.Token.Register(() => ForceCloseTcpClient(originClient)))
+                    {
+                        Task handshakeTask = serverTls.AuthenticateAsClientAsync(
+                            clientOptions, handshakeCts.Token);
+                        Task budgetTask = Task.Delay(
+                            TimeSpan.FromMilliseconds(handshakeBudgetMs + 25));
+                        if (await Task.WhenAny(handshakeTask, budgetTask).ConfigureAwait(false)
+                            != handshakeTask)
+                        {
+                            ForceCloseTcpClient(originClient);
+
+                            // Prefer AuthenticationException (self-signed) over a
+                            // generic cancel when ForceClose unblocks a validation
+                            // failure that raced the budget
+                            // (BrowserShouldReturnTargetConnectionErrorsWhenUsingHttp2).
+                            string timeoutMessage = await ResolveHandshakeTimeoutMessageAsync(
+                                handshakeTask).ConfigureAwait(false);
+                            try
+                            {
+                                await serverTls.DisposeAsync().AsTask()
+                                    .WaitAsync(TimeSpan.FromMilliseconds(50))
+                                    .ConfigureAwait(false);
+                            }
+                            catch (TimeoutException)
+                            {
+                            }
+                            catch (IOException)
+                            {
+                            }
+                            catch (ObjectDisposedException)
+                            {
+                            }
+
+                            serverTls = null;
+                            await WriteTlsErrorPageAsync(browserPrefixed, offered, timeoutMessage)
+                                .ConfigureAwait(false);
+                            await HalfCloseAfterErrorPageAsync(browserClient).ConfigureAwait(false);
+                            try
+                            {
+                                await handshakeTask.ConfigureAwait(false);
+                            }
+                            catch (IOException)
+                            {
+                            }
+                            catch (ObjectDisposedException)
+                            {
+                            }
+                            catch (AuthenticationException)
+                            {
+                            }
+                            catch (OperationCanceledException)
+                            {
+                            }
+
+                            return;
+                        }
+
+                        await handshakeTask.ConfigureAwait(false);
+                    }
                 }
                 catch (Exception ex)
                 {
                     string message = ClientCertificateHelper.RewriteTlsMessage(ex);
+
+                    // Match upstream: destroy the origin socket before upgrading
+                    // the browser side, so a mid-handshake RST cannot race the
+                    // error-page MITM (Darwin CFNetwork reports "Could not connect"
+                    // when the CONNECT tunnel dies during AuthenticateAsServer).
+                    // Bound DisposeAsync after ForceClose — an unbounded dispose can
+                    // stall and push the MITM HTML past Chromium's SOCKS patience.
+                    ForceCloseTcpClient(originClient);
+                    try
+                    {
+                        await serverTls.DisposeAsync().AsTask()
+                            .WaitAsync(TimeSpan.FromMilliseconds(50))
+                            .ConfigureAwait(false);
+                    }
+                    catch (TimeoutException)
+                    {
+                    }
+                    catch (IOException)
+                    {
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                    }
+
+                    serverTls = null;
                     await WriteTlsErrorPageAsync(browserPrefixed, offered, message).ConfigureAwait(false);
+                    await HalfCloseAfterErrorPageAsync(browserClient).ConfigureAwait(false);
                     return;
                 }
 
-                SslApplicationProtocol negotiated = serverTls.NegotiatedApplicationProtocol;
+                // Match upstream socksClientCertificatesInterceptor: MITM offers
+                // only the origin-negotiated ALPN to the browser.
                 browserTls = new SslStream(browserPrefixed, leaveInnerStreamOpen: false);
+                SslApplicationProtocol negotiated = serverTls.NegotiatedApplicationProtocol;
+                List<SslApplicationProtocol> browserAlpn = new()
+                {
+                    negotiated.Protocol.Length > 0 ? negotiated : SslApplicationProtocol.Http11,
+                };
+
                 SslServerAuthenticationOptions serverOptions = new()
                 {
                     ServerCertificate = _dummyCert,
                     ClientCertificateRequired = false,
                     CertificateRevocationCheckMode = X509RevocationMode.NoCheck,
                     EnabledSslProtocols = SslProtocols.None,
-                    ApplicationProtocols = negotiated.Protocol.Length > 0
-                        ? new List<SslApplicationProtocol> { negotiated }
-                        : new List<SslApplicationProtocol> { SslApplicationProtocol.Http11 },
+                    ApplicationProtocols = browserAlpn,
                 };
 #pragma warning disable CA5359
                 serverOptions.RemoteCertificateValidationCallback = (_, _, _, _) => true;
@@ -1025,27 +1760,74 @@ namespace PlaywrightNative.Helpers
             }
         }
 
+        private bool TryGetClientCert(string host, int port, out X509Certificate2 clientCert)
+        {
+            clientCert = null;
+            if (string.IsNullOrEmpty(host))
+            {
+                return false;
+            }
+
+            string portText = port.ToString(CultureInfo.InvariantCulture);
+            if (TryGetCertForHost(host, portText, out clientCert))
+            {
+                return true;
+            }
+
+            // Darwin CFNetwork may CONNECT as 127.0.0.1/localhost while the fixture
+            // registered https://local.playwright — look up that origin only when the
+            // CONNECT host is the loopback alias, never the reverse (HTTP/2 fixtures
+            // register 127.0.0.1 and intentionally omit the cert on local.playwright).
+            if (string.Equals(host, "127.0.0.1", StringComparison.Ordinal)
+                || string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase))
+            {
+                return TryGetCertForHost("local.playwright", portText, out clientCert);
+            }
+
+            return false;
+        }
+
+        private bool TryGetCertForHost(string host, string portText, out X509Certificate2 clientCert)
+        {
+            string originKey = ClientCertificateHelper.NormalizeOrigin(
+                "https://" + host + ":" + portText);
+            return _certs.TryGetValue(originKey, out clientCert);
+        }
+
         private async Task WriteTlsErrorPageAsync(
             Stream browser,
             IReadOnlyList<string> offered,
             string message)
         {
             string body = EscapeHtml("Playwright client-certificate error: " + message);
-            SslStream tls = new(browser, leaveInnerStreamOpen: false);
+
+            // leaveInnerStreamOpen: the Darwin HTTP CONNECT shim must see a clean
+            // TLS close_notify after the HTML is fully written; disposing the
+            // NetworkStream underneath SslStream too early surfaces
+            // "Could not connect to the server" instead of the error document.
+            SslStream tls = new(browser, leaveInnerStreamOpen: true);
             try
             {
+                // Origin handshake already failed — prefer http/1.1 like upstream,
+                // but echo h2 when that is all the ClientHello offered (see
+                // ErrorPageAlpn). Pin TLS 1.2|1.3 so AuthenticateAsServer accepts
+                // a TLS 1.2-only ClientHello from WebKit on macOS
+                // (BrowserShouldNotHangOnTlsErrorsDuringTls12Handshake).
+#pragma warning disable CA5398
                 SslServerAuthenticationOptions options = new()
                 {
                     ServerCertificate = _dummyCert,
                     ClientCertificateRequired = false,
                     CertificateRevocationCheckMode = X509RevocationMode.NoCheck,
-                    EnabledSslProtocols = SslProtocols.None,
-                    ApplicationProtocols = new List<SslApplicationProtocol> { SslApplicationProtocol.Http11 },
+                    EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13,
+                    ApplicationProtocols = ErrorPageAlpn(offered),
                 };
+#pragma warning restore CA5398
 #pragma warning disable CA5359
                 options.RemoteCertificateValidationCallback = (_, _, _, _) => true;
 #pragma warning restore CA5359
                 await tls.AuthenticateAsServerAsync(options, _cts.Token).ConfigureAwait(false);
+
                 if (tls.NegotiatedApplicationProtocol.Equals(SslApplicationProtocol.Http2))
                 {
                     await WriteHttp2ErrorAsync(tls, body, _cts.Token).ConfigureAwait(false);
@@ -1054,6 +1836,8 @@ namespace PlaywrightNative.Helpers
                 {
                     await WriteHttp11ErrorAsync(tls, body, _cts.Token).ConfigureAwait(false);
                 }
+
+                await tls.FlushAsync(_cts.Token).ConfigureAwait(false);
             }
             catch (IOException)
             {
@@ -1061,10 +1845,121 @@ namespace PlaywrightNative.Helpers
             catch (AuthenticationException)
             {
             }
+            catch (OperationCanceledException)
+            {
+            }
             finally
             {
-                await tls.DisposeAsync().ConfigureAwait(false);
+                try
+                {
+                    // Send close_notify without tearing down the TCP socket the
+                    // Darwin bypass shim is still piping toward WebKit.
+                    await tls.DisposeAsync().ConfigureAwait(false);
+                }
+                catch (IOException)
+                {
+                }
+                catch (ObjectDisposedException)
+                {
+                }
             }
+        }
+
+        /// <summary>
+        /// After the MITM error HTML is written, half-close the accepted socket
+        /// and briefly drain so disposing <see cref="TcpClient"/> does not RST
+        /// unread data still in the Darwin bypass shim pipe (CFNetwork then
+        /// reports "Could not connect" instead of the error document).
+        /// </summary>
+        /// <param name="client">Accepted browser-side client, or null.</param>
+        /// <returns>A task that completes when the half-close attempt finishes.</returns>
+        private async Task HalfCloseAfterErrorPageAsync(TcpClient client)
+        {
+            if (client?.Client == null)
+            {
+                return;
+            }
+
+            // Linger so a later Dispose after the Darwin bypass-shim hop still
+            // pushes residual TLS records (SNI-reject / self-signed error pages)
+            // instead of RSTing — CFNetwork otherwise reports "Could not connect".
+            try
+            {
+                client.Client.LingerState = new LingerOption(true, 5);
+            }
+            catch (SocketException)
+            {
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+
+            try
+            {
+                client.Client.Shutdown(SocketShutdown.Send);
+            }
+            catch (SocketException)
+            {
+                return;
+            }
+            catch (ObjectDisposedException)
+            {
+                return;
+            }
+
+            try
+            {
+                NetworkStream stream = client.GetStream();
+                byte[] sink = new byte[1024];
+                using CancellationTokenSource drainCts = new(TimeSpan.FromSeconds(2));
+                while (true)
+                {
+                    int n = await stream.ReadAsync(sink.AsMemory(0, sink.Length), drainCts.Token)
+                        .ConfigureAwait(false);
+                    if (n <= 0)
+                    {
+                        break;
+                    }
+                }
+            }
+            catch (IOException)
+            {
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+            catch (OperationCanceledException)
+            {
+            }
+
+            // Settle long enough for the Darwin bypass-shim hop to flush TLS
+            // records before TcpClient.Dispose RSTs the browser-facing socket.
+            try
+            {
+                await Task.Delay(1200).ConfigureAwait(false);
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+        }
+
+        private readonly struct BrowserProxyRequest
+        {
+            internal BrowserProxyRequest(string host, int port, BrowserProxyKind kind, byte[] forwardRequest)
+            {
+                Host = host;
+                Port = port;
+                Kind = kind;
+                ForwardRequest = forwardRequest;
+            }
+
+            internal string Host { get; }
+
+            internal int Port { get; }
+
+            internal BrowserProxyKind Kind { get; }
+
+            internal byte[] ForwardRequest { get; }
         }
 
         private sealed class PrependStream : Stream
@@ -1101,7 +1996,26 @@ namespace PlaywrightNative.Helpers
                 => _inner.FlushAsync(cancellationToken);
 
             public override int Read(byte[] buffer, int offset, int count)
-                => throw new NotSupportedException();
+            {
+                // SslStream.AuthenticateAsServer may read synchronously while
+                // completing a TLS 1.2 error-page handshake; the ClientHello
+                // prefix must still be replayed.
+                if (_prefix != null && _offset < _prefix.Length)
+                {
+                    int remaining = _prefix.Length - _offset;
+                    int take = Math.Min(remaining, count);
+                    Buffer.BlockCopy(_prefix, _offset, buffer, offset, take);
+                    _offset += take;
+                    if (_offset >= _prefix.Length)
+                    {
+                        _prefix = null;
+                    }
+
+                    return take;
+                }
+
+                return _inner.Read(buffer, offset, count);
+            }
 
             public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
             {

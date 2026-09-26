@@ -18,6 +18,7 @@ using System;
 using System.Collections.Generic;
 using System.Text.Json;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -223,7 +224,7 @@ namespace PlaywrightNative.Helpers
                 string json = await frame.EvaluateAsync<string>(WalkerScript).ConfigureAwait(false);
                 children = new List<AccessibilitySnapshotResult>(ParseJson(json));
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 children = new List<AccessibilitySnapshotResult>();
             }
@@ -320,7 +321,7 @@ namespace PlaywrightNative.Helpers
                         return;
                     }
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
 

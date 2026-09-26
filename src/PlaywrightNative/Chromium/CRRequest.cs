@@ -97,6 +97,13 @@ namespace PlaywrightNative.Chromium
         internal string RequestId { get; }
 
         /// <summary>
+        /// Set once this request has been handed to a route (user or
+        /// auto-continue). A later <c>Fetch.requestPaused</c> with the same
+        /// network id is a redirect hop and must not be routed again.
+        /// </summary>
+        internal bool InterceptionDelivered { get; set; }
+
+        /// <summary>
         /// Raw CDP <c>requestId</c> without a session prefix. Used for
         /// <c>Network.getResponseBody</c> on OOPIF sessions.
         /// </summary>
@@ -195,14 +202,67 @@ namespace PlaywrightNative.Chromium
         internal bool FrameUnavailable { get; set; }
 
         /// <summary>
+        /// True once raw request headers came from a source that will not be
+        /// refined further (a paused/intercepted Fetch request, whose headers
+        /// are already complete). <see cref="Chromium.ChromiumRequest.AllHeadersAsync"/>
+        /// uses this to avoid waiting on a response that a route handler's own
+        /// pending <c>route.continue()</c> is what would produce.
+        /// </summary>
+        internal bool RawHeadersAreFinal { get; private set; }
+
+        /// <summary>
         /// Gets the resource type (e.g. Document, Script, Stylesheet).
         /// </summary>
-        internal string ResourceType { get; }
+        internal string ResourceType { get; private set; }
 
         /// <summary>
         /// Gets a value indicating whether this is a navigation request.
         /// </summary>
-        internal bool IsNavigationRequest { get; }
+        internal bool IsNavigationRequest { get; private set; }
+
+        /// <summary>
+        /// Returns whether this request should be treated as a document navigation
+        /// for goto response capture. CDP main-resource navigations report
+        /// <c>loaderId == requestId</c>; under Windows suite load Fetch-paired
+        /// paths can omit a <c>Document</c> resource type, so equality is also
+        /// accepted (ShouldReturnFromGotoIfNewNavigationIsStarted).
+        /// </summary>
+        internal bool TracksDocumentNavigation
+        {
+            get
+            {
+                if (IsNavigationRequest
+                    || NetworkRequestEvents.IsDocumentNavigation(ResourceType))
+                {
+                    return true;
+                }
+
+                if (!string.IsNullOrEmpty(DocumentId)
+                    && !string.IsNullOrEmpty(ProtocolRequestId)
+                    && string.Equals(DocumentId, ProtocolRequestId, StringComparison.Ordinal))
+                {
+                    return true;
+                }
+
+                // Fetch-paired Chromium navigations under Windows suite load can omit
+                // ResourceType (or report Other) and use requestId != loaderId while
+                // still carrying the frame loader as DocumentId. Treat main-frame GETs
+                // without a concrete subresource type as document navigations so
+                // concurrent-goto recovery can find the 200
+                // (ShouldReturnFromGotoIfNewNavigationIsStarted).
+                if (!string.IsNullOrEmpty(DocumentId)
+                    && string.Equals(Method, "GET", StringComparison.OrdinalIgnoreCase)
+                    && Frame?.ParentFrame == null
+                    && !IsFavicon
+                    && (string.IsNullOrEmpty(ResourceType)
+                        || string.Equals(ResourceType, "Other", StringComparison.OrdinalIgnoreCase)))
+                {
+                    return true;
+                }
+
+                return false;
+            }
+        }
 
         /// <summary>
         /// Gets the frame that initiated this request.
@@ -308,7 +368,7 @@ namespace PlaywrightNative.Chromium
 
             if (IsNavigationRequest
                 && !string.IsNullOrEmpty(Url)
-                && string.Equals(Url, Frame.Url, StringComparison.Ordinal))
+                && FrameShowsUrl(Frame, Url))
             {
                 return false;
             }
@@ -320,6 +380,35 @@ namespace PlaywrightNative.Chromium
 
             return !string.IsNullOrEmpty(DocumentUrl)
                 && !string.Equals(DocumentUrl, Frame.Url, StringComparison.Ordinal);
+
+            static bool FrameShowsUrl(Frame frame, string url)
+            {
+                if (frame == null)
+                {
+                    return false;
+                }
+
+                if (string.Equals(url, frame.Url, StringComparison.Ordinal))
+                {
+                    return true;
+                }
+
+                IReadOnlyList<Frame> children = frame.ChildFrames;
+                if (children == null)
+                {
+                    return false;
+                }
+
+                for (int i = 0; i < children.Count; i++)
+                {
+                    if (FrameShowsUrl(children[i], url))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            }
         }
 
         /// <summary>
@@ -358,7 +447,11 @@ namespace PlaywrightNative.Chromium
         /// When <see langword="false"/>, skip completing the waiter if the list
         /// has no <c>Cookie</c> so extra-info can still supply the jar value.
         /// </param>
-        internal void SetRawRequestHeaders(IReadOnlyList<NameValueEntry> headers, bool completeWithoutCookie = true)
+        /// <param name="isFinal">
+        /// True when <paramref name="headers"/> came from a paused/intercepted
+        /// Fetch request and will not be refined by a later event.
+        /// </param>
+        internal void SetRawRequestHeaders(IReadOnlyList<NameValueEntry> headers, bool completeWithoutCookie = true, bool isFinal = false)
         {
             IReadOnlyList<NameValueEntry> resolved = MergeCookieIntoRaw(headers ?? HeaderMap.Array(Headers));
             if (!completeWithoutCookie && !HasCookie(resolved) && !_rawHeaders.Task.IsCompleted)
@@ -370,6 +463,11 @@ namespace PlaywrightNative.Chromium
             if (!string.IsNullOrEmpty(cookie))
             {
                 HeaderMap.Set(Headers, "cookie", cookie);
+            }
+
+            if (isFinal)
+            {
+                RawHeadersAreFinal = true;
             }
 
             _rawHeaders.TrySetResult(resolved);
@@ -514,6 +612,22 @@ namespace PlaywrightNative.Chromium
         /// </summary>
         /// <returns>The raw header list.</returns>
         internal Task<IReadOnlyList<NameValueEntry>> WaitForRawHeadersAsync() => _rawHeaders.Task;
+
+        /// <summary>
+        /// Promotes a Fetch-paired request to document navigation when
+        /// <c>Fetch.requestPaused</c> reports <c>resourceType=Document</c> after
+        /// <c>Network.requestWillBeSent</c> omitted the type.
+        /// </summary>
+        /// <param name="resourceType">Fetch resource type, or null.</param>
+        internal void PromoteToDocumentNavigation(string resourceType)
+        {
+            if (!string.IsNullOrEmpty(resourceType))
+            {
+                ResourceType = resourceType;
+            }
+
+            IsNavigationRequest = true;
+        }
 
         /// <summary>
         /// Replaces post data from a later protocol event (e.g. Fetch.requestPaused).

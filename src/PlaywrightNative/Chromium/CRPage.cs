@@ -19,11 +19,13 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.ExceptionServices;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
+using Microsoft.Playwright;
 using PlaywrightNative.Helpers;
 
 namespace PlaywrightNative.Chromium
@@ -62,6 +64,12 @@ namespace PlaywrightNative.Chromium
         private readonly object _initScriptSync = new();
         private readonly Queue<string[]> _windowOpenFeatures = new();
         private readonly string _utilityWorldName;
+        private readonly List<CRResponse> _recentNavigationResponses = new();
+        private readonly object _navigationResponseGate = new();
+        private readonly List<FrameNavigationCommit> _recentFrameCommits = new();
+        private readonly object _frameCommitGate = new();
+        private readonly List<InFlightFrameNavigate> _inflightFrameNavigates = new();
+        private readonly object _inflightFrameNavigateGate = new();
         private string _userAgentOverride;
         private string _acceptLanguageOverride;
         private bool _userAgentIsMobile;
@@ -84,6 +92,7 @@ namespace PlaywrightNative.Chromium
         private string _emulatedReducedMotion = "no-preference";
         private string _emulatedForcedColors = "none";
         private string _emulatedContrast = "no-preference";
+        private CRResponse _lastCommittedNavigationResponse;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="CRPage"/> class.
@@ -112,8 +121,11 @@ namespace PlaywrightNative.Chromium
 
             // Create the input simulators. The keyboard is shared with mouse/touch so
             // that chorded inputs (e.g. Shift+Click) pick up currently-pressed modifiers.
-            _keyboard = new Input.Keyboard(new CRRawKeyboard(_client));
-            _mouse = new Input.Mouse(new CRRawMouse(_client), _keyboard);
+            // DragManager mirrors upstream crDragDrop: intercept HTML5 drag so custom
+            // DataTransfer types are preserved without chromium/x-drag-id.
+            CRDragManager dragManager = new CRDragManager(this);
+            _keyboard = new Input.Keyboard(new CRRawKeyboard(_client, dragManager));
+            _mouse = new Input.Mouse(new CRRawMouse(_client, dragManager), _keyboard);
             _touchscreen = new Input.Touchscreen(new CRRawTouchscreen(_client), _keyboard);
 
             // Subscribe to CDP events from the page session.
@@ -319,8 +331,8 @@ namespace PlaywrightNative.Chromium
             // and will capture events as soon as Network.enable is acknowledged.
             // Popup targets omit waitForDebuggerOnStart — a paused noopener
             // successor otherwise never reaches Runtime.executionContextCreated.
-            // Network/Page/lifecycle must be enabled before resume so popup
-            // navigations (target=_blank) are recorded. Optional CDP may hang.
+            // NewPage (Opener == null) still pauses child targets; opener and
+            // noopener popups both have Opener set before InitializeAsync.
             bool waitForDebuggerOnStart = Opener == null;
             Task critical = Task.WhenAll(
                 _client.SendAsync("Page.enable"),
@@ -344,8 +356,12 @@ namespace PlaywrightNative.Chromium
             Task optional = Task.WhenAll(optionalTasks);
             if (Opener != null)
             {
-                await Task.WhenAny(critical, Task.Delay(2_000)).ConfigureAwait(false);
-                await Task.WhenAny(optional, Task.Delay(1_000)).ConfigureAwait(false);
+                // Popup sessions often do not ack Page/Runtime/Network enable until
+                // after Runtime.runIfWaitingForDebugger. Awaiting critical first
+                // deadlocks InitializeAsync (target never resumes → no dialog /
+                // network / execution context). Fire enables, briefly poll, resume.
+                await Task.WhenAny(critical, Task.Delay(100)).ConfigureAwait(false);
+                await Task.WhenAny(optional, Task.Delay(100)).ConfigureAwait(false);
             }
             else
             {
@@ -412,43 +428,78 @@ namespace PlaywrightNative.Chromium
             await _client.SendAsync("Runtime.runIfWaitingForDebugger").ConfigureAwait(false);
             _debuggerResumed = true;
 
-            if (PublicPage != null && owner?.PublicContext != null
-                && (Opener == null || !initScripts.IsCompletedSuccessfully))
+            if (Opener != null)
             {
-                // NewPage about:blank already exists when scripts are registered, so
-                // addScriptToEvaluateOnNewDocument does not run them. Replay on the
-                // current document after resume. Popups replay only when the paused
-                // addScript hung (--disable-web-security); otherwise once-only holds.
-                await owner.PublicContext.EvaluateInitScriptsOnCurrentAsync(PublicPage).ConfigureAwait(false);
-            }
+                // Enables sent while paused usually complete immediately after resume.
+                await Task.WhenAny(critical, Task.Delay(1_000)).ConfigureAwait(false);
+                await Task.WhenAny(optional, Task.Delay(250)).ConfigureAwait(false);
 
-            if (Opener != null && owner?.PublicContext != null && PublicPage != null)
-            {
-                owner.PublicContext.ReportPopupAsNew(PublicPage);
-                Task replay = ReplayExposedBindingsAsync();
-                await Task.WhenAny(replay, Task.Delay(1_000)).ConfigureAwait(false);
-            }
-
-            if (PublicPage != null && owner?.PublicContext != null)
-            {
-                await owner.PublicContext.ApplyMediaEmulationAsync(PublicPage).ConfigureAwait(false);
-                await owner.PublicContext.ApplyCallbackInitScriptsAsync(PublicPage).ConfigureAwait(false);
-            }
-
-            // Official _initialize waits for the first non-initial navigation
-            // (getFrameTree URL is ":" / "" for the empty document) before
-            // reportAsNew. Popups that already committed have a real URL.
-            // window.open() / about:blank may never emit a second frameNavigated
-            // when the target was not paused — poll then treat as about:blank.
-            try
-            {
-                await WaitForFirstNonInitialNavigationAsync().ConfigureAwait(false);
-            }
+                // Official _initialize waits for the first non-initial navigation
+                // before reportAsNew. Report BEFORE any post-resume evaluate:
+                // inline <script>prompt()</script> opens a dialog that stalls
+                // Runtime.evaluate, and browsercontext-events awaits WaitForPage
+                // before Accept — unbounded evaluate here deadlocks both.
+                try
+                {
+                    await WaitForFirstNonInitialNavigationAsync().ConfigureAwait(false);
+                }
 #pragma warning disable RCS1075
-            catch (Exception)
+                catch (Exception)
 #pragma warning restore RCS1075
+                {
+                    _firstNonInitialNavigationTcs.TrySetResult(true);
+                }
+
+                if (PublicPage != null && owner?.PublicContext != null)
+                {
+                    owner.PublicContext.ReportPopupAsNew(PublicPage);
+                    Task replay = ReplayExposedBindingsAsync();
+                    await Task.WhenAny(replay, Task.Delay(1_000)).ConfigureAwait(false);
+                }
+
+                // Bound: Runtime.evaluate / emulation stall while prompt() is open.
+                if (PublicPage != null && owner?.PublicContext != null
+                    && !initScripts.IsCompletedSuccessfully)
+                {
+                    await Task.WhenAny(
+                        owner.PublicContext.EvaluateInitScriptsOnCurrentAsync(PublicPage),
+                        Task.Delay(1_000)).ConfigureAwait(false);
+                }
+
+                if (PublicPage != null && owner?.PublicContext != null)
+                {
+                    await Task.WhenAny(
+                        owner.PublicContext.ApplyMediaEmulationAsync(PublicPage),
+                        Task.Delay(1_000)).ConfigureAwait(false);
+                    await Task.WhenAny(
+                        owner.PublicContext.ApplyCallbackInitScriptsAsync(PublicPage),
+                        Task.Delay(1_000)).ConfigureAwait(false);
+                }
+            }
+            else
             {
-                _firstNonInitialNavigationTcs.TrySetResult(true);
+                if (PublicPage != null && owner?.PublicContext != null)
+                {
+                    // NewPage about:blank already exists when scripts are registered, so
+                    // addScriptToEvaluateOnNewDocument does not run them. Replay on the
+                    // current document after resume.
+                    await owner.PublicContext.EvaluateInitScriptsOnCurrentAsync(PublicPage).ConfigureAwait(false);
+                    await owner.PublicContext.ApplyMediaEmulationAsync(PublicPage).ConfigureAwait(false);
+                    await owner.PublicContext.ApplyCallbackInitScriptsAsync(PublicPage).ConfigureAwait(false);
+                }
+
+                // window.open() / about:blank may never emit a second frameNavigated
+                // when the target was not paused — poll then treat as about:blank.
+                try
+                {
+                    await WaitForFirstNonInitialNavigationAsync().ConfigureAwait(false);
+                }
+#pragma warning disable RCS1075
+                catch (Exception)
+#pragma warning restore RCS1075
+                {
+                    _firstNonInitialNavigationTcs.TrySetResult(true);
+                }
             }
 
             _initializationTcs.TrySetResult(true);
@@ -466,54 +517,465 @@ namespace PlaywrightNative.Chromium
                 {
                     await _client.SendAsync("Page.close").ConfigureAwait(false);
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
 
                 return;
             }
 
-            await _browser.Connection.RootSession
-                .SendAsync("Target.closeTarget", new { targetId = _targetId }).ConfigureAwait(false);
+            if (_closedTcs.Task.IsCompleted)
+            {
+                return;
+            }
+
+            try
+            {
+                await _browser.Connection.RootSession
+                    .SendAsync("Target.closeTarget", new { targetId = _targetId }).ConfigureAwait(false);
+            }
+            catch (PlaywrightException ex) when (
+                ClosedTarget.IsClosed(ex)
+                || ex.Message.Contains("No target with given id", StringComparison.OrdinalIgnoreCase))
+            {
+            }
+
+            // Wait for Target.detachedFromTarget → DidClose so context.Pages is
+            // updated before callers continue (CRBrowserConnectionTests close).
+            await ClosedTask.ConfigureAwait(false);
         }
 
         /// <inheritdoc/>
         public async Task<GotoResult> NavigateFrameAsync(Frame frame, string url, string referrer)
         {
-            object parameters = string.IsNullOrEmpty(referrer)
-                ? (object)new { url, frameId = frame.FrameId, referrerPolicy = "unsafeUrl" }
-                : new { url, referrer, frameId = frame.FrameId, referrerPolicy = "unsafeUrl" };
-            JsonElement? response = await SessionForFrame(frame).SendAsync("Page.navigate", parameters).ConfigureAwait(false);
-
-            if (!response.HasValue)
+            if (IsChromiumCrashUrl(url))
             {
-                return new GotoResult(null);
+                ArmChromeCrashFallback();
             }
 
-            JsonElement responseValue = response.Value;
+            // Under Windows suite load a superseding GoTo can Page.navigate before the
+            // in-flight peer has even issued Network.requestWillBeSent. Chrome then
+            // aborts the peer with ERR_ABORTED and no document commit, so concurrent-
+            // goto recovery cannot return the first navigation's 200. Wait for the
+            // peer to at least start (and briefly for commit) before sending ours —
+            // hung cancel/replace peers already have requestWillBeSent and proceed
+            // after a short grace (ShouldReturnFromGotoIfNewNavigationIsStarted /
+            // ShouldFailWhenCanceledByAnotherNavigation).
+            await WaitForPeerFrameNavigateReadyAsync(frame).ConfigureAwait(false);
 
-            if (responseValue.TryGetProperty("isDownload", out JsonElement downloadEl)
-                && downloadEl.ValueKind == JsonValueKind.True)
+            InFlightFrameNavigate inflight = BeginFrameNavigate(frame, url);
+            try
             {
-                throw new NavigationException("Download is starting", url);
-            }
+                object parameters = string.IsNullOrEmpty(referrer)
+                    ? (object)new { url, frameId = frame.FrameId, referrerPolicy = "unsafeUrl" }
+                    : new { url, referrer, frameId = frame.FrameId, referrerPolicy = "unsafeUrl" };
+                JsonElement? response = await SessionForFrame(frame).SendAsync("Page.navigate", parameters).ConfigureAwait(false);
 
-            if (responseValue.TryGetProperty("errorText", out JsonElement errorTextElement))
-            {
-                string errorText = errorTextElement.GetString();
-                if (!string.IsNullOrEmpty(errorText))
+                if (!response.HasValue)
                 {
-                    throw new NavigationException($"Navigation failed: {errorText}", url);
+                    return new GotoResult(null);
                 }
-            }
 
-            string loaderId = null;
-            if (responseValue.TryGetProperty("loaderId", out JsonElement loaderIdElement))
+                JsonElement responseValue = response.Value;
+
+                if (responseValue.TryGetProperty("isDownload", out JsonElement downloadEl)
+                    && downloadEl.ValueKind == JsonValueKind.True)
+                {
+                    throw new NavigationException("Download is starting", url);
+                }
+
+                string loaderId = null;
+                if (responseValue.TryGetProperty("loaderId", out JsonElement loaderIdElement))
+                {
+                    loaderId = loaderIdElement.GetString();
+                }
+
+                if (!string.IsNullOrEmpty(loaderId))
+                {
+                    inflight.NoteLoaderId(loaderId);
+                }
+
+                if (responseValue.TryGetProperty("errorText", out JsonElement errorTextElement))
+                {
+                    string errorText = errorTextElement.GetString();
+                    if (!string.IsNullOrEmpty(errorText))
+                    {
+                        // Concurrent GoTo under Windows suite load: Page.navigate can
+                        // report ERR_ABORTED after the document already committed (or
+                        // while its Network.responseReceived is still in flight). If we
+                        // can see a usable committed response for this URL/loaderId,
+                        // treat navigate as success so lifecycle wait + response capture
+                        // still return the first document's 200
+                        // (ShouldReturnFromGotoIfNewNavigationIsStarted).
+                        // Cancel/replace/204 keep throwing — those never produce a
+                        // usable committed response for the aborted URL.
+                        if (!string.IsNullOrEmpty(loaderId)
+                            && errorText.Contains("ERR_ABORTED", StringComparison.Ordinal)
+                            && await TryAcceptAbortedNavigateAsCommittedAsync(frame, url, loaderId).ConfigureAwait(false))
+                        {
+                            return new GotoResult(loaderId);
+                        }
+
+                        // Preserve loaderId so GoToFrameCapturingResponseAsync can await
+                        // the document response after concurrent GoTo aborts Page.navigate
+                        // (ShouldReturnFromGotoIfNewNavigationIsStarted under Windows load).
+                        // Still throw: cancel/replace/204 navigations must surface ERR_ABORTED
+                        // (ShouldFailWhenCanceledByAnotherNavigation / …Returns204).
+                        throw new NavigationException($"Navigation failed: {errorText}", url, loaderId);
+                    }
+                }
+
+                return new GotoResult(loaderId);
+            }
+            finally
             {
-                loaderId = loaderIdElement.GetString();
+                EndFrameNavigate(inflight);
             }
 
-            return new GotoResult(loaderId);
+            async Task<bool> TryAcceptAbortedNavigateAsCommittedAsync(Frame targetFrame, string targetUrl, string abortedLoaderId)
+            {
+                // 204 main-frame navigations also report ERR_ABORTED with a loaderId
+                // but must keep throwing (ShouldFailWhenServerReturns204).
+                if (HasAbortedNavigationStatus(targetFrame, targetUrl, abortedLoaderId, status: 204))
+                {
+                    return false;
+                }
+
+                if (HasUsableCommittedNavigationResponse(targetFrame, targetUrl, abortedLoaderId)
+                    || HasMatchingFrameCommit(targetFrame, targetUrl, abortedLoaderId))
+                {
+                    return true;
+                }
+
+                // Suite load: Network.requestWillBeSent / responseReceived can trail
+                // Page.navigate's ERR_ABORTED by tens to hundreds of ms. Page.frameNavigated
+                // may also land after the abort ack. Poll for a usable committed response
+                // or FrameNavigated commit even when the request is not in the recent ring
+                // yet (ShouldReturnFromGotoIfNewNavigationIsStarted).
+                System.Diagnostics.Stopwatch clock = System.Diagnostics.Stopwatch.StartNew();
+                while (clock.ElapsedMilliseconds < 8_000)
+                {
+                    if (HasAbortedNavigationStatus(targetFrame, targetUrl, abortedLoaderId, status: 204))
+                    {
+                        return false;
+                    }
+
+                    if (HasUsableCommittedNavigationResponse(targetFrame, targetUrl, abortedLoaderId)
+                        || HasUsableCommittedNavigationResponse(targetFrame, targetUrl, documentId: null)
+                        || HasMatchingFrameCommit(targetFrame, targetUrl, abortedLoaderId))
+                    {
+                        return true;
+                    }
+
+                    if (_networkManager.TryFindNavigationRequest(abortedLoaderId, targetFrame, targetUrl, out CRRequest pending)
+                        || _networkManager.TryFindNavigationRequest(documentId: null, targetFrame, targetUrl, out pending))
+                    {
+                        if (pending?.Response != null)
+                        {
+                            if (pending.Response.Status == 204)
+                            {
+                                return false;
+                            }
+
+                            if (IsCommittedNavigationStatus(pending.Response.Status)
+                                && (NavigationResponseMatches(pending.Response, targetFrame, targetUrl, abortedLoaderId)
+                                    || NavigationResponseMatches(pending.Response, targetFrame, targetUrl, documentId: null)))
+                            {
+                                return true;
+                            }
+                        }
+
+                        if (!string.IsNullOrEmpty(pending?.FailureText))
+                        {
+                            // Request may be marked failed (ERR_ABORTED) after the
+                            // document already committed — keep polling the ring /
+                            // FrameNavigated commits.
+                            if (HasUsableCommittedNavigationResponse(targetFrame, targetUrl, abortedLoaderId)
+                                || HasUsableCommittedNavigationResponse(targetFrame, targetUrl, documentId: null)
+                                || HasMatchingFrameCommit(targetFrame, targetUrl, abortedLoaderId))
+                            {
+                                return true;
+                            }
+
+                            await Task.Delay(20).ConfigureAwait(false);
+                            continue;
+                        }
+
+                        if (pending != null && pending.Response == null)
+                        {
+                            try
+                            {
+                                Task<CRResponse> wait = pending.WaitForResponseAsync();
+                                int remainMs = Math.Max(1, 8_000 - (int)clock.ElapsedMilliseconds);
+                                Task finished = await Task.WhenAny(wait, Task.Delay(Math.Min(250, remainMs))).ConfigureAwait(false);
+                                if (finished == wait)
+                                {
+                                    CRResponse arrived = await wait.ConfigureAwait(false);
+                                    if (arrived != null && arrived.Status == 204)
+                                    {
+                                        return false;
+                                    }
+
+                                    if (arrived != null
+                                        && IsCommittedNavigationStatus(arrived.Status)
+                                        && (NavigationResponseMatches(arrived, targetFrame, targetUrl, abortedLoaderId)
+                                            || NavigationResponseMatches(arrived, targetFrame, targetUrl, documentId: null)))
+                                    {
+                                        return true;
+                                    }
+                                }
+                            }
+                            catch (PlaywrightException)
+                            {
+                            }
+                            catch (TimeoutException)
+                            {
+                            }
+                        }
+                    }
+
+                    await Task.Delay(20).ConfigureAwait(false);
+                }
+
+                if (HasAbortedNavigationStatus(targetFrame, targetUrl, abortedLoaderId, status: 204))
+                {
+                    return false;
+                }
+
+                return HasUsableCommittedNavigationResponse(targetFrame, targetUrl, abortedLoaderId)
+                    || HasUsableCommittedNavigationResponse(targetFrame, targetUrl, documentId: null)
+                    || HasMatchingFrameCommit(targetFrame, targetUrl, abortedLoaderId);
+            }
+
+            bool HasAbortedNavigationStatus(Frame targetFrame, string targetUrl, string documentId, int status)
+            {
+                if (_networkManager.TryFindNavigationRequest(documentId, targetFrame, targetUrl, out CRRequest request)
+                    && request?.Response != null
+                    && request.Response.Status == status)
+                {
+                    return true;
+                }
+
+                if (_networkManager.TryFindNavigationRequest(documentId: null, targetFrame, targetUrl, out request)
+                    && request?.Response != null
+                    && request.Response.Status == status)
+                {
+                    return true;
+                }
+
+                CRResponse[] recent;
+                lock (_navigationResponseGate)
+                {
+                    recent = _recentNavigationResponses.ToArray();
+                }
+
+                for (int i = recent.Length - 1; i >= 0; i--)
+                {
+                    CRResponse candidate = recent[i];
+                    if (candidate != null
+                        && candidate.Status == status
+                        && (NavigationResponseMatches(candidate, targetFrame, targetUrl, documentId)
+                            || NavigationResponseMatches(candidate, targetFrame, targetUrl, documentId: null)))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            }
+
+            bool HasUsableCommittedNavigationResponse(Frame targetFrame, string targetUrl, string documentId)
+            {
+                if (_networkManager.TryFindNavigationRequest(documentId, targetFrame, targetUrl, out CRRequest request)
+                    && request?.Response is CRResponse ready
+                    && IsCommittedNavigationStatus(ready.Status)
+                    && (NavigationResponseMatches(ready, targetFrame, targetUrl, documentId)
+                        || NavigationResponseMatches(ready, targetFrame, targetUrl, documentId: null)))
+                {
+                    return true;
+                }
+
+                if (_lastCommittedNavigationResponse != null
+                    && IsCommittedNavigationStatus(_lastCommittedNavigationResponse.Status)
+                    && (NavigationResponseMatches(_lastCommittedNavigationResponse, targetFrame, targetUrl, documentId)
+                        || NavigationResponseMatches(_lastCommittedNavigationResponse, targetFrame, targetUrl, documentId: null)))
+                {
+                    return true;
+                }
+
+                CRResponse[] recent;
+                lock (_navigationResponseGate)
+                {
+                    recent = _recentNavigationResponses.ToArray();
+                }
+
+                for (int i = recent.Length - 1; i >= 0; i--)
+                {
+                    CRResponse candidate = recent[i];
+                    if (candidate != null
+                        && IsCommittedNavigationStatus(candidate.Status)
+                        && (NavigationResponseMatches(candidate, targetFrame, targetUrl, documentId)
+                            || NavigationResponseMatches(candidate, targetFrame, targetUrl, documentId: null)))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            }
+
+            bool HasMatchingFrameCommit(Frame targetFrame, string targetUrl, string documentId)
+            {
+                string frameId = targetFrame?.FrameId;
+                FrameNavigationCommit[] commits;
+                lock (_frameCommitGate)
+                {
+                    commits = _recentFrameCommits.ToArray();
+                }
+
+                for (int i = commits.Length - 1; i >= 0; i--)
+                {
+                    FrameNavigationCommit commit = commits[i];
+                    if (!string.IsNullOrEmpty(frameId)
+                        && !string.IsNullOrEmpty(commit.FrameId)
+                        && !string.Equals(frameId, commit.FrameId, StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+
+                    if (!string.IsNullOrEmpty(documentId)
+                        && string.Equals(commit.LoaderId, documentId, StringComparison.Ordinal))
+                    {
+                        return true;
+                    }
+
+                    if (!string.IsNullOrEmpty(targetUrl)
+                        && CommittedNavigationUrlsMatch(commit.Url, targetUrl))
+                    {
+                        return true;
+                    }
+                }
+
+                // Document may still be the aborted navigation's loader even after
+                // Network events were dropped under suite load.
+                if (!string.IsNullOrEmpty(documentId)
+                    && targetFrame != null
+                    && string.Equals(targetFrame.DocumentId, documentId, StringComparison.Ordinal)
+                    && !string.IsNullOrEmpty(targetUrl)
+                    && CommittedNavigationUrlsMatch(targetFrame.Url, targetUrl))
+                {
+                    return true;
+                }
+
+                return false;
+            }
+
+            static bool IsCommittedNavigationStatus(int status)
+                => status >= 200
+                    && status != 204
+                    && (status < 300 || status >= 400);
+
+            static bool NavigationResponseMatches(
+                CRResponse response,
+                Frame targetFrame,
+                string targetUrl,
+                string documentId)
+            {
+                if (response == null)
+                {
+                    return false;
+                }
+
+                Frame responseFrame = response.Request?.Frame;
+                if (responseFrame != null
+                    && targetFrame != null
+                    && !ReferenceEquals(responseFrame, targetFrame)
+                    && !string.Equals(responseFrame.FrameId, targetFrame.FrameId, StringComparison.Ordinal))
+                {
+                    return false;
+                }
+
+                if (!string.IsNullOrEmpty(documentId)
+                    && response.Request != null
+                    && (string.Equals(response.Request.DocumentId, documentId, StringComparison.Ordinal)
+                        || string.Equals(response.Request.ProtocolRequestId, documentId, StringComparison.Ordinal)))
+                {
+                    return true;
+                }
+
+                if (string.IsNullOrEmpty(targetUrl))
+                {
+                    return string.IsNullOrEmpty(documentId);
+                }
+
+                if (CommittedNavigationUrlsMatch(response.Url, targetUrl))
+                {
+                    return true;
+                }
+
+                return response.Request != null
+                    && CommittedNavigationUrlsMatch(response.Request.Url, targetUrl);
+            }
+
+            static bool CommittedNavigationUrlsMatch(string left, string right)
+            {
+                if (string.IsNullOrEmpty(left) || string.IsNullOrEmpty(right))
+                {
+                    return false;
+                }
+
+                if (string.Equals(left, right, StringComparison.OrdinalIgnoreCase)
+                    || left.StartsWith(right, StringComparison.OrdinalIgnoreCase)
+                    || right.StartsWith(left, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+
+                string normalizedLeft = NormalizeCommittedNavigationUrl(left);
+                string normalizedRight = NormalizeCommittedNavigationUrl(right);
+                if (string.IsNullOrEmpty(normalizedLeft) || string.IsNullOrEmpty(normalizedRight))
+                {
+                    return false;
+                }
+
+                return string.Equals(normalizedLeft, normalizedRight, StringComparison.OrdinalIgnoreCase)
+                    || normalizedLeft.StartsWith(normalizedRight, StringComparison.OrdinalIgnoreCase)
+                    || normalizedRight.StartsWith(normalizedLeft, StringComparison.OrdinalIgnoreCase);
+            }
+
+            static string NormalizeCommittedNavigationUrl(string value)
+            {
+                if (string.IsNullOrEmpty(value))
+                {
+                    return value;
+                }
+
+                string withoutHash = NavigationTimeout.WithoutHash(value);
+                string withoutUser = NavigationTimeout.WithoutUserInfo(withoutHash);
+                if (!Uri.TryCreate(withoutUser, UriKind.Absolute, out Uri uri))
+                {
+                    return withoutUser.TrimEnd('/');
+                }
+
+                string host = uri.Host;
+                if (string.Equals(host, "127.0.0.1", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(host, "::1", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(host, "[::1]", StringComparison.OrdinalIgnoreCase))
+                {
+                    host = "localhost";
+                }
+
+                string path = uri.AbsolutePath;
+                if (path.Length > 1)
+                {
+                    path = path.TrimEnd('/');
+                }
+
+                return uri.Scheme + "://" + host
+                    + (uri.IsDefaultPort ? string.Empty : ":" + uri.Port.ToString(System.Globalization.CultureInfo.InvariantCulture))
+                    + path
+                    + uri.Query;
+            }
         }
 
         /// <inheritdoc/>
@@ -614,7 +1076,7 @@ namespace PlaywrightNative.Chromium
                 string errorText = errorTextElement.GetString();
                 if (!string.IsNullOrEmpty(errorText))
                 {
-                    throw new PlaywrightNativeException($"Navigation failed: {errorText}");
+                    throw new PlaywrightException($"Navigation failed: {errorText}");
                 }
             }
 
@@ -949,7 +1411,16 @@ namespace PlaywrightNative.Chromium
 
             worker.ExceptionThrown += (_, error) => PageError?.Invoke(this, error);
             child.MessageReceived += OnWorkerSessionMessage;
-            _ = AttachWorkerAndReportAsync(worker, parentFrameId);
+
+            Frame ownerFrame = !string.IsNullOrEmpty(parentFrameId)
+                ? _frameManager.FrameById(parentFrameId)
+                : null;
+            Task networkTask = _networkManager.AddWorkerSessionAsync(
+                child,
+                ownerFrame ?? MainFrame,
+                isWorker: true,
+                parentFrameId);
+            _ = AttachWorkerAndReportAsync(worker, parentFrameId, networkTask);
         }
 
         /// <summary>
@@ -1006,6 +1477,24 @@ namespace PlaywrightNative.Chromium
         }
 
         /// <summary>
+        /// Clears <paramref name="context"/> from the main frame when it is the
+        /// current main-world context so the next wait observes a fresh one.
+        /// </summary>
+        /// <param name="context">The destroyed context, or <see langword="null"/>.</param>
+        internal void InvalidateExecutionContext(CRExecutionContext context)
+        {
+            if (context == null)
+            {
+                return;
+            }
+
+            if (MainFrame != null && ReferenceEquals(MainFrame.ExecutionContext, context))
+            {
+                MainFrame.ExecutionContext = null;
+            }
+        }
+
+        /// <summary>
         /// Waits until the main frame has an execution context available.
         /// </summary>
         /// <param name="timeout">Maximum time to wait in milliseconds.</param>
@@ -1025,9 +1514,15 @@ namespace PlaywrightNative.Chromium
             while (true)
             {
                 CRExecutionContext context = frame.ExecutionContext;
-                if (context != null)
+                if (context != null && !context.Destroyed.IsCompleted)
                 {
                     return context;
+                }
+
+                if (context != null && context.Destroyed.IsCompleted
+                    && ReferenceEquals(frame.ExecutionContext, context))
+                {
+                    frame.ExecutionContext = null;
                 }
 
                 if (DateTime.UtcNow >= deadline)
@@ -1054,7 +1549,7 @@ namespace PlaywrightNative.Chromium
             {
                 return await context.EvaluateAsync<T>(expression).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException ex) when (
+            catch (PlaywrightException ex) when (
                 ex.Message != null
                 && ex.Message.Contains("Cannot find context", StringComparison.Ordinal))
             {
@@ -1133,7 +1628,7 @@ namespace PlaywrightNative.Chromium
                         };
                     _ = _client.SendAsync("Runtime.evaluate", args);
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
                 catch (ObjectDisposedException)
@@ -1202,12 +1697,15 @@ namespace PlaywrightNative.Chromium
             frame.ClearLifecycleEvents();
             frame.OnLifecycleEvent("commit");
 
+            long startTicks = Environment.TickCount64;
             string targetLifecycleEvent = WaitUntilMapping.ToLifecycleEvent(waitUntil);
 
             TaskCompletionSource<bool> lifecycleTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
             void OnLifecycle(string name)
             {
-                if (name == targetLifecycleEvent)
+                // networkidle can be revoked after firing; only complete while present.
+                if (name == targetLifecycleEvent
+                    && frame.LifecycleEvents.Contains(targetLifecycleEvent))
                 {
                     lifecycleTcs.TrySetResult(true);
                 }
@@ -1240,7 +1738,7 @@ namespace PlaywrightNative.Chromium
                 catch (TimeoutException)
                 {
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
 
@@ -1248,51 +1746,78 @@ namespace PlaywrightNative.Chromium
                     && isolated.Value.TryGetProperty("executionContextId", out JsonElement isolatedId)
                     && isolatedId.TryGetInt32(out int isolatedContextId))
                 {
-                    CRExecutionContext utility = new CRExecutionContext(frameSession, isolatedContextId);
-                    await utility.EvaluateFunctionAsync<bool>(writeHtml, html).WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+                    CRExecutionContext writeContext = new CRExecutionContext(frameSession, isolatedContextId);
+                    await writeContext.EvaluateFunctionAsync<bool>(writeHtml, html).WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
                 }
                 else
                 {
                     await EvaluateFunctionInFrameAsync<bool>(frame, writeHtml, html).WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
                 }
 
-                if (frame.LifecycleEvents.Contains(targetLifecycleEvent))
+                // document.open destroys the main-world context. Wait briefly for a
+                // replacement so callers do not hang on the first post-SetContent
+                // evaluate, but do not treat context recovery as lifecycle success.
                 {
-                    return;
+                    int remainingForContext = timeout == System.Threading.Timeout.Infinite
+                        ? System.Threading.Timeout.Infinite
+                        : Math.Max(0, timeout - (int)(Environment.TickCount64 - startTicks));
+                    try
+                    {
+                        int contextWaitMs = remainingForContext == System.Threading.Timeout.Infinite
+                            ? 5_000
+                            : Math.Min(5_000, remainingForContext);
+                        if (contextWaitMs > 0)
+                        {
+                            await WaitForFrameExecutionContextAsync(frame, timeout: contextWaitMs).ConfigureAwait(false);
+                        }
+                    }
+                    catch (TimeoutException)
+                    {
+                    }
                 }
 
-                try
+                // Keep waiting until the target lifecycle is currently present —
+                // a revoked networkidle must not count as success.
+                while (!frame.LifecycleEvents.Contains(targetLifecycleEvent))
                 {
-                    string ready = await EvaluateFunctionInFrameAsync<string>(frame, "() => document.readyState")
-                        .WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
-                    if (string.Equals(ready, "interactive", StringComparison.Ordinal)
-                        || string.Equals(ready, "complete", StringComparison.Ordinal))
+                    int remainingMs = timeout == System.Threading.Timeout.Infinite
+                        ? System.Threading.Timeout.Infinite
+                        : Math.Max(0, timeout - (int)(Environment.TickCount64 - startTicks));
+                    if (remainingMs == 0)
                     {
-                        frame.OnLifecycleEvent("DOMContentLoaded");
+                        throw new TimeoutException(
+                            $"SetContentAsync timed out waiting for '{targetLifecycleEvent}' after {timeout}ms");
                     }
 
-                    if (string.Equals(ready, "complete", StringComparison.Ordinal))
+                    if (lifecycleTcs.Task.IsCompleted)
                     {
-                        frame.OnLifecycleEvent("load");
+                        lifecycleTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                    }
+
+                    if (frame.LifecycleEvents.Contains(targetLifecycleEvent))
+                    {
+                        break;
+                    }
+
+                    using var cts = remainingMs == System.Threading.Timeout.Infinite
+                        ? null
+                        : new System.Threading.CancellationTokenSource(remainingMs);
+                    CancellationTokenRegistration registration = default;
+                    if (cts != null)
+                    {
+                        registration = cts.Token.Register(() => lifecycleTcs.TrySetException(
+                            new TimeoutException($"SetContentAsync timed out waiting for '{targetLifecycleEvent}' after {timeout}ms")));
+                    }
+
+                    try
+                    {
+                        await lifecycleTcs.Task.ConfigureAwait(false);
+                    }
+                    finally
+                    {
+                        await registration.DisposeAsync().ConfigureAwait(false);
                     }
                 }
-                catch (TimeoutException)
-                {
-                }
-                catch (PlaywrightNativeException)
-                {
-                }
-
-                if (frame.LifecycleEvents.Contains(targetLifecycleEvent))
-                {
-                    return;
-                }
-
-                using var cts = new System.Threading.CancellationTokenSource(timeout);
-                cts.Token.Register(() => lifecycleTcs.TrySetException(
-                    new TimeoutException($"SetContentAsync timed out waiting for '{targetLifecycleEvent}' after {timeout}ms")));
-
-                await lifecycleTcs.Task.ConfigureAwait(false);
             }
             finally
             {
@@ -1341,7 +1866,24 @@ namespace PlaywrightNative.Chromium
         /// <param name="type">Optional <c>type</c> attribute (e.g. <c>module</c>).</param>
         /// <param name="path">Local file injected as content with a <c>sourceURL</c> suffix.</param>
         /// <returns>A handle to the injected <c>script</c> element.</returns>
-        internal async Task<CRElementHandle> AddScriptTagAsync(string url = null, string content = null, string type = null, string path = null)
+        internal Task<CRElementHandle> AddScriptTagAsync(string url = null, string content = null, string type = null, string path = null)
+            => AddScriptTagInFrameAsync(MainFrame, url, content, type, path);
+
+        /// <summary>
+        /// Injects a script tag into <paramref name="frame"/> (not always the main frame).
+        /// </summary>
+        /// <param name="frame">Target frame.</param>
+        /// <param name="url">External script URL.</param>
+        /// <param name="content">Inline script content.</param>
+        /// <param name="type">Optional script type.</param>
+        /// <param name="path">Local file path.</param>
+        /// <returns>A handle to the injected script element.</returns>
+        internal async Task<CRElementHandle> AddScriptTagInFrameAsync(
+            Frame frame,
+            string url = null,
+            string content = null,
+            string type = null,
+            string path = null)
         {
             if (string.IsNullOrEmpty(path) && !string.IsNullOrEmpty(url) && !string.IsNullOrEmpty(content))
             {
@@ -1356,19 +1898,21 @@ namespace PlaywrightNative.Chromium
                 {
                     if (!string.IsNullOrEmpty(resolved.Url))
                     {
-                        return await QueryFunctionAsync(
+                        return await QueryFunctionInFrameAsync(
+                            frame,
                             AddScriptTagHelper.AddScriptUrlFunction,
                             resolved.Url,
                             resolved.Type).ConfigureAwait(false);
                     }
 
-                    CRElementHandle handle = await QueryFunctionAsync(
+                    CRElementHandle handle = await QueryFunctionInFrameAsync(
+                        frame,
                         AddScriptTagHelper.AddScriptContentFunction,
                         resolved.Content,
                         resolved.Type).ConfigureAwait(false);
 
                     // Official extra round-trip so async CSP console errors can win the race.
-                    await EvaluateAsync("true").ConfigureAwait(false);
+                    await EvaluateHandleInFrameAsync(frame, "true").ConfigureAwait(false);
                     return handle;
                 }).ConfigureAwait(false);
         }
@@ -1448,6 +1992,40 @@ namespace PlaywrightNative.Chromium
         }
 
         /// <summary>
+        /// Re-runs registered page init scripts in the current main-world document.
+        /// Used when <c>about:blank</c> → <c>about:blank</c> does not create a new
+        /// document for <c>Page.addScriptToEvaluateOnNewDocument</c>.
+        /// </summary>
+        /// <returns>A task that completes when replay finishes.</returns>
+        internal async Task ReplayPageInitScriptsAsync()
+        {
+            List<string> scripts;
+            lock (_initScriptSync)
+            {
+                if (_initScriptSources.Count == 0)
+                {
+                    return;
+                }
+
+                scripts = new List<string>(_initScriptSources);
+            }
+
+            foreach (string script in scripts)
+            {
+                try
+                {
+                    await EvaluateAsync(script).ConfigureAwait(false);
+                }
+#pragma warning disable RCS1075
+                catch (Exception)
+#pragma warning restore RCS1075
+                {
+                    // Match bootstrap isolation: one throw must not skip the rest.
+                }
+            }
+        }
+
+        /// <summary>
         /// Removes a previously-registered init script. Safe to call on an unknown identifier
         /// (CDP returns an error which is swallowed — idempotent).
         /// </summary>
@@ -1466,7 +2044,7 @@ namespace PlaywrightNative.Chromium
                     identifier,
                 }).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 // Swallow — unknown identifier, session closed, etc.
             }
@@ -1512,7 +2090,7 @@ namespace PlaywrightNative.Chromium
 
             if (_handleBindings.ContainsKey(name) || !_exposedFunctions.TryAdd(name, handler))
             {
-                throw new PlaywrightNativeException(PageBindingScript.AlreadyRegisteredFunction(name));
+                throw new PlaywrightException(PageBindingScript.AlreadyRegisteredFunction(name));
             }
 
             await EnsureBindingInfrastructureAsync().ConfigureAwait(false);
@@ -1543,7 +2121,7 @@ namespace PlaywrightNative.Chromium
 
             if (!_exposedFunctions.TryAdd(name, handler))
             {
-                throw new PlaywrightNativeException(PageBindingScript.AlreadyRegisteredFunction(name));
+                throw new PlaywrightException(PageBindingScript.AlreadyRegisteredFunction(name));
             }
 
             _evaluateCallbackNames[name] = 0;
@@ -1571,7 +2149,7 @@ namespace PlaywrightNative.Chromium
 
             if (!_exposedFunctions.TryAdd(name, handler))
             {
-                throw new PlaywrightNativeException(PageBindingScript.AlreadyRegisteredFunction(name));
+                throw new PlaywrightException(PageBindingScript.AlreadyRegisteredFunction(name));
             }
 
             await EnsureBindingInfrastructureAsync().ConfigureAwait(false);
@@ -1646,7 +2224,7 @@ namespace PlaywrightNative.Chromium
 
             if (_exposedFunctions.ContainsKey(name) || !_handleBindings.TryAdd(name, handler))
             {
-                throw new PlaywrightNativeException(PageBindingScript.AlreadyRegisteredFunction(name));
+                throw new PlaywrightException(PageBindingScript.AlreadyRegisteredFunction(name));
             }
 
             await EnsureBindingInfrastructureAsync().ConfigureAwait(false);
@@ -1708,7 +2286,7 @@ namespace PlaywrightNative.Chromium
 
                 return WrapElementHandle(context, handleValue);
             }
-            catch (PlaywrightNativeException ex) when (PlaywrightNativeException.IsDestroyedContext(ex))
+            catch (PlaywrightException ex) when (PlaywrightNative.Helpers.DestroyedContext.IsDestroyedContext(ex))
             {
                 if (frame != null && frame.ExecutionContext == context)
                 {
@@ -1737,6 +2315,7 @@ namespace PlaywrightNative.Chromium
         internal async Task<IReadOnlyList<CRElementHandle>> QuerySelectorAllInFrameAsync(Frame frame, string selector)
         {
             SelectorQuery.EnsureSelector(selector);
+            DomVisibility.ThrowIfUnknownEngine(selector);
             if (FrameSelector.ContainsControl(selector))
             {
                 IReadOnlyList<IElementHandle> matches = await FrameSelector.QueryAllAsync(
@@ -1759,8 +2338,14 @@ namespace PlaywrightNative.Chromium
             CRExecutionContext context = await WaitForFrameExecutionContextAsync(frame).ConfigureAwait(false);
             if (CustomSelectors.TryResolve(selector, out CustomSelectorCall call))
             {
-                JsonElement? customArray = await context.EvaluateHandleAsync(call.DocumentQueryAllExpression).ConfigureAwait(false);
-                return await UnwrapElementArrayAsync(context, customArray).ConfigureAwait(false);
+                CRExecutionContext evalContext = context;
+                if (CustomSelectors.ShouldQueryInIsolatedWorld(selector))
+                {
+                    evalContext = await GetUtilityWorldAsync(frame).ConfigureAwait(false) ?? context;
+                }
+
+                JsonElement? customArray = await evalContext.EvaluateHandleAsync(call.DocumentQueryAllExpression).ConfigureAwait(false);
+                return await UnwrapElementArrayAsync(evalContext, customArray).ConfigureAwait(false);
             }
 
             JsonElement? arrayRemote = await context.EvaluateFunctionHandleAsync(
@@ -1860,7 +2445,7 @@ namespace PlaywrightNative.Chromium
             {
                 described = await _client.SendAsync("DOM.describeNode", new { objectId }).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 return null;
             }
@@ -1899,7 +2484,7 @@ namespace PlaywrightNative.Chromium
                 {
                     await session.SendAsync("DOM.enable").ConfigureAwait(false);
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
 
@@ -1940,7 +2525,7 @@ namespace PlaywrightNative.Chromium
                 {
                     await session.SendAsync("DOM.enable").ConfigureAwait(false);
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
 
@@ -2042,7 +2627,7 @@ namespace PlaywrightNative.Chromium
             Frame parent = frame.ParentFrame;
             if (parent == null || frame.IsDetached)
             {
-                throw new PlaywrightNativeException("Frame has been detached.");
+                throw new PlaywrightException("Frame has been detached.");
             }
 
             JsonElement? response;
@@ -2051,12 +2636,12 @@ namespace PlaywrightNative.Chromium
                 response = await _client.SendAsync("DOM.getFrameOwner", new { frameId = frame.FrameId })
                     .ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException ex)
+            catch (PlaywrightException ex)
             {
                 if (ex.Message.Contains("Frame with the given id was not found.", StringComparison.Ordinal)
                     || ex.Message.Contains("detached", StringComparison.OrdinalIgnoreCase))
                 {
-                    throw new PlaywrightNativeException("Frame has been detached.");
+                    throw new PlaywrightException("Frame has been detached.");
                 }
 
                 throw;
@@ -2065,14 +2650,14 @@ namespace PlaywrightNative.Chromium
             parent = frame.ParentFrame;
             if (parent == null || frame.IsDetached)
             {
-                throw new PlaywrightNativeException("Frame has been detached.");
+                throw new PlaywrightException("Frame has been detached.");
             }
 
             if (response == null
                 || !response.Value.TryGetProperty("backendNodeId", out JsonElement backendEl)
                 || !backendEl.TryGetInt32(out int backendNodeId))
             {
-                throw new PlaywrightNativeException("Frame has been detached.");
+                throw new PlaywrightException("Frame has been detached.");
             }
 
             CRExecutionContext context = await WaitForFrameExecutionContextAsync(parent).ConfigureAwait(false);
@@ -2084,13 +2669,13 @@ namespace PlaywrightNative.Chromium
 
             if (resolved == null || !resolved.Value.TryGetProperty("object", out JsonElement remote))
             {
-                throw new PlaywrightNativeException("Frame has been detached.");
+                throw new PlaywrightException("Frame has been detached.");
             }
 
             CRElementHandle handle = WrapElementHandle(context, remote);
             if (handle == null)
             {
-                throw new PlaywrightNativeException("Frame has been detached.");
+                throw new PlaywrightException("Frame has been detached.");
             }
 
             return new ChromiumElementHandle(handle);
@@ -2107,6 +2692,20 @@ namespace PlaywrightNative.Chromium
             CRExecutionContext context = await WaitForExecutionContextAsync().ConfigureAwait(false);
             context = MainFrame.ExecutionContext ?? context;
 
+            JsonElement? handleValue = await context.EvaluateFunctionHandleAsync(functionDeclaration, args).ConfigureAwait(false);
+            return WrapElementHandle(context, handleValue);
+        }
+
+        /// <summary>
+        /// Like <see cref="QueryFunctionAsync"/> but evaluates in <paramref name="frame"/>.
+        /// </summary>
+        /// <param name="frame">The frame whose execution context is used.</param>
+        /// <param name="functionDeclaration">A function declaration returning an Element or null.</param>
+        /// <param name="args">Arguments passed to the function.</param>
+        /// <returns>The matched element, or <see langword="null"/>.</returns>
+        internal async Task<CRElementHandle> QueryFunctionInFrameAsync(Frame frame, string functionDeclaration, params object[] args)
+        {
+            CRExecutionContext context = await WaitForFrameExecutionContextAsync(frame).ConfigureAwait(false);
             JsonElement? handleValue = await context.EvaluateFunctionHandleAsync(functionDeclaration, args).ConfigureAwait(false);
             return WrapElementHandle(context, handleValue);
         }
@@ -2204,6 +2803,12 @@ namespace PlaywrightNative.Chromium
             int timeout = 30_000,
             string referrer = null)
         {
+            static bool IsBlankNavigationUrl(string candidate)
+                => string.IsNullOrEmpty(candidate)
+                    || string.Equals(candidate, "about:blank", StringComparison.OrdinalIgnoreCase)
+                    || candidate.StartsWith("about:blank?", StringComparison.OrdinalIgnoreCase)
+                    || candidate.StartsWith("about:blank#", StringComparison.OrdinalIgnoreCase);
+
             url = NavigationTimeout.CompleteUserUrl(url);
             ThrowIfWebUiWouldCrashIsolatedContext();
             referrer = NavigationTimeout.ReferrerFromExtraHeaders(referrer, _networkManager.ExtraHttpHeaders);
@@ -2212,35 +2817,73 @@ namespace PlaywrightNative.Chromium
             string targetLifecycleEvent = WaitUntilMapping.ToLifecycleEvent(waitUntil);
             string apiName = frame.ParentFrame == null ? "page.goto" : "frame.goto";
             int waitMs = timeout <= 0 ? System.Threading.Timeout.Infinite : timeout;
+            bool ensureLifecycleOnExit = false;
 
-            // Race Page.navigate with the navigation timeout. A hanging server
-            // can keep the CDP command outstanding; official progress.race
-            // aborts the whole goto, not just the lifecycle wait.
-            Task<GotoResult> navigateTask = NavigateFrameAsync(frame, url, referrer);
-            if (waitMs != System.Threading.Timeout.Infinite)
+            void EnsurePromisedLifecycleRecorded()
             {
-                using System.Threading.CancellationTokenSource navigateCts = new(waitMs);
-                try
+                // FrameNavigated can wipe LifecycleEvents after the wait resolved
+                // (or after an earlier replay) but before we unsubscribe — leave
+                // callers inspecting MainFrame.LifecycleEvents with only {commit}
+                // (GoToShouldClearLifecycleOnNewNavigation).
+                if (string.Equals(targetLifecycleEvent, "networkidle", StringComparison.Ordinal))
                 {
-                    await navigateTask.WaitAsync(navigateCts.Token).ConfigureAwait(false);
+                    return;
                 }
-                catch (OperationCanceledException)
+
+                if (frame.LifecycleEvents.Contains(targetLifecycleEvent))
                 {
-                    throw NavigationTimeout.Exceeded(apiName, url, NavigationTimeout.WaitUntilName(waitUntil), timeout);
+                    return;
+                }
+
+                if (string.Equals(targetLifecycleEvent, "load", StringComparison.Ordinal)
+                    || string.Equals(targetLifecycleEvent, "DOMContentLoaded", StringComparison.Ordinal))
+                {
+                    if (!frame.LifecycleEvents.Contains("DOMContentLoaded"))
+                    {
+                        frame.OnLifecycleEvent("DOMContentLoaded");
+                    }
+
+                    if (string.Equals(targetLifecycleEvent, "load", StringComparison.Ordinal))
+                    {
+                        frame.OnLifecycleEvent("load");
+                    }
                 }
             }
 
-            GotoResult result = await navigateTask.ConfigureAwait(false);
-            string expectedDocumentId = result.NewDocumentId;
-
+            // Already on about:blank navigating to about:blank: do not short-circuit
+            // before NavigateFrameAsync. A Task.Yield replay raced ActionTrace's own
+            // yield and fired Page.Load before parallel WaitForLoadAsync subscribed
+            // (page-basic should fire load / domcontentloaded). Always navigate, then
+            // replay lifecycle after Page.navigate returns when Chromium omits events.
             TaskCompletionSource<bool> lifecycleTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            string expectedDocumentId = null;
+            bool navigationSettled = false;
+            bool sawTargetLifecycle = false;
 
             void OnLifecycle(string name)
             {
+                if (name != targetLifecycleEvent)
+                {
+                    return;
+                }
+
+                // networkidle can fire then be revoked (new request / iframe). Ignore
+                // the event unless it is currently present — same as SetContent.
+                if (string.Equals(targetLifecycleEvent, "networkidle", StringComparison.Ordinal)
+                    && !frame.LifecycleEvents.Contains(targetLifecycleEvent))
+                {
+                    return;
+                }
+
+                if (!navigationSettled)
+                {
+                    // Lifecycle can fire while Page.navigate is still awaiting.
+                    sawTargetLifecycle = true;
+                    return;
+                }
+
                 // Accept only lifecycle events that belong to the navigation we issued.
-                // Stale events from prior documents have a different DocumentId.
-                if (name == targetLifecycleEvent &&
-                    (expectedDocumentId == null || frame.DocumentId == expectedDocumentId))
+                if (expectedDocumentId == null || frame.DocumentId == expectedDocumentId)
                 {
                     lifecycleTcs.TrySetResult(true);
                 }
@@ -2250,13 +2893,30 @@ namespace PlaywrightNative.Chromium
             {
                 if (ReferenceEquals(detached, frame))
                 {
-                    lifecycleTcs.TrySetException(new PlaywrightNativeException("frame was detached"));
+                    lifecycleTcs.TrySetException(new PlaywrightException("frame was detached"));
                 }
             }
 
             void OnNavigated(Frame navigated, string documentId)
             {
                 if (!ReferenceEquals(navigated, frame))
+                {
+                    return;
+                }
+
+                // A new-document commit clears LifecycleEvents. Drop any mid-navigate
+                // sawTargetLifecycle so GoTo cannot resolve on a cleared load when the
+                // commit belongs to a different document than NavigateFrameAsync returned
+                // (GoToShouldClearLifecycleOnNewNavigation). Same-documentId commits after
+                // settle still leave saw set — lifecycleReady then replays live events.
+                if (!string.IsNullOrEmpty(documentId)
+                    && (expectedDocumentId == null
+                        || !string.Equals(documentId, expectedDocumentId, StringComparison.Ordinal)))
+                {
+                    sawTargetLifecycle = false;
+                }
+
+                if (!navigationSettled)
                 {
                     return;
                 }
@@ -2269,12 +2929,17 @@ namespace PlaywrightNative.Chromium
                     return;
                 }
 
-                // A later document committed while we were still waiting for
-                // waitUntil on the original navigation — official page.goto
-                // returns the already-committed response.
+                // Client redirect / meta refresh committed a newer document
+                // before waitUntil on the original navigation. Keep waiting
+                // for the target lifecycle on the latest document (upstream
+                // page.goto does not resolve early on intermediate commits).
                 if (!string.IsNullOrEmpty(documentId) && documentId != expectedDocumentId)
                 {
-                    lifecycleTcs.TrySetResult(true);
+                    expectedDocumentId = documentId;
+                    if (frame.LifecycleEvents.Contains(targetLifecycleEvent))
+                    {
+                        lifecycleTcs.TrySetResult(true);
+                    }
                 }
             }
 
@@ -2284,32 +2949,193 @@ namespace PlaywrightNative.Chromium
                     new TargetClosedException(DriverMessages.BrowserOrContextClosedExceptionMessage));
             }
 
+            void OnCrashed(object sender, EventArgs e)
+            {
+                lifecycleTcs.TrySetException(new PlaywrightException($"{apiName}: Page crashed"));
+            }
+
+            // Subscribe before Page.navigate so about:blank -> about:blank cannot
+            // lose load between navigate returning and the wait starting.
             frame.LifecycleChanged += OnLifecycle;
             _frameManager.FrameDetached += OnDetached;
             _frameManager.FrameNavigated += OnNavigated;
             Closed += OnClosed;
+            Crashed += OnCrashed;
+
+            // Race Page.navigate with the navigation timeout. A hanging server
+            // can keep the CDP command outstanding; official progress.race
+            // aborts the whole goto, not just the lifecycle wait.
+            Task<GotoResult> navigateTask = NavigateFrameAsync(frame, url, referrer);
+            GotoResult result;
+            try
+            {
+                if (waitMs != System.Threading.Timeout.Infinite)
+                {
+                    using System.Threading.CancellationTokenSource navigateCts = new(waitMs);
+                    try
+                    {
+                        await navigateTask.WaitAsync(navigateCts.Token).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        throw NavigationTimeout.Exceeded(apiName, url, NavigationTimeout.WaitUntilName(waitUntil), timeout);
+                    }
+                }
+
+                result = await navigateTask.ConfigureAwait(false);
+            }
+            catch (NavigationException ex) when (IsMitmTunnelAbort(ex))
+            {
+                // Client-cert MITM: Page.navigate can report ERR_SOCKET_NOT_CONNECTED
+                // / ERR_CONNECTION_ABORTED while the SOCKS tunnel is upgraded to the
+                // HTML error document. Settle navigation and give lifecycle a short
+                // grace window before surfacing the abort — GoToFrameCapturingResponse
+                // also recovers via Network when a 503 lands.
+                //
+                // Do NOT treat empty/about:blank OR URL-only matches as committed.
+                // URL-only soft-grace previously returned success without a painted
+                // document, then Expect hung the full NUnit timeout; falling through
+                // into the full lifecycle wait below did the same under parallel load.
+                // Accept only a real lifecycle (or a usable 503 in the recent ring)
+                // and return early on success.
+                expectedDocumentId = ex.DocumentId;
+                navigationSettled = true;
+
+                if (MitmAbortLooksCommitted(frame, url, targetLifecycleEvent, sawTargetLifecycle, ex.DocumentId))
+                {
+                    Crashed -= OnCrashed;
+                    Closed -= OnClosed;
+                    frame.LifecycleChanged -= OnLifecycle;
+                    _frameManager.FrameDetached -= OnDetached;
+                    _frameManager.FrameNavigated -= OnNavigated;
+                    EnsurePromisedLifecycleRecorded();
+                    frame.Url = NavigationTimeout.PreserveUserInfo(url, frame.Url);
+                    return;
+                }
+
+                int graceMs = waitMs == System.Threading.Timeout.Infinite
+                    ? 2_000
+                    : Math.Min(2_000, Math.Max(250, waitMs));
+                System.Diagnostics.Stopwatch graceClock = System.Diagnostics.Stopwatch.StartNew();
+                while (graceClock.ElapsedMilliseconds < graceMs)
+                {
+                    if (MitmAbortLooksCommitted(frame, url, targetLifecycleEvent, sawTargetLifecycle, ex.DocumentId))
+                    {
+                        Crashed -= OnCrashed;
+                        Closed -= OnClosed;
+                        frame.LifecycleChanged -= OnLifecycle;
+                        _frameManager.FrameDetached -= OnDetached;
+                        _frameManager.FrameNavigated -= OnNavigated;
+                        EnsurePromisedLifecycleRecorded();
+                        frame.Url = NavigationTimeout.PreserveUserInfo(url, frame.Url);
+                        return;
+                    }
+
+                    if (lifecycleTcs.Task.IsCompletedSuccessfully
+                        && !string.IsNullOrEmpty(frame.Url)
+                        && !PopupOpenedHelper.IsBlankUrl(frame.Url))
+                    {
+                        Crashed -= OnCrashed;
+                        Closed -= OnClosed;
+                        frame.LifecycleChanged -= OnLifecycle;
+                        _frameManager.FrameDetached -= OnDetached;
+                        _frameManager.FrameNavigated -= OnNavigated;
+                        EnsurePromisedLifecycleRecorded();
+                        frame.Url = NavigationTimeout.PreserveUserInfo(url, frame.Url);
+                        return;
+                    }
+
+                    await Task.WhenAny(lifecycleTcs.Task, Task.Delay(25)).ConfigureAwait(false);
+                }
+
+                Crashed -= OnCrashed;
+                Closed -= OnClosed;
+                frame.LifecycleChanged -= OnLifecycle;
+                _frameManager.FrameDetached -= OnDetached;
+                _frameManager.FrameNavigated -= OnNavigated;
+                ExceptionDispatchInfo.Capture(ex).Throw();
+                throw;
+            }
+
+            expectedDocumentId = result.NewDocumentId;
+            navigationSettled = true;
 
             try
             {
                 if (frame.IsDetached)
                 {
-                    throw new PlaywrightNativeException("frame was detached");
+                    throw new PlaywrightException("frame was detached");
                 }
 
-                // Fast-path: lifecycle may have already fired before we subscribed
-                // (very fast navigation or events processed by the receive loop before
-                // this continuation was scheduled). Subscribe first, then check, to
-                // prevent a window where the event fires between check and subscribe.
-                if ((expectedDocumentId == null || frame.DocumentId == expectedDocumentId) &&
-                    frame.LifecycleEvents.Contains(targetLifecycleEvent) &&
+                // Fast-path: lifecycle may have fired during navigate (sawTargetLifecycle)
+                // or already be present in LifecycleEvents after subscribe.
+                // networkidle is special: a premature idle during Page.navigate can be
+                // revoked when page scripts start fetches — require it currently present
+                // (ShouldWaitForNetworkidleToSucceedNavigation).
+                //
+                // sawTargetLifecycle is cleared on each new-document FrameNavigated so a
+                // load that was wiped by a later commit cannot satisfy this check alone
+                // (GoToShouldClearLifecycleOnNewNavigation).
+                bool networkIdle = string.Equals(targetLifecycleEvent, "networkidle", StringComparison.Ordinal);
+                bool lifecycleReady =
+                    (networkIdle
+                        ? frame.LifecycleEvents.Contains(targetLifecycleEvent)
+                        : (sawTargetLifecycle || frame.LifecycleEvents.Contains(targetLifecycleEvent))) &&
+                    (expectedDocumentId == null || frame.DocumentId == expectedDocumentId) &&
                     (string.IsNullOrEmpty(expectedDocumentId)
                         ? string.Equals(
                             NavigationTimeout.WithoutUserInfo(frame.Url),
                             NavigationTimeout.WithoutUserInfo(url),
                             StringComparison.Ordinal)
-                        : true))
+                        : true);
+
+                // Same-document navigations (including about:blank -> about:blank with a
+                // null loaderId) resolve once navigate returns, but only once frame.Url
+                // actually reflects the target. Page.navigatedWithinDocument (which sets
+                // frame.Url) races with Page.navigate's own return, so resolving here
+                // whenever expectedDocumentId is empty — regardless of lifecycleReady —
+                // could hand back a page.Url that is still the pre-navigation value
+                // (e.g. a fragment navigation reported without its fragment). When the
+                // URL is not settled yet, fall through and let OnNavigated resolve this
+                // once the frame really has the new URL.
+                if (lifecycleReady)
+                {
+                    EnsurePromisedLifecycleRecorded();
+                    ensureLifecycleOnExit = true;
+                    frame.Url = NavigationTimeout.PreserveUserInfo(url, frame.Url);
+                    return;
+                }
+
+                // Chromium often omits a second load when navigating about:blank to
+                // about:blank even though Page.navigate returns a new loaderId.
+                // Frame.Url may still be "" while the public page URL is about:blank.
+                // Replay lifecycle so WaitForLoad / WaitForDOMContentLoaded hear it
+                // (subscriptions from WhenAll are already armed after the navigate hop).
+                if (IsBlankNavigationUrl(url) && IsBlankNavigationUrl(frame.Url))
                 {
                     frame.Url = NavigationTimeout.PreserveUserInfo(url, frame.Url);
+                    await ReplayPageInitScriptsAsync().ConfigureAwait(false);
+                    frame.OnLifecycleEvent("DOMContentLoaded");
+                    frame.OnLifecycleEvent("load");
+                    ensureLifecycleOnExit = true;
+                    return;
+                }
+
+                // data: navigations under suite load can clear a mid-navigate load and
+                // leave only commit without a second Page.loadEventFired. Replay like
+                // about:blank so LifecycleEvents matches what GoTo promised
+                // (GoToShouldClearLifecycleOnNewNavigation).
+                if (!string.IsNullOrEmpty(url)
+                    && url.StartsWith("data:", StringComparison.OrdinalIgnoreCase)
+                    && !string.IsNullOrEmpty(expectedDocumentId)
+                    && string.Equals(frame.DocumentId, expectedDocumentId, StringComparison.Ordinal)
+                    && frame.LifecycleEvents.Contains("commit")
+                    && !frame.LifecycleEvents.Contains(targetLifecycleEvent))
+                {
+                    frame.Url = NavigationTimeout.PreserveUserInfo(url, frame.Url);
+                    frame.OnLifecycleEvent("DOMContentLoaded");
+                    frame.OnLifecycleEvent("load");
+                    ensureLifecycleOnExit = true;
                     return;
                 }
 
@@ -2318,15 +3144,147 @@ namespace PlaywrightNative.Chromium
                     () => lifecycleTcs.TrySetException(
                         NavigationTimeout.Exceeded(apiName, url, NavigationTimeout.WaitUntilName(waitUntil), timeout)));
 
-                await lifecycleTcs.Task.ConfigureAwait(false);
+                if (networkIdle)
+                {
+                    // Keep waiting until networkidle is currently present — a revoked
+                    // idle must not count as success (mirrors SetContentInFrameAsync).
+                    while (!frame.LifecycleEvents.Contains(targetLifecycleEvent))
+                    {
+                        if (lifecycleTcs.Task.IsCompleted)
+                        {
+                            if (lifecycleTcs.Task.IsFaulted || lifecycleTcs.Task.IsCanceled)
+                            {
+                                await lifecycleTcs.Task.ConfigureAwait(false);
+                            }
+
+                            lifecycleTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                        }
+
+                        if (frame.LifecycleEvents.Contains(targetLifecycleEvent))
+                        {
+                            break;
+                        }
+
+                        await lifecycleTcs.Task.ConfigureAwait(false);
+                    }
+                }
+                else
+                {
+                    await lifecycleTcs.Task.ConfigureAwait(false);
+                    EnsurePromisedLifecycleRecorded();
+                }
+
+                ensureLifecycleOnExit = true;
                 frame.Url = NavigationTimeout.PreserveUserInfo(url, frame.Url);
             }
             finally
             {
+                if (ensureLifecycleOnExit)
+                {
+                    EnsurePromisedLifecycleRecorded();
+                }
+
+                Crashed -= OnCrashed;
                 Closed -= OnClosed;
                 frame.LifecycleChanged -= OnLifecycle;
                 _frameManager.FrameDetached -= OnDetached;
                 _frameManager.FrameNavigated -= OnNavigated;
+            }
+
+            static bool IsMitmTunnelAbort(NavigationException ex)
+                => ex?.Message != null
+                    && (ex.Message.Contains("ERR_SOCKET_NOT_CONNECTED", StringComparison.Ordinal)
+                        || ex.Message.Contains("ERR_CONNECTION_ABORTED", StringComparison.Ordinal));
+
+            bool MitmAbortLooksCommitted(
+                Frame targetFrame,
+                string targetUrl,
+                string lifecycleEvent,
+                bool sawLifecycle,
+                string documentId)
+            {
+                if (sawLifecycle || targetFrame.LifecycleEvents.Contains(lifecycleEvent))
+                {
+                    // Still reject blank URLs — a stale load from about:blank must
+                    // not count as the HTTPS MITM error document.
+                    if (!string.IsNullOrEmpty(targetFrame.Url)
+                        && !PopupOpenedHelper.IsBlankUrl(targetFrame.Url))
+                    {
+                        return true;
+                    }
+                }
+
+                if (IsUsableMitmAbortResponse(_lastCommittedNavigationResponse, targetFrame, targetUrl, documentId))
+                {
+                    return true;
+                }
+
+                CRResponse[] recent;
+                lock (_navigationResponseGate)
+                {
+                    recent = _recentNavigationResponses.ToArray();
+                }
+
+                for (int i = recent.Length - 1; i >= 0; i--)
+                {
+                    if (IsUsableMitmAbortResponse(recent[i], targetFrame, targetUrl, documentId)
+                        || IsUsableMitmAbortResponse(recent[i], targetFrame, targetUrl, documentId: null))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            }
+
+            static bool IsUsableMitmAbortResponse(
+                CRResponse response,
+                Frame targetFrame,
+                string targetUrl,
+                string documentId)
+            {
+                if (response == null
+                    || response.Status < 200
+                    || response.Status == 204
+                    || (response.Status >= 300 && response.Status < 400))
+                {
+                    return false;
+                }
+
+                Frame responseFrame = response.Request?.Frame;
+                if (responseFrame != null
+                    && targetFrame != null
+                    && !ReferenceEquals(responseFrame, targetFrame)
+                    && !string.Equals(responseFrame.FrameId, targetFrame.FrameId, StringComparison.Ordinal))
+                {
+                    return false;
+                }
+
+                if (!string.IsNullOrEmpty(documentId)
+                    && response.Request != null
+                    && (string.Equals(response.Request.DocumentId, documentId, StringComparison.Ordinal)
+                        || string.Equals(response.Request.ProtocolRequestId, documentId, StringComparison.Ordinal)))
+                {
+                    return true;
+                }
+
+                if (string.IsNullOrEmpty(targetUrl) || string.IsNullOrEmpty(response.Url))
+                {
+                    return false;
+                }
+
+                if (string.Equals(response.Url, targetUrl, StringComparison.OrdinalIgnoreCase)
+                    || response.Url.StartsWith(targetUrl, StringComparison.OrdinalIgnoreCase)
+                    || targetUrl.StartsWith(response.Url, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+
+                return response.Request != null
+                    && !string.IsNullOrEmpty(response.Request.Url)
+                    && (string.Equals(response.Request.Url, targetUrl, StringComparison.OrdinalIgnoreCase)
+                        || response.Request.Url.StartsWith(targetUrl, StringComparison.OrdinalIgnoreCase)
+                        || targetUrl.StartsWith(response.Request.Url, StringComparison.OrdinalIgnoreCase));
             }
 
             void ThrowIfWebUiWouldCrashIsolatedContext()
@@ -2371,7 +3329,7 @@ namespace PlaywrightNative.Chromium
                         || host.Equals("settings", StringComparison.OrdinalIgnoreCase);
                 if (crashes)
                 {
-                    throw new PlaywrightNativeException(
+                    throw new PlaywrightException(
                         "Cannot navigate to \"" + url + "\": this page is not available in an isolated browser context, and opening it crashes the browser. Use browserType.launchPersistentContext() instead.");
                 }
             }
@@ -2397,12 +3355,49 @@ namespace PlaywrightNative.Chromium
             CRResponse captured = null;
             void OnResponse(object sender, CRResponse response)
             {
-                if (response?.Request != null
-                    && response.Request.IsNavigationRequest
-                    && response.Request.Frame == frame)
+                if (response?.Request == null)
                 {
-                    captured = response;
+                    return;
                 }
+
+                // Prefer navigation requests; also accept Document resources and
+                // CDP main-resource id equality when IsNavigationRequest was not
+                // set (Fetch-paired paths on Windows).
+                if (!response.Request.TracksDocumentNavigation)
+                {
+                    return;
+                }
+
+                Frame responseFrame = response.Request.Frame;
+                if (responseFrame == null)
+                {
+                    return;
+                }
+
+                if (!ReferenceEquals(responseFrame, frame)
+                    && !string.Equals(responseFrame.FrameId, frame?.FrameId, StringComparison.Ordinal))
+                {
+                    return;
+                }
+
+                // Do not let a superseding goto overwrite a FINAL document response
+                // that already matches THIS goto's URL (ShouldReturnFromGotoIfNewNavigationIsStarted
+                // under Windows suite load: EmptyPage lands while first capture still
+                // holds load-event.html's 200).
+                //
+                // Intermediate 3xx responses also match the goto URL, but must be
+                // replaced by the redirect destination — otherwise GoTo returns the
+                // first 302 forever (ShouldWorkWithRedirects /
+                // ShouldReturnLastResponseInRedirectChain).
+                if (captured != null
+                    && IsFinalDocumentCapture(captured)
+                    && ResponseUrlMatchesTarget(captured, url)
+                    && !ResponseUrlMatchesTarget(response, url))
+                {
+                    return;
+                }
+
+                captured = response;
             }
 
             ResponseReceived += OnResponse;
@@ -2413,11 +3408,33 @@ namespace PlaywrightNative.Chromium
                     await GoToFrameAsync(frame, url, waitUntil, timeout, referrer).ConfigureAwait(false);
                 }
                 catch (NavigationException ex) when (
-                    captured != null
-                    && ex.Message != null
-                    && ex.Message.Contains("ERR_HTTP_RESPONSE_CODE_FAILURE", StringComparison.Ordinal))
+                    IsHttpResponseCodeFailure(ex)
+                    && TryRecoverNavigationResponse(frame, url, captured, out CRResponse recoveredCode))
                 {
-                    return captured;
+                    return ResolveRedirectChainEnd(recoveredCode);
+                }
+                catch (NavigationException ex) when (
+                    IsAbortedNavigation(ex)
+                    && TryRecoverNavigationResponse(frame, url, captured, out CRResponse recoveredAbort, ex.DocumentId))
+                {
+                    return ResolveRedirectChainEnd(recoveredAbort);
+                }
+                catch (NavigationException ex) when (IsAbortedNavigation(ex))
+                {
+                    // Pass a getter so late ResponseReceived updates to `captured`
+                    // are visible while we poll (concurrent GoTo overwrites the
+                    // parameter snapshot under Windows suite load).
+                    CRResponse delayed = await RecoverAbortedNavigationResponseAsync(
+                        frame,
+                        url,
+                        ex.DocumentId,
+                        () => captured).ConfigureAwait(false);
+                    if (delayed != null)
+                    {
+                        return ResolveRedirectChainEnd(delayed);
+                    }
+
+                    throw;
                 }
 
                 if (!string.IsNullOrEmpty(url)
@@ -2427,11 +3444,518 @@ namespace PlaywrightNative.Chromium
                     return null;
                 }
 
-                return captured;
+                // Prefer a final document capture for THIS navigation — including
+                // redirect destinations whose URL differs from the goto target but
+                // whose RedirectedFrom chain includes it — before TryRecover's
+                // URL-only scan (which would miss empty.html after /redirect/1.html).
+                CRResponse fromCapture = ResolveRedirectChainEnd(captured);
+                if (IsFinalDocumentCapture(fromCapture)
+                    && CaptureBelongsToFrame(fromCapture, frame)
+                    && (ResponseUrlMatchesTarget(fromCapture, url)
+                        || ResponseUrlMatchesTarget(captured, url)
+                        || RedirectChainIncludesTarget(fromCapture, url)))
+                {
+                    return fromCapture;
+                }
+
+                // Prefer a response that still matches the original goto URL. A
+                // superseding navigation may have overwritten `captured` while
+                // ERR_ABORTED-with-loaderId was treated as a successful navigate.
+                if (TryRecoverNavigationResponse(frame, url, captured, out CRResponse preferred)
+                    && preferred != null)
+                {
+                    return ResolveRedirectChainEnd(preferred);
+                }
+
+                return fromCapture;
             }
             finally
             {
                 ResponseReceived -= OnResponse;
+            }
+
+            static bool IsHttpResponseCodeFailure(NavigationException ex)
+                => ex?.Message != null
+                    && ex.Message.Contains("ERR_HTTP_RESPONSE_CODE_FAILURE", StringComparison.Ordinal);
+
+            static bool IsAbortedNavigation(NavigationException ex)
+                => ex?.Message != null
+                    && (ex.Message.Contains("ERR_ABORTED", StringComparison.Ordinal)
+                        || ex.Message.Contains("ERR_CONNECTION_ABORTED", StringComparison.Ordinal)
+
+                        // MITM client-cert error page: origin handshake aborts the
+                        // SOCKS tunnel before the HTML error response is observed
+                        // (BrowserShouldNotHangOnTlsErrorsDuringTls12Handshake).
+                        || ex.Message.Contains("ERR_SOCKET_NOT_CONNECTED", StringComparison.Ordinal));
+
+            async Task<CRResponse> RecoverAbortedNavigationResponseAsync(
+                Frame targetFrame,
+                string targetUrl,
+                string documentId,
+                Func<CRResponse> fromEvent)
+            {
+                if (TryRecoverNavigationResponse(targetFrame, targetUrl, fromEvent?.Invoke(), out CRResponse recovered, documentId)
+                    && recovered != null)
+                {
+                    return recovered;
+                }
+
+                // Page.navigate ERR_ABORTED can beat Network.responseReceived under
+                // Windows suite load. Resolve by loaderId / URL and await the
+                // response, but keep polling the recent ring in parallel — the
+                // loaderId may point at an aborted stub while the committed
+                // document response lands on a different request id.
+                System.Diagnostics.Stopwatch clock = System.Diagnostics.Stopwatch.StartNew();
+                Task<CRResponse> pendingWait = null;
+                CRResponse lateByUrl = null;
+
+                // Dedicated URL filter: the shared `captured` cell is still
+                // overwritten by a superseding goto's OnResponse under load even
+                // after we prefer same-URL captures; keep an independent latch.
+                void OnLateTargetResponse(object sender, CRResponse response)
+                {
+                    if (response != null
+                        && IsUsableNavigationResponse(response, targetFrame, targetUrl, documentId: null)
+                        && ResponseUrlMatchesTarget(response, targetUrl))
+                    {
+                        lateByUrl = response;
+                    }
+                }
+
+                ResponseReceived += OnLateTargetResponse;
+                try
+                {
+                    // Snapshot the event response before the superseding goto can
+                    // overwrite the shared `captured` cell under Windows suite load
+                    // (ShouldReturnFromGotoIfNewNavigationIsStarted /
+                    // BrowserShouldNotHangOnTlsErrorsDuringTls12Handshake).
+                    CRResponse eventSnapshot = fromEvent?.Invoke();
+                    if (TryRecoverNavigationResponse(targetFrame, targetUrl, eventSnapshot, out recovered, documentId)
+                        && recovered != null)
+                    {
+                        return recovered;
+                    }
+
+                    if (TryRecoverNavigationResponse(
+                            targetFrame,
+                            targetUrl,
+                            eventSnapshot,
+                            out recovered,
+                            documentId: null)
+                        && recovered != null
+                        && ResponseUrlMatchesTarget(recovered, targetUrl))
+                    {
+                        return recovered;
+                    }
+
+                    if (lateByUrl != null)
+                    {
+                        return lateByUrl;
+                    }
+
+                    // 8s: MITM error-page AuthenticateAsServer + concurrent-goto
+                    // response commit both lag under Windows headful suite load past
+                    // the prior 5s budget (ERR_CONNECTION_ABORTED / ERR_ABORTED).
+                    while (clock.ElapsedMilliseconds < 8_000)
+                    {
+                        if (lateByUrl != null)
+                        {
+                            return lateByUrl;
+                        }
+
+                        if (TryRecoverNavigationResponse(targetFrame, targetUrl, fromEvent?.Invoke() ?? eventSnapshot, out recovered, documentId)
+                            && recovered != null)
+                        {
+                            return recovered;
+                        }
+
+                        // Under Windows suite load Page.navigate's loaderId can disagree
+                        // with Network's document id after a superseding goto aborts the
+                        // first navigation. Always retry URL-only against the recent ring
+                        // so ShouldReturnFromGotoIfNewNavigationIsStarted and MITM
+                        // client-cert error pages (ERR_SOCKET_NOT_CONNECTED) still recover.
+                        if (TryRecoverNavigationResponse(
+                                targetFrame,
+                                targetUrl,
+                                fromEvent?.Invoke() ?? eventSnapshot,
+                                out recovered,
+                                documentId: null)
+                            && recovered != null
+                            && ResponseUrlMatchesTarget(recovered, targetUrl))
+                        {
+                            return recovered;
+                        }
+
+                        // Prefer a URL-matched request when loaderId points at an
+                        // aborted stub: otherwise WaitForResponseAsync completes with
+                        // null and we never adopt the committed document response.
+                        CRRequest request = null;
+                        if (_networkManager.TryFindNavigationRequest(documentId: null, targetFrame, targetUrl, out CRRequest byUrl)
+                            && byUrl?.Response != null
+                            && IsUsableNavigationResponse(byUrl.Response, targetFrame, targetUrl, documentId: null)
+                            && ResponseUrlMatchesTarget(byUrl.Response, targetUrl))
+                        {
+                            return byUrl.Response;
+                        }
+
+                        if (_networkManager.TryFindNavigationRequest(documentId, targetFrame, targetUrl, out request)
+                            && request != null)
+                        {
+                            if (request.Response is CRResponse ready
+                                && IsUsableNavigationResponse(ready, targetFrame, targetUrl, documentId))
+                            {
+                                return ready;
+                            }
+
+                            if (request.Response is CRResponse readyByUrl
+                                && IsUsableNavigationResponse(readyByUrl, targetFrame, targetUrl, documentId: null)
+                                && ResponseUrlMatchesTarget(readyByUrl, targetUrl))
+                            {
+                                return readyByUrl;
+                            }
+
+                            // Arm a wait on an in-flight URL match first; fall back to
+                            // the loaderId candidate only when it has not failed yet.
+                            if (pendingWait == null)
+                            {
+                                CRRequest waitTarget = null;
+                                if (byUrl != null
+                                    && byUrl.Response == null
+                                    && string.IsNullOrEmpty(byUrl.FailureText))
+                                {
+                                    waitTarget = byUrl;
+                                }
+                                else if (request.Response == null
+                                    && string.IsNullOrEmpty(request.FailureText))
+                                {
+                                    waitTarget = request;
+                                }
+
+                                if (waitTarget != null)
+                                {
+                                    pendingWait = waitTarget.WaitForResponseAsync();
+                                }
+                            }
+                        }
+
+                        if (pendingWait != null && pendingWait.IsCompleted)
+                        {
+                            try
+                            {
+                                CRResponse awaited = await pendingWait.ConfigureAwait(false);
+                                if (IsUsableNavigationResponse(awaited, targetFrame, targetUrl, documentId))
+                                {
+                                    return awaited;
+                                }
+
+                                if (IsUsableNavigationResponse(awaited, targetFrame, targetUrl, documentId: null)
+                                    && ResponseUrlMatchesTarget(awaited, targetUrl))
+                                {
+                                    return awaited;
+                                }
+                            }
+                            catch (PlaywrightException)
+                            {
+                            }
+                            catch (TimeoutException)
+                            {
+                            }
+
+                            pendingWait = null;
+                        }
+
+                        await Task.Delay(25).ConfigureAwait(false);
+                    }
+
+                    if (lateByUrl != null)
+                    {
+                        return lateByUrl;
+                    }
+
+                    if (pendingWait != null)
+                    {
+                        try
+                        {
+                            Task finished = await Task.WhenAny(pendingWait, Task.Delay(1)).ConfigureAwait(false);
+                            if (finished == pendingWait)
+                            {
+                                CRResponse awaited = await pendingWait.ConfigureAwait(false);
+                                if (IsUsableNavigationResponse(awaited, targetFrame, targetUrl, documentId))
+                                {
+                                    return awaited;
+                                }
+
+                                if (IsUsableNavigationResponse(awaited, targetFrame, targetUrl, documentId: null)
+                                    && ResponseUrlMatchesTarget(awaited, targetUrl))
+                                {
+                                    return awaited;
+                                }
+                            }
+                        }
+                        catch (PlaywrightException)
+                        {
+                        }
+                        catch (TimeoutException)
+                        {
+                        }
+                    }
+
+                    if (TryRecoverNavigationResponse(targetFrame, targetUrl, fromEvent?.Invoke(), out recovered, documentId)
+                        && recovered != null)
+                    {
+                        return recovered;
+                    }
+
+                    if (TryRecoverNavigationResponse(
+                            targetFrame,
+                            targetUrl,
+                            fromEvent?.Invoke(),
+                            out recovered,
+                            documentId: null)
+                        && recovered != null
+                        && ResponseUrlMatchesTarget(recovered, targetUrl))
+                    {
+                        return recovered;
+                    }
+
+                    return null;
+                }
+                finally
+                {
+                    ResponseReceived -= OnLateTargetResponse;
+                }
+            }
+
+            static bool ResponseUrlMatchesTarget(CRResponse response, string targetUrl)
+            {
+                if (response == null || string.IsNullOrEmpty(targetUrl))
+                {
+                    return false;
+                }
+
+                if (NavigationUrlsMatch(response.Url, targetUrl))
+                {
+                    return true;
+                }
+
+                return response.Request != null
+                    && NavigationUrlsMatch(response.Request.Url, targetUrl);
+            }
+
+            static bool IsFinalDocumentCapture(CRResponse response)
+            {
+                if (response == null)
+                {
+                    return false;
+                }
+
+                int status = response.Status;
+                return status >= 200
+                    && status != 204
+                    && (status < 300 || status >= 400);
+            }
+
+            static bool CaptureBelongsToFrame(CRResponse response, Frame targetFrame)
+            {
+                Frame responseFrame = response?.Request?.Frame;
+                if (responseFrame == null || targetFrame == null)
+                {
+                    return responseFrame == null && targetFrame == null;
+                }
+
+                return ReferenceEquals(responseFrame, targetFrame)
+                    || string.Equals(responseFrame.FrameId, targetFrame.FrameId, StringComparison.Ordinal);
+            }
+
+            static bool RedirectChainIncludesTarget(CRResponse response, string targetUrl)
+            {
+                if (response?.Request == null || string.IsNullOrEmpty(targetUrl))
+                {
+                    return false;
+                }
+
+                CRRequest current = response.Request;
+                int guard = 0;
+                while (current != null && guard++ < 32)
+                {
+                    if (NavigationUrlsMatch(current.Url, targetUrl))
+                    {
+                        return true;
+                    }
+
+                    current = current.RedirectedFrom;
+                }
+
+                return false;
+            }
+
+            static CRResponse ResolveRedirectChainEnd(CRResponse response)
+            {
+                if (response?.Request == null)
+                {
+                    return response;
+                }
+
+                CRRequest current = response.Request;
+                int guard = 0;
+                while (current.RedirectedTo != null && guard++ < 32)
+                {
+                    current = current.RedirectedTo;
+                }
+
+                return current.Response ?? response;
+            }
+
+            bool TryRecoverNavigationResponse(
+                Frame targetFrame,
+                string targetUrl,
+                CRResponse fromEvent,
+                out CRResponse recovered,
+                string documentId = null)
+            {
+                recovered = fromEvent;
+                if (!IsUsableNavigationResponse(recovered, targetFrame, targetUrl, documentId)
+                    && IsUsableNavigationResponse(_lastCommittedNavigationResponse, targetFrame, targetUrl, documentId))
+                {
+                    recovered = _lastCommittedNavigationResponse;
+                }
+
+                // A superseding goto overwrites _lastCommitted before the aborted
+                // goto's catch runs (ShouldReturnFromGotoIfNewNavigationIsStarted).
+                // Search recent commits so the first navigation can still recover.
+                if (!IsUsableNavigationResponse(recovered, targetFrame, targetUrl, documentId))
+                {
+                    CRResponse[] recent;
+                    lock (_navigationResponseGate)
+                    {
+                        recent = _recentNavigationResponses.ToArray();
+                    }
+
+                    for (int i = recent.Length - 1; i >= 0; i--)
+                    {
+                        if (IsUsableNavigationResponse(recent[i], targetFrame, targetUrl, documentId))
+                        {
+                            recovered = recent[i];
+                            break;
+                        }
+                    }
+                }
+
+                return IsUsableNavigationResponse(recovered, targetFrame, targetUrl, documentId);
+            }
+
+            static bool IsUsableNavigationResponse(
+                CRResponse response,
+                Frame targetFrame,
+                string targetUrl,
+                string documentId = null)
+            {
+                // Accept final document statuses (2xx, 4xx, 5xx) including 401 from
+                // cancelled HTTP auth and 503 MITM client-certificate error pages.
+                // Skip only redirects (3xx) and 204 — rejecting 401 made cross-process
+                // auth goto recover a prior localhost 200 after 127.0.0.1→localhost
+                // URL normalization (credentials origin tests).
+                if (response == null
+                    || response.Status < 200
+                    || (response.Status >= 300 && response.Status < 400)
+                    || response.Status == 204)
+                {
+                    return false;
+                }
+
+                Frame responseFrame = response.Request?.Frame;
+                if (responseFrame != null
+                    && targetFrame != null
+                    && !ReferenceEquals(responseFrame, targetFrame)
+                    && !string.Equals(responseFrame.FrameId, targetFrame.FrameId, StringComparison.Ordinal))
+                {
+                    return false;
+                }
+
+                // Prefer loaderId match: Page.navigate ERR_ABORTED carries the
+                // committed document's loaderId while response.Url can disagree
+                // on slash / host form under Windows suite load
+                // (ShouldReturnFromGotoIfNewNavigationIsStarted).
+                if (!string.IsNullOrEmpty(documentId)
+                    && response.Request != null
+                    && (string.Equals(response.Request.DocumentId, documentId, StringComparison.Ordinal)
+                        || string.Equals(response.Request.ProtocolRequestId, documentId, StringComparison.Ordinal)))
+                {
+                    return true;
+                }
+
+                if (string.IsNullOrEmpty(targetUrl))
+                {
+                    return string.IsNullOrEmpty(documentId);
+                }
+
+                if (NavigationUrlsMatch(response.Url, targetUrl))
+                {
+                    return true;
+                }
+
+                return response.Request != null
+                    && NavigationUrlsMatch(response.Request.Url, targetUrl);
+            }
+
+            static bool NavigationUrlsMatch(string left, string right)
+            {
+                if (string.IsNullOrEmpty(left) || string.IsNullOrEmpty(right))
+                {
+                    return false;
+                }
+
+                if (string.Equals(left, right, StringComparison.OrdinalIgnoreCase)
+                    || left.StartsWith(right, StringComparison.OrdinalIgnoreCase)
+                    || right.StartsWith(left, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+
+                string normalizedLeft = NormalizeNavigationUrl(left);
+                string normalizedRight = NormalizeNavigationUrl(right);
+                if (string.IsNullOrEmpty(normalizedLeft) || string.IsNullOrEmpty(normalizedRight))
+                {
+                    return false;
+                }
+
+                return string.Equals(normalizedLeft, normalizedRight, StringComparison.OrdinalIgnoreCase)
+                    || normalizedLeft.StartsWith(normalizedRight, StringComparison.OrdinalIgnoreCase)
+                    || normalizedRight.StartsWith(normalizedLeft, StringComparison.OrdinalIgnoreCase);
+            }
+
+            static string NormalizeNavigationUrl(string url)
+            {
+                if (string.IsNullOrEmpty(url))
+                {
+                    return url;
+                }
+
+                string withoutHash = NavigationTimeout.WithoutHash(url);
+                string withoutUser = NavigationTimeout.WithoutUserInfo(withoutHash);
+                if (!Uri.TryCreate(withoutUser, UriKind.Absolute, out Uri uri))
+                {
+                    return withoutUser.TrimEnd('/');
+                }
+
+                string host = uri.Host;
+                if (string.Equals(host, "127.0.0.1", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(host, "::1", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(host, "[::1]", StringComparison.OrdinalIgnoreCase))
+                {
+                    host = "localhost";
+                }
+
+                string path = uri.AbsolutePath;
+                if (path.Length > 1)
+                {
+                    path = path.TrimEnd('/');
+                }
+
+                return uri.Scheme + "://" + host
+                    + (uri.IsDefaultPort ? string.Empty : ":" + uri.Port.ToString(System.Globalization.CultureInfo.InvariantCulture))
+                    + path
+                    + uri.Query;
             }
         }
 
@@ -2519,7 +4043,7 @@ namespace PlaywrightNative.Chromium
                 IReadOnlyCollection<string> lifecycle = main.LifecycleEvents;
                 if (!lifecycle.Contains("DOMContentLoaded") && !lifecycle.Contains("load"))
                 {
-                    throw new PlaywrightNativeException("Cannot take a screenshot while page is navigating");
+                    throw new PlaywrightException("Cannot take a screenshot while page is navigating");
                 }
             }
 
@@ -2550,7 +4074,7 @@ namespace PlaywrightNative.Chromium
                         .ConfigureAwait(false);
                     if (!response.HasValue || !response.Value.TryGetProperty("data", out JsonElement data))
                     {
-                        throw new PlaywrightNativeException("Page.captureScreenshot returned no data.");
+                        throw new PlaywrightException("Page.captureScreenshot returned no data.");
                     }
 
                     string base64 = data.GetString();
@@ -2558,7 +4082,7 @@ namespace PlaywrightNative.Chromium
                 }
                 catch (Exception ex) when (
                     ex is TimeoutException
-                    || (ex is PlaywrightNativeException
+                    || (ex is PlaywrightException
                         && (ex.Message.Contains("Not attached to an active page", StringComparison.Ordinal)
                             || ex.Message.Contains("Cannot take screenshot with 0 width", StringComparison.Ordinal)
                             || ex.Message.Contains("Cannot take screenshot with 0 height", StringComparison.Ordinal)
@@ -2568,7 +4092,7 @@ namespace PlaywrightNative.Chromium
                 {
                     if (attempt >= 20)
                     {
-                        throw new PlaywrightNativeException(navigating);
+                        throw new PlaywrightException(navigating);
                     }
 
                     await Task.Delay(50).ConfigureAwait(false);
@@ -2686,7 +4210,7 @@ namespace PlaywrightNative.Chromium
 
             if (!response.HasValue || !response.Value.TryGetProperty("data", out JsonElement data))
             {
-                throw new PlaywrightNativeException("Page.printToPDF returned no data.");
+                throw new PlaywrightException("Page.printToPDF returned no data.");
             }
 
             string base64 = data.GetString();
@@ -2910,7 +4434,7 @@ namespace PlaywrightNative.Chromium
                     acceptLanguage,
                 }).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 // Older Chromium builds only expose Emulation.setUserAgentOverride.
             }
@@ -3004,11 +4528,11 @@ namespace PlaywrightNative.Chromium
             {
                 await _client.SendAsync("Emulation.setTimezoneOverride", new { timezoneId = _timezoneOverride }).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException ex) when (
+            catch (PlaywrightException ex) when (
                 ex.Message.Contains("timezone", StringComparison.OrdinalIgnoreCase)
                 || ex.Message.Contains("time zone", StringComparison.OrdinalIgnoreCase))
             {
-                throw new PlaywrightNativeException("Invalid timezone ID: " + timezoneId);
+                throw new PlaywrightException("Invalid timezone ID: " + timezoneId);
             }
 
             await SendToOopifSessionsAsync("Emulation.setTimezoneOverride", new { timezoneId = _timezoneOverride }).ConfigureAwait(false);
@@ -3080,7 +4604,7 @@ namespace PlaywrightNative.Chromium
             {
                 latitude = geolocation.Latitude,
                 longitude = geolocation.Longitude,
-                accuracy = geolocation.Accuracy,
+                accuracy = geolocation.Accuracy ?? 0f,
             });
         }
 
@@ -3271,7 +4795,83 @@ namespace PlaywrightNative.Chromium
         /// Called by <see cref="CRNetworkManager"/> when a network response is received.
         /// </summary>
         /// <param name="response">The response that was received.</param>
-        internal void OnResponseReceived(CRResponse response) => ResponseReceived?.Invoke(this, response);
+        internal void OnResponseReceived(CRResponse response)
+        {
+            if (response?.Request != null
+                && response.Status != 204
+                && response.Request.TracksDocumentNavigation)
+            {
+                RememberCommittedNavigationResponse(response);
+            }
+
+            ResponseReceived?.Invoke(this, response);
+        }
+
+        /// <summary>
+        /// Latches a document response into the concurrent-goto recovery ring.
+        /// Used when Fetch promotes a request after <c>responseReceived</c> already
+        /// fired without <see cref="CRRequest.TracksDocumentNavigation"/>.
+        /// </summary>
+        /// <param name="response">A committed document response.</param>
+        internal void LatchCommittedNavigationResponse(CRResponse response)
+            => RememberCommittedNavigationResponse(response);
+
+        /// <summary>
+        /// Marks an in-flight <c>Page.navigate</c> as having observed
+        /// <c>Network.requestWillBeSent</c> for its document (or a matching
+        /// main-frame GET). Used so a superseding goto can wait until the peer
+        /// has started before aborting it.
+        /// </summary>
+        /// <param name="frame">Frame that owns the request.</param>
+        /// <param name="url">Request URL.</param>
+        /// <param name="loaderId">CDP loader id when known.</param>
+        /// <param name="isDocumentNavigation">Whether the request tracks a document navigation.</param>
+        internal void NoteFrameNavigateRequest(Frame frame, string url, string loaderId, bool isDocumentNavigation)
+        {
+            if (!isDocumentNavigation || frame == null)
+            {
+                return;
+            }
+
+            string frameId = frame.FrameId;
+            InFlightFrameNavigate[] peers;
+            lock (_inflightFrameNavigateGate)
+            {
+                peers = _inflightFrameNavigates.ToArray();
+            }
+
+            for (int i = 0; i < peers.Length; i++)
+            {
+                peers[i].NoteRequestIfMatches(frameId, url, loaderId);
+            }
+        }
+
+        /// <summary>
+        /// A JavaScript dialog can only open after a real document commit. Mark
+        /// that commit so <see cref="Page.IsClientInitialized"/> and popup
+        /// <c>reportAsNew</c> are not stuck waiting on <c>frameNavigated</c>
+        /// while Chrome stalls CDP behind the open dialog. No-op for blank /
+        /// <c>javascript:</c> URLs (official omits <c>dialog.page</c> until
+        /// <c>reportAsNew</c>).
+        /// </summary>
+        /// <returns>
+        /// <see langword="true"/> when a non-blank, non-<c>javascript:</c> commit was marked.
+        /// </returns>
+        internal bool NoteDialogOpened()
+        {
+            string url = MainFrame?.Url ?? string.Empty;
+            if (string.IsNullOrEmpty(url)
+                || PopupOpenedHelper.IsInitialEmptyDocumentUrl(url)
+                || PopupOpenedHelper.IsBlankUrl(url)
+                || url.StartsWith("javascript:", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            HasCommittedNonInitialNavigation = true;
+            _firstNonInitialNavigationTcs.TrySetResult(true);
+            return true;
+        }
 
         /// <summary>
         /// Invoked by <see cref="CRBrowser"/> when a new target whose <c>openerId</c>
@@ -3291,6 +4891,9 @@ namespace PlaywrightNative.Chromium
         /// <summary>
         /// Official popup <c>reportAsNew</c>: wait for init, then for a
         /// non-blank URL so <c>target=_blank</c> reports the navigated page.
+        /// Chromium noopener + URL attaches with an empty URL and navigates
+        /// afterward; do not emit until a live main-world context exists for
+        /// that document (otherwise evaluate races <c>executionContextDestroyed</c>).
         /// </summary>
         /// <returns>A task that completes when the popup can be reported.</returns>
         internal async Task PrepareForPopupReportAsync()
@@ -3311,16 +4914,50 @@ namespace PlaywrightNative.Chromium
                 return;
             }
 
-            if (!PopupOpenedHelper.IsBlankUrl(_frameManager.MainFrame?.Url))
+            // Wait for the first non-initial commit (about:blank counts). Then give
+            // window.open(url) a short grace to replace blank with the destination.
+            // Do not wait 5s on a committed about:blank — that is a valid final URL
+            // (PopupPageShouldBeUsable / OpenerAsync use a 5s CTS).
+            string url = _frameManager.MainFrame?.Url;
+            if (PopupOpenedHelper.IsInitialEmptyDocumentUrl(url))
+            {
+                await Task.WhenAny(
+                        _firstNonInitialNavigationTcs.Task,
+                        _closedTcs.Task,
+                        Task.Delay(5_000))
+                    .ConfigureAwait(false);
+            }
+
+            if (_closedTcs.Task.IsCompleted)
             {
                 return;
             }
 
-            await Task.WhenAny(
-                    _firstNonBlankNavigationTcs.Task,
-                    _closedTcs.Task,
-                    Task.Delay(5_000))
-                .ConfigureAwait(false);
+            if (PopupOpenedHelper.IsBlankUrl(_frameManager.MainFrame?.Url)
+                && !_firstNonBlankNavigationTcs.Task.IsCompleted)
+            {
+                await Task.WhenAny(
+                        _firstNonBlankNavigationTcs.Task,
+                        _closedTcs.Task,
+                        Task.Delay(500))
+                    .ConfigureAwait(false);
+            }
+
+            if (_closedTcs.Task.IsCompleted)
+            {
+                return;
+            }
+
+            try
+            {
+                await WaitForExecutionContextAsync(5_000).ConfigureAwait(false);
+            }
+#pragma warning disable RCS1075
+            catch (Exception)
+#pragma warning restore RCS1075
+            {
+                // Closed or never got a context — still report (closed popups emit).
+            }
         }
 
         /// <summary>
@@ -3338,8 +4975,13 @@ namespace PlaywrightNative.Chromium
         /// <param name="waitAfter">When <see langword="false"/>, skip the wait.</param>
         /// <param name="timeout">Click timeout in milliseconds.</param>
         /// <param name="action">The pointer action.</param>
+        /// <param name="expectNavigation">
+        /// When <see langword="true"/>, keep speculative navigation retains armed for
+        /// form/link clicks so auto-wait does not return before the document request
+        /// (ShouldAwaitFormGetOnClick under Windows suite load).
+        /// </param>
         /// <returns>A task that completes when the action and wait finish.</returns>
-        internal Task RunWithSignalsAsync(bool waitAfter, float? timeout, Func<Task> action)
+        internal Task RunWithSignalsAsync(bool waitAfter, float? timeout, Func<Task> action, bool expectNavigation = false)
             => ActionSignals.RunAsync(
                 _frameManager.Signals,
                 InputActionEpilogueAsync,
@@ -3347,7 +4989,8 @@ namespace PlaywrightNative.Chromium
                 timeout,
                 action,
                 PublicPage,
-                CommitLiveSameDocumentUrl);
+                CommitLiveSameDocumentUrl,
+                expectNavigation);
 
         private void CommitLiveSameDocumentUrl(string url)
         {
@@ -3365,7 +5008,7 @@ namespace PlaywrightNative.Chromium
             {
                 return await session.SendAsync("DOM.describeNode", new { objectId }).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 return null;
             }
@@ -3484,7 +5127,7 @@ namespace PlaywrightNative.Chromium
             {
                 await session.SendAsync(method, parameters).WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
             catch (TimeoutException)
@@ -3612,7 +5255,7 @@ namespace PlaywrightNative.Chromium
                     history = await _client.SendAsync("Page.getNavigationHistory").ConfigureAwait(false);
                     break;
                 }
-                catch (PlaywrightNativeException ex) when (
+                catch (PlaywrightException ex) when (
                     attempt < attempts - 1
                     && ex.Message != null
                     && ex.Message.Contains("Not attached to an active page", StringComparison.OrdinalIgnoreCase))
@@ -3727,7 +5370,74 @@ namespace PlaywrightNative.Chromium
             }
 
             _crashed = true;
+            _client.MarkCrashed();
             Crashed?.Invoke(this, EventArgs.Empty);
+        }
+
+        /// <summary>
+        /// Official Chromium crash probe is <c>chrome://crash</c>. On some Windows
+        /// headful hosts <c>Inspector.targetCrashed</c> is delayed or omitted; arm a
+        /// <c>Page.crash</c> fallback (same idea as WebKit's EnsureCrashReported).
+        /// </summary>
+        private void ArmChromeCrashFallback()
+        {
+            _ = EnsureChromeCrashReportedAsync();
+        }
+
+        private async Task EnsureChromeCrashReportedAsync()
+        {
+            try
+            {
+                await Task.Delay(750).ConfigureAwait(false);
+            }
+            catch (ObjectDisposedException)
+            {
+                return;
+            }
+
+            // Page may have closed between arming and the delay (Windows headful
+            // crash probes). Never Page.crash a recycled or closed session.
+            if (_crashed || _client.IsClosed || _closedTcs.Task.IsCompleted)
+            {
+                return;
+            }
+
+            try
+            {
+                // Do not await: Page.crash kills the renderer before an ack arrives.
+                _ = _client.SendAsync("Page.crash");
+            }
+            catch (PlaywrightException)
+            {
+            }
+
+            try
+            {
+                await Task.Delay(1_000).ConfigureAwait(false);
+            }
+            catch (ObjectDisposedException)
+            {
+                return;
+            }
+
+            // After an explicit Page.crash, silence means the protocol dropped
+            // Inspector.targetCrashed (Windows headful). Same fallback as WebKit.
+            if (!_crashed && !_client.IsClosed && !_closedTcs.Task.IsCompleted)
+            {
+                OnInspectorTargetCrashed();
+            }
+        }
+
+        private bool IsChromiumCrashUrl(string url)
+        {
+            if (string.IsNullOrEmpty(url))
+            {
+                return false;
+            }
+
+            return url.StartsWith("chrome://crash", StringComparison.OrdinalIgnoreCase)
+                || url.StartsWith("chrome://kill", StringComparison.OrdinalIgnoreCase)
+                || url.StartsWith("chrome://hang", StringComparison.OrdinalIgnoreCase);
         }
 
         private void OnAttachedToTarget(JsonElement? parameters)
@@ -3784,7 +5494,19 @@ namespace PlaywrightNative.Chromium
 
             worker.ExceptionThrown += (_, error) => PageError?.Invoke(this, error);
             child.MessageReceived += OnWorkerSessionMessage;
-            _ = AttachWorkerAndReportAsync(worker, parentFrameId);
+
+            // Start Network.enable before any async yield from this attach
+            // handler. PlzDedicatedWorker may finish the main script on this
+            // session while we are still scheduling AttachWorkerAndReportAsync.
+            Frame ownerFrame = !string.IsNullOrEmpty(parentFrameId)
+                ? _frameManager.FrameById(parentFrameId)
+                : null;
+            Task networkTask = _networkManager.AddWorkerSessionAsync(
+                child,
+                ownerFrame ?? MainFrame,
+                isWorker: true,
+                parentFrameId);
+            _ = AttachWorkerAndReportAsync(worker, parentFrameId, networkTask);
         }
 
         private void OnWorkerSessionMessage(string method, JsonElement? parameters)
@@ -3801,28 +5523,57 @@ namespace PlaywrightNative.Chromium
             }
         }
 
-        private async Task AttachWorkerAndReportAsync(CRWorker worker, string parentFrameId)
+        private async Task AttachWorkerAndReportAsync(CRWorker worker, string parentFrameId, Task networkTask = null)
         {
             try
             {
-                await worker.EnableRuntimeAsync().ConfigureAwait(false);
-                Frame ownerFrame = !string.IsNullOrEmpty(parentFrameId)
-                    ? _frameManager.FrameById(parentFrameId)
-                    : null;
-                await _networkManager.AddWorkerSessionAsync(
-                    worker.Session,
-                    ownerFrame ?? MainFrame,
-                    isWorker: true,
-                    parentFrameId).ConfigureAwait(false);
+                // Network.enable was already sent from OnAttachedToTarget /
+                // AttachChildWorker. Await it before resume so loadingFinished
+                // on this PlzDedicatedWorker session is not missed; Runtime.enable
+                // is best-effort and must not delay Network.
+                if (networkTask != null)
+                {
+                    await networkTask.ConfigureAwait(false);
+                }
+                else
+                {
+                    Frame ownerFrame = !string.IsNullOrEmpty(parentFrameId)
+                        ? _frameManager.FrameById(parentFrameId)
+                        : null;
+                    await _networkManager.AddWorkerSessionAsync(
+                        worker.Session,
+                        ownerFrame ?? MainFrame,
+                        isWorker: true,
+                        parentFrameId).ConfigureAwait(false);
+                }
+
+                try
+                {
+                    await worker.EnableRuntimeAsync().ConfigureAwait(false);
+                }
+                catch (PlaywrightException)
+                {
+                    // Official session._sendMayFail('Runtime.enable').
+                }
+
                 try
                 {
                     await worker.Session.SendAsync(
                         "Target.setAutoAttach",
                         new { autoAttach = true, waitForDebuggerOnStart = true, flatten = true }).ConfigureAwait(false);
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                     // Nested-worker auto-attach is best-effort on older Chrome.
+                }
+
+                // Official: below Chromium 143 there is no Inspector.workerScriptLoaded
+                // event, so evaluate() only ever waited on the execution context.
+                // From 143 on, CRWorker's own message handler resolves once both
+                // the context exists and this event has fired.
+                if (ChromiumMajorVersion() < 143)
+                {
+                    worker.MarkScriptLoadedImmediately();
                 }
 
                 // Official adds the worker before resume so page.console listeners
@@ -3830,11 +5581,24 @@ namespace PlaywrightNative.Chromium
                 WorkerCreated?.Invoke(this, worker);
                 await worker.ResumeDebuggerAsync().ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 // The worker may close before domains are enabled.
                 WorkerCreated?.Invoke(this, worker);
             }
+        }
+
+        private int ChromiumMajorVersion()
+        {
+            string version = _browser.Version;
+            if (string.IsNullOrEmpty(version))
+            {
+                return int.MaxValue;
+            }
+
+            int dot = version.IndexOf('.', StringComparison.Ordinal);
+            string major = dot >= 0 ? version.Substring(0, dot) : version;
+            return int.TryParse(major, out int value) ? value : int.MaxValue;
         }
 
         private void OnDetachedFromTarget(JsonElement? parameters)
@@ -4071,7 +5835,7 @@ namespace PlaywrightNative.Chromium
             JsonElement p = parameters.Value;
 
             // DevTools replays buffered logs with executionContextId = 0 after
-            // Runtime.enable. Those objects are already gone (puppeteer#3865).
+            // Runtime.enable. Those objects are already gone.
             if (p.TryGetProperty("executionContextId", out JsonElement ctxIdEl)
                 && ctxIdEl.TryGetInt32(out int replayContextId)
                 && replayContextId == 0)
@@ -4210,6 +5974,7 @@ namespace PlaywrightNative.Chromium
 
             if (_contextIdToContext.TryRemove(contextId, out CRExecutionContext context))
             {
+                context.MarkDestroyed();
                 foreach (Frame frame in _frameManager.Frames)
                 {
                     if (frame.ExecutionContext == context)
@@ -4222,6 +5987,11 @@ namespace PlaywrightNative.Chromium
 
         private void OnExecutionContextsCleared()
         {
+            foreach (KeyValuePair<int, CRExecutionContext> entry in _contextIdToContext)
+            {
+                entry.Value.MarkDestroyed();
+            }
+
             _contextIdToContext.Clear();
             foreach (Frame frame in _frameManager.Frames)
             {
@@ -4309,6 +6079,7 @@ namespace PlaywrightNative.Chromium
                 Frame before = _frameManager.FrameById(frameId) ?? _frameManager.MainFrame;
                 string previousDocumentId = before?.DocumentId;
                 _frameManager.FrameCommittedNewDocumentNavigation(frameId, url ?? string.Empty, name ?? string.Empty, loaderId);
+                RecordFrameNavigationCommit(frameId, url, loaderId);
                 Frame navigated = _frameManager.FrameById(frameId) ?? _frameManager.MainFrame;
                 if (navigated != null && navigated.ParentFrame == null
                     && !string.Equals(navigated.DocumentId, previousDocumentId, StringComparison.Ordinal))
@@ -4495,6 +6266,8 @@ namespace PlaywrightNative.Chromium
                     return true;
                 }
 
+                // Official popup.spec: context "page" precedes exposeFunction callback.
+                ReportPopupBeforeBinding();
                 Task<object> invoked = handler(args);
                 _ = Task.Run(() => DeliverInvokedBindingAsync(invoked, executionContextId, seq));
                 return true;
@@ -4504,6 +6277,32 @@ namespace PlaywrightNative.Chromium
                 _ = Task.Run(() => DeliverBindingErrorAsync(executionContextId, seq, ex));
                 return true;
             }
+        }
+
+        private void ReportPopupBeforeBinding()
+        {
+            if (Opener == null || PublicPage == null)
+            {
+                return;
+            }
+
+            ChromiumBrowserContext context = PublicPage.Context as ChromiumBrowserContext
+                ?? _browser.DefaultContext?.PublicContext
+                ?? FindOwningPublicContext();
+            context?.ReportPopupAsNew(PublicPage);
+        }
+
+        private ChromiumBrowserContext FindOwningPublicContext()
+        {
+            foreach (CRBrowserContext context in _browser.Contexts)
+            {
+                if (context.Pages.Contains(this) && context.PublicContext != null)
+                {
+                    return context.PublicContext;
+                }
+            }
+
+            return null;
         }
 
         private async Task DeliverInvokedBindingAsync(Task<object> invoked, int executionContextId, long seq)
@@ -4545,6 +6344,7 @@ namespace PlaywrightNative.Chromium
                         return;
                     }
 
+                    ReportPopupBeforeBinding();
                     CRExecutionContext context = new CRExecutionContext(_client, executionContextId);
                     JsonElement? handleValue = await context.EvaluateHandleAsync(PageBindingScript.TakeHandleExpression(seq)).ConfigureAwait(false);
                     CRJSHandle jsHandle = WrapJSHandle(context, handleValue);
@@ -4570,6 +6370,7 @@ namespace PlaywrightNative.Chromium
                     return;
                 }
 
+                ReportPopupBeforeBinding();
                 object result = await handler(args).ConfigureAwait(false);
                 await DeliverBindingResultAsync(executionContextId, seq, result).ConfigureAwait(false);
             }
@@ -4658,7 +6459,7 @@ namespace PlaywrightNative.Chromium
 
                     await context.EvaluateAsync<object>(expression).WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
                 catch (TimeoutException)
@@ -4681,7 +6482,7 @@ namespace PlaywrightNative.Chromium
                     awaitPromise = false,
                 }).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 // Best-effort delivery — the execution context may have been destroyed
                 // by a navigation between the call and the response.
@@ -4789,13 +6590,29 @@ namespace PlaywrightNative.Chromium
 
         private async Task WaitForFirstNonInitialNavigationAsync()
         {
-            await SyncMainFrameFromTreeAsync().ConfigureAwait(false);
+            // Frame commit may already have signaled (inline prompt popups). Skip
+            // Page.getFrameTree when done — Chrome stalls CDP replies while a
+            // JavaScript dialog is open.
             if (_firstNonInitialNavigationTcs.Task.IsCompleted)
             {
                 return;
             }
 
-            await Task.WhenAny(_firstNonInitialNavigationTcs.Task, Task.Delay(500)).ConfigureAwait(false);
+            // Bound getFrameTree: an in-flight Page.getFrameTree after prompt()
+            // never returns until the dialog is handled, which deadlocks
+            // InitializeAsync → reportAsNew → WaitForPage (inline-script popup).
+            await Task.WhenAny(SyncMainFrameFromTreeAsync(), Task.Delay(250)).ConfigureAwait(false);
+            if (_firstNonInitialNavigationTcs.Task.IsCompleted)
+            {
+                return;
+            }
+
+            // Popups (especially noopener + URL) resume then navigate; under
+            // load the first commit can land after 500ms. Wait longer before
+            // synthesizing about:blank so reportAsNew does not race the real
+            // document's execution context swap.
+            int waitMs = Opener != null ? 5_000 : 500;
+            await Task.WhenAny(_firstNonInitialNavigationTcs.Task, Task.Delay(waitMs)).ConfigureAwait(false);
             if (_firstNonInitialNavigationTcs.Task.IsCompleted)
             {
                 return;
@@ -4819,7 +6636,7 @@ namespace PlaywrightNative.Chromium
             {
                 response = await _client.SendAsync("Page.getFrameTree").ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 return;
             }
@@ -4841,6 +6658,338 @@ namespace PlaywrightNative.Chromium
             }
 
             MarkFirstNonInitialNavigation(url);
+        }
+
+        /// <summary>
+        /// Records a <c>Page.frameNavigated</c> commit so concurrent-goto
+        /// <c>ERR_ABORTED</c> recovery can treat the document as committed even
+        /// when <c>Network.responseReceived</c> was dropped from the ring under
+        /// Windows suite load (ShouldReturnFromGotoIfNewNavigationIsStarted).
+        /// </summary>
+        /// <param name="frameId">CDP frame id.</param>
+        /// <param name="url">Committed URL.</param>
+        /// <param name="loaderId">CDP loader id.</param>
+        private void RecordFrameNavigationCommit(string frameId, string url, string loaderId)
+        {
+            if (string.IsNullOrEmpty(loaderId) && string.IsNullOrEmpty(url))
+            {
+                return;
+            }
+
+            if (!string.IsNullOrEmpty(url)
+                && (url.StartsWith("javascript:", StringComparison.OrdinalIgnoreCase)
+                    || PopupOpenedHelper.IsBlankUrl(url)))
+            {
+                return;
+            }
+
+            Frame frame = !string.IsNullOrEmpty(frameId)
+                ? _frameManager.FrameById(frameId) ?? _frameManager.MainFrame
+                : _frameManager.MainFrame;
+
+            // Latch any already-known document response into the recent ring so
+            // TryAccept / RecoverAborted can still return status 200 after the
+            // Network request map entry is removed on abort.
+            if (_networkManager.TryFindNavigationRequest(loaderId, frame, url, out CRRequest byLoader)
+                && byLoader?.Response is CRResponse ready
+                && ready.Status != 204)
+            {
+                RememberCommittedNavigationResponse(ready);
+            }
+            else if (_networkManager.TryFindNavigationRequest(documentId: null, frame, url, out CRRequest byUrl)
+                && byUrl?.Response is CRResponse readyByUrl
+                && readyByUrl.Status != 204)
+            {
+                RememberCommittedNavigationResponse(readyByUrl);
+            }
+
+            NoteFrameNavigateCommit(frameId, url, loaderId);
+
+            lock (_frameCommitGate)
+            {
+                _recentFrameCommits.Add(new FrameNavigationCommit(frameId, url, loaderId));
+                while (_recentFrameCommits.Count > 16)
+                {
+                    _recentFrameCommits.RemoveAt(0);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Ensures <paramref name="response"/> stays visible to goto abort recovery.
+        /// </summary>
+        /// <param name="response">A committed document response.</param>
+        private void RememberCommittedNavigationResponse(CRResponse response)
+        {
+            if (response == null || response.Status == 204)
+            {
+                return;
+            }
+
+            _lastCommittedNavigationResponse = response;
+            lock (_navigationResponseGate)
+            {
+                for (int i = 0; i < _recentNavigationResponses.Count; i++)
+                {
+                    if (ReferenceEquals(_recentNavigationResponses[i], response))
+                    {
+                        return;
+                    }
+                }
+
+                _recentNavigationResponses.Add(response);
+                while (_recentNavigationResponses.Count > 16)
+                {
+                    _recentNavigationResponses.RemoveAt(0);
+                }
+            }
+        }
+
+        private void NoteFrameNavigateCommit(string frameId, string url, string loaderId)
+        {
+            InFlightFrameNavigate[] peers;
+            lock (_inflightFrameNavigateGate)
+            {
+                peers = _inflightFrameNavigates.ToArray();
+            }
+
+            for (int i = 0; i < peers.Length; i++)
+            {
+                peers[i].NoteCommitIfMatches(frameId, url, loaderId);
+            }
+        }
+
+        private InFlightFrameNavigate BeginFrameNavigate(Frame frame, string url)
+        {
+            InFlightFrameNavigate inflight = new InFlightFrameNavigate(frame?.FrameId, url);
+            lock (_inflightFrameNavigateGate)
+            {
+                _inflightFrameNavigates.Add(inflight);
+            }
+
+            return inflight;
+        }
+
+        private void EndFrameNavigate(InFlightFrameNavigate inflight)
+        {
+            if (inflight == null)
+            {
+                return;
+            }
+
+            inflight.MarkCompleted();
+            lock (_inflightFrameNavigateGate)
+            {
+                _inflightFrameNavigates.Remove(inflight);
+            }
+        }
+
+        private async Task WaitForPeerFrameNavigateReadyAsync(Frame frame)
+        {
+            string frameId = frame?.FrameId;
+            if (string.IsNullOrEmpty(frameId))
+            {
+                return;
+            }
+
+            InFlightFrameNavigate[] peers;
+            lock (_inflightFrameNavigateGate)
+            {
+                peers = _inflightFrameNavigates.ToArray();
+            }
+
+            for (int i = 0; i < peers.Length; i++)
+            {
+                InFlightFrameNavigate peer = peers[i];
+                if (!peer.MatchesFrame(frameId) || peer.IsCompleted)
+                {
+                    continue;
+                }
+
+                // Peer has not reached the network yet: wait until it does (or
+                // commits / finishes) so we do not abort a navigate that never
+                // started under suite load.
+                if (!peer.HasSeenRequest && !peer.HasCommitted)
+                {
+                    await Task.WhenAny(
+                            peer.RequestSeenTask,
+                            peer.CommittedTask,
+                            peer.CompletedTask,
+                            Task.Delay(3_000))
+                        .ConfigureAwait(false);
+                }
+
+                if (peer.IsCompleted || peer.HasCommitted)
+                {
+                    continue;
+                }
+
+                // Request is in flight but document not committed yet. Give a
+                // short grace for normal HTML commits; hung cancel/replace peers
+                // time out here and we proceed so ERR_ABORTED still surfaces.
+                if (peer.HasSeenRequest && !peer.HasCommitted)
+                {
+                    await Task.WhenAny(
+                            peer.CommittedTask,
+                            peer.CompletedTask,
+                            Task.Delay(2_000))
+                        .ConfigureAwait(false);
+                }
+            }
+        }
+
+        private readonly struct FrameNavigationCommit
+        {
+            internal FrameNavigationCommit(string frameId, string url, string loaderId)
+            {
+                FrameId = frameId ?? string.Empty;
+                Url = url ?? string.Empty;
+                LoaderId = loaderId ?? string.Empty;
+            }
+
+            internal string FrameId { get; }
+
+            internal string Url { get; }
+
+            internal string LoaderId { get; }
+        }
+
+        private sealed class InFlightFrameNavigate
+        {
+            private readonly string _frameId;
+            private readonly string _url;
+            private readonly TaskCompletionSource<bool> _requestSeenTcs =
+                new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            private readonly TaskCompletionSource<bool> _committedTcs =
+                new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            private readonly TaskCompletionSource<bool> _completedTcs =
+                new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            private string _loaderId;
+
+            internal InFlightFrameNavigate(string frameId, string url)
+            {
+                _frameId = frameId ?? string.Empty;
+                _url = url ?? string.Empty;
+            }
+
+            internal bool HasSeenRequest => _requestSeenTcs.Task.IsCompletedSuccessfully;
+
+            internal bool HasCommitted => _committedTcs.Task.IsCompletedSuccessfully;
+
+            internal bool IsCompleted => _completedTcs.Task.IsCompletedSuccessfully;
+
+            internal Task RequestSeenTask => _requestSeenTcs.Task;
+
+            internal Task CommittedTask => _committedTcs.Task;
+
+            internal Task CompletedTask => _completedTcs.Task;
+
+            internal bool MatchesFrame(string frameId)
+                => !string.IsNullOrEmpty(frameId)
+                    && string.Equals(_frameId, frameId, StringComparison.Ordinal);
+
+            internal void NoteLoaderId(string loaderId)
+            {
+                if (!string.IsNullOrEmpty(loaderId))
+                {
+                    _loaderId = loaderId;
+                }
+            }
+
+            internal void NoteRequestIfMatches(string frameId, string url, string loaderId)
+            {
+                if (!MatchesFrame(frameId))
+                {
+                    return;
+                }
+
+                if (!string.IsNullOrEmpty(loaderId)
+                    && !string.IsNullOrEmpty(_loaderId)
+                    && string.Equals(loaderId, _loaderId, StringComparison.Ordinal))
+                {
+                    _requestSeenTcs.TrySetResult(true);
+                    return;
+                }
+
+                if (UrlsLikelyMatch(_url, url))
+                {
+                    _requestSeenTcs.TrySetResult(true);
+                    if (!string.IsNullOrEmpty(loaderId) && string.IsNullOrEmpty(_loaderId))
+                    {
+                        _loaderId = loaderId;
+                    }
+                }
+            }
+
+            internal void NoteCommitIfMatches(string frameId, string url, string loaderId)
+            {
+                if (!MatchesFrame(frameId))
+                {
+                    return;
+                }
+
+                if (!string.IsNullOrEmpty(loaderId)
+                    && !string.IsNullOrEmpty(_loaderId)
+                    && string.Equals(loaderId, _loaderId, StringComparison.Ordinal))
+                {
+                    _requestSeenTcs.TrySetResult(true);
+                    _committedTcs.TrySetResult(true);
+                    return;
+                }
+
+                if (UrlsLikelyMatch(_url, url))
+                {
+                    _requestSeenTcs.TrySetResult(true);
+                    _committedTcs.TrySetResult(true);
+                    if (!string.IsNullOrEmpty(loaderId) && string.IsNullOrEmpty(_loaderId))
+                    {
+                        _loaderId = loaderId;
+                    }
+                }
+            }
+
+            internal void MarkCompleted()
+            {
+                _requestSeenTcs.TrySetResult(true);
+                _committedTcs.TrySetResult(true);
+                _completedTcs.TrySetResult(true);
+            }
+
+            private static bool UrlsLikelyMatch(string left, string right)
+            {
+                if (string.IsNullOrEmpty(left) || string.IsNullOrEmpty(right))
+                {
+                    return false;
+                }
+
+                if (string.Equals(left, right, StringComparison.OrdinalIgnoreCase)
+                    || left.StartsWith(right, StringComparison.OrdinalIgnoreCase)
+                    || right.StartsWith(left, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+
+                try
+                {
+                    if (!Uri.TryCreate(left, UriKind.Absolute, out Uri leftUri)
+                        || !Uri.TryCreate(right, UriKind.Absolute, out Uri rightUri))
+                    {
+                        return false;
+                    }
+
+                    return string.Equals(
+                        leftUri.AbsolutePath.TrimEnd('/'),
+                        rightUri.AbsolutePath.TrimEnd('/'),
+                        StringComparison.OrdinalIgnoreCase);
+                }
+                catch (UriFormatException)
+                {
+                    return false;
+                }
+            }
         }
     }
 }

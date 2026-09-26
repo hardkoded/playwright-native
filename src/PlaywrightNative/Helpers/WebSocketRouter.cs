@@ -20,6 +20,7 @@ using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -821,7 +822,7 @@ namespace PlaywrightNative.Helpers
             {
                 await frame.EvaluateAsync(script).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
             catch (ObjectDisposedException)
@@ -869,7 +870,7 @@ namespace PlaywrightNative.Helpers
             {
                 await EnsurePageTaggedAsync(page).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
         }
@@ -902,7 +903,7 @@ namespace PlaywrightNative.Helpers
                 {
                     await page.EvaluateAsync(assign).ConfigureAwait(false);
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
             }
@@ -912,7 +913,7 @@ namespace PlaywrightNative.Helpers
             {
                 await page.EvaluateAsync(WebSocketRouteScript.Injector).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
 
@@ -927,7 +928,7 @@ namespace PlaywrightNative.Helpers
                 {
                     await frame.EvaluateAsync(WebSocketRouteScript.Injector).ConfigureAwait(false);
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
             }
@@ -949,7 +950,7 @@ namespace PlaywrightNative.Helpers
             {
                 await frame.EvaluateAsync(WebSocketRouteScript.Injector).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
         }
@@ -977,7 +978,7 @@ namespace PlaywrightNative.Helpers
             {
                 await page.EvaluateAsync(WebSocketRouteScript.Injector).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
         }

@@ -21,6 +21,7 @@ using System.Globalization;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 
@@ -161,7 +162,7 @@ namespace PlaywrightNative.Tests
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
 
             await page.Screencast.StartAsync(_ => Task.CompletedTask).ConfigureAwait(false);
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => page.Screencast.StartAsync(_ => Task.CompletedTask));
             Assert.That(error, Is.Not.Null);
             Assert.That(error.Message, Does.Contain("Screencast is already started"));
@@ -296,7 +297,7 @@ namespace PlaywrightNative.Tests
             await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
             await page.Screencast.StartAsync(new() { Path = video1 }).ConfigureAwait(false);
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => page.Screencast.StartAsync(new() { Path = video2 }));
             Assert.That(error, Is.Not.Null);
             Assert.That(error.Message, Does.Contain("Screencast is already started"));

@@ -19,6 +19,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Text;
 using System.Text.Json;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -122,12 +123,12 @@ namespace PlaywrightNative.Helpers
         {
             if (PredefinedNames.Contains(name))
             {
-                throw new PlaywrightNativeException("selectors.register: \"" + name + "\" is a predefined selector engine");
+                throw new PlaywrightException("selectors.register: \"" + name + "\" is a predefined selector engine");
             }
 
             if (!Engines.TryAdd(name, script))
             {
-                throw new PlaywrightNativeException("selectors.register: \"" + name + "\" selector engine has been already registered");
+                throw new PlaywrightException("selectors.register: \"" + name + "\" selector engine has been already registered");
             }
 
             ContentScript[name] = contentScript;
@@ -194,7 +195,7 @@ namespace PlaywrightNative.Helpers
             if (first.StartsWith("internal:has=", StringComparison.Ordinal)
                 || string.Equals(first, "internal:has", StringComparison.Ordinal))
             {
-                throw new PlaywrightNativeException("\"internal:has\" selector cannot be first");
+                throw new PlaywrightException("\"internal:has\" selector cannot be first");
             }
 
             if (SelectorQuery.NeedsChainEngine(selector))

@@ -19,6 +19,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -58,13 +59,15 @@ namespace PlaywrightNative.WebKit
         private Dictionary<string, string> _extraHttpHeaders;
         private ViewportSize _viewport;
         private string _userAgent;
+        private string _defaultSafariUserAgent;
+        private bool _defaultSafariUaInitInstalled;
         private string _locale;
         private string _timezoneId;
         private bool _offline;
-        private ColorScheme _colorScheme;
-        private ReducedMotion _reducedMotion;
-        private ForcedColors _forcedColors;
-        private Contrast _contrast;
+        private ColorScheme _colorScheme = ColorScheme.Null;
+        private ReducedMotion _reducedMotion = ReducedMotion.Null;
+        private ForcedColors _forcedColors = ForcedColors.Null;
+        private Contrast _contrast = Contrast.Null;
         private bool _hasTouch;
         private bool _bypassCsp;
         private Geolocation _geolocation;
@@ -83,6 +86,7 @@ namespace PlaywrightNative.WebKit
         private bool _creatingStorageStatePage;
         private string _closeReason;
         private LocaleHandshakeProxy _localeHandshake;
+        private WebKitMacProxyBypassShim _macProxyBypassShim;
         private ClientCertificatesProxy _clientCertificatesProxy;
         private IReadOnlyList<ClientCertificate> _clientCertificates;
         private Proxy _proxy;
@@ -225,7 +229,8 @@ namespace PlaywrightNative.WebKit
         }
 
         /// <inheritdoc/>
-        IReadOnlyDictionary<string, string> IHasExtraHttpHeaders.ExtraHttpHeaders => _extraHttpHeaders;
+        IReadOnlyDictionary<string, string> IHasExtraHttpHeaders.ExtraHttpHeaders
+            => BuildExtraHeaders() ?? _extraHttpHeaders;
 
         IReadOnlyCollection<string> IHasStorageStateInternals.VisitedOrigins
         {
@@ -261,7 +266,13 @@ namespace PlaywrightNative.WebKit
         /// <inheritdoc/>
         IReadOnlyList<ClientCertificate> IHasClientCertificates.ClientCertificates => _clientCertificates;
 
-        Proxy IHasProxy.Proxy => _clientCertificatesProxy != null ? _apiRequestProxy : _proxy;
+        // Locale handshake and client-certificate MITM proxies are browser-only.
+        // APIRequest must see the caller proxy (often null); routing HttpClient through
+        // LocaleHandshakeProxy truncates chunked localhost responses into "socket hang up".
+        Proxy IHasProxy.Proxy =>
+            _clientCertificatesProxy != null || _localeHandshake != null
+                ? _apiRequestProxy
+                : _proxy;
 
         /// <summary>
         /// Proxy passed to <c>Playwright.createContext</c>.
@@ -271,6 +282,17 @@ namespace PlaywrightNative.WebKit
             get => _proxy;
             set => _proxy = value;
         }
+
+        /// <summary>
+        /// Listen port of the locale-handshake or client-certificate proxy
+        /// attached to this context, when present. WebKit reports this as
+        /// <c>metrics.remoteAddress</c> for proxied destinations.
+        /// </summary>
+        internal int? InternalProxyPort
+            => _macProxyBypassShim?.Port
+                ?? (_localeHandshake != null
+                    ? _localeHandshake.Port
+                    : _clientCertificatesProxy?.Port);
 
         /// <summary>
         /// Gets the owning WebKit browser instance.
@@ -302,6 +324,31 @@ namespace PlaywrightNative.WebKit
         /// (<c>FullScreenEnabled</c>, input types, <c>window.orientation</c>).
         /// </summary>
         internal bool IsMobile => _isMobile;
+
+        /// <summary>
+        /// Gets a value indicating whether this context emulates offline mode.
+        /// </summary>
+        internal bool IsOffline => _offline;
+
+        /// <summary>
+        /// Whether <c>javaScriptEnabled: false</c> was set on this context.
+        /// </summary>
+        internal bool IsJavaScriptDisabled => _javaScriptDisabled;
+
+        /// <summary>
+        /// Context viewport override, or <see langword="null"/> for no default viewport.
+        /// </summary>
+        internal ViewportSize EmulatedViewport => _viewport;
+
+        /// <summary>
+        /// Context device scale factor, or <see langword="null"/>.
+        /// </summary>
+        internal float? EmulatedDeviceScaleFactor => _deviceScaleFactor;
+
+        /// <summary>
+        /// Context <c>screen</c> size override, or <see langword="null"/>.
+        /// </summary>
+        internal ScreenSize EmulatedScreenSize => _screenSize;
 
         /// <summary>
         /// Official <c>browser.newPage()</c> marks the context so a second
@@ -494,16 +541,20 @@ namespace PlaywrightNative.WebKit
 
         /// <inheritdoc/>
         public Task AddCookiesAsync(IEnumerable<Cookie> cookies)
-            => string.IsNullOrEmpty(_browserContextId)
+        {
+            IEnumerable<Cookie> cookiesForProtocol = ExpandLoopbackCookiesForMacWsShim(
+                FilterCookiesForWebKitHost(cookies));
+            return string.IsNullOrEmpty(_browserContextId)
                 ? _browser.Session.SendAsync("Playwright.setCookies", new
                 {
-                    cookies = ContextCookies.ToProtocol(cookies, webKit: true),
+                    cookies = ContextCookies.ToProtocol(cookiesForProtocol, webKit: true),
                 })
                 : _browser.Session.SendAsync("Playwright.setCookies", new
                 {
-                    cookies = ContextCookies.ToProtocol(cookies, webKit: true),
+                    cookies = ContextCookies.ToProtocol(cookiesForProtocol, webKit: true),
                     browserContextId = _browserContextId,
                 });
+        }
 
         /// <inheritdoc/>
         public Task ClearCookiesAsync()
@@ -531,7 +582,132 @@ namespace PlaywrightNative.WebKit
                     browserContextId = _browserContextId,
                 }).ConfigureAwait(false);
 
-            return ContextCookies.FilterByUrls(ContextCookies.FromProtocol(result, webKit: true), urls);
+            IReadOnlyList<BrowserContextCookiesResult> cookies =
+                ContextCookies.FromProtocol(result, webKit: true);
+            cookies = HideMacWsShimCookies(cookies);
+
+            // Linux WebKit can leave Playwright.getAllCookies holding a stale
+            // empty-name cookie value after document.cookie = '=…' under suite
+            // load. Prefer the live document.cookie unnamed value so a
+            // Cookies→AddCookies roundtrip (ShouldAllowUnnamedCookies) does not
+            // resurrect the protocol-stale value. Darwin already treats unnamed
+            // cookies as invisible in document.cookie, so skip there.
+            if (cookies.Count > 0 && !RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+            {
+                bool hasUnnamed = false;
+                for (int i = 0; i < cookies.Count; i++)
+                {
+                    if (cookies[i] != null && string.IsNullOrEmpty(cookies[i].Name))
+                    {
+                        hasUnnamed = true;
+                        break;
+                    }
+                }
+
+                if (hasUnnamed)
+                {
+                    Dictionary<string, string> liveUnnamedByHost =
+                        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                    foreach (WKPage page in WKPages)
+                    {
+                        if (page == null || page.IsClosed)
+                        {
+                            continue;
+                        }
+
+                        string pageUrl = page.Url;
+                        if (string.IsNullOrEmpty(pageUrl)
+                            || !Uri.TryCreate(pageUrl, UriKind.Absolute, out Uri pageUri)
+                            || string.IsNullOrEmpty(pageUri.Host))
+                        {
+                            continue;
+                        }
+
+                        try
+                        {
+                            string live = await page.EvaluateAsync<string>("document.cookie")
+                                .ConfigureAwait(false);
+                            string unnamed = ExtractUnnamedCookieValue(live);
+                            if (!string.IsNullOrEmpty(unnamed))
+                            {
+                                liveUnnamedByHost[pageUri.Host] = unnamed;
+                            }
+                        }
+                        catch (PlaywrightException)
+                        {
+                        }
+                    }
+
+                    if (liveUnnamedByHost.Count > 0)
+                    {
+                        List<BrowserContextCookiesResult> reconciled =
+                            new List<BrowserContextCookiesResult>(cookies.Count);
+                        for (int i = 0; i < cookies.Count; i++)
+                        {
+                            BrowserContextCookiesResult cookie = cookies[i];
+                            if (cookie == null
+                                || !string.IsNullOrEmpty(cookie.Name)
+                                || string.IsNullOrEmpty(cookie.Domain))
+                            {
+                                reconciled.Add(cookie);
+                                continue;
+                            }
+
+                            string host = cookie.Domain.TrimStart('.');
+                            if (liveUnnamedByHost.TryGetValue(host, out string liveValue)
+                                && !string.Equals(liveValue, cookie.Value, StringComparison.Ordinal))
+                            {
+                                reconciled.Add(new BrowserContextCookiesResult
+                                {
+                                    Name = cookie.Name,
+                                    Value = liveValue,
+                                    Domain = cookie.Domain,
+                                    Path = cookie.Path,
+                                    Expires = cookie.Expires,
+                                    HttpOnly = cookie.HttpOnly,
+                                    Secure = cookie.Secure,
+                                    SameSite = cookie.SameSite,
+                                    PartitionKey = cookie.PartitionKey,
+                                });
+                            }
+                            else
+                            {
+                                reconciled.Add(cookie);
+                            }
+                        }
+
+                        cookies = reconciled;
+                    }
+                }
+            }
+
+            return ContextCookies.FilterByUrls(cookies, urls);
+
+            // Empty-name cookies appear in document.cookie as a bare value (no name=).
+            static string ExtractUnnamedCookieValue(string documentCookie)
+            {
+                if (string.IsNullOrEmpty(documentCookie))
+                {
+                    return null;
+                }
+
+                string[] parts = documentCookie.Split(';');
+                for (int i = 0; i < parts.Length; i++)
+                {
+                    string part = parts[i].Trim();
+                    if (part.Length == 0)
+                    {
+                        continue;
+                    }
+
+                    if (part.IndexOf('=') < 0)
+                    {
+                        return part;
+                    }
+                }
+
+                return null;
+            }
         }
 
         /// <inheritdoc/>
@@ -580,15 +756,40 @@ namespace PlaywrightNative.WebKit
                 throw ClosedTarget.Exception("Context has been closed.", _closeReason);
             }
 
-            WKPage page = await NewWKPageAsync().ConfigureAwait(false);
-            page.OwnerContext = this;
-            await ApplyContextChromeAsync(page).ConfigureAwait(false);
+            // Darwin pageProxyDestroyed can race NewPage chrome apply after a
+            // successful InitializedTask (SyncBootstrap / setBootstrapScript).
+            // Soft-tolerate the closed page once, then retry so callers that need
+            // a live page (credentials NewPage) are not handed a dead proxy.
+            // Intentionally closed during init (InitializedTask faulted) still
+            // returns the closed page for ShouldCloseAllBelongingPages*.
+            WKPage page = null;
+            for (int attempt = 0; attempt < 2; attempt++)
+            {
+                page = await NewWKPageAsync().ConfigureAwait(false);
+                page.OwnerContext = this;
+                bool initSucceeded = page.InitializedTask.IsCompletedSuccessfully;
+                await ApplyContextChromeAsync(page).ConfigureAwait(false);
+                if (!page.IsClosed || !initSucceeded || attempt > 0)
+                {
+                    return page;
+                }
+
+                // Chromium-style: drop the dead proxy and open a replacement.
+                try
+                {
+                    await page.CloseAsync().ConfigureAwait(false);
+                }
+                catch (PlaywrightException)
+                {
+                }
+            }
+
             return page;
         }
 
         /// <inheritdoc/>
         public Task<ICDPSession> NewCDPSessionAsync(IPage page)
-            => throw new PlaywrightNativeException("CDP sessions are only supported in Chromium.");
+            => throw new PlaywrightException("CDP sessions are only supported in Chromium.");
 
         /// <inheritdoc/>
         public Task<T> WaitForEventAsync<T>(PlaywrightEvent<T> contextEvent, Func<T, bool> predicate = null, float? timeout = null)
@@ -666,17 +867,8 @@ namespace PlaywrightNative.WebKit
             GeolocationValidator.Validate(geolocation);
             _geolocation = geolocation;
             await SetGeolocationOverrideAsync(geolocation).ConfigureAwait(false);
-            foreach (WKPage page in WKPages)
-            {
-                try
-                {
-                    await page.SetGeolocationOverrideAsync(geolocation).ConfigureAwait(false);
-                }
-                catch (PlaywrightNativeException)
-                {
-                    // Page-proxy override is optional when Playwright.setGeolocationOverride applied.
-                }
-            }
+
+            // Official WebKit applies geolocation only via Playwright.setGeolocationOverride.
         }
 
         /// <inheritdoc/>
@@ -748,6 +940,16 @@ namespace PlaywrightNative.WebKit
             }
 
             _closeReason = reason;
+
+            // Abort in-flight APIRequest before HAR/video flush. Keep _closed false
+            // until after page close reasons are stamped so HAR body fallbacks still
+            // work under load (see FlushHarQuietlyAsync below).
+            APIRequestContext.AbortFor(this);
+
+            // Flush HAR before stamping close reasons onto pages/sessions so
+            // page-body fallbacks and getResponseBody can still run under load.
+            Exception harError = await FlushHarQuietlyAsync().ConfigureAwait(false);
+
             lock (_pages)
             {
                 foreach (WKPage page in _pages)
@@ -756,10 +958,11 @@ namespace PlaywrightNative.WebKit
                 }
             }
 
-            Exception harError = await FlushHarQuietlyAsync().ConfigureAwait(false);
             await VideoRecorder.FlushAsync(this).ConfigureAwait(false);
             _localeHandshake?.Dispose();
             _localeHandshake = null;
+            _macProxyBypassShim?.Dispose();
+            _macProxyBypassShim = null;
             _clientCertificatesProxy?.Dispose();
             _clientCertificatesProxy = null;
             _closed = true;
@@ -822,6 +1025,7 @@ namespace PlaywrightNative.WebKit
             }
 
             _closed = true;
+            APIRequestContext.AbortFor(this);
             Close?.Invoke(this, this);
         }
 
@@ -871,7 +1075,7 @@ namespace PlaywrightNative.WebKit
 
                 if (string.IsNullOrEmpty(pageProxyId))
                 {
-                    throw new PlaywrightNativeException("Playwright.createPage did not return a pageProxyId.");
+                    throw new PlaywrightException("Playwright.createPage did not return a pageProxyId.");
                 }
 
                 // Decide-and-register atomically against AddPage so the pageProxyCreated event
@@ -890,7 +1094,19 @@ namespace PlaywrightNative.WebKit
                 // If the pageProxyCreated event already fired, claim it from the early-arrival map.
                 if (earlyPage != null)
                 {
-                    await earlyPage.InitializedTask.ConfigureAwait(false);
+                    try
+                    {
+                        await earlyPage.InitializedTask.ConfigureAwait(false);
+                    }
+#pragma warning disable RCS1075
+                    catch (Exception)
+#pragma warning restore RCS1075
+                    {
+                        // Official reportAsNew: init can fail if the page closes
+                        // during bootstrap (ShouldCloseAllBelongingPages*). Still
+                        // hand the page back so CloseAsync can finish cleaning up.
+                    }
+
                     await WaitAndReportAsNewAsync(earlyPage).ConfigureAwait(false);
                     return earlyPage;
                 }
@@ -906,7 +1122,16 @@ namespace PlaywrightNative.WebKit
                     throw;
                 }
 
-                await page.InitializedTask.ConfigureAwait(false);
+                try
+                {
+                    await page.InitializedTask.ConfigureAwait(false);
+                }
+#pragma warning disable RCS1075
+                catch (Exception)
+#pragma warning restore RCS1075
+                {
+                }
+
                 await WaitAndReportAsNewAsync(page).ConfigureAwait(false);
                 return page;
             }
@@ -947,18 +1172,15 @@ namespace PlaywrightNative.WebKit
             if (_geolocation != null)
             {
                 await SetGeolocationOverrideAsync(_geolocation).ConfigureAwait(false);
-                try
-                {
-                    await page.SetGeolocationOverrideAsync(_geolocation).ConfigureAwait(false);
-                }
-                catch (PlaywrightNativeException)
-                {
-                }
             }
 
             if (!string.IsNullOrEmpty(_userAgent))
             {
                 await page.SetUserAgentAsync(_userAgent).ConfigureAwait(false);
+            }
+            else
+            {
+                await EnsureDefaultUserAgentHasSafariTokenAsync(page).ConfigureAwait(false);
             }
 
             if (!string.IsNullOrEmpty(_timezoneId))
@@ -966,6 +1188,11 @@ namespace PlaywrightNative.WebKit
                 await page.SetTimezoneAsync(_timezoneId).ConfigureAwait(false);
             }
 
+            // NewPage (Opener == null): string init scripts are installed via
+            // ApplyInitScriptsBeforeResumeAsync in InitializeAndMaybeResumeAsync
+            // so Page.setBootstrapScript lands before Target.resume. Popup chrome
+            // below still needs headers / viewport before that same before-resume
+            // call (InitializeAndMaybeResumeAsync runs ApplyEmulation first).
             if (page.Opener == null)
             {
                 return;
@@ -994,12 +1221,19 @@ namespace PlaywrightNative.WebKit
                     _screenSize).ConfigureAwait(false);
             }
 
+            // Expose + init scripts for protocol popups (Opener set): install before
+            // Target.resume so bootstrap runs on the first about:blank. NewPage and
+            // inferred opener-less siblings use ApplyInitScriptsBeforeResumeAsync.
             foreach (Func<IPage, Task> install in _exposed.Installers)
             {
                 await install(page).ConfigureAwait(false);
             }
 
             await _initScripts.ApplyAllAsync(page).ConfigureAwait(false);
+            if (page is WKPage popupPage)
+            {
+                popupPage.MarkContextInitScriptsInstalledBeforeResume();
+            }
         }
 
         /// <summary>
@@ -1083,6 +1317,52 @@ namespace PlaywrightNative.WebKit
             => _localeHandshake = handshake;
 
         /// <summary>
+        /// Owns the macOS WebKit proxy-bypass shim for this context.
+        /// </summary>
+        /// <param name="shim">Shim started for this context, or <see langword="null"/>.</param>
+        internal void AttachMacProxyBypassShim(WebKitMacProxyBypassShim shim)
+            => _macProxyBypassShim = shim;
+
+        /// <summary>
+        /// Official popup <c>page</c> event must fire before the opener calls
+        /// a context <c>exposeFunction</c> on the new window.
+        /// </summary>
+        /// <param name="page">The popup instance.</param>
+        internal void ReportPopupAsNew(WKPage page)
+            => ReportAsNew(page);
+
+        /// <summary>
+        /// Re-runs context init scripts on the current document after
+        /// <c>document.open</c>/<c>write</c>/<c>close</c> wipes listeners
+        /// (native context-menu suppress, locale WS shim).
+        /// </summary>
+        /// <param name="page">The page whose current document should be patched.</param>
+        /// <returns>A task that completes when evaluation has been attempted.</returns>
+        internal Task ReplayInitScriptsOnCurrentDocumentAsync(IPage page)
+            => _initScripts.EvaluateOnCurrentAsync(page);
+
+        /// <summary>
+        /// On macOS WebKit, loopback WebSockets bypass HTTP proxies. When a
+        /// <see cref="LocaleHandshakeProxy"/> is attached, install an init
+        /// script that rewrites <c>ws://localhost</c> to <c>local.playwright</c>
+        /// so Accept-Language rewriting still applies. Linux uses SOCKS without
+        /// loopback bypass, so the shim is unnecessary there.
+        /// </summary>
+        /// <returns>A task that completes when the shim is registered.</returns>
+        internal async Task ApplyMacLocaleWebSocketShimAsync()
+        {
+            if (_localeHandshake == null
+                || (!RuntimeInformation.IsOSPlatform(OSPlatform.OSX)
+                    && Environment.GetEnvironmentVariable("PW_FORCE_MAC_WS_SHIM") != "1"))
+            {
+                return;
+            }
+
+            await AddInitScriptAsync(WebKitMacLocaleWebSocketShim.Source, scriptPath: null)
+                .ConfigureAwait(false);
+        }
+
+        /// <summary>
         /// Owns the official client-certificate SOCKS MITM for this context.
         /// </summary>
         /// <param name="proxy">Interceptor, or <see langword="null"/>.</param>
@@ -1136,7 +1416,7 @@ namespace PlaywrightNative.WebKit
             string locale = null,
             string timezoneId = null,
             bool? offline = null,
-            ColorScheme colorScheme = default,
+            ColorScheme colorScheme = ColorScheme.Null,
             bool? hasTouch = null,
             bool? bypassCSP = null,
             Geolocation geolocation = null,
@@ -1148,9 +1428,9 @@ namespace PlaywrightNative.WebKit
             HttpCredentials httpCredentials = null,
             ScreenSize screenSize = null,
             bool? acceptDownloads = null,
-            ReducedMotion reducedMotion = default,
-            ForcedColors forcedColors = default,
-            Contrast contrast = default)
+            ReducedMotion reducedMotion = ReducedMotion.Null,
+            ForcedColors forcedColors = ForcedColors.Null,
+            Contrast contrast = Contrast.Null)
         {
             GeolocationValidator.Validate(geolocation);
             _viewport = ViewportSizeHelper.Resolve(viewport);
@@ -1162,14 +1442,16 @@ namespace PlaywrightNative.WebKit
             _reducedMotion = reducedMotion;
             _forcedColors = forcedColors;
             _contrast = contrast;
-            _hasTouch = hasTouch == true;
+
+            // Official isMobile also enables touch (meta viewport + touch events).
+            _isMobile = isMobile == true;
+            _hasTouch = hasTouch == true || _isMobile;
             _bypassCsp = bypassCSP == true;
             _geolocation = geolocation;
             _grantedPermissions.SeedAllOrigins(permissions);
             _ignoreHttpsErrors = ignoreHTTPSErrors == true;
             _javaScriptDisabled = javaScriptEnabled == false;
             _deviceScaleFactor = deviceScaleFactor;
-            _isMobile = isMobile == true;
             _httpCredentials = HttpBasicAuth.Snapshot(httpCredentials);
             _screenSize = screenSize;
             _acceptDownloads = acceptDownloads != false;
@@ -1297,9 +1579,11 @@ namespace PlaywrightNative.WebKit
         /// <c>window.orientation</c> and exposes <c>PushManager</c>.
         /// Open-source WebKit after the font-display descriptor change
         /// does not put <c>fontDisplay</c> on <c>element.style</c>.
+        /// On macOS/Windows also suppresses the native context menu under
+        /// automation (DOM <c>contextmenu</c> still fires).
         /// </summary>
-        /// <returns>A task that completes when the init script is registered.</returns>
-        internal Task ApplyWebKitPageShimsAsync()
+        /// <returns>A task that completes when the init scripts are registered.</returns>
+        internal async Task ApplyWebKitPageShimsAsync()
         {
             string desktopBits = _isMobile
                 ? string.Empty
@@ -1367,7 +1651,29 @@ namespace PlaywrightNative.WebKit
   hideFontDisplay(window.Element);
 " + desktopBits + @"
 })()";
-            return AddInitScriptAsync(script, scriptPath: null);
+            await AddInitScriptAsync(script, scriptPath: null).ConfigureAwait(false);
+            await ApplyNativeContextMenuSuppressAsync().ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Prevents the native context menu from opening under automation on
+        /// Cocoa/Win WebKit. DOM <c>contextmenu</c> still fires. Frozen mac14
+        /// WebKit lacks the official r2322+ in-browser suppress
+        /// (<c>controlledByAutomation &amp;&amp; simulatingUserInput</c>).
+        /// </summary>
+        /// <returns>A task that completes when the init script is registered.</returns>
+        internal Task ApplyNativeContextMenuSuppressAsync()
+        {
+            // Nested NSMenu / Win32 modal loops are macOS + Windows only; GTK
+            // WebKit does not trap subsequent synthetic clicks the same way.
+            if (!RuntimeInformation.IsOSPlatform(OSPlatform.OSX)
+                && !RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
+                && Environment.GetEnvironmentVariable("PW_FORCE_WEBKIT_CONTEXT_MENU_SUPPRESS") != "1")
+            {
+                return Task.CompletedTask;
+            }
+
+            return AddInitScriptAsync(WebKitSuppressNativeContextMenu.Source, scriptPath: null);
         }
 
         /// <summary>
@@ -1398,6 +1704,22 @@ namespace PlaywrightNative.WebKit
         }
 
         /// <summary>
+        /// Applies <c>Playwright.setIgnoreCertificateErrors</c> when
+        /// <c>ignoreHTTPSErrors</c> (or a client-certificate MITM proxy) is set.
+        /// Matches official <c>WKBrowserContext.initialize</c>.
+        /// </summary>
+        /// <returns>A task that completes when the override has been set.</returns>
+        internal Task ApplyIgnoreCertificateErrorsAsync()
+        {
+            if (!_ignoreHttpsErrors && _clientCertificatesProxy == null)
+            {
+                return Task.CompletedTask;
+            }
+
+            return SetIgnoreCertificateErrorsAsync(true);
+        }
+
+        /// <summary>
         /// Applies <c>Playwright.setDownloadBehavior</c> for this context.
         /// </summary>
         /// <returns>A task that completes when the behavior has been set.</returns>
@@ -1422,21 +1744,350 @@ namespace PlaywrightNative.WebKit
         }
 
         /// <summary>
-        /// Installs context bindings then init scripts on a newly created page,
-        /// including popups. Bindings must be present so an init script can call
-        /// <c>exposeFunction</c> names.
+        /// Installs context bindings and string init scripts before
+        /// <c>Target.resume</c> so the first <c>about:blank</c> runs
+        /// <c>Page.setBootstrapScript</c> (upstream <c>allInitScripts</c> /
+        /// Chromium <c>ApplyInitScriptsBeforeResumeAsync</c>). Without this,
+        /// NewPage applies scripts only after resume; Darwin
+        /// <c>about:blank</c>→<c>about:blank</c> is often same-document and
+        /// never re-runs bootstrap, so a failed
+        /// <see cref="ContextInitScriptSet.EvaluateOnCurrentAsync"/> leaves
+        /// markers like <c>window.__fromContext</c> unset.
         /// </summary>
         /// <param name="page">The new page.</param>
-        /// <returns>A task that completes when every script has been installed.</returns>
-        internal async Task ApplyInitScriptsAsync(IPage page)
+        /// <returns>A task that completes when scripts have been installed.</returns>
+        internal async Task ApplyInitScriptsBeforeResumeAsync(IPage page)
         {
+            if (page == null)
+            {
+                return;
+            }
+
+            // Target recycle re-enters InitializeAndMaybeResumeAsync. String scripts
+            // are already in WKPage._initScripts and SyncBootstrapScriptOnAsync during
+            // InitializeTargetAsync re-sends them — do not ApplyAll again (duplicates
+            // bootstrap entries and double-fires init scripts on later navigations).
+            if (page is WKPage existing && existing.ContextInitScriptsInstalledBeforeResume)
+            {
+                return;
+            }
+
             foreach (Func<IPage, Task> install in _exposed.Installers)
             {
                 await install(page).ConfigureAwait(false);
             }
 
-            await _initScripts.ApplyAllAsync(page).ConfigureAwait(false);
-            await _initScripts.EvaluateOnCurrentAsync(page).ConfigureAwait(false);
+            await _initScripts.ApplyAllAsync(page, callbacks: false).ConfigureAwait(false);
+            if (page is WKPage wkPage)
+            {
+                wkPage.MarkContextInitScriptsInstalledBeforeResume();
+            }
+        }
+
+        /// <summary>
+        /// Installs context bindings then init scripts on a newly created page,
+        /// including popups. Bindings must be present so an init script can call
+        /// <c>exposeFunction</c> names. String scripts are usually already on the
+        /// page from <see cref="ApplyInitScriptsBeforeResumeAsync"/>; this path
+        /// still installs <c>exposeFunctions</c> callbacks and replays on the
+        /// current document.
+        /// </summary>
+        /// <param name="page">The new page.</param>
+        /// <returns>A task that completes when every script has been installed.</returns>
+        internal async Task ApplyInitScriptsAsync(IPage page)
+        {
+            bool stringScriptsAlreadyInstalled = page is WKPage wk
+                && wk.ContextInitScriptsInstalledBeforeResume;
+
+            if (!stringScriptsAlreadyInstalled)
+            {
+                foreach (Func<IPage, Task> install in _exposed.Installers)
+                {
+                    try
+                    {
+                        await install(page).ConfigureAwait(false);
+                    }
+                    catch (PlaywrightException ex) when (
+                        ex.Message != null
+                        && ex.Message.Contains("already registered", StringComparison.OrdinalIgnoreCase))
+                    {
+                    }
+                }
+
+                await _initScripts.ApplyAllAsync(page).ConfigureAwait(false);
+
+                // If this path won a race with ApplyInitScriptsBeforeResumeAsync
+                // (InitializedTask used to complete before before-resume), mark the
+                // page so BeforeResume does not add the same string scripts again.
+                if (page is WKPage installed)
+                {
+                    installed.MarkContextInitScriptsInstalledBeforeResume();
+                }
+
+                if (!_javaScriptDisabled)
+                {
+                    await _initScripts.EvaluateOnCurrentAsync(page).ConfigureAwait(false);
+                }
+            }
+            else
+            {
+                // exposeFunctions callbacks after resume when only string scripts
+                // were installed before resume (NewPage path). Protocol popups
+                // already applied callbacks in ApplyEmulationToPageAsync.
+                await _initScripts.ApplyAllAsync(page, callbacks: true).ConfigureAwait(false);
+
+                // NewPage: first about:blank predates bootstrap; Darwin also needs
+                // EvaluateOnCurrent's retry loop after Target.resume (target recycle /
+                // Mac locale WS shim). Skip for protocol popups (Opener set) so
+                // InitScriptShouldRunOnlyOnceInPopup does not double-fire.
+                if (!_javaScriptDisabled
+                    && page is WKPage newPage
+                    && newPage.Opener == null)
+                {
+                    await _initScripts.EvaluateOnCurrentAsync(page).ConfigureAwait(false);
+                }
+            }
+
+            // about:blank is created before addScriptToEvaluateOnNewDocument runs.
+            // Re-assert the Mac WS shim on the current document so loopback
+            // WebSockets are rewritten even when EvaluateOnCurrentAsync swallowed
+            // an earlier init-script failure (CFNetwork otherwise fails localhost
+            // through the HTTP handshake proxy with Error / 306).
+            // Bound the evaluate: a recycled/zombie target otherwise burns the
+            // full WKSession 20s command timeout and eats LaunchAsyncHandleSIGTERM
+            // FalseShouldStartAPage's NUnit 30s budget (empty-stack timeout).
+            if (!_javaScriptDisabled
+                && _localeHandshake != null
+                && (RuntimeInformation.IsOSPlatform(OSPlatform.OSX)
+                    || Environment.GetEnvironmentVariable("PW_FORCE_MAC_WS_SHIM") == "1"))
+            {
+                await EvaluateWithShortBudgetAsync(
+                        page,
+                        WebKitMacLocaleWebSocketShim.Source,
+                        TimeSpan.FromSeconds(1.5))
+                    .ConfigureAwait(false);
+            }
+        }
+
+        /// <summary>
+        /// Runs <paramref name="expression"/> on <paramref name="page"/> but
+        /// abandons the attempt if it does not settle within <paramref name="budget"/>.
+        /// Zombie WebKit targets after Darwin recycle otherwise hang until the
+        /// 20s session command timeout.
+        /// </summary>
+        private static async Task EvaluateWithShortBudgetAsync(IPage page, string expression, TimeSpan budget)
+        {
+            if (page == null || string.IsNullOrEmpty(expression))
+            {
+                return;
+            }
+
+            try
+            {
+                Task evalTask = page.EvaluateAsync(expression);
+                Task finished = await Task.WhenAny(evalTask, Task.Delay(budget)).ConfigureAwait(false);
+                if (finished != evalTask)
+                {
+                    // Observe the abandoned attempt so a late TimeoutException is not unobserved.
+                    _ = evalTask.ContinueWith(
+                        t => _ = t.Exception,
+                        CancellationToken.None,
+                        TaskContinuationOptions.OnlyOnFaulted,
+                        TaskScheduler.Default);
+                    return;
+                }
+
+                await evalTask.ConfigureAwait(false);
+            }
+            catch (PlaywrightException)
+            {
+            }
+            catch (TimeoutException)
+            {
+            }
+        }
+
+        private static IEnumerable<Cookie> FilterCookiesForWebKitHost(IEnumerable<Cookie> cookies)
+        {
+            if (!DropsUnsupportedPartitionedCookies())
+            {
+                return cookies;
+            }
+
+            List<Cookie> filtered = new List<Cookie>();
+            foreach (Cookie cookie in cookies)
+            {
+                if (!string.IsNullOrEmpty(cookie.PartitionKey))
+                {
+                    // Frozen WebKit builds used on mac14 ignore CHIPS partitionKey and store
+                    // the cookie as a normal first-party cookie. Drop these so API-added
+                    // partitioned cookies stay invisible in document.cookie, matching upstream.
+                    continue;
+                }
+
+                filtered.Add(cookie);
+            }
+
+            return filtered;
+        }
+
+        /// <summary>
+        /// Darwin WebKitMacLocaleWebSocketShim rewrites <c>wss://localhost</c> to
+        /// <c>wss://local.playwright</c>. CFNetwork looks up cookies for the wire
+        /// host, so mirror loopback cookies onto the fake hosts. Keep the caller's
+        /// cookie objects unchanged (do not <see cref="ContextCookies.Rewrite"/> —
+        /// that would stamp Domain onto Url cookies and make a later ToProtocol
+        /// Rewrite throw "either url or domain"). Mirror with Domain+Path+
+        /// SameSite=None+Secure so the cross-site WSS upgrade still attaches them.
+        /// </summary>
+        private static IEnumerable<Cookie> ExpandLoopbackCookiesForMacWsShim(IEnumerable<Cookie> cookies)
+        {
+            if (cookies == null)
+            {
+                return Array.Empty<Cookie>();
+            }
+
+            bool macShim =
+                RuntimeInformation.IsOSPlatform(OSPlatform.OSX)
+                || Environment.GetEnvironmentVariable("PW_FORCE_MAC_WS_SHIM") == "1";
+            if (!macShim)
+            {
+                return cookies;
+            }
+
+            List<Cookie> expanded = new List<Cookie>();
+            foreach (Cookie cookie in cookies)
+            {
+                if (cookie == null)
+                {
+                    continue;
+                }
+
+                expanded.Add(cookie);
+
+                if (!TryGetLoopbackCookieHost(cookie, out string domain, out string path, out bool? secure))
+                {
+                    continue;
+                }
+
+                string fakeHost = null;
+                if (string.Equals(domain, "localhost", StringComparison.OrdinalIgnoreCase)
+                    || domain.EndsWith(".localhost", StringComparison.OrdinalIgnoreCase))
+                {
+                    fakeHost = WebKitMacLocaleWebSocketShim.FakeLoopbackHost;
+                }
+                else if (string.Equals(domain, "127.0.0.1", StringComparison.Ordinal))
+                {
+                    fakeHost = WebKitMacLocaleWebSocketShim.FakeIpv4LoopbackHost;
+                }
+                else if (string.Equals(domain, "::1", StringComparison.Ordinal)
+                    || string.Equals(domain, "[::1]", StringComparison.OrdinalIgnoreCase))
+                {
+                    fakeHost = WebKitMacLocaleWebSocketShim.FakeIpv6LoopbackHost;
+                }
+
+                if (fakeHost == null)
+                {
+                    continue;
+                }
+
+                // Mirror onto the Mac WS shim host. Domain+Path+Secure+SameSite=None:
+                // the page stays on localhost while the wire host is local.playwright*,
+                // so the cookie is always cross-site and must be SameSite=None to be
+                // attached on the WSS upgrade. Url-only mirrors were expanded back to
+                // Domain by Rewrite/ToProtocol and previously omitted SameSite=None.
+                bool useHttps = secure == true || cookie.Secure == true;
+                expanded.Add(new Cookie
+                {
+                    Name = cookie.Name,
+                    Value = cookie.Value,
+                    Domain = fakeHost,
+                    Path = string.IsNullOrEmpty(path) ? "/" : path,
+                    Expires = cookie.Expires,
+                    HttpOnly = cookie.HttpOnly,
+                    Secure = useHttps,
+                    SameSite = Microsoft.Playwright.SameSiteAttribute.None,
+                    PartitionKey = cookie.PartitionKey,
+                });
+            }
+
+            return expanded;
+        }
+
+        /// <summary>
+        /// Hides Mac WS shim fake-host cookies from the public cookies API so
+        /// mirrored <c>local.playwright*</c> rows do not inflate counts.
+        /// </summary>
+        private static IReadOnlyList<BrowserContextCookiesResult> HideMacWsShimCookies(
+            IReadOnlyList<BrowserContextCookiesResult> cookies)
+        {
+            bool macShim =
+                RuntimeInformation.IsOSPlatform(OSPlatform.OSX)
+                || Environment.GetEnvironmentVariable("PW_FORCE_MAC_WS_SHIM") == "1";
+            if (!macShim || cookies == null || cookies.Count == 0)
+            {
+                return cookies;
+            }
+
+            List<BrowserContextCookiesResult> filtered = new List<BrowserContextCookiesResult>();
+            foreach (BrowserContextCookiesResult cookie in cookies)
+            {
+                if (cookie != null
+                    && WebKitMacLocaleWebSocketShim.IsFakeLoopbackHost(cookie.Domain ?? string.Empty))
+                {
+                    continue;
+                }
+
+                filtered.Add(cookie);
+            }
+
+            return filtered;
+        }
+
+        private static bool TryGetLoopbackCookieHost(
+            Cookie cookie,
+            out string domain,
+            out string path,
+            out bool? secure)
+        {
+            domain = cookie.Domain ?? string.Empty;
+            path = cookie.Path ?? string.Empty;
+            secure = cookie.Secure;
+            if (!string.IsNullOrEmpty(domain))
+            {
+                if (string.IsNullOrEmpty(path))
+                {
+                    path = "/";
+                }
+
+                return true;
+            }
+
+            if (string.IsNullOrEmpty(cookie.Url)
+                || !Uri.TryCreate(cookie.Url, UriKind.Absolute, out Uri uri))
+            {
+                return false;
+            }
+
+            domain = uri.Host;
+            string pathname = uri.AbsolutePath;
+            int slash = pathname.LastIndexOf('/');
+            path = slash >= 0 ? pathname.Substring(0, slash + 1) : "/";
+            if (!secure.HasValue
+                && string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+            {
+                secure = true;
+            }
+
+            return !string.IsNullOrEmpty(domain);
+        }
+
+        private static bool DropsUnsupportedPartitionedCookies()
+        {
+            string platformKey = BrowserData.PlaywrightPlatformKey(
+                SupportedBrowser.Webkit,
+                BrowserData.CurrentPlatform());
+            return platformKey.StartsWith("mac14", StringComparison.Ordinal);
         }
 
         private static Task<IAsyncDisposable> InstallOnAsync(IPage page, string name, Func<System.Text.Json.JsonElement[], Task<object>> handler)
@@ -1446,7 +2097,7 @@ namespace PlaywrightNative.WebKit
                 return webkit.InstallExposedAsync(name, handler, fromContext: true);
             }
 
-            throw new PlaywrightNativeException("Context exposeFunction requires a WebKit page.");
+            throw new PlaywrightException("Context exposeFunction requires a WebKit page.");
         }
 
         private static Task<IAsyncDisposable> InstallHandleOnAsync(
@@ -1466,7 +2117,7 @@ namespace PlaywrightNative.WebKit
                     fromContext: true);
             }
 
-            throw new PlaywrightNativeException("Context exposeBinding requires a WebKit page.");
+            throw new PlaywrightException("Context exposeBinding requires a WebKit page.");
         }
 
         private static bool ContainsClipboardRead(IEnumerable<string> permissions)
@@ -1496,7 +2147,37 @@ namespace PlaywrightNative.WebKit
 
         private async Task ApplyContextChromeAsync(IPage page)
         {
-            await ApplyInitScriptsAsync(page).ConfigureAwait(false);
+            // Darwin pageProxyDestroyed can close the page between InitializedTask
+            // and chrome apply (same race SyncBootstrapScriptAsync soft-tolerates).
+            // Skip the rest so NewPage returns the closed page for cleanup rather
+            // than failing mid-bootstrap (ShouldFailWithoutCredentials).
+            if (page is WKPage closedCheck && closedCheck.IsClosed)
+            {
+                return;
+            }
+
+            try
+            {
+                await ApplyInitScriptsAsync(page).ConfigureAwait(false);
+            }
+            catch (TargetClosedException) when (page is WKPage wkInit && wkInit.IsClosed)
+            {
+                return;
+            }
+            catch (PlaywrightException ex) when (
+                page is WKPage wkInit && wkInit.IsClosed
+                && ex.Message != null
+                && (ex.Message.Contains("Target closed", StringComparison.OrdinalIgnoreCase)
+                    || ex.Message.Contains("Session closed", StringComparison.OrdinalIgnoreCase)
+                    || ex.Message.Contains("has been closed", StringComparison.OrdinalIgnoreCase)))
+            {
+                return;
+            }
+
+            if (page is WKPage closedAfterInit && closedAfterInit.IsClosed)
+            {
+                return;
+            }
 
             Dictionary<string, string> headers = BuildExtraHeaders();
             if (page is IAppliesMergedExtraHttpHeaders)
@@ -1510,87 +2191,32 @@ namespace PlaywrightNative.WebKit
 
             if (page is WKPage wkPage)
             {
-                List<WKRouteEntry> routes;
-                lock (_routes)
+                try
                 {
-                    routes = new List<WKRouteEntry>(_routes);
+                    await ApplyWkPageChromeAsync(wkPage).ConfigureAwait(false);
                 }
-
-                foreach (WKRouteEntry entry in routes)
+                catch (TargetClosedException) when (wkPage.IsClosed)
                 {
-                    await wkPage.AddRouteAsync(entry).ConfigureAwait(false);
+                    return;
                 }
-
-                if (!string.IsNullOrEmpty(_userAgent))
+                catch (PlaywrightException ex) when (
+                    wkPage.IsClosed
+                    && ex.Message != null
+                    && (ex.Message.Contains("Target closed", StringComparison.OrdinalIgnoreCase)
+                        || ex.Message.Contains("Session closed", StringComparison.OrdinalIgnoreCase)
+                        || ex.Message.Contains("has been closed", StringComparison.OrdinalIgnoreCase)))
                 {
-                    await wkPage.SetUserAgentAsync(_userAgent).ConfigureAwait(false);
-                }
-
-                if (!string.IsNullOrEmpty(_timezoneId))
-                {
-                    await wkPage.SetTimezoneAsync(_timezoneId).ConfigureAwait(false);
-                }
-
-                if (_offline)
-                {
-                    await wkPage.SetOfflineAsync(true).ConfigureAwait(false);
-                }
-
-                await wkPage.SetTouchEmulationEnabledAsync(_hasTouch).ConfigureAwait(false);
-                await wkPage.ApplySafariOverrideSettingsAsync(_isMobile).ConfigureAwait(false);
-
-                if (_bypassCsp)
-                {
-                    await wkPage.SetBypassCSPAsync(true).ConfigureAwait(false);
-                }
-
-                await ApplyGrantedPermissionsAsync(wkPage).ConfigureAwait(false);
-
-                if (_geolocation != null)
-                {
-                    await SetGeolocationOverrideAsync(_geolocation).ConfigureAwait(false);
-                    try
-                    {
-                        await wkPage.SetGeolocationOverrideAsync(_geolocation).ConfigureAwait(false);
-                    }
-                    catch (PlaywrightNativeException)
-                    {
-                        // Page-proxy Emulation.setGeolocationOverride is optional when
-                        // Playwright.setGeolocationOverride already applied the context override.
-                    }
-                }
-
-                if (_ignoreHttpsErrors || _clientCertificatesProxy != null)
-                {
-                    await SetIgnoreCertificateErrorsAsync(true).ConfigureAwait(false);
-                }
-
-                if (_javaScriptDisabled)
-                {
-                    await wkPage.SetJavaScriptEnabledAsync(false).ConfigureAwait(false);
-                }
-
-                if (!string.IsNullOrEmpty(_locale))
-                {
-                    wkPage.SetLocale(_locale);
-                    await wkPage.UpdateLocaleInterceptionAsync().ConfigureAwait(false);
-                }
-
-                if (_viewport != null || _deviceScaleFactor.HasValue || _isMobile || _screenSize != null)
-                {
-                    int width = _viewport?.Width ?? ViewportSizeHelper.Default.Width;
-                    int height = _viewport?.Height ?? ViewportSizeHelper.Default.Height;
-                    await wkPage.SetEmulatedViewportAsync(
-                        width,
-                        height,
-                        _deviceScaleFactor ?? 1,
-                        _isMobile,
-                        _screenSize).ConfigureAwait(false);
+                    return;
                 }
             }
             else if (_viewport != null)
             {
                 await page.SetViewportSizeAsync(_viewport.Width, _viewport.Height).ConfigureAwait(false);
+            }
+
+            if (page is WKPage stillOpen && stillOpen.IsClosed)
+            {
+                return;
             }
 
             if (_colorScheme != ColorScheme.Null)
@@ -1616,6 +2242,92 @@ namespace PlaywrightNative.WebKit
             if (Credentials is ContextCredentials credentials)
             {
                 await credentials.AttachIfInstalledAsync(page).ConfigureAwait(false);
+            }
+        }
+
+        private async Task ApplyWkPageChromeAsync(WKPage wkPage)
+        {
+            // Create-time HttpCredentials must reach the page network managers and
+            // enable interception (HeadersWithAuth). Match SetHttpCredentialsAsync:
+            // store credentials, cancel the HTTP auth dialog, then update interception.
+            wkPage.SetHttpCredentials(_httpCredentials);
+            await wkPage.ApplyAuthCredentialsAsync().ConfigureAwait(false);
+            await wkPage.UpdateNetworkInterceptionAsync().ConfigureAwait(false);
+
+            List<WKRouteEntry> routes;
+            lock (_routes)
+            {
+                routes = new List<WKRouteEntry>(_routes);
+            }
+
+            foreach (WKRouteEntry entry in routes)
+            {
+                await wkPage.AddRouteAsync(entry).ConfigureAwait(false);
+            }
+
+            if (!string.IsNullOrEmpty(_userAgent))
+            {
+                await wkPage.SetUserAgentAsync(_userAgent).ConfigureAwait(false);
+            }
+            else
+            {
+                await EnsureDefaultUserAgentHasSafariTokenAsync(wkPage).ConfigureAwait(false);
+            }
+
+            if (!string.IsNullOrEmpty(_timezoneId))
+            {
+                await wkPage.SetTimezoneAsync(_timezoneId).ConfigureAwait(false);
+            }
+
+            if (_offline)
+            {
+                await wkPage.SetOfflineAsync(true).ConfigureAwait(false);
+            }
+
+            await wkPage.SetTouchEmulationEnabledAsync(_hasTouch).ConfigureAwait(false);
+            await wkPage.ApplySafariOverrideSettingsAsync(_isMobile).ConfigureAwait(false);
+
+            if (_bypassCsp)
+            {
+                await wkPage.SetBypassCSPAsync(true).ConfigureAwait(false);
+            }
+
+            await ApplyGrantedPermissionsAsync(wkPage).ConfigureAwait(false);
+
+            if (_geolocation != null)
+            {
+                await SetGeolocationOverrideAsync(_geolocation).ConfigureAwait(false);
+
+                // Official WebKit only uses Playwright.setGeolocationOverride on the browser
+                // session. Page-proxy Emulation.setGeolocationOverride is Chromium-only.
+            }
+
+            if (_ignoreHttpsErrors || _clientCertificatesProxy != null)
+            {
+                await SetIgnoreCertificateErrorsAsync(true).ConfigureAwait(false);
+            }
+
+            if (_javaScriptDisabled)
+            {
+                await wkPage.SetJavaScriptEnabledAsync(false).ConfigureAwait(false);
+            }
+
+            if (!string.IsNullOrEmpty(_locale))
+            {
+                wkPage.SetLocale(_locale);
+                await wkPage.UpdateLocaleInterceptionAsync().ConfigureAwait(false);
+            }
+
+            if (_viewport != null || _deviceScaleFactor.HasValue || _isMobile || _screenSize != null)
+            {
+                int width = _viewport?.Width ?? ViewportSizeHelper.Default.Width;
+                int height = _viewport?.Height ?? ViewportSizeHelper.Default.Height;
+                await wkPage.SetEmulatedViewportAsync(
+                    width,
+                    height,
+                    _deviceScaleFactor ?? 1,
+                    _isMobile,
+                    _screenSize).ConfigureAwait(false);
             }
         }
 
@@ -1653,7 +2365,7 @@ namespace PlaywrightNative.WebKit
                 {
                     await page.EvaluateAsync(WebKitClipboardShim.Source).ConfigureAwait(false);
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
             }
@@ -1706,7 +2418,7 @@ namespace PlaywrightNative.WebKit
                     }).ConfigureAwait(false);
                 }
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 // Older WebKit builds may not expose Playwright.setIgnoreCertificateErrors.
             }
@@ -1719,40 +2431,31 @@ namespace PlaywrightNative.WebKit
                 return;
             }
 
-            try
+            // Match upstream WKBrowserContext.setGeolocation: Playwright.setGeolocationOverride
+            // on the browser session with { ...geolocation, timestamp }.
+            float accuracy = geolocation.Accuracy ?? 0f;
+            var payload = new
             {
-                if (string.IsNullOrEmpty(_browserContextId))
+                latitude = geolocation.Latitude,
+                longitude = geolocation.Longitude,
+                accuracy = accuracy,
+                timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            };
+
+            if (string.IsNullOrEmpty(_browserContextId))
+            {
+                await _browser.Session.SendAsync("Playwright.setGeolocationOverride", new
                 {
-                    await _browser.Session.SendAsync("Playwright.setGeolocationOverride", new
-                    {
-                        geolocation = new
-                        {
-                            latitude = geolocation.Latitude,
-                            longitude = geolocation.Longitude,
-                            accuracy = geolocation.Accuracy,
-                            timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-                        },
-                    }).ConfigureAwait(false);
-                }
-                else
-                {
-                    await _browser.Session.SendAsync("Playwright.setGeolocationOverride", new
-                    {
-                        browserContextId = _browserContextId,
-                        geolocation = new
-                        {
-                            latitude = geolocation.Latitude,
-                            longitude = geolocation.Longitude,
-                            accuracy = geolocation.Accuracy,
-                            timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-                        },
-                    }).ConfigureAwait(false);
-                }
+                    geolocation = payload,
+                }).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            else
             {
-                // Older WebKit builds do not expose Playwright.setGeolocationOverride;
-                // page-proxy Emulation.setGeolocationOverride is applied by the caller.
+                await _browser.Session.SendAsync("Playwright.setGeolocationOverride", new
+                {
+                    browserContextId = _browserContextId,
+                    geolocation = payload,
+                }).ConfigureAwait(false);
             }
         }
 
@@ -1948,7 +2651,7 @@ namespace PlaywrightNative.WebKit
         {
             if (harError != null)
             {
-                throw new PlaywrightNativeException(harError.Message, harError);
+                throw new PlaywrightException(harError.Message, harError);
             }
         }
 
@@ -1985,7 +2688,7 @@ namespace PlaywrightNative.WebKit
             {
                 await Task.WhenAll(cancels).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
         }
@@ -2034,14 +2737,20 @@ namespace PlaywrightNative.WebKit
             {
             }
 
-            try
+            if (page == null || page.ClosedTask.IsCompleted)
             {
-                await Task.WhenAny(page.ReportAsNewNavigationTask, page.ClosedTask).ConfigureAwait(false);
+                ReportAsNew(page);
+                return;
             }
-#pragma warning disable RCS1075
-            catch (Exception)
-#pragma warning restore RCS1075
+
+            // context.NewPage stays on about:blank — report after init.
+            // window.open(url) popups must wait for the first non-blank URL so
+            // BrowserContextEvent.Page observers see the committed destination
+            // (should have url / opener), not the intermediate about:blank.
+            if (!CreatePageIsInFlight())
             {
+                await page.PrepareAndReportPopupAsync().ConfigureAwait(false);
+                return;
             }
 
             ReportAsNew(page);
@@ -2049,99 +2758,434 @@ namespace PlaywrightNative.WebKit
 
         private void ReportAsNew(WKPage page)
         {
-            if (page == null || !page.TryMarkReportedAsNew())
+            if (page == null)
             {
                 return;
             }
 
-            if (!_creatingStorageStatePage)
+            page.ReportAsNewOnce(() =>
             {
-                Page?.Invoke(this, page);
-            }
+                if (!_creatingStorageStatePage)
+                {
+                    Page?.Invoke(this, page);
+                }
+            });
         }
 
 #pragma warning disable SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
-        Task<IAsyncDisposable> IBrowserContext.AddInitScriptAsync(string script, string scriptPath) => Task.FromResult<IAsyncDisposable>(default!);
+        Task<IAsyncDisposable> IBrowserContext.AddInitScriptAsync(string script, string scriptPath) => AddInitScriptAsync(script, scriptPath);
 
-        Task IBrowserContext.ClearCookiesAsync(BrowserContextClearCookiesOptions options) => Task.CompletedTask;
+        Task IBrowserContext.ClearCookiesAsync(BrowserContextClearCookiesOptions options) => CookieClearFilter.ClearAsync(this, options, ClearCookiesAsync);
 
-        Task IBrowserContext.CloseAsync(BrowserContextCloseOptions options) => Task.CompletedTask;
+        Task IBrowserContext.CloseAsync(BrowserContextCloseOptions options) => CloseAsync(options?.Reason);
 
-        Task<IReadOnlyList<BrowserContextCookiesResult>> IBrowserContext.CookiesAsync(string urls) => Task.FromResult<IReadOnlyList<BrowserContextCookiesResult>>(default!);
+        Task<IReadOnlyList<BrowserContextCookiesResult>> IBrowserContext.CookiesAsync(string urls) => string.IsNullOrEmpty(urls) ? CookiesAsync() : CookiesAsync(new[] { urls });
 
-        Task<IAsyncDisposable> IBrowserContext.ExposeBindingAsync(string name, Action callback) => Task.FromResult<IAsyncDisposable>(default!);
+        Task<IAsyncDisposable> IBrowserContext.ExposeBindingAsync(string name, Action callback) => ExposeBindingAsync(name, callback);
 
-        Task<IAsyncDisposable> IBrowserContext.ExposeBindingAsync(string name, Action<BindingSource> callback) => Task.FromResult<IAsyncDisposable>(default!);
+        Task<IAsyncDisposable> IBrowserContext.ExposeBindingAsync(string name, Action<BindingSource> callback)
+        {
+            if (callback == null)
+            {
+                throw new ArgumentNullException(nameof(callback));
+            }
 
-        Task<IAsyncDisposable> IBrowserContext.ExposeBindingAsync<T>(string name, Action<BindingSource, T> callback) => Task.FromResult<IAsyncDisposable>(default!);
+            return RegisterExposedAsync(
+                name,
+                page => InstallOnAsync(
+                    page,
+                    name,
+                    PageExposeBinder.WrapBinding<object>(this, page, source =>
+                    {
+                        callback(source);
+                        return null;
+                    })));
+        }
 
-        Task<IAsyncDisposable> IBrowserContext.ExposeBindingAsync<TResult>(string name, Func<BindingSource, TResult> callback) => Task.FromResult<IAsyncDisposable>(default!);
+        Task<IAsyncDisposable> IBrowserContext.ExposeBindingAsync<T>(string name, Action<BindingSource, T> callback)
+        {
+            if (callback == null)
+            {
+                throw new ArgumentNullException(nameof(callback));
+            }
 
-        Task<IAsyncDisposable> IBrowserContext.ExposeBindingAsync<T, TResult>(string name, Func<BindingSource, T, TResult> callback) => Task.FromResult<IAsyncDisposable>(default!);
+            return RegisterExposedAsync(
+                name,
+                page => InstallOnAsync(
+                    page,
+                    name,
+                    PageExposeBinder.WrapBinding<T, object>(this, page, (source, arg) =>
+                    {
+                        callback(source, arg);
+                        return null;
+                    })));
+        }
 
-        Task<IAsyncDisposable> IBrowserContext.ExposeBindingAsync<T1, T2, T3, TResult>(string name, Func<BindingSource, T1, T2, T3, TResult> callback) => Task.FromResult<IAsyncDisposable>(default!);
+        Task<IAsyncDisposable> IBrowserContext.ExposeBindingAsync<TResult>(string name, Func<BindingSource, TResult> callback)
+        {
+            if (callback == null)
+            {
+                throw new ArgumentNullException(nameof(callback));
+            }
 
-        Task<IAsyncDisposable> IBrowserContext.ExposeBindingAsync<T1, T2, T3, T4, TResult>(string name, Func<BindingSource, T1, T2, T3, T4, TResult> callback) => Task.FromResult<IAsyncDisposable>(default!);
+            return RegisterExposedAsync(name, page => InstallOnAsync(page, name, PageExposeBinder.WrapBinding(this, page, callback)));
+        }
 
-        Task<IAsyncDisposable> IBrowserContext.ExposeFunctionAsync<T1, T2, T3, TResult>(string name, Func<T1, T2, T3, TResult> callback) => Task.FromResult<IAsyncDisposable>(default!);
+        Task<IAsyncDisposable> IBrowserContext.ExposeBindingAsync<T, TResult>(string name, Func<BindingSource, T, TResult> callback)
+        {
+            if (callback == null)
+            {
+                throw new ArgumentNullException(nameof(callback));
+            }
 
-        Task<IAsyncDisposable> IBrowserContext.ExposeFunctionAsync<T1, T2, T3, T4, TResult>(string name, Func<T1, T2, T3, T4, TResult> callback) => Task.FromResult<IAsyncDisposable>(default!);
+            if (typeof(T) == typeof(IJSHandle))
+            {
+                return ExposeBindingAsync(
+                    name,
+                    (BindingSource source, IJSHandle handle) => (object)callback(source, (T)(object)handle));
+            }
 
-        Task IBrowserContext.GrantPermissionsAsync(IEnumerable<string> permissions, BrowserContextGrantPermissionsOptions options) => Task.CompletedTask;
+            return RegisterExposedAsync(name, page => InstallOnAsync(page, name, PageExposeBinder.WrapBinding(this, page, callback)));
+        }
+
+        Task<IAsyncDisposable> IBrowserContext.ExposeBindingAsync<T1, T2, T3, TResult>(string name, Func<BindingSource, T1, T2, T3, TResult> callback)
+        {
+            if (callback == null)
+            {
+                throw new ArgumentNullException(nameof(callback));
+            }
+
+            return RegisterExposedAsync(name, page => InstallOnAsync(page, name, PageExposeBinder.WrapBinding(this, page, callback)));
+        }
+
+        Task<IAsyncDisposable> IBrowserContext.ExposeBindingAsync<T1, T2, T3, T4, TResult>(string name, Func<BindingSource, T1, T2, T3, T4, TResult> callback)
+        {
+            if (callback == null)
+            {
+                throw new ArgumentNullException(nameof(callback));
+            }
+
+            return RegisterExposedAsync(name, page => InstallOnAsync(page, name, PageExposeBinder.WrapBinding(this, page, callback)));
+        }
+
+        Task<IAsyncDisposable> IBrowserContext.ExposeFunctionAsync<T1, T2, T3, TResult>(string name, Func<T1, T2, T3, TResult> callback)
+        {
+            if (callback == null)
+            {
+                throw new ArgumentNullException(nameof(callback));
+            }
+
+            return RegisterExposedAsync(name, page => InstallOnAsync(page, name, PageExposeBinder.Wrap(callback)));
+        }
+
+        Task<IAsyncDisposable> IBrowserContext.ExposeFunctionAsync<T1, T2, T3, T4, TResult>(string name, Func<T1, T2, T3, T4, TResult> callback)
+        {
+            if (callback == null)
+            {
+                throw new ArgumentNullException(nameof(callback));
+            }
+
+            return RegisterExposedAsync(name, page => InstallOnAsync(page, name, PageExposeBinder.Wrap(callback)));
+        }
+
+        Task IBrowserContext.GrantPermissionsAsync(IEnumerable<string> permissions, BrowserContextGrantPermissionsOptions options) => GrantPermissionsAsync(permissions, options?.Origin);
 
         Task<ICDPSession> IBrowserContext.NewCDPSessionAsync(IFrame page) => Task.FromResult<ICDPSession>(default!);
 
-        Task<IAsyncDisposable> IBrowserContext.RouteAsync(string url, Action<IRoute> handler, BrowserContextRouteOptions options) => Task.FromResult<IAsyncDisposable>(default!);
+        async Task<IAsyncDisposable> IBrowserContext.RouteAsync(string url, Action<IRoute> handler, BrowserContextRouteOptions options)
+        {
+            await RouteAsync(url, handler, options?.Times).ConfigureAwait(false);
+            return NoopContextDisposable.Instance;
+        }
 
-        Task<IAsyncDisposable> IBrowserContext.RouteAsync(Regex url, Action<IRoute> handler, BrowserContextRouteOptions options) => Task.FromResult<IAsyncDisposable>(default!);
+        async Task<IAsyncDisposable> IBrowserContext.RouteAsync(Regex url, Action<IRoute> handler, BrowserContextRouteOptions options)
+        {
+            await RouteAsync(url, handler, options?.Times).ConfigureAwait(false);
+            return NoopContextDisposable.Instance;
+        }
 
-        Task<IAsyncDisposable> IBrowserContext.RouteAsync(Func<string, bool> url, Action<IRoute> handler, BrowserContextRouteOptions options) => Task.FromResult<IAsyncDisposable>(default!);
+        async Task<IAsyncDisposable> IBrowserContext.RouteAsync(Func<string, bool> url, Action<IRoute> handler, BrowserContextRouteOptions options)
+        {
+            await RouteAsync(url, handler, options?.Times).ConfigureAwait(false);
+            return NoopContextDisposable.Instance;
+        }
 
-        Task<IAsyncDisposable> IBrowserContext.RouteAsync(string url, Func<IRoute, Task> handler, BrowserContextRouteOptions options) => Task.FromResult<IAsyncDisposable>(default!);
+        async Task<IAsyncDisposable> IBrowserContext.RouteAsync(string url, Func<IRoute, Task> handler, BrowserContextRouteOptions options)
+        {
+            await RouteAsync(url, handler, options?.Times).ConfigureAwait(false);
+            return NoopContextDisposable.Instance;
+        }
 
-        Task<IAsyncDisposable> IBrowserContext.RouteAsync(Regex url, Func<IRoute, Task> handler, BrowserContextRouteOptions options) => Task.FromResult<IAsyncDisposable>(default!);
+        async Task<IAsyncDisposable> IBrowserContext.RouteAsync(Regex url, Func<IRoute, Task> handler, BrowserContextRouteOptions options)
+        {
+            await RouteAsync(url, handler, options?.Times).ConfigureAwait(false);
+            return NoopContextDisposable.Instance;
+        }
 
-        Task<IAsyncDisposable> IBrowserContext.RouteAsync(Func<string, bool> url, Func<IRoute, Task> handler, BrowserContextRouteOptions options) => Task.FromResult<IAsyncDisposable>(default!);
+        async Task<IAsyncDisposable> IBrowserContext.RouteAsync(Func<string, bool> url, Func<IRoute, Task> handler, BrowserContextRouteOptions options)
+        {
+            await RouteAsync(url, handler, options?.Times).ConfigureAwait(false);
+            return NoopContextDisposable.Instance;
+        }
 
-        Task IBrowserContext.RouteFromHARAsync(string har, BrowserContextRouteFromHAROptions options) => Task.CompletedTask;
+        Task IBrowserContext.RouteFromHARAsync(string har, BrowserContextRouteFromHAROptions options)
+            => HarPlayback.InstallAsync(this, har, options);
 
-        Task IBrowserContext.RouteWebSocketAsync(string url, Action<IWebSocketRoute> handler) => Task.CompletedTask;
+        Task IBrowserContext.RouteWebSocketAsync(string url, Action<IWebSocketRoute> handler)
+            => WebSocketRouter.InstallAsync(this, url, handler);
 
-        Task IBrowserContext.RouteWebSocketAsync(Regex url, Action<IWebSocketRoute> handler) => Task.CompletedTask;
+        Task IBrowserContext.RouteWebSocketAsync(Regex url, Action<IWebSocketRoute> handler)
+            => WebSocketRouter.InstallAsync(this, url, handler);
 
-        Task IBrowserContext.RouteWebSocketAsync(Func<string, bool> url, Action<IWebSocketRoute> handler) => Task.CompletedTask;
+        Task IBrowserContext.RouteWebSocketAsync(Func<string, bool> url, Action<IWebSocketRoute> handler)
+            => WebSocketRouter.InstallAsync(this, url, handler);
 
-        Task<IConsoleMessage> IBrowserContext.RunAndWaitForConsoleMessageAsync(Func<Task> action, BrowserContextRunAndWaitForConsoleMessageOptions options) => Task.FromResult<IConsoleMessage>(default!);
+        Task<IConsoleMessage> IBrowserContext.RunAndWaitForConsoleMessageAsync(Func<Task> action, BrowserContextRunAndWaitForConsoleMessageOptions options)
+            => RunAndWaitInternalAsync(
+                action,
+                WaitForEventAsync(BrowserContextEvent.Console, options?.Predicate, options?.Timeout));
 
-        Task<IPage> IBrowserContext.RunAndWaitForPageAsync(Func<Task> action, BrowserContextRunAndWaitForPageOptions options) => Task.FromResult<IPage>(default!);
+        Task<IPage> IBrowserContext.RunAndWaitForPageAsync(Func<Task> action, BrowserContextRunAndWaitForPageOptions options)
+            => RunAndWaitInternalAsync(
+                action,
+                WaitForEventAsync(BrowserContextEvent.Page, options?.Predicate, options?.Timeout));
 
-        void IBrowserContext.SetDefaultNavigationTimeout(float timeout) { }
+        void IBrowserContext.SetDefaultNavigationTimeout(float timeout) => _ = SetDefaultNavigationTimeoutAsync(timeout);
 
-        void IBrowserContext.SetDefaultTimeout(float timeout) { }
+        void IBrowserContext.SetDefaultTimeout(float timeout) => _ = SetDefaultTimeoutAsync(timeout);
 
-        Task IBrowserContext.SetExtraHTTPHeadersAsync(IEnumerable<KeyValuePair<string, string>> headers) => Task.CompletedTask;
+        Task IBrowserContext.SetExtraHTTPHeadersAsync(IEnumerable<KeyValuePair<string, string>> headers) => SetExtraHttpHeadersAsync(headers);
 
-        Task IBrowserContext.SetStorageStateAsync(string storageStatePath) => Task.CompletedTask;
+        Task IBrowserContext.SetStorageStateAsync(string storageStatePath)
+        {
+            string value = storageStatePath;
+            bool inlineJson = !string.IsNullOrEmpty(value)
+                && value.TrimStart().StartsWith('{');
+            return StorageStateHelper.ApplyAsync(
+                this,
+                inlineJson ? value : null,
+                inlineJson ? null : value,
+                replaceExisting: true);
+        }
 
-        Task<string> IBrowserContext.StorageStateAsync(BrowserContextStorageStateOptions options) => Task.FromResult<string>(default!);
+        Task<string> IBrowserContext.StorageStateAsync(BrowserContextStorageStateOptions options) => StorageStateAsync(options?.Path, options?.IndexedDB, options?.Credentials);
 
-        Task IBrowserContext.UnrouteAllAsync(BrowserContextUnrouteAllOptions options) => Task.CompletedTask;
+        Task IBrowserContext.UnrouteAllAsync(BrowserContextUnrouteAllOptions options)
+            => UnrouteAllAsync(UnrouteBehaviorBridge.FromOfficial(options?.Behavior));
 
-        Task IBrowserContext.UnrouteAsync(string url, Action<IRoute> handler) => Task.CompletedTask;
+        Task IBrowserContext.UnrouteAsync(string url, Action<IRoute> handler)
+            => UnrouteAsync(url, handler);
 
-        Task IBrowserContext.UnrouteAsync(Regex url, Action<IRoute> handler) => Task.CompletedTask;
+        Task IBrowserContext.UnrouteAsync(Regex url, Action<IRoute> handler)
+            => UnrouteAsync(url, handler);
 
-        Task IBrowserContext.UnrouteAsync(Func<string, bool> url, Action<IRoute> handler) => Task.CompletedTask;
+        Task IBrowserContext.UnrouteAsync(Func<string, bool> url, Action<IRoute> handler)
+            => UnrouteAsync(url, handler);
 
-        Task IBrowserContext.UnrouteAsync(string url, Func<IRoute, Task> handler) => Task.CompletedTask;
+        Task IBrowserContext.UnrouteAsync(string url, Func<IRoute, Task> handler)
+            => UnrouteAsync(url, handler);
 
-        Task IBrowserContext.UnrouteAsync(Regex url, Func<IRoute, Task> handler) => Task.CompletedTask;
+        Task IBrowserContext.UnrouteAsync(Regex url, Func<IRoute, Task> handler)
+            => UnrouteAsync(url, handler);
 
-        Task IBrowserContext.UnrouteAsync(Func<string, bool> url, Func<IRoute, Task> handler) => Task.CompletedTask;
+        Task IBrowserContext.UnrouteAsync(Func<string, bool> url, Func<IRoute, Task> handler)
+            => UnrouteAsync(url, handler);
 
-        Task<IConsoleMessage> IBrowserContext.WaitForConsoleMessageAsync(BrowserContextWaitForConsoleMessageOptions options) => Task.FromResult<IConsoleMessage>(default!);
+        Task<IConsoleMessage> IBrowserContext.WaitForConsoleMessageAsync(BrowserContextWaitForConsoleMessageOptions options)
+            => WaitForEventAsync(BrowserContextEvent.Console, options?.Predicate, options?.Timeout);
 
-        Task<IPage> IBrowserContext.WaitForPageAsync(BrowserContextWaitForPageOptions options) => Task.FromResult<IPage>(default!);
+        Task<IPage> IBrowserContext.WaitForPageAsync(BrowserContextWaitForPageOptions options)
+            => WaitForEventAsync(BrowserContextEvent.Page, options?.Predicate, options?.Timeout);
+
+        private static async Task<T> RunAndWaitInternalAsync<T>(Func<Task> action, Task<T> waitTask)
+        {
+            if (action == null)
+            {
+                throw new ArgumentNullException(nameof(action));
+            }
+
+            Task actionTask = action();
+            T result = await waitTask.ConfigureAwait(false);
+            await actionTask.ConfigureAwait(false);
+            return result;
+        }
+
+        /// <summary>
+        /// Re-applies the macOS Safari-token default on <paramref name="page"/>
+        /// after a cross-process navigation drops the per-target override.
+        /// </summary>
+        /// <param name="page">The page whose target just committed.</param>
+        /// <returns>A task that completes when the override is applied or skipped.</returns>
+        internal Task ReapplyDefaultSafariUserAgentAsync(WKPage page)
+            => EnsureDefaultUserAgentHasSafariTokenAsync(page);
+
+        /// <summary>
+        /// macOS WebKit's default <c>navigator.userAgent</c> often omits the
+        /// trailing <c>Safari/…</c> token that upstream Playwright and the
+        /// page-basic sanity check expect. Append one derived from AppleWebKit
+        /// when the context did not set an explicit user agent.
+        /// </summary>
+        /// <param name="page">The page to normalize.</param>
+        /// <returns>A task that completes when the override is applied or skipped.</returns>
+        private async Task EnsureDefaultUserAgentHasSafariTokenAsync(WKPage page)
+        {
+            if (page == null
+                || !RuntimeInformation.IsOSPlatform(OSPlatform.OSX)
+                || !string.IsNullOrEmpty(_userAgent))
+            {
+                return;
+            }
+
+            string ua = _defaultSafariUserAgent;
+
+            // ApplyEmulation runs before Target.resume. Probing navigator.userAgent
+            // on a paused Darwin target wedges Runtime.evaluate until the 20s
+            // WKSession command timeout — even budgeted WhenAny attempts leave
+            // orphans that then make StampNavigatorUserAgentAsync hang and eat
+            // LaunchAsyncHandleSIGINTFalseShouldStartAPage's NUnit 30s budget.
+            // Use the fallback Safari-token UA until the page is live; after
+            // resume EvaluateOnCurrent / recycle re-stamp covers the document.
+            if (string.IsNullOrEmpty(ua) && page.InitializedTask.IsCompleted)
+            {
+                // Cap each probe: zombie targets after Darwin recycle hang until
+                // the 20s WKSession command timeout. Five unbounded retries ate
+                // LaunchAsyncHandleSIGTERMFalseShouldStartAPage's NUnit 30s budget.
+                DateTime deadline = DateTime.UtcNow.AddSeconds(2);
+                for (int attempt = 0; attempt < 5 && DateTime.UtcNow < deadline; attempt++)
+                {
+                    try
+                    {
+                        TimeSpan remaining = deadline - DateTime.UtcNow;
+                        if (remaining <= TimeSpan.Zero)
+                        {
+                            break;
+                        }
+
+                        TimeSpan attemptBudget = remaining > TimeSpan.FromMilliseconds(800)
+                            ? TimeSpan.FromMilliseconds(800)
+                            : remaining;
+                        Task<string> evalTask = page.EvaluateAsync<string>("() => navigator.userAgent");
+                        Task finished = await Task.WhenAny(evalTask, Task.Delay(attemptBudget))
+                            .ConfigureAwait(false);
+                        if (finished != evalTask)
+                        {
+                            _ = evalTask.ContinueWith(
+                                t => _ = t.Exception,
+                                CancellationToken.None,
+                                TaskContinuationOptions.OnlyOnFaulted,
+                                TaskScheduler.Default);
+                        }
+                        else
+                        {
+                            ua = await evalTask.ConfigureAwait(false);
+                            if (!string.IsNullOrEmpty(ua))
+                            {
+                                break;
+                            }
+                        }
+                    }
+#pragma warning disable RCS1075
+                    catch (Exception)
+#pragma warning restore RCS1075
+                    {
+                        // Page may not be evaluable yet (or mid-swap); retry briefly.
+                    }
+
+                    await Task.Delay(50).ConfigureAwait(false);
+                }
+            }
+
+            if (!string.IsNullOrEmpty(ua)
+                && ua.Contains("Safari/", StringComparison.Ordinal)
+                && ua.Contains("Version/", StringComparison.Ordinal))
+            {
+                await StampNavigatorUserAgentAsync(page, ua).ConfigureAwait(false);
+                return;
+            }
+
+            // MiniBrowser's default navigator.userAgent often omits Version/ and
+            // Safari/. Page.overrideUserAgent also fails to stick before the
+            // first document is live, so stamp both the protocol override and a
+            // navigator getter (init script) without assigning _userAgent.
+            string baseUa = string.IsNullOrEmpty(ua)
+                ? "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)"
+                : ua;
+            string withSafari = WithSafariTokens(baseUa);
+            _defaultSafariUserAgent = withSafari;
+            await page.SetUserAgentAsync(withSafari).ConfigureAwait(false);
+            await StampNavigatorUserAgentAsync(page, withSafari).ConfigureAwait(false);
+
+            static string WithSafariTokens(string userAgent)
+            {
+                string result = string.IsNullOrEmpty(userAgent)
+                    ? "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)"
+                    : userAgent.TrimEnd();
+                Match webkit = Regex.Match(result, @"AppleWebKit/([\d.]+)");
+                string version = webkit.Success ? webkit.Groups[1].Value : "605.1.15";
+                if (!result.Contains("Version/", StringComparison.Ordinal))
+                {
+                    result += " Version/" + version;
+                }
+
+                if (!result.Contains("Safari/", StringComparison.Ordinal))
+                {
+                    result += " Safari/" + version;
+                }
+
+                return result;
+            }
+        }
+
+        private async Task StampNavigatorUserAgentAsync(WKPage page, string userAgent)
+        {
+            if (page == null || string.IsNullOrEmpty(userAgent))
+            {
+                return;
+            }
+
+            string literal = JsonSerializer.Serialize(userAgent);
+            string script =
+                "(() => { const ua = " + literal + @";
+  try {
+    Object.defineProperty(navigator, 'userAgent', {
+      configurable: true,
+      enumerable: true,
+      get() { return ua; }
+    });
+  } catch (e) {}
+})()";
+
+            // ApplyEmulation stamps before Target.resume. Unbounded EvaluateAsync
+            // on a paused Darwin target burns the full 20s WKSession command
+            // timeout (LaunchAsyncHandleSIGINTFalseShouldStartAPage empty-stack
+            // 30s). Only evaluate once the page is live, and bound the attempt;
+            // the init script below still covers navigations / EvaluateOnCurrent.
+            if (page.InitializedTask.IsCompleted)
+            {
+                await EvaluateWithShortBudgetAsync(
+                        page,
+                        script,
+                        TimeSpan.FromSeconds(1.5))
+                    .ConfigureAwait(false);
+            }
+
+            if (_defaultSafariUaInitInstalled)
+            {
+                return;
+            }
+
+            _defaultSafariUaInitInstalled = true;
+            await AddInitScriptAsync(script, scriptPath: null).ConfigureAwait(false);
+        }
+
+        private sealed class NoopContextDisposable : IAsyncDisposable
+        {
+            internal static readonly NoopContextDisposable Instance = new();
+
+            public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+        }
+
 #pragma warning restore SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
+
     }
 }

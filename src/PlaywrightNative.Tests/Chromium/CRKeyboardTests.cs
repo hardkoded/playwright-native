@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 
@@ -182,7 +183,7 @@ namespace PlaywrightNative.Tests.Chromium
         {
             await Page.GoToAsync(TestConstants.ServerUrl + "/input/textarea.html").ConfigureAwait(false);
 
-            PlaywrightNativeException ex = Assert.ThrowsAsync<PlaywrightNativeException>(
+            PlaywrightException ex = Assert.ThrowsAsync<PlaywrightException>(
                 () => Page.Keyboard.PressAsync("NotARealKey"));
             Assert.That(ex.Message, Does.Contain("NotARealKey"));
         }

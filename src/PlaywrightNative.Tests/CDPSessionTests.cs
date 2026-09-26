@@ -16,6 +16,7 @@
  */
 using System.Text.Json;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 
@@ -141,11 +142,11 @@ namespace PlaywrightNative.Tests
             await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
 
-            PlaywrightNativeException pageEx = Assert.ThrowsAsync<PlaywrightNativeException>(
+            PlaywrightException pageEx = Assert.ThrowsAsync<PlaywrightException>(
                 async () => await page.NewCDPSessionAsync().ConfigureAwait(false));
             Assert.That(pageEx.Message, Does.Contain("Chromium"));
 
-            PlaywrightNativeException browserEx = Assert.ThrowsAsync<PlaywrightNativeException>(
+            PlaywrightException browserEx = Assert.ThrowsAsync<PlaywrightException>(
                 async () => await browser.NewBrowserCDPSessionAsync().ConfigureAwait(false));
             Assert.That(browserEx.Message, Does.Contain("Chromium"));
         }
@@ -168,7 +169,7 @@ namespace PlaywrightNative.Tests
 
             IElementHandle iframe = await page.QuerySelectorAsync("iframe").ConfigureAwait(false);
             IFrame frame = await iframe.ContentFrameAsync().ConfigureAwait(false);
-            PlaywrightNativeException ex = Assert.ThrowsAsync<PlaywrightNativeException>(
+            PlaywrightException ex = Assert.ThrowsAsync<PlaywrightException>(
                 async () => await context.NewCDPSessionAsync(frame).ConfigureAwait(false));
             Assert.That(
                 ex.Message,

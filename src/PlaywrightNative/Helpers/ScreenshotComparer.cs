@@ -20,6 +20,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -67,7 +68,7 @@ namespace PlaywrightNative.Helpers
                     maskColor: maskColor).ConfigureAwait(false);
                 return Matches(actual, expected, maxDiffPixels, maxDiffPixelRatio, threshold);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 return false;
             }
@@ -114,7 +115,7 @@ namespace PlaywrightNative.Helpers
                     maskColor: maskColor).ConfigureAwait(false);
                 return Matches(actual, expected, maxDiffPixels, maxDiffPixelRatio, threshold);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 return false;
             }

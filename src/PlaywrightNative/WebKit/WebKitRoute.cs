@@ -73,7 +73,10 @@ namespace PlaywrightNative.WebKit
         {
             byte[] body = postDataText != null ? Encoding.UTF8.GetBytes(postDataText) : postData;
             IDictionary<string, string> headerDict = ToDictionary(headers);
-            IBrowserContext context = Request.Frame?.Page?.Context;
+
+            // Early popup/navigation requests may not have a Frame yet; continue must
+            // still work. Prefer OwningPage (non-throwing) over Request.Frame.
+            IBrowserContext context = _wkRoute.Request.OwningPage?.Context;
             return ActionTrace.RunAsync(
                 context,
                 "Continue request",
@@ -148,13 +151,77 @@ namespace PlaywrightNative.WebKit
         }
 
 #pragma warning disable SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
-        Task IRoute.ContinueAsync(RouteContinueOptions options) => Task.CompletedTask;
+        Task IRoute.ContinueAsync(RouteContinueOptions options)
+            => ResumeAsync(
+                headers: options?.Headers,
+                method: options?.Method,
+                postData: options?.PostData,
+                url: options?.Url);
 
-        Task IRoute.FallbackAsync(RouteFallbackOptions options) => Task.CompletedTask;
+        Task IRoute.FallbackAsync(RouteFallbackOptions options)
+            => FallbackAsync(
+                headers: options?.Headers,
+                method: options?.Method,
+                postData: options?.PostData,
+                url: options?.Url);
 
-        Task<IAPIResponse> IRoute.FetchAsync(RouteFetchOptions options) => Task.FromResult<IAPIResponse>(default!);
+        async Task<IAPIResponse> IRoute.FetchAsync(RouteFetchOptions options)
+        {
+            RouteFetchResult fetched = await RouteFetch.FetchAsync(
+                Request,
+                url: options?.Url,
+                method: options?.Method,
+                headers: options?.Headers,
+                postData: options?.PostData,
+                timeout: options?.Timeout.HasValue == true ? (int?)options.Timeout.Value : null,
+                maxRedirects: options?.MaxRedirects,
+                maxRetries: options?.MaxRetries ?? 0).ConfigureAwait(false);
+            return new APIResponse(
+                fetched.Status,
+                fetched.StatusText,
+                fetched.Url,
+                fetched.Headers,
+                fetched.Body);
+        }
 
-        Task IRoute.FulfillAsync(RouteFulfillOptions options) => Task.CompletedTask;
+        Task IRoute.FulfillAsync(RouteFulfillOptions options)
+            => FulfillFromOptionsAsync(options);
+
+        private async Task FulfillFromOptionsAsync(RouteFulfillOptions options)
+        {
+            options ??= new RouteFulfillOptions();
+            string body = options.Body;
+            byte[] bodyBytes = options.BodyBytes;
+            string contentType = options.ContentType;
+            IEnumerable<KeyValuePair<string, string>> headers = options.Headers;
+            int? status = options.Status;
+
+            if (options.Response != null)
+            {
+                status ??= options.Response.Status;
+                headers ??= options.Response.Headers;
+                if (body == null && bodyBytes == null && options.Path == null && options.Json == null)
+                {
+                    bodyBytes = await options.Response.BodyAsync().ConfigureAwait(false);
+                }
+
+                if (contentType == null
+                    && options.Response.Headers != null
+                    && options.Response.Headers.TryGetValue("content-type", out string responseType))
+                {
+                    contentType = responseType;
+                }
+            }
+
+            await FulfillAsync(
+                body: body,
+                bodyBytes: bodyBytes,
+                contentType: contentType,
+                headers: headers,
+                path: options.Path,
+                status: status,
+                json: options.Json).ConfigureAwait(false);
+        }
 #pragma warning restore SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
     }
 }

@@ -22,29 +22,38 @@ namespace PlaywrightNative.Chromium
 {
     /// <summary>
     /// Sends CDP <c>Input.dispatchKeyEvent</c> and <c>Input.insertText</c> commands.
+    /// Cancels an intercepted HTML5 drag on Escape (upstream <c>crInput.RawKeyboardImpl</c>).
     /// </summary>
     internal class CRRawKeyboard : IRawKeyboard
     {
         private readonly CRSession _session;
+        private readonly CRDragManager _dragManager;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="CRRawKeyboard"/> class.
         /// </summary>
         /// <param name="session">The CDP session to send commands on.</param>
-        public CRRawKeyboard(CRSession session)
+        /// <param name="dragManager">Chromium drag interceptor.</param>
+        public CRRawKeyboard(CRSession session, CRDragManager dragManager)
         {
             _session = session;
+            _dragManager = dragManager;
         }
 
         /// <summary>
         /// Dispatches a CDP <c>Input.dispatchKeyEvent</c> <c>keyDown</c> (or <c>rawKeyDown</c>
-        /// when there is no text to emit).
+        /// when there is no text to emit). Escape cancels an in-flight drag.
         /// </summary>
-        public Task KeyDownAsync(IReadOnlyCollection<Input.KeyboardModifier> modifiers, Input.KeyDefinition key, bool autoRepeat)
+        public async Task KeyDownAsync(IReadOnlyCollection<Input.KeyboardModifier> modifiers, Input.KeyDefinition key, bool autoRepeat)
         {
+            if (key.Code == "Escape" && await _dragManager.CancelDragAsync().ConfigureAwait(false))
+            {
+                return;
+            }
+
             string type = string.IsNullOrEmpty(key.Text) ? "rawKeyDown" : "keyDown";
 
-            return _session.SendAsync("Input.dispatchKeyEvent", new
+            await _session.SendAsync("Input.dispatchKeyEvent", new
             {
                 type,
                 modifiers = modifiers.ToCdpMask(),
@@ -56,7 +65,7 @@ namespace PlaywrightNative.Chromium
                 autoRepeat,
                 location = key.Location,
                 isKeypad = key.Location == 3,
-            });
+            }).ConfigureAwait(false);
         }
 
         /// <summary>

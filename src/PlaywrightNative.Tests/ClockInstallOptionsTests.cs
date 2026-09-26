@@ -41,6 +41,7 @@ namespace PlaywrightNative.Tests
             const long frozen = 1_706_871_600_000;
             DateTime timeDate = DateTimeOffset.FromUnixTimeMilliseconds(frozen).UtcDateTime;
             await page.Clock.InstallAsync(new ClockInstallOptions { TimeDate = timeDate }).ConfigureAwait(false);
+            await page.Clock.PauseAtAsync(frozen).ConfigureAwait(false);
 
             long now = await page.EvaluateAsync<long>("Date.now()").ConfigureAwait(false);
             Assert.That(now, Is.EqualTo(frozen));
@@ -60,6 +61,7 @@ namespace PlaywrightNative.Tests
             DateTime parsed = DateTime.Parse(time, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind);
             long expected = new DateTimeOffset(parsed.ToUniversalTime()).ToUnixTimeMilliseconds();
             await page.Clock.InstallAsync(new ClockInstallOptions { Time = time }).ConfigureAwait(false);
+            await page.Clock.PauseAtAsync(expected).ConfigureAwait(false);
 
             long now = await page.EvaluateAsync<long>("Date.now()").ConfigureAwait(false);
             Assert.That(now, Is.EqualTo(expected));
@@ -79,6 +81,7 @@ namespace PlaywrightNative.Tests
             DateTime parsed = DateTime.Parse(time, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind);
             long expected = new DateTimeOffset(parsed.ToUniversalTime()).ToUnixTimeMilliseconds();
             await page.Clock.InstallAsync(new ClockInstallOptions { TimeString = time }).ConfigureAwait(false);
+            await page.Clock.PauseAtAsync(expected).ConfigureAwait(false);
 
             long now = await page.EvaluateAsync<long>("Date.now()").ConfigureAwait(false);
             Assert.That(now, Is.EqualTo(expected));
@@ -101,6 +104,7 @@ namespace PlaywrightNative.Tests
                 TimeDate = timeDate,
                 Time = "1999-01-01T00:00:00.000Z",
             }).ConfigureAwait(false);
+            await page.Clock.PauseAtAsync(frozen).ConfigureAwait(false);
 
             long now = await page.EvaluateAsync<long>("Date.now()").ConfigureAwait(false);
             Assert.That(now, Is.EqualTo(frozen));

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Net.Sockets;
 using System.Net.WebSockets;
 using System.Text;
 using System.Threading;
@@ -24,18 +25,35 @@ namespace PlaywrightNative.TestServer
         private readonly List<string> _bufferedMessages = new List<string>();
         private bool _receiveStarted;
         private bool _closed;
+        private bool _closeSent;
         private readonly SemaphoreSlim _writeLock = new SemaphoreSlim(1, 1);
+        private readonly TaskCompletionSource<bool> _closedTcs =
+            new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
         internal OfficialServerWebSocket(WebSocket socket, Stream stream = null)
         {
             _socket = socket;
             _stream = stream;
+
+            // When we own the raw upgraded stream, start the receive loop immediately so
+            // ping/close frames are handled even before the test registers listeners.
+            // Deferred start raced macOS WebKit client closes (page saw 1006).
+            if (_stream != null)
+            {
+                EnsureReceive();
+            }
         }
 
         internal OfficialServerWebSocket(Stream stream)
         {
             _stream = stream ?? throw new ArgumentNullException(nameof(stream));
+            EnsureReceive();
         }
+
+        /// <summary>
+        /// Completes when the peer close handshake finishes or the stream drops.
+        /// </summary>
+        internal Task WaitUntilClosedAsync() => _closedTcs.Task;
 
         /// <summary>
         /// Registers a one-shot text-or-binary message listener. Binary frames
@@ -96,13 +114,20 @@ namespace PlaywrightNative.TestServer
         public void Send(string text)
         {
             byte[] bytes = Encoding.UTF8.GetBytes(text ?? string.Empty);
-            if (_socket != null)
+
+            // Prefer the upgraded stream when present. ManagedWebSocket shares that
+            // stream; mixing APIs corrupts framing, and CloseAsync has failed to echo
+            // application close codes (3000–4999) on macOS WebKit (page sees 1006).
+            if (_stream != null)
             {
-                _ = _socket.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, CancellationToken.None);
+                WriteFrame(opcode: 1, bytes);
                 return;
             }
 
-            WriteFrame(opcode: 1, bytes);
+            if (_socket != null)
+            {
+                _ = _socket.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, CancellationToken.None);
+            }
         }
 
         /// <summary>
@@ -112,13 +137,16 @@ namespace PlaywrightNative.TestServer
         public void Send(byte[] payload)
         {
             byte[] bytes = payload ?? Array.Empty<byte>();
-            if (_socket != null)
+            if (_stream != null)
             {
-                _ = _socket.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Binary, true, CancellationToken.None);
+                WriteFrame(opcode: 2, bytes);
                 return;
             }
 
-            WriteFrame(opcode: 2, bytes);
+            if (_socket != null)
+            {
+                _ = _socket.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Binary, true, CancellationToken.None);
+            }
         }
 
         /// <summary>
@@ -129,30 +157,32 @@ namespace PlaywrightNative.TestServer
         public void Close(int code, string reason)
         {
             string text = reason ?? string.Empty;
+            if (_stream != null)
+            {
+                byte[] reasonBytes = Encoding.UTF8.GetBytes(text);
+                byte[] payload = new byte[2 + reasonBytes.Length];
+                payload[0] = (byte)((code >> 8) & 0xFF);
+                payload[1] = (byte)(code & 0xFF);
+                Buffer.BlockCopy(reasonBytes, 0, payload, 2, reasonBytes.Length);
+                // Mark before write so a concurrent peer close does not echo a
+                // second close frame (Chromium then surfaces error+1006).
+                _closeSent = true;
+                WriteFrame(opcode: 8, payload);
+                return;
+            }
+
             if (_socket != null)
             {
-                WebSocketCloseStatus status = Enum.IsDefined(typeof(WebSocketCloseStatus), code)
-                    ? (WebSocketCloseStatus)code
-                    : WebSocketCloseStatus.NormalClosure;
                 try
                 {
-                    status = (WebSocketCloseStatus)code;
+                    WebSocketCloseStatus status = (WebSocketCloseStatus)code;
                     _ = _socket.CloseAsync(status, text, CancellationToken.None);
                 }
                 catch (ArgumentException)
                 {
                     _ = _socket.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, text, CancellationToken.None);
                 }
-
-                return;
             }
-
-            byte[] reasonBytes = Encoding.UTF8.GetBytes(text);
-            byte[] payload = new byte[2 + reasonBytes.Length];
-            payload[0] = (byte)((code >> 8) & 0xFF);
-            payload[1] = (byte)(code & 0xFF);
-            Buffer.BlockCopy(reasonBytes, 0, payload, 2, reasonBytes.Length);
-            WriteFrame(opcode: 8, payload);
         }
 
         /// <summary>
@@ -222,15 +252,19 @@ namespace PlaywrightNative.TestServer
         {
             try
             {
-                if (_socket != null)
-                {
-                    await ReceiveSocketAsync().ConfigureAwait(false);
-                    return;
-                }
-
+                // Prefer raw frames when the upgraded stream is available so client
+                // close codes (e.g. 3002) are echoed byte-for-byte. ManagedWebSocket
+                // CloseAsync can fail to complete the handshake for application codes
+                // on some platforms; WebKit then reports error + close 1006.
                 if (_stream != null)
                 {
                     await ReceiveStreamAsync().ConfigureAwait(false);
+                    return;
+                }
+
+                if (_socket != null)
+                {
+                    await ReceiveSocketAsync().ConfigureAwait(false);
                 }
             }
             catch (IOException)
@@ -259,18 +293,33 @@ namespace PlaywrightNative.TestServer
                 {
                     int code = result.CloseStatus.HasValue ? (int)result.CloseStatus.Value : 1005;
                     byte[] reason = Encoding.UTF8.GetBytes(result.CloseStatusDescription ?? string.Empty);
+                    WebSocketCloseStatus status = result.CloseStatus ?? WebSocketCloseStatus.NormalClosure;
+                    string description = result.CloseStatusDescription ?? string.Empty;
                     try
                     {
-                        await _socket.CloseAsync(
-                            result.CloseStatus ?? WebSocketCloseStatus.NormalClosure,
-                            result.CloseStatusDescription,
-                            CancellationToken.None).ConfigureAwait(false);
+                        // Already received the peer close frame — only send ours.
+                        await _socket.CloseOutputAsync(status, description, CancellationToken.None)
+                            .ConfigureAwait(false);
                     }
                     catch (WebSocketException)
                     {
                     }
                     catch (ArgumentException)
                     {
+                        try
+                        {
+                            await _socket.CloseOutputAsync(
+                                    WebSocketCloseStatus.NormalClosure,
+                                    description,
+                                    CancellationToken.None)
+                                .ConfigureAwait(false);
+                        }
+                        catch (WebSocketException)
+                        {
+                        }
+                        catch (ArgumentException)
+                        {
+                        }
                     }
 
                     NotifyClose(code, reason);
@@ -300,9 +349,85 @@ namespace PlaywrightNative.TestServer
                     byte[] reason = payload.Length > 2
                         ? payload.AsSpan(2).ToArray()
                         : Array.Empty<byte>();
-                    WriteFrame(opcode: 8, payload);
+                    // RFC 6455: only reply with Close if we have not already sent one.
+                    // Echoing after a server-initiated Close confuses Chromium into
+                    // error + 1006 (ShouldWorkWithTextMessage).
+                    if (!_closeSent)
+                    {
+                        _closeSent = true;
+                        WriteFrame(opcode: 8, payload);
+                    }
+
+                    // Let dual Darwin proxies (Mac bypass shim → LocaleHandshakeProxy)
+                    // copy the close echo to CFNetwork BEFORE TCP FIN. Shutdown(Send)
+                    // immediately after WriteFrame coalesced echo+FIN through both
+                    // hops; WebKit then reported error + close 1006 instead of clean
+                    // application close 3002 (ShouldWorkWithClientSideClose).
+                    await Task.Delay(1600).ConfigureAwait(false);
+
+                    try
+                    {
+                        if (_stream is NetworkStream network)
+                        {
+                            try
+                            {
+                                network.Socket.LingerState = new LingerOption(true, 10);
+                                network.Socket.NoDelay = true;
+                            }
+                            catch (SocketException)
+                            {
+                            }
+
+                            network.Socket?.Shutdown(SocketShutdown.Send);
+                        }
+                    }
+                    catch (SocketException)
+                    {
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                    }
+
+                    // Brief drain so proxy hops observe EOF after the delayed FIN.
+                    // Cap the wait — a long drain deadlocks when the peer still
+                    // expects a clean close that never arrives.
+                    try
+                    {
+                        byte[] sink = new byte[256];
+                        using CancellationTokenSource drainCts =
+                            new CancellationTokenSource(TimeSpan.FromMilliseconds(800));
+                        while (true)
+                        {
+                            int n = await _stream.ReadAsync(sink.AsMemory(0, sink.Length), drainCts.Token)
+                                .ConfigureAwait(false);
+                            if (n == 0)
+                            {
+                                break;
+                            }
+                        }
+                    }
+                    catch (IOException)
+                    {
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                    }
+                    catch (OperationCanceledException)
+                    {
+                    }
+
                     NotifyClose(code, reason);
+                    // Keep the upgrade handler alive briefly so Kestrel does not
+                    // dispose the stream while bypass/handshake shims still flush.
+                    await Task.Delay(400).ConfigureAwait(false);
                     return;
+                }
+
+                if (opcode == 9)
+                {
+                    // Respond to ping so the peer does not abort the connection.
+                    WriteFrame(opcode: 10, payload);
+                    continue;
                 }
 
                 if (opcode == 1 || opcode == 2)
@@ -487,6 +612,7 @@ namespace PlaywrightNative.TestServer
                 listeners = new List<Action<int, byte[]>>(_closeListeners);
             }
 
+            _closedTcs.TrySetResult(true);
             handler?.Invoke(code, reason ?? Array.Empty<byte>());
             foreach (Action<int, byte[]> listener in listeners)
             {

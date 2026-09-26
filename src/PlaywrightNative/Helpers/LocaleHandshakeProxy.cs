@@ -34,18 +34,29 @@ namespace PlaywrightNative.Helpers
     /// </summary>
     internal sealed class LocaleHandshakeProxy : IDisposable
     {
+        private const int MaxBufferedBodyBytes = 1024 * 1024;
+
         private static readonly string[] HeaderSeparators = ["\r\n"];
 
+        /// <summary>
+        /// Byte-preserving 0–255 mapping. <see cref="Encoding.ASCII"/> replaces
+        /// bytes ≥ 128 with <c>?</c> (63), which corrupts binary/UTF-8 bodies on
+        /// loopback HTTP when WebKit traffic is forced through this proxy.
+        /// </summary>
+        private static readonly Encoding Latin1 = Encoding.Latin1;
+
         private readonly string _locale;
+        private readonly bool _useSocks;
         private readonly TcpListener _listener;
         private readonly CancellationTokenSource _cts = new();
         private readonly Task _acceptLoop;
         private volatile IReadOnlyDictionary<string, string> _extraHeaders;
         private int _disposed;
 
-        private LocaleHandshakeProxy(string locale)
+        private LocaleHandshakeProxy(string locale, bool useSocks)
         {
             _locale = locale;
+            _useSocks = useSocks;
             _listener = new TcpListener(IPAddress.Loopback, 0);
             _listener.Start();
             Port = ((IPEndPoint)_listener.LocalEndpoint).Port;
@@ -108,6 +119,57 @@ namespace PlaywrightNative.Helpers
         /// <param name="effectiveProxy">Proxy to pass to createContext.</param>
         /// <returns>The proxy to dispose with the context, or <see langword="null"/>.</returns>
         internal static LocaleHandshakeProxy TryStart(string locale, Proxy userProxy, bool force, out Proxy effectiveProxy)
+            => TryStart(locale, userProxy, force, bypassLoopback: true, out effectiveProxy);
+
+        /// <summary>
+        /// Starts a handshake proxy when <paramref name="locale"/> is set,
+        /// <paramref name="force"/> is <see langword="true"/>, and the caller
+        /// did not already supply a proxy.
+        /// </summary>
+        /// <param name="locale">Context locale, or <see langword="null"/>.</param>
+        /// <param name="userProxy">Caller-supplied proxy, or <see langword="null"/>.</param>
+        /// <param name="force">Start even when no locale is configured.</param>
+        /// <param name="bypassLoopback">
+        /// When <see langword="true"/>, localhost bypasses the proxy (Chromium uses
+        /// Fetch to rewrite loopback WebSocket handshakes). WebKit Network
+        /// interception does not rewrite WebSocket upgrades, so WebKit must pass
+        /// <see langword="false"/> or localhost WS keeps the browser default
+        /// <c>Accept-Language</c>.
+        /// </param>
+        /// <param name="effectiveProxy">Proxy to pass to createContext.</param>
+        /// <returns>The proxy to dispose with the context, or <see langword="null"/>.</returns>
+        internal static LocaleHandshakeProxy TryStart(
+            string locale,
+            Proxy userProxy,
+            bool force,
+            bool bypassLoopback,
+            out Proxy effectiveProxy)
+            => TryStart(locale, userProxy, force, bypassLoopback, useSocks: false, out effectiveProxy);
+
+        /// <summary>
+        /// Starts a handshake proxy when <paramref name="locale"/> is set,
+        /// <paramref name="force"/> is <see langword="true"/>, and the caller
+        /// did not already supply a proxy.
+        /// </summary>
+        /// <param name="locale">Context locale, or <see langword="null"/>.</param>
+        /// <param name="userProxy">Caller-supplied proxy, or <see langword="null"/>.</param>
+        /// <param name="force">Start even when no locale is configured.</param>
+        /// <param name="bypassLoopback">
+        /// When <see langword="true"/>, localhost bypasses the proxy.
+        /// </param>
+        /// <param name="useSocks">
+        /// When <see langword="true"/>, expose <c>socks5://</c> so WebKit keeps
+        /// HTTP/2 ALPN (HTTP CONNECT proxies disable it on Linux libsoup).
+        /// </param>
+        /// <param name="effectiveProxy">Proxy to pass to createContext.</param>
+        /// <returns>The proxy to dispose with the context, or <see langword="null"/>.</returns>
+        internal static LocaleHandshakeProxy TryStart(
+            string locale,
+            Proxy userProxy,
+            bool force,
+            bool bypassLoopback,
+            bool useSocks,
+            out Proxy effectiveProxy)
         {
             effectiveProxy = userProxy;
             if (userProxy != null || (string.IsNullOrEmpty(locale) && !force))
@@ -115,11 +177,15 @@ namespace PlaywrightNative.Helpers
                 return null;
             }
 
-            LocaleHandshakeProxy handshake = new(locale);
+            LocaleHandshakeProxy handshake = new(locale, useSocks);
+            string scheme = useSocks ? "socks5://" : "http://";
             effectiveProxy = new Proxy
             {
-                Server = "http://127.0.0.1:" + handshake.Port.ToString(CultureInfo.InvariantCulture),
-                Bypass = "<-loopback>",
+                Server = scheme + "127.0.0.1:" + handshake.Port.ToString(CultureInfo.InvariantCulture),
+
+                // <loopback> expands in ProxySettings.ShouldBypass (shim / MITM).
+                // Keep <-loopback> as a synonym there for older callers.
+                Bypass = bypassLoopback ? "<loopback>" : null,
             };
             return handshake;
         }
@@ -129,9 +195,59 @@ namespace PlaywrightNative.Helpers
         /// </summary>
         /// <param name="headers">Merged extra headers, or <see langword="null"/>.</param>
         internal void SetExtraHeaders(IReadOnlyDictionary<string, string> headers)
-            => _extraHeaders = headers;
+        {
+            if (headers == null || headers.Count == 0)
+            {
+                _extraHeaders = null;
+                return;
+            }
+
+            // Snapshot so later page/context map replacement cannot clear the
+            // proxy mid-handshake (macOS WebKit ignores Network.setExtraHTTPHeaders
+            // on upgrades and relies solely on this stamp).
+            Dictionary<string, string> copy = new(StringComparer.OrdinalIgnoreCase);
+            foreach (KeyValuePair<string, string> header in headers)
+            {
+                if (string.IsNullOrEmpty(header.Key))
+                {
+                    continue;
+                }
+
+                copy[header.Key] = header.Value ?? string.Empty;
+            }
+
+            _extraHeaders = copy.Count == 0 ? null : copy;
+        }
 
         private static async Task<byte[]> ReadHttpMessageAsync(HttpIO io, CancellationToken token)
+        {
+            (byte[] message, int remainingBody) = await ReadHttpMessageCoreAsync(io, bufferBody: true, token)
+                .ConfigureAwait(false);
+            if (remainingBody > 0 && message != null)
+            {
+                // bufferBody:true still streams oversized bodies via the core
+                // helper — append by reading remainingBody into a combined buffer
+                // only when small; oversized returns headers-only + remaining.
+                MemoryStream combined = new();
+                combined.Write(message);
+                await CopyExactAsync(io, combined, remainingBody, token).ConfigureAwait(false);
+                return combined.ToArray();
+            }
+
+            return message;
+        }
+
+        /// <summary>
+        /// Reads one HTTP message. When <paramref name="bufferBody"/> is false or
+        /// Content-Length exceeds <see cref="MaxBufferedBodyBytes"/>, returns
+        /// headers only and leaves remaining body bytes on
+        /// <paramref name="io"/> for the caller to stream (avoids buffering
+        /// 200MB multipart uploads through the Linux WebKit SOCKS MITM).
+        /// </summary>
+        private static async Task<(byte[] Message, int RemainingBody)> ReadHttpMessageCoreAsync(
+            HttpIO io,
+            bool bufferBody,
+            CancellationToken token)
         {
             MemoryStream buffer = new();
             while (true)
@@ -148,14 +264,29 @@ namespace PlaywrightNative.Helpers
                     int n = await io.ReadAsync(buffer, token).ConfigureAwait(false);
                     if (n == 0)
                     {
-                        return data.Length == 0 ? null : data;
+                        return data.Length == 0 ? (null, 0) : (data, 0);
                     }
 
                     continue;
                 }
 
                 int contentLength = ParseContentLength(data, headerEnd);
-                int total = headerEnd + 4 + Math.Max(contentLength, 0);
+                int headersLength = headerEnd + 4;
+                bool streamBody = !bufferBody || contentLength > MaxBufferedBodyBytes;
+                if (streamBody && contentLength > 0)
+                {
+                    data = buffer.ToArray();
+                    if (data.Length > headersLength)
+                    {
+                        io.Unread(data, headersLength, data.Length - headersLength);
+                    }
+
+                    byte[] headersOnly = new byte[headersLength];
+                    Buffer.BlockCopy(data, 0, headersOnly, 0, headersLength);
+                    return (headersOnly, contentLength);
+                }
+
+                int total = headersLength + Math.Max(contentLength, 0);
                 while (data.Length < total)
                 {
                     int n = await io.ReadAsync(buffer, token).ConfigureAwait(false);
@@ -173,10 +304,28 @@ namespace PlaywrightNative.Helpers
                     io.Unread(data, total, data.Length - total);
                     byte[] exact = new byte[total];
                     Buffer.BlockCopy(data, 0, exact, 0, total);
-                    return exact;
+                    return (exact, 0);
                 }
 
-                return data;
+                return (data, 0);
+            }
+        }
+
+        private static async Task CopyExactAsync(HttpIO from, Stream to, int count, CancellationToken token)
+        {
+            int remaining = count;
+            byte[] chunk = new byte[Math.Min(64 * 1024, Math.Max(count, 1))];
+            while (remaining > 0)
+            {
+                int toRead = Math.Min(chunk.Length, remaining);
+                int n = await from.ReadBytesAsync(chunk.AsMemory(0, toRead), token).ConfigureAwait(false);
+                if (n == 0)
+                {
+                    break;
+                }
+
+                await to.WriteAsync(chunk.AsMemory(0, n), token).ConfigureAwait(false);
+                remaining -= n;
             }
         }
 
@@ -198,7 +347,7 @@ namespace PlaywrightNative.Helpers
 
         private static int ParseContentLength(byte[] data, int headerEnd)
         {
-            string headers = Encoding.ASCII.GetString(data, 0, headerEnd);
+            string headers = Latin1.GetString(data, 0, headerEnd);
             foreach (string line in headers.Split(HeaderSeparators, StringSplitOptions.None))
             {
                 if (line.StartsWith("Content-Length:", StringComparison.OrdinalIgnoreCase)
@@ -210,6 +359,29 @@ namespace PlaywrightNative.Helpers
             }
 
             return 0;
+        }
+
+        /// <summary>
+        /// <see cref="ReadHttpMessageAsync"/> stops at headers when there is no
+        /// Content-Length (typical chunked Kestrel responses). Remaining body
+        /// bytes must be tunneled.
+        /// </summary>
+        private static bool IsChunkedOrUnsized(string responseText)
+        {
+            if (string.IsNullOrEmpty(responseText))
+            {
+                return false;
+            }
+
+            int headerEnd = responseText.IndexOf("\r\n\r\n", StringComparison.Ordinal);
+            string headers = headerEnd < 0 ? responseText : responseText.Substring(0, headerEnd);
+            if (headers.Contains("Transfer-Encoding:", StringComparison.OrdinalIgnoreCase)
+                && headers.Contains("chunked", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            return !headers.Contains("Content-Length:", StringComparison.OrdinalIgnoreCase);
         }
 
         private static bool IsConnect(byte[] message)
@@ -227,7 +399,7 @@ namespace PlaywrightNative.Helpers
                 return false;
             }
 
-            string text = Encoding.ASCII.GetString(message);
+            string text = Latin1.GetString(message);
             return text.Contains("Upgrade: websocket", StringComparison.OrdinalIgnoreCase)
                 || text.Contains("Sec-WebSocket-Key:", StringComparison.OrdinalIgnoreCase);
         }
@@ -288,7 +460,7 @@ namespace PlaywrightNative.Helpers
                 return false;
             }
 
-            string text = Encoding.ASCII.GetString(message);
+            string text = Latin1.GetString(message);
             int lineEnd = text.IndexOf("\r\n", StringComparison.Ordinal);
             string requestLine = lineEnd < 0 ? text : text.Substring(0, lineEnd);
             string[] parts = requestLine.Split(' ');
@@ -321,7 +493,7 @@ namespace PlaywrightNative.Helpers
 
         private static byte[] ToOriginForm(byte[] message)
         {
-            string text = Encoding.ASCII.GetString(message);
+            string text = Latin1.GetString(message);
             int lineEnd = text.IndexOf("\r\n", StringComparison.Ordinal);
             if (lineEnd < 0)
             {
@@ -356,12 +528,12 @@ namespace PlaywrightNative.Helpers
                 rewritten += " " + string.Join(" ", parts, 2, parts.Length - 2);
             }
 
-            return StripProxyHeaders(Encoding.ASCII.GetBytes(string.Concat(rewritten, text.AsSpan(lineEnd))));
+            return StripProxyHeaders(Latin1.GetBytes(string.Concat(rewritten, text.AsSpan(lineEnd))));
         }
 
         private static byte[] StripProxyHeaders(byte[] message)
         {
-            string text = Encoding.ASCII.GetString(message);
+            string text = Latin1.GetString(message);
             int headerEnd = text.IndexOf("\r\n\r\n", StringComparison.Ordinal);
             if (headerEnd < 0)
             {
@@ -386,12 +558,12 @@ namespace PlaywrightNative.Helpers
             }
 
             builder.Append(text.AsSpan(headerEnd));
-            return Encoding.ASCII.GetBytes(builder.ToString());
+            return Latin1.GetBytes(builder.ToString());
         }
 
         private static byte[] RewriteAcceptLanguage(byte[] message, string locale)
         {
-            string text = Encoding.ASCII.GetString(message);
+            string text = Latin1.GetString(message);
             int headerEnd = text.IndexOf("\r\n\r\n", StringComparison.Ordinal);
             if (headerEnd < 0)
             {
@@ -441,7 +613,7 @@ namespace PlaywrightNative.Helpers
             }
 
             builder.Append(text.AsSpan(headerEnd));
-            return Encoding.ASCII.GetBytes(builder.ToString());
+            return Latin1.GetBytes(builder.ToString());
         }
 
         private static byte[] RewriteExtraHeaders(byte[] message, IReadOnlyDictionary<string, string> extra)
@@ -451,7 +623,7 @@ namespace PlaywrightNative.Helpers
                 return message;
             }
 
-            string text = Encoding.ASCII.GetString(message);
+            string text = Latin1.GetString(message);
             int headerEnd = text.IndexOf("\r\n\r\n", StringComparison.Ordinal);
             if (headerEnd < 0)
             {
@@ -508,33 +680,322 @@ namespace PlaywrightNative.Helpers
             }
 
             builder.Append(text.AsSpan(headerEnd));
-            return Encoding.ASCII.GetBytes(builder.ToString());
+            return Latin1.GetBytes(builder.ToString());
         }
 
         private static async Task TunnelAsync(HttpIO client, HttpIO server, CancellationToken token)
         {
             await client.FlushUnreadAsync(server.Stream, token).ConfigureAwait(false);
             await server.FlushUnreadAsync(client.Stream, token).ConfigureAwait(false);
-            Task copyA = client.Stream.CopyToAsync(server.Stream, token);
-            Task copyB = server.Stream.CopyToAsync(client.Stream, token);
+
+            // Half-close aware tunnel: when one side EOFs (e.g. macOS cfNetwork after a
+            // client WebSocket close frame), shut down only that write direction and keep
+            // copying the opposite way so the close echo can still reach the browser.
+            // Task.WhenAny + dispose aborted application close codes as 1006.
             try
             {
-                await Task.WhenAny(copyA, copyB).ConfigureAwait(false);
+                client.Stream.Socket.NoDelay = true;
+                server.Stream.Socket.NoDelay = true;
+                client.Stream.Socket.LingerState = new LingerOption(true, 2);
+                server.Stream.Socket.LingerState = new LingerOption(true, 2);
+            }
+            catch (SocketException)
+            {
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+
+            using CancellationTokenSource tunnelCts = CancellationTokenSource.CreateLinkedTokenSource(token);
+            Task copyA = CopyAndShutdownAsync(client.Stream, server.Stream, tunnelCts.Token);
+            Task copyB = CopyAndShutdownAsync(server.Stream, client.Stream, tunnelCts.Token);
+            try
+            {
+                await Task.WhenAll(copyA, copyB).ConfigureAwait(false);
             }
             catch (IOException)
+            {
+            }
+            catch (ObjectDisposedException)
             {
             }
             catch (OperationCanceledException)
             {
             }
+            finally
+            {
+                try
+                {
+                    await tunnelCts.CancelAsync().ConfigureAwait(false);
+                }
+                catch (ObjectDisposedException)
+                {
+                }
+
+                // Extra settle so the Mac bypass-shim hop can push the close
+                // echo to CFNetwork before TcpClient.Dispose.
+                try
+                {
+                    await Task.Delay(400, CancellationToken.None).ConfigureAwait(false);
+                }
+                catch (ObjectDisposedException)
+                {
+                }
+            }
+        }
+
+        private static async Task CopyAndShutdownAsync(
+            NetworkStream source,
+            NetworkStream destination,
+            CancellationToken token)
+        {
+            byte[] buffer = new byte[81920];
+            try
+            {
+                while (true)
+                {
+                    int read = await source.ReadAsync(buffer.AsMemory(0, buffer.Length), token)
+                        .ConfigureAwait(false);
+                    if (read == 0)
+                    {
+                        break;
+                    }
+
+                    await destination.WriteAsync(buffer.AsMemory(0, read), token).ConfigureAwait(false);
+                    await destination.FlushAsync(token).ConfigureAwait(false);
+                }
+            }
+            catch (IOException)
+            {
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            finally
+            {
+                try
+                {
+                    try
+                    {
+                        destination.Socket.LingerState = new LingerOption(true, 10);
+                    }
+                    catch (SocketException)
+                    {
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                    }
+
+                    // Separate the last flushed write from TCP FIN so the next
+                    // Darwin proxy hop (or CFNetwork) can deliver a WebSocket
+                    // close frame before seeing half-close (else 1006).
+                    try
+                    {
+                        await Task.Delay(80, CancellationToken.None).ConfigureAwait(false);
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                    }
+
+                    destination.Socket?.Shutdown(SocketShutdown.Send);
+                }
+                catch (SocketException)
+                {
+                }
+                catch (ObjectDisposedException)
+                {
+                }
+            }
+        }
+
+        private static async Task<bool> SocksHandshakeAsync(Stream stream, CancellationToken token)
+        {
+            int ver = await ReadSocksByteAsync(stream, token).ConfigureAwait(false);
+            int nmethods = await ReadSocksByteAsync(stream, token).ConfigureAwait(false);
+            if (ver != 0x05 || nmethods < 0)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < nmethods; i++)
+            {
+                if (await ReadSocksByteAsync(stream, token).ConfigureAwait(false) < 0)
+                {
+                    return false;
+                }
+            }
+
+            await stream.WriteAsync(new byte[] { 0x05, 0x00 }, token).ConfigureAwait(false);
+            return true;
+        }
+
+        private static async Task<(string Host, int Port)?> TryReadSocksConnectAsync(
+            Stream stream,
+            CancellationToken token)
+        {
+            int ver = await ReadSocksByteAsync(stream, token).ConfigureAwait(false);
+            int cmd = await ReadSocksByteAsync(stream, token).ConfigureAwait(false);
+            int rsv = await ReadSocksByteAsync(stream, token).ConfigureAwait(false);
+            int atyp = await ReadSocksByteAsync(stream, token).ConfigureAwait(false);
+            if (ver != 0x05 || cmd != 0x01 || rsv != 0x00)
+            {
+                return null;
+            }
+
+            string host;
+            if (atyp == 0x01)
+            {
+                byte[] addr = new byte[4];
+                if (!await ReadSocksExactAsync(stream, addr, token).ConfigureAwait(false))
+                {
+                    return null;
+                }
+
+                host = new IPAddress(addr).ToString();
+            }
+            else if (atyp == 0x04)
+            {
+                byte[] addr = new byte[16];
+                if (!await ReadSocksExactAsync(stream, addr, token).ConfigureAwait(false))
+                {
+                    return null;
+                }
+
+                host = new IPAddress(addr).ToString();
+            }
+            else if (atyp == 0x03)
+            {
+                int len = await ReadSocksByteAsync(stream, token).ConfigureAwait(false);
+                if (len <= 0)
+                {
+                    return null;
+                }
+
+                byte[] name = new byte[len];
+                if (!await ReadSocksExactAsync(stream, name, token).ConfigureAwait(false))
+                {
+                    return null;
+                }
+
+                host = Encoding.ASCII.GetString(name);
+            }
+            else
+            {
+                return null;
+            }
+
+            byte[] portBytes = new byte[2];
+            if (!await ReadSocksExactAsync(stream, portBytes, token).ConfigureAwait(false))
+            {
+                return null;
+            }
+
+            int port = (portBytes[0] << 8) | portBytes[1];
+            return (host, port);
+        }
+
+        private static async Task WriteSocksSuccessAsync(Stream stream, CancellationToken token)
+        {
+            byte[] reply =
+            {
+                0x05, 0x00, 0x00, 0x01,
+                127, 0, 0, 1,
+                0x00, 0x00,
+            };
+            await stream.WriteAsync(reply, token).ConfigureAwait(false);
+        }
+
+        private static async Task WriteSocksFailureAsync(Stream stream, CancellationToken token)
+        {
+            byte[] refused =
+            {
+                0x05, 0x05, 0x00, 0x01,
+                127, 0, 0, 1,
+                0x00, 0x00,
+            };
+            try
+            {
+                await stream.WriteAsync(refused, token).ConfigureAwait(false);
+            }
+            catch (IOException)
+            {
+            }
+        }
+
+        private static async Task<int> ReadSocksByteAsync(Stream stream, CancellationToken token)
+        {
+            byte[] one = new byte[1];
+            int n = await stream.ReadAsync(one.AsMemory(0, 1), token).ConfigureAwait(false);
+            return n == 0 ? -1 : one[0];
+        }
+
+        private static async Task<bool> ReadSocksExactAsync(Stream stream, byte[] buffer, CancellationToken token)
+        {
+            int offset = 0;
+            while (offset < buffer.Length)
+            {
+                int n = await stream.ReadAsync(buffer.AsMemory(offset, buffer.Length - offset), token)
+                    .ConfigureAwait(false);
+                if (n == 0)
+                {
+                    return false;
+                }
+
+                offset += n;
+            }
+
+            return true;
         }
 
         private static async Task<TcpClient> ConnectAsync(string host, int port, CancellationToken token)
         {
+            // macOS WebKit routes loopback WS via local.playwright (see
+            // WebKitMacLocaleWebSocketShim); map back to localhost for the
+            // real test-server socket, matching ClientCertificatesProxy.
+            string connectHost = ClientCertificatesProxy.RewriteToLocalhostIfNeeded(host);
+
+            // Cap DNS + TCP connect. Darwin forces this MITM on every WebKit
+            // context; without a bound, ConnectAsync("nonexistent.invalid") can
+            // hang until the NUnit 30s budget (RequestFailed never fires for
+            // data:-page fetch hang tests). Stay well under RequestFailedShouldFire's
+            // 5s waiter: CancelAfter(5s) raced that CTS so the test canceled first.
+            // Dispose the client on budget expiry — CancelAfter alone may not abort
+            // getaddrinfo promptly, leaving the browser socket open with no failure.
+            TimeSpan connectBudget = TimeSpan.FromSeconds(2);
+
+            if (string.Equals(connectHost, "localhost", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(connectHost, "127.0.0.1", StringComparison.Ordinal))
+            {
+                TcpClient ipv4 = new(AddressFamily.InterNetwork) { NoDelay = true };
+                try
+                {
+                    await ConnectWithBudgetAsync(
+                            ipv4,
+                            (client, ct) => client.ConnectAsync(IPAddress.Loopback, port, ct).AsTask(),
+                            connectBudget,
+                            token)
+                        .ConfigureAwait(false);
+                    return ipv4;
+                }
+                catch
+                {
+                    ipv4.Dispose();
+                    throw;
+                }
+            }
+
             TcpClient server = new() { NoDelay = true };
             try
             {
-                await server.ConnectAsync(host, port, token).ConfigureAwait(false);
+                await ConnectWithBudgetAsync(
+                        server,
+                        (client, ct) => client.ConnectAsync(connectHost, port, ct).AsTask(),
+                        connectBudget,
+                        token)
+                    .ConfigureAwait(false);
                 return server;
             }
             catch
@@ -544,6 +1005,122 @@ namespace PlaywrightNative.Helpers
             }
         }
 
+        /// <summary>
+        /// Connects with a hard wall-clock budget. On expiry, disposes
+        /// <paramref name="client"/> so the OS aborts DNS/TCP and throws
+        /// <see cref="SocketException"/> (SOCKS failure / HTTP hang-up path).
+        /// </summary>
+        private static async Task ConnectWithBudgetAsync(
+            TcpClient client,
+            Func<TcpClient, CancellationToken, Task> connect,
+            TimeSpan budget,
+            CancellationToken token)
+        {
+            using CancellationTokenSource connectCts = CancellationTokenSource.CreateLinkedTokenSource(token);
+            connectCts.CancelAfter(budget);
+            try
+            {
+                await connect(client, connectCts.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!token.IsCancellationRequested)
+            {
+                // Connect budget elapsed (not proxy dispose). Abort the socket and
+                // surface as a connection failure so SOCKS WriteSocksFailure /
+                // HTTP close without a 502 reach WebKit as RequestFailed.
+                try
+                {
+                    client.Dispose();
+                }
+                catch (ObjectDisposedException)
+                {
+                }
+
+                throw new SocketException((int)SocketError.TimedOut);
+            }
+        }
+
+        /// <summary>
+        /// After <see cref="ConnectAsync"/> maps <c>local.playwright*</c> to
+        /// loopback, rewrite the <c>Host</c> header to the public loopback host
+        /// so origin servers see localhost / 127.0.0.1 / ::1.
+        /// </summary>
+        /// <param name="message">HTTP request bytes.</param>
+        /// <returns>Request with Host rewritten when needed.</returns>
+        private static byte[] RewriteFakeLoopbackHostHeader(byte[] message)
+        {
+            if (message == null || message.Length == 0)
+            {
+                return message;
+            }
+
+            string text = Latin1.GetString(message);
+            int headerEnd = text.IndexOf("\r\n\r\n", StringComparison.Ordinal);
+            if (headerEnd < 0)
+            {
+                return message;
+            }
+
+            string[] lines = text.Substring(0, headerEnd).Split(HeaderSeparators, StringSplitOptions.None);
+            bool changed = false;
+            for (int i = 1; i < lines.Length; i++)
+            {
+                int colon = lines[i].IndexOf(':');
+                if (colon < 0)
+                {
+                    continue;
+                }
+
+                if (!lines[i].Substring(0, colon).Trim().Equals("Host", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                string value = lines[i].Substring(colon + 1).Trim();
+                string host;
+                int port = 0;
+                if (TryParseAuthority(value, out host, out port))
+                {
+                    // Host: name:port
+                }
+                else
+                {
+                    host = value.Trim('[', ']');
+                }
+
+                if (!WebKitMacLocaleWebSocketShim.IsFakeLoopbackHost(host))
+                {
+                    break;
+                }
+
+                string publicHost = WebKitMacLocaleWebSocketShim.ToPublicHost(host);
+                string newHost = port > 0
+                    ? publicHost + ":" + port.ToString(CultureInfo.InvariantCulture)
+                    : publicHost;
+                lines[i] = "Host: " + newHost;
+                changed = true;
+                break;
+            }
+
+            if (!changed)
+            {
+                return message;
+            }
+
+            StringBuilder builder = new();
+            for (int i = 0; i < lines.Length; i++)
+            {
+                if (i > 0)
+                {
+                    builder.Append("\r\n");
+                }
+
+                builder.Append(lines[i]);
+            }
+
+            builder.Append(text.AsSpan(headerEnd));
+            return Latin1.GetBytes(builder.ToString());
+        }
+
         private byte[] RewriteHandshake(byte[] request)
         {
             if (!string.IsNullOrEmpty(_locale))
@@ -551,6 +1128,7 @@ namespace PlaywrightNative.Helpers
                 request = RewriteAcceptLanguage(request, _locale);
             }
 
+            request = RewriteFakeLoopbackHostHeader(request);
             return RewriteExtraHeaders(request, _extraHeaders);
         }
 
@@ -586,8 +1164,28 @@ namespace PlaywrightNative.Helpers
             try
             {
                 using (client)
-                using (NetworkStream clientStream = client.GetStream())
                 {
+                    // Do not dispose NetworkStream separately — that can RST the
+                    // browser-facing socket before dual-hop peers finish reading a
+                    // WebSocket close echo (ShouldWorkWithClientSideClose → 1006).
+                    try
+                    {
+                        client.Client.LingerState = new LingerOption(true, 5);
+                    }
+                    catch (SocketException)
+                    {
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                    }
+
+                    NetworkStream clientStream = client.GetStream();
+                    if (_useSocks)
+                    {
+                        await HandleSocksClientAsync(clientStream).ConfigureAwait(false);
+                        return;
+                    }
+
                     await HandleStreamAsync(new HttpIO(clientStream), predetermined: null).ConfigureAwait(false);
                 }
             }
@@ -605,6 +1203,83 @@ namespace PlaywrightNative.Helpers
             }
         }
 
+        private async Task HandleSocksClientAsync(NetworkStream clientStream)
+        {
+            CancellationToken token = _cts.Token;
+            if (!await SocksHandshakeAsync(clientStream, token).ConfigureAwait(false))
+            {
+                return;
+            }
+
+            (string Host, int Port)? target = await TryReadSocksConnectAsync(clientStream, token)
+                .ConfigureAwait(false);
+            if (target == null)
+            {
+                await WriteSocksFailureAsync(clientStream, token).ConfigureAwait(false);
+                return;
+            }
+
+            TcpClient server = null;
+            try
+            {
+                server = await ConnectAsync(target.Value.Host, target.Value.Port, token).ConfigureAwait(false);
+            }
+            catch (IOException)
+            {
+                await WriteSocksFailureAsync(clientStream, token).ConfigureAwait(false);
+                return;
+            }
+            catch (SocketException)
+            {
+                await WriteSocksFailureAsync(clientStream, token).ConfigureAwait(false);
+                return;
+            }
+            catch (OperationCanceledException)
+            {
+                // Connect budget / proxy dispose: tell the SOCKS client the
+                // hop failed so RequestFailed still fires (OCE alone used to
+                // close the socket with no SOCKS reply).
+                await WriteSocksFailureAsync(clientStream, token).ConfigureAwait(false);
+                return;
+            }
+
+            try
+            {
+                await WriteSocksSuccessAsync(clientStream, token).ConfigureAwait(false);
+                HttpIO client = new HttpIO(clientStream);
+                HttpIO serverIo = new HttpIO(server.GetStream());
+
+                // HTTPS / WSS: first byte is TLS handshake (0x16). Tunnel opaquely
+                // so HTTP/2 ALPN stays between browser and origin. Cleartext WS
+                // upgrades are rewritten like the HTTP-proxy path.
+                int first = await ReadSocksByteAsync(clientStream, token).ConfigureAwait(false);
+                if (first < 0)
+                {
+                    return;
+                }
+
+                client.Unread(new byte[] { (byte)first }, 0, 1);
+                if (first == 0x16)
+                {
+                    await TunnelAsync(client, serverIo, token).ConfigureAwait(false);
+                    return;
+                }
+
+                // Drop the SOCKS-origin socket; HandleStreamAsync opens its own
+                // for the cleartext rewrite path.
+                server.Dispose();
+                server = null;
+                await HandleStreamAsync(
+                        client,
+                        predetermined: Tuple.Create(target.Value.Host, target.Value.Port))
+                    .ConfigureAwait(false);
+            }
+            finally
+            {
+                server?.Dispose();
+            }
+        }
+
         private async Task HandleStreamAsync(HttpIO client, Tuple<string, int> predetermined)
         {
             CancellationToken token = _cts.Token;
@@ -616,7 +1291,11 @@ namespace PlaywrightNative.Helpers
             {
                 while (!token.IsCancellationRequested)
                 {
-                    byte[] request = await ReadHttpMessageAsync(client, token).ConfigureAwait(false);
+                    (byte[] request, int remainingBody) = await ReadHttpMessageCoreAsync(
+                            client,
+                            bufferBody: true,
+                            token)
+                        .ConfigureAwait(false);
                     if (request == null || request.Length == 0)
                     {
                         return;
@@ -633,17 +1312,58 @@ namespace PlaywrightNative.Helpers
                         server?.Dispose();
                         server = await ConnectAsync(host, port, token).ConfigureAwait(false);
                         serverIo = new HttpIO(server.GetStream());
-                        byte[] established = Encoding.ASCII.GetBytes("HTTP/1.1 200 Connection Established\r\n\r\n");
+                        byte[] established = Latin1.GetBytes("HTTP/1.1 200 Connection Established\r\n\r\n");
                         await client.Stream.WriteAsync(established, token).ConfigureAwait(false);
 
-                        // TLS (wss/https) is tunneled; ws:// handshakes stay HTTP.
-                        if (port == 443 || !IsLoopbackHost(host))
+                        // Plain ws:// via Mac shim uses CONNECT to local.playwright*
+                        // then an HTTP Upgrade on the tunnel. Rewrite Host on that
+                        // first request so the origin sees localhost/127.0.0.1.
+                        // TLS (wss/https) ClientHello must stay an opaque tunnel —
+                        // parsing it as HTTP hangs (IgnoreHTTPSErrors / cookies).
+                        if (WebKitMacLocaleWebSocketShim.IsFakeLoopbackHost(host))
                         {
+                            // Peek one byte: TLS handshake records start with 0x16.
+                            byte[] peek = new byte[1];
+                            int peeked = await client.Stream.ReadAsync(peek.AsMemory(0, 1), token)
+                                .ConfigureAwait(false);
+                            if (peeked == 0)
+                            {
+                                return;
+                            }
+
+                            if (peek[0] == 0x16)
+                            {
+                                client.Unread(peek, 0, 1);
+                                await TunnelAsync(client, serverIo, token).ConfigureAwait(false);
+                                return;
+                            }
+
+                            client.Unread(peek, 0, 1);
+                            byte[] tunneled = await ReadHttpMessageAsync(client, token).ConfigureAwait(false);
+                            if (tunneled == null || tunneled.Length == 0)
+                            {
+                                return;
+                            }
+
+                            if (IsWebSocketUpgrade(tunneled))
+                            {
+                                tunneled = RewriteHandshake(tunneled);
+                            }
+                            else
+                            {
+                                tunneled = RewriteFakeLoopbackHostHeader(tunneled);
+                            }
+
+                            await serverIo.Stream.WriteAsync(tunneled, token).ConfigureAwait(false);
                             await TunnelAsync(client, serverIo, token).ConfigureAwait(false);
                             return;
                         }
 
-                        await HandleStreamAsync(client, Tuple.Create(host, port)).ConfigureAwait(false);
+                        // CONNECT is always an opaque tunnel (https/wss), including
+                        // loopback on non-443 test-server ports. Parsing the post-CONNECT
+                        // bytes as HTTP hangs on the TLS ClientHello (WebKit HTTPS
+                        // cookie / IgnoreHTTPSErrors tests).
+                        await TunnelAsync(client, serverIo, token).ConfigureAwait(false);
                         return;
                     }
 
@@ -673,6 +1393,12 @@ namespace PlaywrightNative.Helpers
                         {
                             byte[] remote = ToOriginForm(request);
                             await serverIo.Stream.WriteAsync(remote, token).ConfigureAwait(false);
+                            if (remainingBody > 0)
+                            {
+                                await CopyExactAsync(client, serverIo.Stream, remainingBody, token)
+                                    .ConfigureAwait(false);
+                            }
+
                             await TunnelAsync(client, serverIo, token).ConfigureAwait(false);
                             return;
                         }
@@ -684,7 +1410,18 @@ namespace PlaywrightNative.Helpers
                     }
 
                     byte[] forwarded = predetermined == null ? ToOriginForm(request) : StripProxyHeaders(request);
+
+                    // SOCKS predetermined targets keep the wire Host (local.playwright*).
+                    // Always rewrite to the public loopback host before the origin hop.
+                    forwarded = RewriteFakeLoopbackHostHeader(forwarded);
+
                     await serverIo.Stream.WriteAsync(forwarded, token).ConfigureAwait(false);
+                    if (remainingBody > 0)
+                    {
+                        await CopyExactAsync(client, serverIo.Stream, remainingBody, token)
+                            .ConfigureAwait(false);
+                    }
+
                     if (IsWebSocketUpgrade(request))
                     {
                         await TunnelAsync(client, serverIo, token).ConfigureAwait(false);
@@ -698,7 +1435,18 @@ namespace PlaywrightNative.Helpers
                     }
 
                     await client.Stream.WriteAsync(response, token).ConfigureAwait(false);
-                    string responseText = Encoding.ASCII.GetString(response);
+                    string responseText = Latin1.GetString(response);
+
+                    // ReadHttpMessageAsync only honors Content-Length. Chunked (or
+                    // otherwise unsized) bodies remain on the socket — tunnel them
+                    // instead of closing after headers (Connection: close + chunked
+                    // was surfacing as APIRequest "socket hang up").
+                    if (IsChunkedOrUnsized(responseText))
+                    {
+                        await TunnelAsync(client, serverIo, token).ConfigureAwait(false);
+                        return;
+                    }
+
                     if (responseText.Contains("Connection: close", StringComparison.OrdinalIgnoreCase))
                     {
                         return;
@@ -764,6 +1512,26 @@ namespace PlaywrightNative.Helpers
                 _unread = null;
                 _unreadOffset = 0;
                 _unreadCount = 0;
+            }
+
+            internal async Task<int> ReadBytesAsync(Memory<byte> destination, CancellationToken token)
+            {
+                if (_unreadCount > 0)
+                {
+                    int take = Math.Min(_unreadCount, destination.Length);
+                    _unread.AsSpan(_unreadOffset, take).CopyTo(destination.Span);
+                    _unreadOffset += take;
+                    _unreadCount -= take;
+                    if (_unreadCount == 0)
+                    {
+                        _unread = null;
+                        _unreadOffset = 0;
+                    }
+
+                    return take;
+                }
+
+                return await Stream.ReadAsync(destination, token).ConfigureAwait(false);
             }
         }
     }

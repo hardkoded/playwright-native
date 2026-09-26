@@ -49,7 +49,7 @@ var ClockController = class {
   }
   install(time) {
     this._replayLogOnce();
-    this._innerSetTime(asWallTime(time));
+    this._innerInstall(asWallTime(time));
   }
   setSystemTime(time) {
     this._replayLogOnce();
@@ -79,6 +79,14 @@ var ClockController = class {
     this._now.isFixedTime = false;
     if (this._now.origin < 0)
       this._now.origin = this._now.time;
+  }
+  _innerInstall(time) {
+    // On a fresh install, reset the monotonic counter so that drift
+    // accumulated by the realTime ticker before the user called install()
+    // does not leak into performance.now().
+    if (this._now.origin < 0)
+      this._now.ticks = 0;
+    this._innerSetTime(time);
   }
   _innerSetFixedTime(time) {
     this._innerSetTime(time);
@@ -122,14 +130,27 @@ var ClockController = class {
     this._replayLogOnce();
     await this._innerPause();
     const toConsume = time - this._now.time;
-    await this._innerFastForwardTo(shiftTicks(this._now.ticks, toConsume));
+    // install() leaves real-time running (inject calls resume). By the time
+    // pauseAt(sameTime) runs, wall clock may have advanced past `time` so
+    // toConsume is negative — match _replayLogOnce's pauseAt path and snap
+    // the wall time instead of throwing "Cannot fast-forward to the past".
+    if (toConsume > 0) {
+      await this._innerFastForwardTo(shiftTicks(this._now.ticks, toConsume));
+    } else {
+      this._innerSetTime(asWallTime(time));
+    }
     return toConsume;
   }
   async _innerPause() {
-    var _a;
     this._realTime = void 0;
-    await ((_a = this._currentRealTimeTimer) == null ? void 0 : _a.dispose());
+    const t = this._currentRealTimeTimer;
     this._currentRealTimeTimer = void 0;
+    if (t) {
+      t.cancel();
+      // Do not await t.promise. On Darwin WebKit an in-flight _runTo can
+      // sit on embedder.setTimeout that never fires after timers/performance
+      // are replaced, deadlocking pauseAt/runFor for the full NUnit timeout.
+    }
   }
   resume() {
     this._replayLogOnce();
@@ -156,10 +177,17 @@ var ClockController = class {
       callAt,
       promise: void 0,
       cancel: this._embedder.setTimeout(() => {
+        // _innerPause clears _realTime and cancels without awaiting t.promise
+        // (Darwin awaitPromise deadlock). Drop late callbacks so they cannot
+        // start a concurrent _runTo alongside runFor/fastForward/pauseAt.
+        if (!this._realTime || this._currentRealTimeTimer !== realTimeTimer) {
+          return;
+        }
         this._syncRealTime();
         realTimeTimer.promise = this._runTo(this._now.ticks).catch((e) => console.error(e));
         void realTimeTimer.promise.then(() => {
-          this._currentRealTimeTimer = void 0;
+          if (this._currentRealTimeTimer === realTimeTimer)
+            this._currentRealTimeTimer = void 0;
           if (this._realTime)
             this._updateRealTimeTimer();
         });
@@ -321,7 +349,7 @@ var ClockController = class {
         this._advanceNow(shiftTicks(this._now.ticks, time - lastLogTime));
       lastLogTime = time;
       if (type === "install") {
-        this._innerSetTime(asWallTime(param));
+        this._innerInstall(asWallTime(param));
       } else if (type === "fastForward" || type === "runFor") {
         this._advanceNow(shiftTicks(this._now.ticks, param));
       } else if (type === "pauseAt") {
@@ -583,9 +611,27 @@ function fakeAbortSignal(clock, abortSignal, browserName) {
 }
 function createClock(globalObject, config = {}) {
   const originals = platformOriginals(globalObject);
+  // Native performance.now can stop advancing once window.performance is
+  // replaced (seen on macOS WebKit during tight busy loops). Anchor a
+  // wall-clock fallback so _syncRealTime still progresses Date.now and
+  // performance.now while the event loop is blocked.
+  const wallStart = originals.raw.Date.now();
+  let perfStart = 0;
+  try {
+    perfStart = Math.ceil(originals.raw.performance.now());
+  } catch (e) {
+  }
   const embedder = {
     dateNow: () => originals.raw.Date.now(),
-    performanceNow: () => Math.ceil(originals.raw.performance.now()),
+    performanceNow: () => {
+      let perfNow = perfStart;
+      try {
+        perfNow = Math.ceil(originals.raw.performance.now());
+      } catch (e) {
+      }
+      const wallElapsed = originals.raw.Date.now() - wallStart;
+      return Math.max(perfNow, perfStart + wallElapsed);
+    },
     setTimeout: (task, timeout) => {
       const timerId = originals.bound.setTimeout(task, timeout);
       return () => originals.bound.clearTimeout(timerId);

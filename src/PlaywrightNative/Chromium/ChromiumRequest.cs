@@ -55,20 +55,20 @@ namespace PlaywrightNative.Chromium
             {
                 if (_crRequest.ServiceWorker != null)
                 {
-                    throw new PlaywrightNativeException(
+                    throw new PlaywrightException(
                         "Service Worker requests do not have an associated frame.");
                 }
 
                 if (_crRequest.FrameUnavailable)
                 {
-                    throw new PlaywrightNativeException(
+                    throw new PlaywrightException(
                         "Frame for this navigation request is not available, because the request\nwas issued before the frame is created. You can check whether the request\nis a navigation request by calling isNavigationRequest() method.");
                 }
 
                 IFrame frame = ResolveFrame();
                 if (frame != null && frame.Page == null)
                 {
-                    throw new PlaywrightNativeException(
+                    throw new PlaywrightException(
                         "Frame for this navigation request is not available, because the request\nwas issued before the frame is created. You can check whether the request\nis a navigation request by calling isNavigationRequest() method.");
                 }
 
@@ -156,7 +156,7 @@ namespace PlaywrightNative.Chromium
             CRResponse response = _crRequest.Response;
             if (response == null)
             {
-                throw new PlaywrightNativeException("Unable to fetch sizes for failed request");
+                throw new PlaywrightException("Unable to fetch sizes for failed request");
             }
 
             return RequestSizesCalculator.Compute(
@@ -187,7 +187,35 @@ namespace PlaywrightNative.Chromium
             }
 
             IReadOnlyList<NameValueEntry> raw = await _crRequest.WaitForRawHeadersAsync().ConfigureAwait(false);
-            await _crRequest.WaitForResponseAsync().ConfigureAwait(false);
+
+            // A paused/intercepted request's headers are already complete — waiting
+            // further would deadlock a route handler that reads them before calling
+            // route.continue(), since neither a response nor "finished" can happen
+            // until continue() runs.
+            if (!_crRequest.RawHeadersAreFinal)
+            {
+                // Service-worker and other requests may finish without responseReceived.
+                // Don't hang AllHeadersAsync waiting for a response that will never arrive.
+                // When the page closes mid-flight, propagate the target-closed error even if
+                // provisional/raw headers already resolved (official page-close.spec.ts).
+                Task responseTask = _crRequest.WaitForResponseAsync();
+                Task finishedTask = _crRequest.WaitUntilFinishedAsync();
+                if (!responseTask.IsCompleted)
+                {
+                    await Task.WhenAny(responseTask, finishedTask).ConfigureAwait(false);
+                }
+
+                if (responseTask.IsFaulted)
+                {
+                    await responseTask.ConfigureAwait(false);
+                }
+
+                if (finishedTask.IsFaulted)
+                {
+                    await finishedTask.ConfigureAwait(false);
+                }
+            }
+
             Dictionary<string, string> map = RawNetworkHeaders.AllJoined(raw);
             foreach (KeyValuePair<string, string> header in _crRequest.Headers)
             {
@@ -240,7 +268,7 @@ namespace PlaywrightNative.Chromium
                 raw = await _crRequest.WaitForRawHeadersAsync().ConfigureAwait(false);
             }
 
-            return raw.Select(e => new Header { Name = e.Name, Value = e.Value }).ToList();
+            return EquatableHeader.FromEntries(raw);
         }
 
         private IRequest WrapRedirect(CRRequest request)

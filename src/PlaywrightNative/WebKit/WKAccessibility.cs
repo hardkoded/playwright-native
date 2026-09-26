@@ -18,6 +18,7 @@ using System;
 using System.Collections.Generic;
 using System.Text.Json;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using PlaywrightNative.Helpers;
 
 namespace PlaywrightNative.WebKit
@@ -113,7 +114,7 @@ namespace PlaywrightNative.WebKit
                     return (idEl.GetInt32(), false);
                 }
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 // WebKit 2276 often rejects requestNode; match the element in the document tree instead.
             }

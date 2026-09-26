@@ -52,13 +52,17 @@ namespace PlaywrightNative
             => Element.SetInputFilesAsync(files, noWaitAfter, timeout, force: true);
 
 #pragma warning disable SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
-        Task IFileChooser.SetFilesAsync(string files, FileChooserSetFilesOptions options) => Task.CompletedTask;
+        Task IFileChooser.SetFilesAsync(string files, FileChooserSetFilesOptions options)
+            => SetFilesAsync(files, options?.NoWaitAfter, options?.Timeout);
 
-        Task IFileChooser.SetFilesAsync(IEnumerable<string> files, FileChooserSetFilesOptions options) => Task.CompletedTask;
+        Task IFileChooser.SetFilesAsync(IEnumerable<string> files, FileChooserSetFilesOptions options)
+            => SetFilesAsync(files, options?.NoWaitAfter, options?.Timeout);
 
-        Task IFileChooser.SetFilesAsync(FilePayload files, FileChooserSetFilesOptions options) => Task.CompletedTask;
+        Task IFileChooser.SetFilesAsync(FilePayload files, FileChooserSetFilesOptions options)
+            => SetFilesAsync(files, options?.NoWaitAfter, options?.Timeout);
 
-        Task IFileChooser.SetFilesAsync(IEnumerable<FilePayload> files, FileChooserSetFilesOptions options) => Task.CompletedTask;
+        Task IFileChooser.SetFilesAsync(IEnumerable<FilePayload> files, FileChooserSetFilesOptions options)
+            => SetFilesAsync(files, options?.NoWaitAfter, options?.Timeout);
 #pragma warning restore SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
     }
 }

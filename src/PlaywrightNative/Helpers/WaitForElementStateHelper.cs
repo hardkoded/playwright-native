@@ -18,6 +18,7 @@ using System;
 using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -27,6 +28,47 @@ namespace PlaywrightNative.Helpers
     /// </summary>
     internal static class WaitForElementStateHelper
     {
+        /// <summary>
+        /// In-page stability check (same shape as
+        /// <see cref="ScrollIntoViewIfNeededAction"/>), with a configurable
+        /// consecutive-frame count.
+        /// </summary>
+        private const string IsStableFunction = @"async (el, rafCount) => {
+    if (!el || !el.isConnected) {
+        return 'notconnected';
+    }
+    const view = (el.ownerDocument && el.ownerDocument.defaultView) || window;
+    function boxOf() {
+        const r = el.getBoundingClientRect();
+        return [r.top, r.left, r.width, r.height];
+    }
+    function raf() {
+        return new Promise(resolve => view.requestAnimationFrame(resolve));
+    }
+    const need = Math.max(1, rafCount | 0);
+    let last = null;
+    let hits = 0;
+    for (let i = 0; i < need + 8; i++) {
+        await raf();
+        const box = boxOf();
+        if (box[2] <= 0 && box[3] <= 0) {
+            return 'notstable';
+        }
+        if (last
+            && last[0] === box[0] && last[1] === box[1]
+            && last[2] === box[2] && last[3] === box[3]) {
+            hits++;
+            if (hits >= need) {
+                return 'ok';
+            }
+        } else {
+            hits = 0;
+        }
+        last = box;
+    }
+    return 'notstable';
+}";
+
         /// <summary>
         /// Waits until <paramref name="handle"/> satisfies <paramref name="state"/>.
         /// </summary>
@@ -44,14 +86,25 @@ namespace PlaywrightNative.Helpers
             ElementState wanted = state == EnumCompat.UndefinedElementState ? ElementState.Visible : state;
             int timeoutMs = TimeoutSettings.TimeoutMs(timeout);
             Stopwatch sw = Stopwatch.StartNew();
-            StableProbe probe = new StableProbe();
 
             while (true)
             {
+                if (timeoutMs != Timeout.Infinite && sw.ElapsedMilliseconds >= timeoutMs)
+                {
+                    throw new TimeoutException($"element.waitForElementState({wanted}): Timeout {timeoutMs}ms exceeded.");
+                }
+
                 bool done = false;
                 try
                 {
-                    bool attached = await IsAttachedAsync(handle).ConfigureAwait(false);
+                    // Bound each probe so a wedged evaluate cannot outlive the
+                    // action timeout (Darwin WebKit FillAsyncSetsInputValue).
+                    int probeMs = timeoutMs == Timeout.Infinite
+                        ? Timeout.Infinite
+                        : Math.Max(1, timeoutMs - (int)sw.ElapsedMilliseconds);
+                    bool attached = await RaceProbeAsync(
+                        () => IsAttachedAsync(handle),
+                        probeMs).ConfigureAwait(false);
                     if (!attached)
                     {
                         if (wanted == ElementState.Hidden)
@@ -59,20 +112,36 @@ namespace PlaywrightNative.Helpers
                             return;
                         }
 
-                        throw new PlaywrightNativeException(ClickAction.NotAttachedMessage);
+                        throw new PlaywrightException(ClickAction.NotAttachedMessage);
                     }
 
                     done = wanted switch
                     {
-                        ElementState.Hidden => await handle.IsHiddenAsync().ConfigureAwait(false),
-                        ElementState.Enabled => await IsAriaEnabledAsync(handle).ConfigureAwait(false),
-                        ElementState.Disabled => !await IsAriaEnabledAsync(handle).ConfigureAwait(false),
-                        ElementState.Editable => await handle.IsEditableAsync().ConfigureAwait(false),
-                        ElementState.Stable => await IsStableAsync(handle, probe).ConfigureAwait(false),
-                        _ => await handle.IsVisibleAsync().ConfigureAwait(false),
+                        ElementState.Hidden => await RaceProbeAsync(
+                            () => handle.IsHiddenAsync(),
+                            probeMs).ConfigureAwait(false),
+                        ElementState.Enabled => await RaceProbeAsync(
+                            () => IsAriaEnabledAsync(handle),
+                            probeMs).ConfigureAwait(false),
+                        ElementState.Disabled => !await RaceProbeAsync(
+                            () => IsAriaEnabledAsync(handle),
+                            probeMs).ConfigureAwait(false),
+                        ElementState.Editable => await RaceProbeAsync(
+                            () => handle.IsEditableAsync(),
+                            probeMs).ConfigureAwait(false),
+                        ElementState.Stable => await RaceProbeAsync(
+                            () => IsStableAsync(handle),
+                            probeMs).ConfigureAwait(false),
+                        _ => await RaceProbeAsync(
+                            () => handle.IsVisibleAsync(),
+                            probeMs).ConfigureAwait(false),
                     };
                 }
-                catch (PlaywrightNativeException ex) when (!IsNotAttached(ex))
+                catch (TimeoutException)
+                {
+                    throw new TimeoutException($"element.waitForElementState({wanted}): Timeout {timeoutMs}ms exceeded.");
+                }
+                catch (PlaywrightException ex) when (!IsNotAttached(ex))
                 {
                     if (wanted == ElementState.Hidden)
                     {
@@ -112,9 +181,26 @@ namespace PlaywrightNative.Helpers
             return WaitAsync(handle, ElementState.Visible, timeout);
         }
 
-        private static bool IsNotAttached(PlaywrightNativeException ex)
+        private static bool IsNotAttached(PlaywrightException ex)
             => ex != null && !string.IsNullOrEmpty(ex.Message)
                 && ex.Message.Contains(ClickAction.NotAttachedMessage, StringComparison.Ordinal);
+
+        private static async Task<T> RaceProbeAsync<T>(Func<Task<T>> probeAsync, int probeMs)
+        {
+            if (probeMs == Timeout.Infinite)
+            {
+                return await probeAsync().ConfigureAwait(false);
+            }
+
+            Task<T> probe = probeAsync();
+            Task delay = Task.Delay(probeMs);
+            if (await Task.WhenAny(probe, delay).ConfigureAwait(false) != probe)
+            {
+                throw new TimeoutException();
+            }
+
+            return await probe.ConfigureAwait(false);
+        }
 
         private static async Task<bool> IsAttachedAsync(IElementHandle handle)
         {
@@ -122,7 +208,7 @@ namespace PlaywrightNative.Helpers
             {
                 return await handle.EvaluateAsync<bool>("el => !!(el && el.isConnected)").ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 return false;
             }
@@ -146,38 +232,45 @@ namespace PlaywrightNative.Helpers
                     return isEnabled(el);
                 }");
 
-        private static async Task<bool> IsStableAsync(IElementHandle handle, StableProbe probe)
+        private static async Task<bool> IsStableAsync(IElementHandle handle)
         {
-            if (!await handle.IsVisibleAsync().ConfigureAwait(false))
+            // Official injectedScript._checkElementIsStable: sample boxes on
+            // consecutive animation frames. Host Task.Delay does not advance
+            // WebKit CSS transitions, so two BoundingBox reads can match while
+            // the element is still moving (ShouldWaitForStablePosition).
+            string result;
+            try
             {
-                probe.LastBox = null;
+                result = await handle.EvaluateAsync<string>(IsStableFunction, StableRafCount()).ConfigureAwait(false);
+            }
+            catch (PlaywrightException)
+            {
                 return false;
             }
 
-            ElementHandleBoundingBoxResult box = await handle.BoundingBoxAsync().ConfigureAwait(false);
-            if (box == null)
+            if (result == "notconnected")
             {
-                probe.LastBox = null;
-                return false;
+                throw new PlaywrightException(ClickAction.NotAttachedMessage);
             }
 
-            if (probe.LastBox == null)
-            {
-                probe.LastBox = box;
-                return false;
-            }
-
-            bool same = probe.LastBox.X == box.X
-                && probe.LastBox.Y == box.Y
-                && probe.LastBox.Width == box.Width
-                && probe.LastBox.Height == box.Height;
-            probe.LastBox = box;
-            return same;
+            return result == "ok";
         }
 
-        private sealed class StableProbe
+        /// <summary>
+        /// Official <c>rafCountForStablePosition</c>: WebKit on Windows needs 5;
+        /// elsewhere 1 consecutive matching animation-frame pair is enough.
+        /// </summary>
+        private static int StableRafCount()
         {
-            internal ElementHandleBoundingBoxResult LastBox { get; set; }
+            if (!string.Equals(
+                    Environment.GetEnvironmentVariable("PRODUCT"),
+                    "WEBKIT",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return 1;
+            }
+
+            return OperatingSystem.IsWindows() ? 5 : 1;
         }
     }
 }

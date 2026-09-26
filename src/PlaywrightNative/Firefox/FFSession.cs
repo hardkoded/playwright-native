@@ -21,6 +21,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
+using Microsoft.Playwright;
 using PlaywrightNative.Transport;
 using PlaywrightNative.Transport.Protocol;
 
@@ -124,7 +125,7 @@ namespace PlaywrightNative.Firefox
                 {
                     if (message.Error != null)
                     {
-                        tcs.TrySetException(new PlaywrightNativeException(message.Error.Message));
+                        tcs.TrySetException(new PlaywrightException(message.Error.Message));
                     }
                     else
                     {

@@ -43,8 +43,11 @@ namespace PlaywrightNative.Tests.Chromium
         {
             await Page.ExposeFunctionAsync("add", args =>
             {
-                int a = args[0].GetInt32();
-                int b = args[1].GetInt32();
+                // The wire format tags each argument ({ n: 3 }, { s: "x" }, …) so
+                // ExposeFunctionBinder.Arg<T> can tell types and cycles apart; this
+                // low-level handler reads the raw JsonElement[] itself.
+                int a = args[0].GetProperty("n").GetInt32();
+                int b = args[1].GetProperty("n").GetInt32();
                 return Task.FromResult<object>(a + b);
             }).ConfigureAwait(false);
 
@@ -74,7 +77,7 @@ namespace PlaywrightNative.Tests.Chromium
             await Page.ExposeFunctionAsync("slowDouble", async args =>
             {
                 await Task.Delay(50).ConfigureAwait(false);
-                return (object)(args[0].GetInt32() * 2);
+                return (object)(args[0].GetProperty("n").GetInt32() * 2);
             }).ConfigureAwait(false);
 
             int result = await Page.EvaluateAsync<int>("window.slowDouble(5)").ConfigureAwait(false);

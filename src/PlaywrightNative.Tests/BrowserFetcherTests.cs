@@ -14,17 +14,34 @@ using PlaywrightNative.NUnit;
 namespace PlaywrightNative.Tests
 {
     [TestFixture]
+    [NonParallelizable]
     public class BrowserFetcherTests
     {
-        [SetUp]
-        public void ClearEnvironmentBefore() => ClearEnvironment();
+        private string _savedBrowsersPath;
+        private string _savedDownloadHost;
+        private string _savedDownloadTimeout;
 
-        [TearDown]
-        public void ClearEnvironment()
+        [SetUp]
+        public void SaveAndClearEnvironment()
         {
+            // These env vars are process-wide. Clearing them without restore makes
+            // BrowserType.ExecutablePath look at the default cache while launches
+            // still use the path resolved under PLAYWRIGHT_BROWSERS_PATH (CI), so
+            // ExecutablePath returns "" after a successful WebKit launch.
+            _savedBrowsersPath = Environment.GetEnvironmentVariable("PLAYWRIGHT_BROWSERS_PATH");
+            _savedDownloadHost = Environment.GetEnvironmentVariable("PLAYWRIGHT_DOWNLOAD_HOST");
+            _savedDownloadTimeout = Environment.GetEnvironmentVariable("PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT");
             Environment.SetEnvironmentVariable("PLAYWRIGHT_BROWSERS_PATH", null);
             Environment.SetEnvironmentVariable("PLAYWRIGHT_DOWNLOAD_HOST", null);
             Environment.SetEnvironmentVariable("PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT", null);
+        }
+
+        [TearDown]
+        public void RestoreEnvironment()
+        {
+            Environment.SetEnvironmentVariable("PLAYWRIGHT_BROWSERS_PATH", _savedBrowsersPath);
+            Environment.SetEnvironmentVariable("PLAYWRIGHT_DOWNLOAD_HOST", _savedDownloadHost);
+            Environment.SetEnvironmentVariable("PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT", _savedDownloadTimeout);
         }
 
         [PlaywrightTest("browsers-path.spec.ts", "Defaults to chromium and current platform")]
@@ -123,7 +140,7 @@ namespace PlaywrightNative.Tests
         {
             BrowserFetcher fetcher = new(new BrowserFetcherOptions { Path = "/tmp/cache", Platform = Platform.Linux });
             string actual = fetcher.GetExecutablePath("9999");
-            Assert.That(actual, Is.EqualTo(Path.Combine("/tmp/cache", "chromium-9999", "chrome-linux", "chrome")));
+            Assert.That(actual, Is.EqualTo(Path.Combine("/tmp/cache", "chromium-9999", "chrome-linux64", "chrome")));
         }
 
         [PlaywrightTest("browsers-path.spec.ts", "Get installed browsers returns empty when cache missing")]
@@ -203,7 +220,7 @@ namespace PlaywrightNative.Tests
         [Test]
         public void DownloadAsyncNoArgDelegatesToDefaultBuild()
         {
-            // Cache hit path: marker present, no network involved.
+            // Cache hit path: marker + executable present, no network involved.
             string tempCache = Path.Combine(Path.GetTempPath(), "pwsharp-fetcher-test-" + Guid.NewGuid());
             Directory.CreateDirectory(tempCache);
             try
@@ -218,6 +235,12 @@ namespace PlaywrightNative.Tests
                     Path = tempCache,
                     Platform = Platform.Linux,
                 });
+
+                // DownloadAsync only treats marker trees as installed when the
+                // real executable exists (stale CI caches must re-extract).
+                string executable = fetcher.GetExecutablePath(BrowserData.ChromiumRevision);
+                Directory.CreateDirectory(Path.GetDirectoryName(executable));
+                File.WriteAllText(executable, string.Empty);
 
                 InstalledBrowser installed = fetcher.DownloadAsync().GetAwaiter().GetResult();
 

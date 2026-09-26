@@ -18,6 +18,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Text.Json;
+using System.Threading.Tasks;
 using PlaywrightNative.Helpers;
 
 namespace PlaywrightNative.Chromium
@@ -73,6 +74,7 @@ namespace PlaywrightNative.Chromium
 
                 hop.FlushRequest();
                 hop.FlushResponse();
+                TryStopTracking(requestId, list);
             }
         }
 
@@ -86,10 +88,13 @@ namespace PlaywrightNative.Chromium
                 {
                     hop.StoreRequestExtra(extra);
                     hop.FlushRequest();
-                    return;
+                }
+                else
+                {
+                    list.PendingRequestExtra.Enqueue(extra);
                 }
 
-                list.PendingRequestExtra.Enqueue(extra);
+                TryStopTracking(requestId, list);
             }
         }
 
@@ -103,53 +108,181 @@ namespace PlaywrightNative.Chromium
                 {
                     hop.StoreResponseExtra(extra);
                     hop.FlushResponse();
-                    return;
+                }
+                else
+                {
+                    list.PendingResponseExtra.Enqueue(extra);
                 }
 
-                list.PendingResponseExtra.Enqueue(extra);
+                TryStopTracking(requestId, list);
             }
         }
 
         internal void Finished(string requestId)
         {
-            if (!_hops.TryRemove(requestId, out HopList list))
+            // Extra-info and loadingFinished travel on different CDP channels
+            // and can arrive in either order. Official _checkFinished keeps the
+            // entry until every hasExtraInfo response is paired; dropping the
+            // hop here left WaitForRawHeadersAsync hanging (HAR zip 30s).
+            if (!_hops.TryGetValue(requestId, out HopList list))
             {
                 return;
             }
 
             lock (list.Gate)
             {
-                while (list.PendingRequestExtra.Count > 0)
-                {
-                    Hop hop = FirstWithoutRequestExtra(list);
-                    if (hop == null)
-                    {
-                        break;
-                    }
-
-                    hop.StoreRequestExtra(list.PendingRequestExtra.Dequeue());
-                }
-
-                while (list.PendingResponseExtra.Count > 0)
-                {
-                    Hop hop = FirstWithoutResponseExtra(list);
-                    if (hop == null)
-                    {
-                        break;
-                    }
-
-                    hop.StoreResponseExtra(list.PendingResponseExtra.Dequeue());
-                }
+                list.LoadingDone = true;
+                AssignPendingExtras(list);
 
                 for (int i = 0; i < list.Hops.Count; i++)
                 {
                     Hop hop = list.Hops[i];
                     hop.FlushRequest();
                     hop.FlushResponse();
-                    hop.Request?.EnsureRawRequestHeaders();
-                    hop.Response?.EnsureRawResponseHeaders();
+                    SealRequestHeaders(hop);
+                    SealResponseHeaders(requestId, list, hop);
+                }
+
+                TryStopTracking(requestId, list);
+            }
+        }
+
+        private void AssignPendingExtras(HopList list)
+        {
+            while (list.PendingRequestExtra.Count > 0)
+            {
+                Hop hop = FirstWithoutRequestExtra(list);
+                if (hop == null)
+                {
+                    break;
+                }
+
+                hop.StoreRequestExtra(list.PendingRequestExtra.Dequeue());
+            }
+
+            while (list.PendingResponseExtra.Count > 0)
+            {
+                Hop hop = FirstWithoutResponseExtra(list);
+                if (hop == null)
+                {
+                    break;
+                }
+
+                hop.StoreResponseExtra(list.PendingResponseExtra.Dequeue());
+            }
+        }
+
+        private void TryStopTracking(string requestId, HopList list)
+        {
+            if (!list.LoadingDone)
+            {
+                return;
+            }
+
+            for (int i = 0; i < list.Hops.Count; i++)
+            {
+                if (!ResponseHeadersSettled(list.Hops[i]))
+                {
+                    return;
                 }
             }
+
+            for (int i = 0; i < list.Hops.Count; i++)
+            {
+                Hop hop = list.Hops[i];
+                hop.FlushRequest();
+                hop.FlushResponse();
+                SealRequestHeaders(hop);
+                hop.Response?.EnsureRawResponseHeaders();
+            }
+
+            _hops.TryRemove(requestId, out _);
+        }
+
+        private void SealRequestHeaders(Hop hop)
+        {
+            if (hop?.Request == null)
+            {
+                return;
+            }
+
+            // requestWillBeSent headers omit Accept* until ExtraInfo. Sealing
+            // them in loadingFinished races that event and HeadersArray returns
+            // the short list (ShouldReportRawHeaders).
+            if (hop.HasRequestExtra || hop.Request.ServedFromCache)
+            {
+                hop.Request.EnsureRawRequestHeaders();
+                return;
+            }
+
+            CRRequest pending = hop.Request;
+            _ = Task.Run(async () =>
+            {
+                await Task.Delay(750).ConfigureAwait(false);
+                pending.EnsureRawRequestHeaders();
+            });
+        }
+
+        private void SealResponseHeaders(string requestId, HopList list, Hop hop)
+        {
+            if (hop?.Response == null)
+            {
+                return;
+            }
+
+            if (ResponseHeadersSettled(hop))
+            {
+                hop.Response.EnsureRawResponseHeaders();
+                return;
+            }
+
+            // ExtraInfo and loadingFinished travel on different CDP channels.
+            // For iframe/nested worker scripts Chromium may set hasExtraInfo
+            // without ever delivering responseReceivedExtraInfo (playwright#39948).
+            // Mirror SealRequestHeaders: allow channel skew, then seal provisional.
+            // Immediate seal raced ExtraInfo under Windows suite load and locked
+            // comma-joined Network.responseReceived headers into HeadersArray
+            // (ShouldReportAllHeaders). Prefer a deferred seal; ApplyExtraHeaders
+            // can still upgrade after a provisional seal.
+            CRResponse pending = hop.Response;
+            _ = DeferredSealResponseHeadersAsync(requestId, list, hop, pending);
+        }
+
+        private async Task DeferredSealResponseHeadersAsync(
+            string requestId,
+            HopList list,
+            Hop hop,
+            CRResponse pending)
+        {
+            await Task.Delay(750).ConfigureAwait(false);
+            if (!_hops.TryGetValue(requestId, out HopList current) || !ReferenceEquals(current, list))
+            {
+                return;
+            }
+
+            lock (list.Gate)
+            {
+                if (!hop.HasResponseExtra && pending.ExpectsExtraInfo)
+                {
+                    pending.SetExpectsExtraInfo(false);
+                    pending.EnsureRawResponseHeaders();
+                }
+
+                TryStopTracking(requestId, list);
+            }
+        }
+
+        private bool ResponseHeadersSettled(Hop hop)
+        {
+            if (hop.Response == null)
+            {
+                // Keep a stored extra until the response object exists so
+                // ResponseCreated can apply it. No response and no extra
+                // (loadingFailed) is settled.
+                return !hop.HasResponseExtra;
+            }
+
+            return !hop.Response.ExpectsExtraInfo || hop.HasResponseExtra;
         }
 
         private Hop FindHop(HopList list, CRRequest request)
@@ -213,6 +346,8 @@ namespace PlaywrightNative.Chromium
             internal Queue<JsonElement> PendingRequestExtra { get; } = new();
 
             internal Queue<JsonElement> PendingResponseExtra { get; } = new();
+
+            internal bool LoadingDone { get; set; }
         }
 
         private sealed class Hop
@@ -260,14 +395,25 @@ namespace PlaywrightNative.Chromium
                     return;
                 }
 
-                IReadOnlyList<NameValueEntry> fromText = _responseExtra.TryGetProperty("headersText", out JsonElement textElement)
-                    ? ResponseHeaders.ParseHeadersText(textElement.GetString())
+                // Official responseExtraInfoTracker._patchHeaders uses
+                // headersObjectToArray(responseExtraInfo.headers, '\n') — not
+                // headersText. Chrome joins duplicate non-cookie values with
+                // '\n' in the headers object; headersText may collapse them to
+                // a single comma-joined line (ShouldReportAllHeaders).
+                IReadOnlyList<NameValueEntry> headers = _responseExtra.TryGetProperty("headers", out JsonElement headersEl)
+                    ? RawNetworkHeaders.FromObject(headersEl)
                     : Array.Empty<NameValueEntry>();
-                IReadOnlyList<NameValueEntry> headers = fromText.Count > 0
-                    ? fromText
-                    : _responseExtra.TryGetProperty("headers", out JsonElement headersEl)
-                        ? RawNetworkHeaders.FromObject(headersEl)
-                        : HeaderMap.Array(Response.Headers);
+                if (headers.Count == 0
+                    && _responseExtra.TryGetProperty("headersText", out JsonElement textElement))
+                {
+                    headers = ResponseHeaders.ParseHeadersText(textElement.GetString());
+                }
+
+                if (headers.Count == 0)
+                {
+                    headers = HeaderMap.Array(Response.Headers);
+                }
+
                 Response.ApplyExtraHeaders(headers);
             }
         }

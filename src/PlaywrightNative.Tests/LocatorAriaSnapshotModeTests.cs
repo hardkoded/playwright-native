@@ -16,6 +16,7 @@
  */
 using System.Diagnostics;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 
@@ -73,7 +74,7 @@ namespace PlaywrightNative.Tests
             await page.SetContentAsync("<div>empty</div>").ConfigureAwait(false);
 
             Stopwatch clock = Stopwatch.StartNew();
-            PlaywrightNativeException ex = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException ex = Assert.CatchAsync<PlaywrightException>(
                 () => page.Locator("#missing").AriaSnapshotAsync(new() { Mode = AriaSnapshotMode.Ai }));
             clock.Stop();
 

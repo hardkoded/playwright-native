@@ -137,7 +137,6 @@ namespace PlaywrightNative
             {
                 Status = fetched?.Status,
                 Headers = fetched?.Headers,
-                BodyBytes = fetched?.Body,
                 Body = body,
             });
 

@@ -16,6 +16,7 @@
  */
 using System;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 
@@ -88,7 +89,7 @@ namespace PlaywrightNative.Tests
             await page.SetContentAsync("<div></div>").ConfigureAwait(false);
             await other.SetContentAsync("<button>X</button>").ConfigureAwait(false);
 
-            PlaywrightNativeException ex = Assert.Throws<PlaywrightNativeException>(
+            PlaywrightException ex = Assert.Throws<PlaywrightException>(
                 () => page.Locator(other.Locator("button")));
 
             Assert.That(ex.Message, Does.Contain("same frame"));

@@ -113,12 +113,31 @@ namespace PlaywrightNative.WebKit
             WKFrame parentFrame = FrameById(parentFrameId);
             if (parentFrame == null)
             {
-                return;
+                if (string.IsNullOrEmpty(parentFrameId))
+                {
+                    // Upstream frames.frameAttached: no parent → rebind main frame id
+                    // (cross-process navigation keeps frame identity).
+                    UpdateMainFrameId(frameId);
+                    return;
+                }
+
+                // Parent id not yet tracked (Darwin race after main-frame id swap).
+                // Attach under the live main frame so iframe FrameAttached is not dropped
+                // — ContextFrameAttachedShouldFireOnIframe hung for the full NUnit timeout.
+                parentFrame = MainFrame;
+                if (parentFrame == null)
+                {
+                    return;
+                }
             }
 
             WKFrame frame = new(frameId, parentFrame);
             parentFrame.AddChildFrame(frame);
             _frames.TryAdd(frameId, frame);
+
+            // New children are not networkidle yet — clear a premature parent
+            // networkidle so waiters keep waiting for hanging iframe navigations.
+            MainFrame?.RecalculateNetworkIdle();
 
             if (fireEvent)
             {
@@ -170,6 +189,11 @@ namespace PlaywrightNative.WebKit
             frame.Url = url ?? string.Empty;
             frame.Name = name ?? string.Empty;
             frame.ClearLifecycleEvents();
+
+            // Match upstream frameLifecycleEvent("commit") so child frame.goto /
+            // waitForLoadState(Commit) can observe the new document without
+            // polling document.readyState (which races concurrent hung navigations).
+            frame.OnLifecycleEvent("commit");
 
             if (fireEvent)
             {

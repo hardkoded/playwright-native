@@ -18,6 +18,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 using PlaywrightNative.TestServer;
@@ -142,7 +143,7 @@ namespace PlaywrightNative.Tests
         [Timeout(TestConstants.DefaultTestTimeout)]
         public void ShouldThrowForNonStringHeaderValues()
         {
-            PlaywrightNativeException error3 = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error3 = Assert.CatchAsync<PlaywrightException>(
                 () => _browser.NewContextAsync(new() { ExtraHTTPHeaders = new Dictionary<string, string> { ["foo"] = null } }));
             Assert.That(error3.Message, Does.Contain("Expected value of header \"foo\" to be String, but \"object\" is found."));
         }

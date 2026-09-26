@@ -37,7 +37,7 @@ namespace PlaywrightNative
         /// <summary>Legacy evaluate with exposeFunctions.</summary>
         /// <typeparam name="T">Result type.</typeparam>
         public static Task<T> EvaluateExposingFunctionsAsync<T>(this IJSHandle handle, string expression, object arg = default)
-            => EvaluateCallbacks.EvaluateTargetAsync<T>(handle, expression, arg, exposeFunctions: true);
+            => EvaluateCallbacks.EvaluateOnHandleAsync<T>(handle, expression, arg, exposeFunctions: true);
 
         /// <summary>Legacy property spelling.</summary>
         public static Task<IJSHandle> PropertyAsync(this IJSHandle handle, string propertyName)

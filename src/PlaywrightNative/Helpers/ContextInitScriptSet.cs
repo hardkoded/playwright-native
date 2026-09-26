@@ -16,7 +16,9 @@
  */
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -137,13 +139,63 @@ namespace PlaywrightNative.Helpers
                     continue;
                 }
 
-                try
+                // Darwin WebKit can recycle the inner target while NewPage finishes
+                // applying context init scripts. A single EvaluateAsync failure used
+                // to be swallowed, leaving window.__fromContext unset when the later
+                // about:blank goto is same-document and does not re-run bootstrap
+                // (AddInitScriptAsyncShouldApplyToNewPage flake on macOS CI).
+                // Cap each attempt: a hung EvaluateAsync never throws, so an unbounded
+                // await would ignore the deadline and burn Launch/NewPage NUnit budgets
+                // (LaunchAsyncHandleSIGINTFalseShouldStartAPage 30s empty stack).
+                DateTime deadline = DateTime.UtcNow.AddSeconds(5);
+                Exception lastError = null;
+                while (DateTime.UtcNow < deadline)
                 {
-                    await page.EvaluateAsync(entry.CurrentDocumentSource).ConfigureAwait(false);
+                    TimeSpan remaining = deadline - DateTime.UtcNow;
+                    if (remaining <= TimeSpan.Zero)
+                    {
+                        break;
+                    }
+
+                    TimeSpan attemptBudget = remaining > TimeSpan.FromSeconds(1.5)
+                        ? TimeSpan.FromSeconds(1.5)
+                        : remaining;
+                    try
+                    {
+                        Task evalTask = page.EvaluateAsync(entry.CurrentDocumentSource);
+                        Task finished = await Task.WhenAny(evalTask, Task.Delay(attemptBudget))
+                            .ConfigureAwait(false);
+                        if (finished != evalTask)
+                        {
+                            _ = evalTask.ContinueWith(
+                                t => _ = t.Exception,
+                                CancellationToken.None,
+                                TaskContinuationOptions.OnlyOnFaulted,
+                                TaskScheduler.Default);
+                            lastError = new TimeoutException("EvaluateOnCurrentAsync attempt budget exceeded.");
+                            await Task.Delay(50).ConfigureAwait(false);
+                            continue;
+                        }
+
+                        await evalTask.ConfigureAwait(false);
+                        lastError = null;
+                        break;
+                    }
+                    catch (PlaywrightException ex)
+                    {
+                        lastError = ex;
+                        await Task.Delay(50).ConfigureAwait(false);
+                    }
+                    catch (TimeoutException ex)
+                    {
+                        lastError = ex;
+                        await Task.Delay(50).ConfigureAwait(false);
+                    }
                 }
-                catch (PlaywrightNativeException)
-                {
-                }
+
+                // Preserve prior soft-fail behavior after exhausting retries so a
+                // permanently closed page does not fail NewPage itself.
+                _ = lastError;
             }
         }
 
@@ -167,7 +219,7 @@ namespace PlaywrightNative.Helpers
             {
                 if (!EvaluateWithArg.IsFunction(script))
                 {
-                    throw new PlaywrightNativeException(EvaluateCallbacks.InitScriptRequiresFunction);
+                    throw new PlaywrightException(EvaluateCallbacks.InitScriptRequiresFunction);
                 }
 
                 return AddAsync(
@@ -178,17 +230,23 @@ namespace PlaywrightNative.Helpers
 
             if (string.IsNullOrEmpty(script) && !string.IsNullOrEmpty(scriptPath))
             {
-                script = PathIo.ReadText(scriptPath);
+                // Use Resolve so path scripts get sourceURL + trailing newline like
+                // inline content (AddInitScriptAsyncShouldReadScriptPath).
+                script = AddInitScriptHelper.Resolve(string.Empty, scriptPath);
+                scriptPath = null;
             }
 
             if (arg != null && !string.IsNullOrEmpty(script))
             {
-                script = EvaluateWithArg.Wrap(script, EvaluateCallbacks.DropFunctions(arg), throwOnFunctions: false);
+                script = EvaluateWithArg.Wrap(
+                    script,
+                    EvaluateCallbacks.DropFunctions(AddInitScriptHelper.UnwrapInitScriptArg(arg)),
+                    throwOnFunctions: false);
             }
 
             if (string.IsNullOrEmpty(script))
             {
-                throw new PlaywrightNativeException(AddInitScriptHelper.MissingOptionsMessage);
+                throw new PlaywrightException(AddInitScriptHelper.MissingOptionsMessage);
             }
 
             string captured = script;

@@ -18,6 +18,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
 using System.Text.Json;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -35,7 +36,7 @@ namespace PlaywrightNative.Helpers
         {
             Assembly assembly = typeof(PlaywrightDevices).Assembly;
             using Stream stream = assembly.GetManifestResourceStream("PlaywrightNative.Helpers.deviceDescriptorsSource.json")
-                ?? throw new PlaywrightNativeException("Bundled Playwright device descriptors are missing.");
+                ?? throw new PlaywrightException("Bundled Playwright device descriptors are missing.");
             using JsonDocument document = JsonDocument.Parse(stream);
             Dictionary<string, BrowserContextOptions> devices = new(StringComparer.Ordinal);
             foreach (JsonProperty property in document.RootElement.EnumerateObject())

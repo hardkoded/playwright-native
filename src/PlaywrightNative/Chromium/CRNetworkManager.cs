@@ -21,6 +21,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using PlaywrightNative.Helpers;
 
 namespace PlaywrightNative.Chromium
@@ -35,13 +36,14 @@ namespace PlaywrightNative.Chromium
         private readonly CRSession _session;
         private readonly CRPage _page;
         private readonly ConcurrentDictionary<string, CRRequest> _requestsById = new();
+        private readonly List<CRRequest> _recentNavigationRequests = new();
+        private readonly object _recentNavigationRequestsGate = new();
         private readonly ConcurrentDictionary<string, CRWebSocket> _webSockets = new();
         private readonly List<CRRouteEntry> _routes = new();
         private readonly ConcurrentDictionary<string, BufferedFetch> _networkIdToFetchRequestPaused = new();
         private readonly ConcurrentDictionary<string, BufferedWillBeSent> _pendingRequestWillBeSent = new();
         private readonly ConcurrentDictionary<string, CRRequest> _requestsByRawId = new();
         private readonly ConcurrentDictionary<string, byte> _handledFetchIds = new(StringComparer.Ordinal);
-        private readonly ConcurrentDictionary<string, IReadOnlyList<NameValueEntry>> _pendingExtraHeaders = new();
         private readonly ConcurrentDictionary<string, byte> _attemptedAuthentications = new();
         private readonly ConcurrentDictionary<string, byte> _servedFromCache = new(StringComparer.Ordinal);
         private readonly ConcurrentDictionary<string, WorkerSessionState> _workerSessions = new(StringComparer.Ordinal);
@@ -106,10 +108,14 @@ namespace PlaywrightNative.Chromium
             session.MessageReceived += state.Handler;
             try
             {
-                List<Task> tasks = new List<Task>
-                {
-                    session.SendAsync("Network.enable"),
-                };
+                // Network.enable must complete before the caller resumes a
+                // PlzDedicatedWorker target. loadingFinished for the main script
+                // arrives on this session and is not replayed; the old 3s
+                // WaitAsync swallowed timeouts and resumed without Network,
+                // dropping RequestFinished for nested workers under CI load.
+                await session.SendAsync("Network.enable").ConfigureAwait(false);
+
+                List<Task> tasks = new List<Task>();
                 if (_extraHttpHeaders != null && _extraHttpHeaders.Count > 0)
                 {
                     tasks.Add(session.SendAsync("Network.setExtraHTTPHeaders", new { headers = _extraHttpHeaders }));
@@ -139,12 +145,12 @@ namespace PlaywrightNative.Chromium
                         }));
                 }
 
-                await Task.WhenAll(tasks).WaitAsync(TimeSpan.FromSeconds(3)).ConfigureAwait(false);
+                if (tasks.Count > 0)
+                {
+                    await Task.WhenAll(tasks).ConfigureAwait(false);
+                }
             }
-            catch (TimeoutException)
-            {
-            }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 RemoveWorkerSession(session);
             }
@@ -167,7 +173,7 @@ namespace PlaywrightNative.Chromium
             {
                 await EnableFetchBoundedAsync(session).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
         }
@@ -204,7 +210,7 @@ namespace PlaywrightNative.Chromium
             List<CRRequest> pending = new();
             foreach (CRRequest request in _requestsById.Values)
             {
-                if (request.IsNavigationRequest
+                if (request.TracksDocumentNavigation
                     && request.Response != null
                     && !request.Finished
                     && request.Frame != null
@@ -225,7 +231,236 @@ namespace PlaywrightNative.Chromium
 
                 RaiseRequestFinished(request);
                 request.Frame?.OnInflightRequestFinished(request.RequestId);
-                _extraInfo.Finished(request.RequestId);
+                _extraInfo.Finished(ExtraInfoId(request));
+            }
+        }
+
+        /// <summary>
+        /// Finds an in-flight or recent navigation request by CDP loader id and/or URL.
+        /// Used when <c>Page.navigate</c> returns <c>ERR_ABORTED</c> before
+        /// <c>Network.responseReceived</c> lands in the goto capture handler.
+        /// </summary>
+        /// <param name="documentId">CDP <c>loaderId</c>, or <see langword="null"/>.</param>
+        /// <param name="frame">Expected frame, or <see langword="null"/>.</param>
+        /// <param name="url">Target navigation URL, or <see langword="null"/>.</param>
+        /// <param name="request">The matching request when found.</param>
+        /// <returns><see langword="true"/> when a navigation request was found.</returns>
+        internal bool TryFindNavigationRequest(string documentId, Frame frame, string url, out CRRequest request)
+        {
+            request = null;
+            CRRequest byDocument = null;
+            CRRequest byUrl = null;
+            foreach (KeyValuePair<string, CRRequest> pair in _requestsById)
+            {
+                if (!Match(pair.Value))
+                {
+                    continue;
+                }
+
+                if (HasUsableResponse(byDocument) && HasUsableResponse(byUrl))
+                {
+                    break;
+                }
+            }
+
+            // Requests may already be removed from _requestsById after abort /
+            // finish under Windows suite load — also scan the recent ring.
+            if (!HasUsableResponse(byDocument) || !HasUsableResponse(byUrl))
+            {
+                CRRequest[] recent;
+                lock (_recentNavigationRequestsGate)
+                {
+                    recent = _recentNavigationRequests.ToArray();
+                }
+
+                for (int i = recent.Length - 1; i >= 0; i--)
+                {
+                    if (!Match(recent[i]))
+                    {
+                        continue;
+                    }
+
+                    if (HasUsableResponse(byDocument) && HasUsableResponse(byUrl))
+                    {
+                        break;
+                    }
+                }
+            }
+
+            // Prefer a candidate that already has a usable final response:
+            // Page.navigate's loaderId can point at an aborted stub (null or
+            // non-final response) while the committed document 200 lives on the
+            // URL-matched request (ShouldReturnFromGotoIfNewNavigationIsStarted).
+            if (HasUsableResponse(byDocument))
+            {
+                request = byDocument;
+            }
+            else if (HasUsableResponse(byUrl))
+            {
+                request = byUrl;
+            }
+            else if (byUrl?.Response != null)
+            {
+                request = byUrl;
+            }
+            else if (byDocument?.Response != null)
+            {
+                request = byDocument;
+            }
+            else
+            {
+                request = byUrl ?? byDocument;
+            }
+
+            return request != null;
+
+            static bool HasUsableResponse(CRRequest candidate)
+            {
+                CRResponse response = candidate?.Response;
+                if (response == null)
+                {
+                    return false;
+                }
+
+                int status = response.Status;
+                return status >= 200
+                    && status != 204
+                    && (status < 300 || status >= 400);
+            }
+
+            bool Match(CRRequest candidate)
+            {
+                if (candidate == null)
+                {
+                    return false;
+                }
+
+                // Prefer TracksDocumentNavigation, but when the caller searches by
+                // loaderId also accept DocumentId hits whose Fetch-paired main
+                // resource omitted Document type and used requestId != loaderId
+                // (ShouldReturnFromGotoIfNewNavigationIsStarted under Windows load).
+                bool documentIdHit = !string.IsNullOrEmpty(documentId)
+                    && (string.Equals(candidate.DocumentId, documentId, StringComparison.Ordinal)
+                        || string.Equals(candidate.ProtocolRequestId, documentId, StringComparison.Ordinal));
+
+                if (!candidate.TracksDocumentNavigation && !documentIdHit)
+                {
+                    return false;
+                }
+
+                if (frame != null
+                    && candidate.Frame != null
+                    && !ReferenceEquals(candidate.Frame, frame)
+                    && !string.Equals(candidate.Frame.FrameId, frame.FrameId, StringComparison.Ordinal))
+                {
+                    return false;
+                }
+
+                if (documentIdHit)
+                {
+                    // Prefer a documentId hit that already has a usable response;
+                    // otherwise allow a later map/ring entry to replace a stub.
+                    if (byDocument == null || !HasUsableResponse(byDocument))
+                    {
+                        byDocument = candidate;
+                    }
+
+                    return true;
+                }
+
+                if (!string.IsNullOrEmpty(url)
+                    && !string.IsNullOrEmpty(candidate.Url)
+                    && NavigationRequestUrlsMatch(candidate.Url, url))
+                {
+                    // URL-only matches normally require document-navigation tracking so
+                    // subresources that share the page loaderId are not adopted. Under
+                    // Windows suite load the main document can omit Document type until
+                    // (or without) Fetch promotion — still adopt a usable main-frame GET
+                    // response so concurrent-goto recovery finds the 200.
+                    bool mainFrameDocumentGuess = candidate.Frame?.ParentFrame == null
+                        && string.Equals(candidate.Method, "GET", StringComparison.OrdinalIgnoreCase)
+                        && !candidate.IsFavicon
+                        && HasUsableResponse(candidate)
+                        && (string.IsNullOrEmpty(candidate.ResourceType)
+                            || string.Equals(candidate.ResourceType, "Other", StringComparison.OrdinalIgnoreCase)
+                            || NetworkRequestEvents.IsDocumentNavigation(candidate.ResourceType));
+
+                    if (!candidate.TracksDocumentNavigation && !mainFrameDocumentGuess)
+                    {
+                        return false;
+                    }
+
+                    if (byUrl == null || (!HasUsableResponse(byUrl) && HasUsableResponse(candidate)))
+                    {
+                        byUrl = candidate;
+                    }
+
+                    return true;
+                }
+
+                // documentId was requested but this candidate is neither a loader
+                // nor URL match — keep scanning.
+                return false;
+            }
+
+            static bool NavigationRequestUrlsMatch(string left, string right)
+            {
+                if (string.IsNullOrEmpty(left) || string.IsNullOrEmpty(right))
+                {
+                    return false;
+                }
+
+                if (string.Equals(left, right, StringComparison.OrdinalIgnoreCase)
+                    || left.StartsWith(right, StringComparison.OrdinalIgnoreCase)
+                    || right.StartsWith(left, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+
+                string normalizedLeft = NormalizeNavigationRequestUrl(left);
+                string normalizedRight = NormalizeNavigationRequestUrl(right);
+                if (string.IsNullOrEmpty(normalizedLeft) || string.IsNullOrEmpty(normalizedRight))
+                {
+                    return false;
+                }
+
+                return string.Equals(normalizedLeft, normalizedRight, StringComparison.OrdinalIgnoreCase)
+                    || normalizedLeft.StartsWith(normalizedRight, StringComparison.OrdinalIgnoreCase)
+                    || normalizedRight.StartsWith(normalizedLeft, StringComparison.OrdinalIgnoreCase);
+            }
+
+            static string NormalizeNavigationRequestUrl(string value)
+            {
+                if (string.IsNullOrEmpty(value))
+                {
+                    return value;
+                }
+
+                string withoutHash = NavigationTimeout.WithoutHash(value);
+                string withoutUser = NavigationTimeout.WithoutUserInfo(withoutHash);
+                if (!Uri.TryCreate(withoutUser, UriKind.Absolute, out Uri uri))
+                {
+                    return withoutUser.TrimEnd('/');
+                }
+
+                string host = uri.Host;
+                if (string.Equals(host, "127.0.0.1", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(host, "::1", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(host, "[::1]", StringComparison.OrdinalIgnoreCase))
+                {
+                    host = "localhost";
+                }
+
+                string path = uri.AbsolutePath;
+                if (path.Length > 1)
+                {
+                    path = path.TrimEnd('/');
+                }
+
+                return uri.Scheme + "://" + host
+                    + (uri.IsDefaultPort ? string.Empty : ":" + uri.Port.ToString(System.Globalization.CultureInfo.InvariantCulture))
+                    + path
+                    + uri.Query;
             }
         }
 
@@ -276,7 +511,7 @@ namespace PlaywrightNative.Chromium
                         return bytes;
                     }
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
             }
@@ -316,7 +551,7 @@ namespace PlaywrightNative.Chromium
                 {
                     await state.Session.SendAsync("Network.setExtraHTTPHeaders", new { headers }).ConfigureAwait(false);
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
             }
@@ -543,7 +778,7 @@ namespace PlaywrightNative.Chromium
                     catch (TimeoutException)
                     {
                     }
-                    catch (PlaywrightNativeException)
+                    catch (PlaywrightException)
                     {
                     }
                 }
@@ -561,7 +796,7 @@ namespace PlaywrightNative.Chromium
                 catch (TimeoutException)
                 {
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
 
@@ -584,7 +819,7 @@ namespace PlaywrightNative.Chromium
                     catch (TimeoutException)
                     {
                     }
-                    catch (PlaywrightNativeException)
+                    catch (PlaywrightException)
                     {
                     }
                 }
@@ -621,20 +856,6 @@ namespace PlaywrightNative.Chromium
             }
 
             return result;
-        }
-
-        private static IReadOnlyList<NameValueEntry> ParseExtraHeaders(JsonElement payload)
-        {
-            if (payload.TryGetProperty("headersText", out JsonElement textElement))
-            {
-                IReadOnlyList<NameValueEntry> fromText = ResponseHeaders.ParseHeadersText(textElement.GetString());
-                if (fromText.Count > 0)
-                {
-                    return fromText;
-                }
-            }
-
-            return ResponseHeaders.FromMap(ParseResponseHeaders(payload));
         }
 
         private static string GetString(JsonElement element, string propertyName)
@@ -715,7 +936,7 @@ namespace PlaywrightNative.Chromium
             catch (TimeoutException)
             {
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
         }
@@ -745,14 +966,14 @@ namespace PlaywrightNative.Chromium
                     {
                         await worker.Session.SendAsync("Network.setRequestInterception", new { patterns }).ConfigureAwait(false);
                     }
-                    catch (PlaywrightNativeException)
+                    catch (PlaywrightException)
                     {
                     }
                 }
 
                 _webSocketInterceptingEnabled = needWs;
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
         }
@@ -946,7 +1167,7 @@ namespace PlaywrightNative.Chromium
             socket.NotifyError(WebSocketProtocol.FormatSocketError(message, socket.Har.Status));
         }
 
-        private void OnRequestWillBeSent(JsonElement? parameters, CRSession session, bool force = false)
+        private void OnRequestWillBeSent(JsonElement? parameters, CRSession session, bool force = false, bool allowRoute = true)
         {
             if (!parameters.HasValue)
             {
@@ -962,12 +1183,25 @@ namespace PlaywrightNative.Chromium
             }
 
             string requestId = RequestKey(session, rawId);
-            string holdType = GetString(p, "type");
+            string holdUrl = p.TryGetProperty("request", out JsonElement holdRequest)
+                ? GetString(holdRequest, "url")
+                : null;
+
+            // Official crNetworkManager: while protocol interception is enabled,
+            // buffer every non-data requestWillBeSent until Fetch.requestPaused
+            // pairs with it — or until responseReceived(fromServiceWorker) /
+            // loadingFailed releases it without creating a route. Service-worker
+            // handled frame fetches never get requestPaused; creating the request
+            // early would leave Fetch paused with no continue.
+            //
+            // Preflight requestWillBeSent reports type "Other", so buffering by
+            // resource type alone is not enough — buffer all types here.
             if (!force
-                && (string.Equals(holdType, "Fetch", StringComparison.Ordinal) || string.Equals(holdType, "XHR", StringComparison.Ordinal))
+                && _interceptingEnabled
+                && !string.IsNullOrEmpty(holdUrl)
+                && !holdUrl.StartsWith("data:", StringComparison.OrdinalIgnoreCase)
                 && !_networkIdToFetchRequestPaused.ContainsKey(rawId)
-                && !_networkIdToFetchRequestPaused.ContainsKey(requestId)
-                && HasUserRoutes())
+                && !_networkIdToFetchRequestPaused.ContainsKey(requestId))
             {
                 _pendingRequestWillBeSent[rawId] = new BufferedWillBeSent(session, p);
                 return;
@@ -1017,7 +1251,13 @@ namespace PlaywrightNative.Chromium
                         ResponseNetworkInfo.ParseFromServiceWorker(redirectResponse),
                         ResponseNetworkInfo.ParseHttpVersion(redirectResponse));
 
-                    _extraInfo.ResponseCreated(requestId, redirectResponseObj);
+                    // redirectHasExtraInfo is on requestWillBeSent, same as
+                    // official _handleRequestRedirect. Provisional headers must
+                    // not be sealed onto a later hop.
+                    bool redirectExpectsExtraInfo = GetBool(p, "redirectHasExtraInfo")
+                        && !existingRequest.ServedFromCache;
+                    redirectResponseObj.SetExpectsExtraInfo(redirectExpectsExtraInfo);
+                    _extraInfo.ResponseCreated(rawId, redirectResponseObj);
                     RaiseResponseReceived(redirectResponseObj);
                     RaiseRequestFinished(existingRequest);
                     existingRequest.Frame?.OnInflightRequestFinished(requestId);
@@ -1045,7 +1285,13 @@ namespace PlaywrightNative.Chromium
                 type = "preflight";
             }
 
-            bool isNavigationRequest = NetworkRequestEvents.IsDocumentNavigation(type);
+            // Main document navigations report loaderId == requestId. Resource
+            // type can be missing on Fetch-paired Windows paths, so also treat
+            // that equality as a navigation request before constructing CRRequest.
+            string loaderId = GetString(p, "loaderId");
+            bool isMainResource = !string.IsNullOrEmpty(loaderId)
+                && string.Equals(loaderId, rawId, StringComparison.Ordinal);
+            bool isNavigationRequest = NetworkRequestEvents.IsDocumentNavigation(type) || isMainResource;
 
             CRRequest request = new(
                 requestId,
@@ -1062,9 +1308,11 @@ namespace PlaywrightNative.Chromium
             request.NetworkSession = session ?? _session;
             request.FetchProtocolBody = () => GetProtocolBodyAsync(request);
 
-            _extraInfo.RequestCreated(requestId, request);
+            // Worker main scripts start on the page session and finish on the
+            // worker session (PlzDedicatedWorker). Extra-info events use the
+            // raw CDP id on whichever session emits them.
+            _extraInfo.RequestCreated(rawId, request);
 
-            string loaderId = GetString(p, "loaderId");
             request.DocumentId = !string.IsNullOrEmpty(loaderId) ? loaderId : frame?.DocumentId;
             request.DocumentUrl = isNavigationRequest ? url : frame?.Url;
             request.TimestampSeconds = ResourceTimingParser.ReadDouble(p, "timestamp");
@@ -1082,21 +1330,45 @@ namespace PlaywrightNative.Chromium
 
             _requestsById[requestId] = request;
             _requestsByRawId[rawId] = request;
+            RememberRecentNavigationRequest(request);
+            _page.NoteFrameNavigateRequest(frame, url, loaderId, isNavigationRequest || request.TracksDocumentNavigation);
+
             RaiseRequestCreated(request);
             frame?.OnInflightRequestStarted(
                 requestId,
-                NetworkIdleRules.IsExcluded(request.Url, request.ResourceType));
+                NetworkIdleRules.IsExcluded(request.Url, request.ResourceType),
+                isNavigationRequest);
 
             // Fetch.requestPaused for worker fetches arrives on the page session
             // (Chrome 130+), while Network.requestWillBeSent arrives on the worker
             // session. Correlate by the raw networkId, and continue/fulfill on the
             // Fetch session that paused the request.
+            //
+            // Official fromServiceWorker / loadingFailed release passes no paused
+            // event (allowRoute: false): materialize the request without a route so
+            // page.RouteAsync does not see SW-handled fetches.
             if (_networkIdToFetchRequestPaused.TryRemove(rawId, out BufferedFetch buffered)
                 || _networkIdToFetchRequestPaused.TryRemove(requestId, out buffered))
             {
                 string interceptionId = GetString(buffered.Parameters, "requestId");
-                if (!string.IsNullOrEmpty(interceptionId)
-                    && _handledFetchIds.TryAdd(interceptionId, 0))
+                if (string.IsNullOrEmpty(interceptionId))
+                {
+                    return;
+                }
+
+                if (!allowRoute)
+                {
+                    // Orphaned pause after SW/loadingFailed release: continue so
+                    // Fetch does not hang, but do not invoke user routes.
+                    if (_handledFetchIds.TryAdd(interceptionId, 0))
+                    {
+                        ContinueFetchMayFail(buffered.Session ?? session, interceptionId);
+                    }
+
+                    return;
+                }
+
+                if (_handledFetchIds.TryAdd(interceptionId, 0))
                 {
                     ApplyPausedRequestDetails(request, buffered.Parameters);
                     OnInterceptedRequest(interceptionId, request, buffered.Session ?? session);
@@ -1127,9 +1399,12 @@ namespace PlaywrightNative.Chromium
                 string responseUrl = p.TryGetProperty("response", out swResponse)
                     ? GetString(swResponse, "url")
                     : null;
+
+                // Official: SW-handled frame responses never get requestPaused —
+                // release the buffered willBeSent without creating a route.
                 if (swResponse.ValueKind == JsonValueKind.Object
                     && ResponseNetworkInfo.ParseFromServiceWorker(swResponse)
-                    && TryReleaseHeldFetch(rawId, responseUrl))
+                    && TryReleaseHeldFetch(rawId, responseUrl, allowRoute: false))
                 {
                     if (!_requestsById.TryGetValue(requestId, out request)
                         && !_requestsByRawId.TryGetValue(rawId, out request))
@@ -1177,12 +1452,23 @@ namespace PlaywrightNative.Chromium
                 ResponseNetworkInfo.ParseFromServiceWorker(responsePayload),
                 ResponseNetworkInfo.ParseHttpVersion(responsePayload));
 
-            if (_pendingExtraHeaders.TryRemove(requestId, out IReadOnlyList<NameValueEntry> extra))
+            // hasExtraInfo is on Network.responseReceived, not on the nested
+            // response object. Reading the nested field always missed it, so
+            // provisional headers (no Set-Cookie, comma-joined duplicates)
+            // were sealed before extraInfo arrived.
+            bool expectsExtraInfo = GetBool(p, "hasExtraInfo") && !request.ServedFromCache;
+            response.SetExpectsExtraInfo(expectsExtraInfo);
+            if (!expectsExtraInfo)
             {
-                response.ApplyExtraHeaders(extra);
+                // No extraInfo event will arrive. Seal provisional headers so
+                // HeadersArrayAsync does not wait forever.
+                response.EnsureRawResponseHeaders();
             }
 
-            _extraInfo.ResponseCreated(requestId, response);
+            // Pair through the tracker only. Applying a pending extra here
+            // stamps the latest hop with an earlier redirect's headers
+            // (ShouldReportRawResponseHeadersInRedirects).
+            _extraInfo.ResponseCreated(rawId, response);
             MaybeUpdateRequestSession(session, request);
             RaiseResponseReceived(response);
         }
@@ -1201,8 +1487,7 @@ namespace PlaywrightNative.Chromium
                 return;
             }
 
-            string requestId = RequestKey(session, rawId);
-            _extraInfo.RequestExtraInfo(requestId, p);
+            _extraInfo.RequestExtraInfo(rawId, p);
         }
 
         private void OnResponseReceivedExtraInfo(JsonElement? parameters, CRSession session)
@@ -1219,18 +1504,10 @@ namespace PlaywrightNative.Chromium
                 return;
             }
 
-            string requestId = RequestKey(session, rawId);
-            IReadOnlyList<NameValueEntry> pairs = ParseExtraHeaders(p);
-            if (_requestsById.TryGetValue(requestId, out CRRequest request) && request.Response != null)
-            {
-                request.Response.ApplyExtraHeaders(pairs);
-            }
-            else if (pairs.Count > 0)
-            {
-                _pendingExtraHeaders[requestId] = pairs;
-            }
-
-            _extraInfo.ResponseExtraInfo(requestId, p);
+            // Pair by the raw CDP id, not the session-prefixed key. A direct
+            // apply onto _requestsById hits the latest request, which is the
+            // wrong hop once a redirect has reused the id.
+            _extraInfo.ResponseExtraInfo(rawId, p);
         }
 
         private void OnLoadingFinished(JsonElement? parameters, CRSession session)
@@ -1260,7 +1537,7 @@ namespace PlaywrightNative.Chromium
 
                 RaiseRequestFinished(request);
                 request.Frame?.OnInflightRequestFinished(request.RequestId);
-                _extraInfo.Finished(request.RequestId);
+                _extraInfo.Finished(ExtraInfoId(request));
             }
         }
 
@@ -1307,6 +1584,14 @@ namespace PlaywrightNative.Chromium
 
             string requestId = RequestKey(session, rawId);
 
+            // Official: release buffered requestWillBeSent when the request fails
+            // before Fetch.requestPaused (common for SW-handled / cancelled fetches),
+            // without creating a route — same as responseReceived(fromServiceWorker).
+            if (!_requestsById.ContainsKey(requestId) && !_requestsByRawId.ContainsKey(rawId))
+            {
+                TryReleaseHeldFetch(rawId, url: null, allowRoute: false);
+            }
+
             if (TryTakeRequest(session, rawId, out CRRequest request))
             {
                 MaybeUpdateRequestSession(session, request);
@@ -1329,7 +1614,7 @@ namespace PlaywrightNative.Chromium
                 }
 
                 request.Frame?.OnInflightRequestFinished(requestId);
-                _extraInfo.Finished(requestId);
+                _extraInfo.Finished(rawId);
             }
 
             if ((_webSockets.TryGetValue(rawId, out CRWebSocket socket)
@@ -1498,6 +1783,21 @@ namespace PlaywrightNative.Chromium
 
             if (!string.IsNullOrEmpty(networkId) && TryGetRequestByNetworkId(session, networkId, out CRRequest request))
             {
+                // Redirects reuse networkId with a new Fetch id. The previous hop
+                // was already routed. Buffer this pause so the redirect
+                // requestWillBeSent can link RedirectedTo and auto-continue.
+                // Official: "We do not support intercepting redirects."
+                if (request.InterceptionDelivered)
+                {
+                    _handledFetchIds.TryRemove(interceptionId, out _);
+                    if (!_networkIdToFetchRequestPaused.ContainsKey(networkId))
+                    {
+                        _networkIdToFetchRequestPaused[networkId] = new BufferedFetch(session, p);
+                    }
+
+                    return;
+                }
+
                 ApplyPausedRequestDetails(request, p);
                 OnInterceptedRequest(interceptionId, request, session);
                 return;
@@ -1561,11 +1861,66 @@ namespace PlaywrightNative.Chromium
             OnInterceptedRequest(interceptionId, fetchRequest, session);
         }
 
+        /// <summary>
+        /// Adds <paramref name="request"/> to the recent navigation ring when it
+        /// tracks a document navigation (including late Fetch Document promotion).
+        /// </summary>
+        /// <param name="request">The request to remember.</param>
+        private void RememberRecentNavigationRequest(CRRequest request)
+        {
+            if (request == null || !request.TracksDocumentNavigation)
+            {
+                return;
+            }
+
+            lock (_recentNavigationRequestsGate)
+            {
+                for (int i = 0; i < _recentNavigationRequests.Count; i++)
+                {
+                    if (ReferenceEquals(_recentNavigationRequests[i], request))
+                    {
+                        return;
+                    }
+                }
+
+                _recentNavigationRequests.Add(request);
+                while (_recentNavigationRequests.Count > 32)
+                {
+                    _recentNavigationRequests.RemoveAt(0);
+                }
+            }
+        }
+
         private void ApplyPausedRequestDetails(CRRequest request, JsonElement paused)
         {
             if (!paused.TryGetProperty("request", out JsonElement pausedRequest))
             {
                 return;
+            }
+
+            // Fetch.requestPaused often carries resourceType=Document when
+            // Network.requestWillBeSent omitted type and used requestId != loaderId.
+            // Promote those to navigation tracking so concurrent-goto recovery can
+            // still find the committed 200 (ShouldReturnFromGotoIfNewNavigationIsStarted).
+            string pausedType = GetString(paused, "resourceType");
+            if (!request.TracksDocumentNavigation
+                && NetworkRequestEvents.IsDocumentNavigation(pausedType))
+            {
+                request.PromoteToDocumentNavigation(pausedType);
+                RememberRecentNavigationRequest(request);
+                _page.NoteFrameNavigateRequest(
+                    request.Frame,
+                    request.Url,
+                    request.DocumentId,
+                    isDocumentNavigation: true);
+
+                // Response may have landed before Fetch promotion; OnResponseReceived
+                // skipped the committed ring while TracksDocumentNavigation was false.
+                // Latch it now so ERR_ABORTED recovery still sees the document 200.
+                if (request.Response is CRResponse already && already.Status != 204)
+                {
+                    _page.LatchCommittedNavigationResponse(already);
+                }
             }
 
             request.UpdatePostData(RequestPostData.FromProtocol(pausedRequest));
@@ -1578,7 +1933,7 @@ namespace PlaywrightNative.Chromium
             ApplyChromiumRefererConcatenation(request);
             if (pausedHeaders.Count > 0)
             {
-                request.SetRawRequestHeaders(pausedHeaders);
+                request.SetRawRequestHeaders(pausedHeaders, isFinal: true);
             }
         }
 
@@ -1629,9 +1984,10 @@ namespace PlaywrightNative.Chromium
 
         private void OnInterceptedRequest(string interceptionId, CRRequest request, CRSession session)
         {
+            request.InterceptionDelivered = true;
             request.ApplyInterceptedHeaders(request.Headers, EffectiveExtraHeaders());
             ApplyChromiumRefererConcatenation(request);
-            request.SetRawRequestHeaders(HeaderMap.Array(request.Headers));
+            request.SetRawRequestHeaders(HeaderMap.Array(request.Headers), isFinal: true);
 
             if (request.RedirectedFrom != null)
             {
@@ -1821,7 +2177,74 @@ namespace PlaywrightNative.Chromium
                     overwrite: false);
             }
 
+            // Prefetch subresource bodies while Chromium still holds them.
+            // Document navigations must not be prefetched: an early
+            // getResponseBody miss is cached as "navigated away" and the
+            // later TextAsync (OOPIF grid.html) never retries. Documents are
+            // also unsafe to loadNetworkResource (Set-Cookie / missing Referer).
+            if (!NetworkRequestEvents.IsDocumentNavigation(request.ResourceType))
+            {
+                _ = response.PrefetchBodyAsync();
+            }
+
+            // Under Windows suite load Network.requestWillBeSent can omit
+            // Document type and leave DocumentId unset (requestId != loaderId)
+            // until Fetch.requestPaused. Promote + latch main-frame GETs that
+            // already look like documents so concurrent-goto ERR_ABORTED
+            // recovery still finds the committed 200 even when Fetch never
+            // promotes (ShouldReturnFromGotoIfNewNavigationIsStarted).
+            MaybeLatchMainFrameDocumentResponse(request, response);
+
             _page.OnResponseReceived(response);
+        }
+
+        private void MaybeLatchMainFrameDocumentResponse(CRRequest request, CRResponse response)
+        {
+            if (request == null || response == null)
+            {
+                return;
+            }
+
+            int status = response.Status;
+            if (status < 200
+                || status == 204
+                || (status >= 300 && status < 400))
+            {
+                return;
+            }
+
+            if (request.Frame?.ParentFrame != null
+                || !string.Equals(request.Method, "GET", StringComparison.OrdinalIgnoreCase)
+                || request.IsFavicon)
+            {
+                return;
+            }
+
+            string resourceType = request.ResourceType;
+            bool looksDocument = request.TracksDocumentNavigation
+                || string.IsNullOrEmpty(resourceType)
+                || string.Equals(resourceType, "Other", StringComparison.OrdinalIgnoreCase)
+                || NetworkRequestEvents.IsDocumentNavigation(resourceType);
+            if (!looksDocument)
+            {
+                return;
+            }
+
+            if (!request.TracksDocumentNavigation)
+            {
+                request.PromoteToDocumentNavigation(
+                    NetworkRequestEvents.IsDocumentNavigation(resourceType)
+                        ? resourceType
+                        : "Document");
+            }
+
+            RememberRecentNavigationRequest(request);
+            _page.NoteFrameNavigateRequest(
+                request.Frame,
+                request.Url,
+                request.DocumentId,
+                isDocumentNavigation: true);
+            _page.LatchCommittedNavigationResponse(response);
         }
 
         private void RaiseRequestFinished(CRRequest request)
@@ -1899,6 +2322,20 @@ namespace PlaywrightNative.Chromium
                     entry.Lifetime.End(invocation);
                 }
             };
+        }
+
+        private string ExtraInfoId(CRRequest request)
+        {
+            if (request == null)
+            {
+                return null;
+            }
+
+            // Network.*ExtraInfo is keyed by the CDP requestId, which is stable
+            // when the worker or OOPIF session takes over the same request.
+            return string.IsNullOrEmpty(request.ProtocolRequestId)
+                ? request.RequestId
+                : request.ProtocolRequestId;
         }
 
         private string RequestKey(CRSession session, string requestId)
@@ -2046,20 +2483,31 @@ namespace PlaywrightNative.Chromium
             return child;
         }
 
-        private bool HasUserRoutes()
+        private void ContinueFetchMayFail(CRSession session, string interceptionId)
         {
-            if (_handleAuthRequests)
+            if (session == null || string.IsNullOrEmpty(interceptionId))
             {
-                return true;
+                return;
             }
 
-            lock (_routes)
-            {
-                return _routes.Count > 0;
-            }
+            _ = session.SendAsync("Fetch.continueRequest", new { requestId = interceptionId })
+                .ContinueWith(
+                    t =>
+                    {
+                        if (t.IsFaulted)
+                        {
+                            LogRouteHandlerError(t.Exception?.GetBaseException() ?? t.Exception);
+                        }
+                    },
+                    TaskScheduler.Default);
         }
 
-        private bool TryReleaseHeldFetch(string rawId, string url, CRSession session = null, JsonElement? paused = null)
+        private bool TryReleaseHeldFetch(
+            string rawId,
+            string url,
+            CRSession session = null,
+            JsonElement? paused = null,
+            bool allowRoute = true)
         {
             BufferedWillBeSent pending = null;
             if (!string.IsNullOrEmpty(rawId))
@@ -2085,12 +2533,12 @@ namespace PlaywrightNative.Chromium
                 return false;
             }
 
-            if (paused.HasValue && !string.IsNullOrEmpty(rawId))
+            if (allowRoute && paused.HasValue && !string.IsNullOrEmpty(rawId))
             {
                 _networkIdToFetchRequestPaused[rawId] = new BufferedFetch(session, paused.Value);
             }
 
-            OnRequestWillBeSent(pending.Parameters, pending.Session, force: true);
+            OnRequestWillBeSent(pending.Parameters, pending.Session, force: true, allowRoute: allowRoute);
             return true;
         }
 

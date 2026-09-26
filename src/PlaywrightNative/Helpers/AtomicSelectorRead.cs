@@ -20,6 +20,7 @@ using System.Globalization;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -102,7 +103,7 @@ namespace PlaywrightNative.Helpers
             {
                 raw = await evaluateAsync(VisibleFunction(selector, strict)).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException ex)
+            catch (PlaywrightException ex)
             {
                 throw EscapeXpathSelector(ex, selector);
             }
@@ -148,16 +149,20 @@ namespace PlaywrightNative.Helpers
                 return "const el = " + QueryExpression(selector) + ";";
             }
 
+            // Build the violation text in the page: only there can we render the
+            // official "N) <preview> aka <locator>" line for every match.
             return "const all = " + QueryAllExpression(selector) + ";" +
-                " if (all && all.length > 1) return { ok: true, n: all.length };" +
+                " if (all && all.length > 1) {" + StrictModeViolation.GeneratorSource +
+                " return { ok: true, n: all.length, m: formatStrict(" +
+                JsonSerializer.Serialize(StrictModeViolation.QuoteLocator(selector)) + ", all) }; }" +
                 " const el = all && all.length ? all[0] : null;";
         }
 
-        private static PlaywrightNativeException EscapeXpathSelector(PlaywrightNativeException ex, string selector)
+        private static PlaywrightException EscapeXpathSelector(PlaywrightException ex, string selector)
         {
             if (ex == null)
             {
-                return new PlaywrightNativeException("xpath");
+                return new PlaywrightException("xpath");
             }
 
             if (string.IsNullOrEmpty(selector) || !selector.Contains('\'', StringComparison.Ordinal))
@@ -171,7 +176,7 @@ namespace PlaywrightNative.Helpers
                 return ex;
             }
 
-            return new PlaywrightNativeException(ex.Message + " " + escaped);
+            return new PlaywrightException(ex.Message + " " + escaped);
         }
 
         private static void ThrowIfStrict(JsonElement? raw, string selector)
@@ -189,7 +194,13 @@ namespace PlaywrightNative.Helpers
                 return;
             }
 
-            throw new PlaywrightNativeException(
+            if (raw.Value.TryGetProperty("m", out JsonElement message)
+                && message.ValueKind == JsonValueKind.String)
+            {
+                throw new PlaywrightException(message.GetString());
+            }
+
+            throw new PlaywrightException(
                 "strict mode violation: " +
                 StrictModeViolation.QuoteLocator(selector) +
                 " resolved to " +

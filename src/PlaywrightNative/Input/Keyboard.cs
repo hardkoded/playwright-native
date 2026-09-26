@@ -18,6 +18,7 @@ using System;
 using System.Collections.Generic;
 using System.Text;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Input
 {
@@ -202,7 +203,7 @@ namespace PlaywrightNative.Input
             KeyDefinition def = USKeyboardLayout.TryResolve(ResolveControlOrMeta(key));
             if (def == null)
             {
-                throw new PlaywrightNativeException($"Unknown key: \"{key}\"");
+                throw new PlaywrightException($"Unknown key: \"{key}\"");
             }
 
             return def;

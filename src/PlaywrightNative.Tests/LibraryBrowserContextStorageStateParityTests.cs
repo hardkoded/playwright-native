@@ -21,6 +21,7 @@ using System.IO;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.Helpers;
 using PlaywrightNative.NUnit;
@@ -175,7 +176,7 @@ namespace PlaywrightNative.Tests
         [Timeout(TestConstants.DefaultTestTimeout)]
         public void ShouldReportGoodErrorIfTheUrlIsNotValid()
         {
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(() =>
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(() =>
                 _browser.NewContextAsync(new() { StorageState = "{\"cookies\":[],\"origins\":[{\"origin\":\"foo\",\"localStorage\":[{\"name\":\"name1\",\"value\":\"value1\"}]}]}" }));
             Assert.That(error.Message, Does.Contain("Error setting storage state:"));
             Assert.That(error.Message, Does.Contain("foo"));
@@ -284,7 +285,7 @@ namespace PlaywrightNative.Tests
         public void ShouldHandleMissingFile()
         {
             string file = Path.Combine(Path.GetTempPath(), "pwsharp-does-not-exist-" + Guid.NewGuid().ToString("N") + ".json");
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => _browser.NewContextAsync(new BrowserContextOptions { StorageStatePath = file }));
             Assert.That(error.Message, Does.Contain("Error reading storage state from " + file + ":\nENOENT"));
         }
@@ -298,7 +299,7 @@ namespace PlaywrightNative.Tests
             File.WriteAllText(file, "not-json");
             try
             {
-                PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+                PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                     () => _browser.NewContextAsync(new BrowserContextOptions { StorageStatePath = file }));
                 Assert.That(
                     error.Message,
@@ -689,7 +690,7 @@ namespace PlaywrightNative.Tests
         {
             IBrowserContext context = await _browser.NewContextAsync().ConfigureAwait(false);
             string file = Path.Combine(Path.GetTempPath(), "pwsharp-does-not-exist-" + Guid.NewGuid().ToString("N") + ".json");
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => context.SetStorageStateAsync(storageStatePath: file));
             Assert.That(error.Message, Does.Contain("Error reading storage state from " + file));
             await context.CloseAsync().ConfigureAwait(false);

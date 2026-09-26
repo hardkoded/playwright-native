@@ -235,6 +235,23 @@ namespace PlaywrightNative.Helpers
     return result;
   };
 
+  const flattenedTextContent = (node) => {
+    if (node.nodeType === 3) return node.nodeValue || '';
+    if (node.nodeType !== 1) return '';
+    if (node.nodeName === 'SLOT') {
+      const assigned = node.assignedNodes ? node.assignedNodes() : [];
+      if (assigned.length) {
+        let out = '';
+        for (let i = 0; i < assigned.length; i++) out += flattenedTextContent(assigned[i]);
+        return out;
+      }
+    }
+    let out = '';
+    const kids = node.childNodes || [];
+    for (let i = 0; i < kids.length; i++) out += flattenedTextContent(kids[i]);
+    return out;
+  };
+
   const getElementAccessibleNameText = (element) => {
     const labelled = element.getAttribute('aria-labelledby');
     if (labelled) {
@@ -259,7 +276,7 @@ namespace PlaywrightNative.Helpers
       const type = String(element.type || '').toLowerCase();
       if (type === 'submit' || type === 'button' || type === 'reset') return element.value || '';
     }
-    return element.textContent || '';
+    return flattenedTextContent(element) || '';
   };
 
   const getElementAccessibleDescription = (element) => {

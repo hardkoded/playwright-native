@@ -7,12 +7,15 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -51,6 +54,74 @@ namespace PlaywrightNative.Helpers
 
         internal const string WritePrefixFunction = @"(p) => { window.__pwAriaFramePrefix = String(p); return true; }";
 
+        /// <summary>
+        /// Parent-document check for <c>loading=lazy</c> without callFunctionOn
+        /// on the iframe objectId (Darwin wedges that path for unloaded lazy frames).
+        /// </summary>
+        private const string IsLazyIframeRefFunction = @"(ref) => {
+  const want = String(ref || '');
+  const visit = (el) => {
+    if (!el || el.nodeType !== 1) return null;
+    if (el._ariaRef && el._ariaRef.ref === want) return el;
+    const kids = el.children || [];
+    for (let i = 0; i < kids.length; i++) {
+      const hit = visit(kids[i]);
+      if (hit) return hit;
+    }
+    if (el.shadowRoot) {
+      const sk = el.shadowRoot.children || [];
+      for (let i = 0; i < sk.length; i++) {
+        const hit = visit(sk[i]);
+        if (hit) return hit;
+      }
+    }
+    return null;
+  };
+  const el = visit(document.documentElement);
+  if (el) {
+    return (el.getAttribute('loading') || '').toLowerCase() === 'lazy';
+  }
+  const frames = document.querySelectorAll('iframe, frame');
+  if (!frames.length) return false;
+  for (let i = 0; i < frames.length; i++) {
+    if ((frames[i].getAttribute('loading') || '').toLowerCase() !== 'lazy') return false;
+  }
+  return true;
+}";
+
+        /// <summary>
+        /// Parent-document capture-ready check by aria-ref (no iframe objectId).
+        /// </summary>
+        private const string IframeCaptureReadyByRefFunction = @"(ref) => {
+  const want = String(ref || '');
+  const visit = (el) => {
+    if (!el || el.nodeType !== 1) return null;
+    if (el._ariaRef && el._ariaRef.ref === want) return el;
+    const kids = el.children || [];
+    for (let i = 0; i < kids.length; i++) {
+      const hit = visit(kids[i]);
+      if (hit) return hit;
+    }
+    if (el.shadowRoot) {
+      const sk = el.shadowRoot.children || [];
+      for (let i = 0; i < sk.length; i++) {
+        const hit = visit(sk[i]);
+        if (hit) return hit;
+      }
+    }
+    return null;
+  };
+  const el = visit(document.documentElement);
+  if (!el) return true;
+  try {
+    const loading = (el.getAttribute('loading') || '').toLowerCase();
+    if (loading === 'lazy') return false;
+    return true;
+  } catch (e) {
+    return true;
+  }
+}";
+
         private static readonly ConditionalWeakTable<IPage, State> PageState = new ConditionalWeakTable<IPage, State>();
 
         /// <summary>
@@ -70,23 +141,65 @@ namespace PlaywrightNative.Helpers
 
             try
             {
+                // Cap readyState wait so SnapshotForAI(timeout: 3000) cannot burn
+                // the full NUnit budget when lazy iframes keep readyState busy.
+                // interactive/complete still auto-waits navigations (reload).
+                float waitMs = timeout ?? 3_000f;
+                if (waitMs > 1_500f)
+                {
+                    waitMs = 1_500f;
+                }
+
                 await page.WaitForFunctionAsync(
-                    "() => document.readyState === 'complete'",
-                    timeout: timeout).ConfigureAwait(false);
+                    "() => document.readyState === 'complete' || document.readyState === 'interactive'",
+                    timeout: waitMs).ConfigureAwait(false);
+                await WaitForSameOriginIframeBodiesAsync(page, waitMs).ConfigureAwait(false);
             }
             catch (TimeoutException)
             {
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
 
             IElementHandle root = await page.Locator("body, frameset").First.ElementHandleAsync(timeout).ConfigureAwait(false);
-            await EnsurePrefixesAsync(page).ConfigureAwait(false);
+            Stopwatch deadlineClock = Stopwatch.StartNew();
+            int budgetMs = TimeoutSettings.TimeoutMs(timeout);
+            if (budgetMs > 3_000)
+            {
+                budgetMs = 3_000;
+            }
+
+            await EnsurePrefixesAsync(page, deadlineClock, budgetMs).ConfigureAwait(false);
             IFrame frame = page.MainFrame;
-            string prefix = await PrefixForAsync(page, frame).ConfigureAwait(false);
-            string yaml = await AriaSnapshotOfficialAi.CaptureYamlAsync(root, depth, boxes, prefix).ConfigureAwait(false);
-            return await StitchAsync(page, frame, yaml, depth, boxes, timeout).ConfigureAwait(false);
+            string prefix = await RaceOrDefaultAsync(
+                () => PrefixForAsync(page, frame),
+                deadlineClock,
+                budgetMs,
+                fallback: string.Empty).ConfigureAwait(false);
+            string yaml = await RaceOrDefaultAsync(
+                () => AriaSnapshotOfficialAi.CaptureYamlAsync(root, depth, boxes, prefix),
+                deadlineClock,
+                budgetMs,
+                fallback: string.Empty).ConfigureAwait(false);
+            if (string.IsNullOrEmpty(yaml))
+            {
+                return string.Empty;
+            }
+
+            // Windows suite load: EnsurePrefixes + parent AX often spend the
+            // shared 3s budget before multi-srcdoc stitch runs, leaving empty
+            // iframe lines (ShouldPersistIframeReferences).
+            Stopwatch stitchClock = deadlineClock;
+            int stitchBudget = budgetMs;
+            if (yaml.Contains("- iframe", StringComparison.Ordinal)
+                && RemainingMs(deadlineClock, budgetMs) < 2_500)
+            {
+                stitchClock = Stopwatch.StartNew();
+                stitchBudget = 3_500;
+            }
+
+            return await StitchAsync(page, frame, yaml, depth, boxes, stitchClock, stitchBudget).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -106,23 +219,54 @@ namespace PlaywrightNative.Helpers
 
             try
             {
+                float waitMs = timeout ?? 3_000f;
+                if (waitMs > 1_500f)
+                {
+                    waitMs = 1_500f;
+                }
+
                 await page.WaitForFunctionAsync(
-                    "() => document.readyState === 'complete'",
-                    timeout: timeout).ConfigureAwait(false);
+                    "() => document.readyState === 'complete' || document.readyState === 'interactive'",
+                    timeout: waitMs).ConfigureAwait(false);
+                await WaitForSameOriginIframeBodiesAsync(page, waitMs).ConfigureAwait(false);
             }
             catch (TimeoutException)
             {
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
 
             IElementHandle root = await page.Locator("body, frameset").First.ElementHandleAsync(timeout).ConfigureAwait(false);
-            await EnsurePrefixesAsync(page).ConfigureAwait(false);
+            Stopwatch deadlineClock = Stopwatch.StartNew();
+            int budgetMs = TimeoutSettings.TimeoutMs(timeout);
+            if (budgetMs > 3_000)
+            {
+                budgetMs = 3_000;
+            }
+
+            await EnsurePrefixesAsync(page, deadlineClock, budgetMs).ConfigureAwait(false);
             IFrame frame = page.MainFrame;
-            string prefix = await PrefixForAsync(page, frame).ConfigureAwait(false);
-            string json = await AriaSnapshotOfficialAi.CaptureJsonAsync(root, depth, boxes, prefix).ConfigureAwait(false);
-            return await StitchJsonAsync(page, frame, json, depth, boxes, timeout).ConfigureAwait(false);
+            string prefix = await RaceOrDefaultAsync(
+                () => PrefixForAsync(page, frame),
+                deadlineClock,
+                budgetMs,
+                fallback: string.Empty).ConfigureAwait(false);
+            string json = await RaceOrDefaultAsync(
+                () => AriaSnapshotOfficialAi.CaptureJsonAsync(root, depth, boxes, prefix),
+                deadlineClock,
+                budgetMs,
+                fallback: "[]").ConfigureAwait(false);
+            Stopwatch stitchClock = deadlineClock;
+            int stitchBudget = budgetMs;
+            if (json.Contains("\"role\":\"iframe\"", StringComparison.Ordinal)
+                && RemainingMs(deadlineClock, budgetMs) < 2_500)
+            {
+                stitchClock = Stopwatch.StartNew();
+                stitchBudget = 3_500;
+            }
+
+            return await StitchJsonAsync(page, frame, json, depth, boxes, stitchClock, stitchBudget).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -143,13 +287,15 @@ namespace PlaywrightNative.Helpers
             IPage page = owner?.Page;
             if (page == null)
             {
-                throw new PlaywrightNativeException("Cannot take an aria snapshot of a detached element.");
+                throw new PlaywrightException("Cannot take an aria snapshot of a detached element.");
             }
 
-            await EnsurePrefixesAsync(page).ConfigureAwait(false);
+            // Windows Chromium under suite load needs headroom for srcdoc iframe
+            // ContentFrame + AX capture (AiModeShouldIncludeIframeContents).
+            await EnsurePrefixesAsync(page, Stopwatch.StartNew(), 3_000).ConfigureAwait(false);
             string prefix = await PrefixForAsync(page, owner).ConfigureAwait(false);
             string yaml = await AriaSnapshotOfficialAi.CaptureYamlAsync(root, depth, boxes, prefix).ConfigureAwait(false);
-            return await StitchAsync(page, owner, yaml, depth, boxes, 2000).ConfigureAwait(false);
+            return await StitchAsync(page, owner, yaml, depth, boxes, Stopwatch.StartNew(), 3_500).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -170,13 +316,13 @@ namespace PlaywrightNative.Helpers
             IPage page = owner?.Page;
             if (page == null)
             {
-                throw new PlaywrightNativeException("Cannot take an aria snapshot of a detached element.");
+                throw new PlaywrightException("Cannot take an aria snapshot of a detached element.");
             }
 
-            await EnsurePrefixesAsync(page).ConfigureAwait(false);
+            await EnsurePrefixesAsync(page, Stopwatch.StartNew(), 3_000).ConfigureAwait(false);
             string prefix = await PrefixForAsync(page, owner).ConfigureAwait(false);
             string json = await AriaSnapshotOfficialAi.CaptureJsonAsync(root, depth, boxes, prefix).ConfigureAwait(false);
-            return await StitchJsonAsync(page, owner, json, depth, boxes, 2000).ConfigureAwait(false);
+            return await StitchJsonAsync(page, owner, json, depth, boxes, Stopwatch.StartNew(), 3_500).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -256,7 +402,8 @@ namespace PlaywrightNative.Helpers
             string yaml,
             int? depth,
             bool boxes,
-            float? timeout,
+            Stopwatch deadlineClock,
+            int budgetMs,
             int depthOffset = 0)
         {
             if (string.IsNullOrEmpty(yaml))
@@ -289,53 +436,54 @@ namespace PlaywrightNative.Helpers
                     continue;
                 }
 
+                if (RemainingMs(deadlineClock, budgetMs) <= 0)
+                {
+                    result.Append(line);
+                    continue;
+                }
+
                 string ariaRef = match.Groups[2].Value;
-                IElementHandle iframeEl = await FindInFrameAsync(frame, ariaRef).ConfigureAwait(false);
-                IFrame child = null;
-                if (iframeEl != null)
-                {
-                    try
-                    {
-                        child = await iframeEl.ContentFrameAsync().ConfigureAwait(false);
-                    }
-                    catch (PlaywrightNativeException)
-                    {
-                        child = null;
-                    }
-                }
 
-                if (child == null || child.IsDetached)
-                {
-                    result.Append(line);
-                    continue;
-                }
+                // Do not wrap CaptureChildYaml in RaceOrDefaultAsync: nested
+                // ContentFrame/AX waits under Windows suite load often exceed the
+                // outer whenAny and abandon a still-successful capture
+                // (AiModeShouldIncludeIframeContents → empty iframe line).
+                string childYaml = await CaptureChildYamlAsync(
+                    page,
+                    frame,
+                    ariaRef,
+                    depth,
+                    boxes,
+                    deadlineClock,
+                    budgetMs,
+                    lineDepth + 1).ConfigureAwait(false);
 
-                int startDepth = lineDepth + 1;
-                string childYaml;
-                try
+                // Retry with FrameLocator / focused child when the primary path
+                // misses. Use for [active] (Darwin Focus) and for a sole iframe
+                // (srcdoc AiMode). Multi-iframe pages retry by DOM index so
+                // srcdoc siblings are not swapped (ShouldPersistIframeReferences).
+                if (string.IsNullOrEmpty(childYaml)
+                    && !await IsLazyIframeRefAsync(frame, ariaRef).ConfigureAwait(false))
                 {
-                    IElementHandle childRoot = await child.QuerySelectorAsync("body, frameset").ConfigureAwait(false);
-                    if (childRoot == null)
+                    if (line.Contains("[active]", StringComparison.Ordinal)
+                        || SoleChildFrameOrNull(frame) != null)
                     {
-                        result.Append(line);
-                        continue;
+                        childYaml = await CaptureActiveDataIframeYamlAsync(
+                            page,
+                            depth,
+                            boxes,
+                            lineDepth + 1).ConfigureAwait(false);
                     }
-
-                    string prefix = await PrefixForAsync(page, child).ConfigureAwait(false);
-                    childYaml = await AriaSnapshotOfficialAi
-                        .CaptureYamlAsync(childRoot, depth, boxes, prefix, startDepth)
-                        .ConfigureAwait(false);
-                    childYaml = await StitchAsync(page, child, childYaml, depth, boxes, timeout, startDepth).ConfigureAwait(false);
-                }
-                catch (PlaywrightNativeException)
-                {
-                    result.Append(line);
-                    continue;
-                }
-                catch (TimeoutException)
-                {
-                    result.Append(line);
-                    continue;
+                    else
+                    {
+                        childYaml = await CaptureChildYamlByDomIndexAsync(
+                            page,
+                            frame,
+                            ariaRef,
+                            depth,
+                            boxes,
+                            lineDepth + 1).ConfigureAwait(false);
+                    }
                 }
 
                 if (string.IsNullOrEmpty(childYaml))
@@ -364,13 +512,561 @@ namespace PlaywrightNative.Helpers
             return result.ToString();
         }
 
+        private static async Task<string> CaptureChildYamlAsync(
+            IPage page,
+            IFrame frame,
+            string ariaRef,
+            int? depth,
+            bool boxes,
+            Stopwatch deadlineClock,
+            int budgetMs,
+            int startDepth)
+        {
+            // Never resolve ContentFrame / evaluate on lazy iframe objectIds —
+            // Darwin WebKit wedges the target for the full command timeout
+            // (ReturnEmptySnapshotWhenIframeIsNotLoaded → NUnit 30s).
+            if (await IsLazyIframeRefAsync(frame, ariaRef).ConfigureAwait(false))
+            {
+                return null;
+            }
+
+            // Name/src match first — does not need _ariaRef on the element and
+            // avoids IsCaptureReady false-negatives when refs live in another world
+            // (ShouldStitchAllFrameSnapshots on Windows).
+            IFrame child = await ChildFrameForAriaRefAsync(frame, ariaRef).ConfigureAwait(false);
+
+            // Only abandon blank ChildFrames when the document is empty. Darwin
+            // data: iframes keep Url at about:blank forever; rejecting those that
+            // already have body children forced enter-frame, which can miss after
+            // Focus and leave `iframe [active]` with no nested snapshot
+            // (ShouldSupportManyPropertiesOnIframes).
+            if (child != null
+                && !child.IsDetached
+                && PopupOpenedHelper.IsBlankUrl(child.Url)
+                && !await FrameBodyHasChildrenAsync(child, deadlineClock, budgetMs).ConfigureAwait(false))
+            {
+                child = null;
+            }
+
+            if (child == null || child.IsDetached)
+            {
+                // Prefer upstream enter-frame (same path FrameLocator/Focus uses on
+                // Darwin WebKit 2251) before EvaluateHandle ContentFrame, which can
+                // land on a stale about:blank child for data: iframes.
+                string enterSel = "aria-ref=" + ariaRef + " >> internal:control=enter-frame >> body, frameset";
+                IElementHandle enterRoot = await RaceOrDefaultAsync(
+                    () => frame.Locator(enterSel).ElementHandleAsync(
+                        Math.Min(800f, RemainingMs(deadlineClock, budgetMs))),
+                    deadlineClock,
+                    Math.Min(900, RemainingMs(deadlineClock, budgetMs)),
+                    fallback: null).ConfigureAwait(false);
+
+                // Darwin: aria-ref enter-frame can miss after FocusAsync while CSS
+                // FrameLocator still resolves (ShouldSupportManyPropertiesOnIframes).
+                if (enterRoot == null
+                    && await IframeRefSrcIsDataAsync(frame, ariaRef, deadlineClock, budgetMs).ConfigureAwait(false))
+                {
+                    enterRoot = await RaceOrDefaultAsync(
+                        () => page.FrameLocator("iframe, frame").Locator("body, frameset")
+                            .ElementHandleAsync(Math.Min(800f, RemainingMs(deadlineClock, budgetMs))),
+                        deadlineClock,
+                        Math.Min(900, RemainingMs(deadlineClock, budgetMs)),
+                        fallback: null).ConfigureAwait(false);
+                }
+
+                if (enterRoot != null)
+                {
+                    child = await enterRoot.OwnerFrameAsync().ConfigureAwait(false);
+                    if (child != null && !child.IsDetached)
+                    {
+                        string prefix = await PrefixForAsync(page, child).ConfigureAwait(false);
+                        string enterYaml = await AriaSnapshotOfficialAi
+                            .CaptureYamlAsync(enterRoot, depth, boxes, prefix, startDepth)
+                            .ConfigureAwait(false);
+                        return await StitchAsync(page, child, enterYaml, depth, boxes, deadlineClock, budgetMs, startDepth)
+                            .ConfigureAwait(false);
+                    }
+                }
+
+                IElementHandle iframeEl = null;
+                if (await IsCaptureReadyIframeRefAsync(frame, ariaRef).ConfigureAwait(false))
+                {
+                    iframeEl = await RaceOrDefaultAsync(
+                        () => FindInFrameAsync(frame, ariaRef),
+                        deadlineClock,
+                        Math.Min(300, RemainingMs(deadlineClock, budgetMs)),
+                        fallback: null).ConfigureAwait(false);
+                }
+
+                child = await ContentFrameOrNullAsync(iframeEl).ConfigureAwait(false);
+                if (child != null
+                    && !child.IsDetached
+                    && PopupOpenedHelper.IsBlankUrl(child.Url)
+                    && !await FrameBodyHasChildrenAsync(child, deadlineClock, budgetMs).ConfigureAwait(false))
+                {
+                    child = null;
+                    iframeEl = null;
+                }
+
+                // Darwin data: iframes: ChildFrames.Url stays about:blank and
+                // aria-ref FindInFrame/ContentFrame can miss while CSS works.
+                if (iframeEl == null || child == null || child.IsDetached)
+                {
+                    iframeEl = await RaceOrDefaultAsync(
+                        () => frame.QuerySelectorAsync("iframe, frame"),
+                        deadlineClock,
+                        Math.Min(250, RemainingMs(deadlineClock, budgetMs)),
+                        fallback: null).ConfigureAwait(false);
+                    child = await ContentFrameOrNullAsync(iframeEl).ConfigureAwait(false);
+                }
+
+                if (child == null || child.IsDetached)
+                {
+                    child = await RaceOrDefaultAsync(
+                        () => ChildFrameByElementIdentityAsync(frame, iframeEl),
+                        deadlineClock,
+                        Math.Min(250, RemainingMs(deadlineClock, budgetMs)),
+                        fallback: null).ConfigureAwait(false);
+                }
+            }
+
+            if (child == null || child.IsDetached)
+            {
+                return null;
+            }
+
+            if (PopupOpenedHelper.IsBlankUrl(child.Url)
+                && !await FrameBodyHasChildrenAsync(child, deadlineClock, budgetMs).ConfigureAwait(false))
+            {
+                return null;
+            }
+
+            IElementHandle childRoot = await RaceOrDefaultAsync(
+                () => child.QuerySelectorAsync("body, frameset"),
+                deadlineClock,
+                Math.Min(400, RemainingMs(deadlineClock, budgetMs)),
+                fallback: null).ConfigureAwait(false);
+            if (childRoot == null)
+            {
+                return null;
+            }
+
+            string childPrefix = await PrefixForAsync(page, child).ConfigureAwait(false);
+            string childYaml;
+            try
+            {
+                childYaml = await AriaSnapshotOfficialAi
+                    .CaptureYamlAsync(childRoot, depth, boxes, childPrefix, startDepth)
+                    .ConfigureAwait(false);
+            }
+            catch (PlaywrightException)
+            {
+                // Navigating/detached child frames must miss so the caller can
+                // fall back to an iframe stub (ShouldGracefullyFallbackWhenChildFrameCantBeCaptured).
+                return null;
+            }
+            catch (TimeoutException)
+            {
+                return null;
+            }
+
+            // Darwin data: ContentFrame can resolve before the AX tree has
+            // nodes (ShouldMarkIframeAsActiveWhenItContainsFocusedElement).
+            // Empty YAML must miss so the [active] retry can use Focus's frame.
+            if (string.IsNullOrEmpty(childYaml))
+            {
+                return null;
+            }
+
+            return await StitchAsync(page, child, childYaml, depth, boxes, deadlineClock, budgetMs, startDepth)
+                .ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Last-chance stitch for an <c>iframe [active]</c> line when the primary
+        /// capture returned empty. Prefers the child frame that currently has
+        /// focus (Darwin data: after FocusAsync), then CSS <c>FrameLocator</c>,
+        /// with a fresh timeout so a spent stitch budget cannot leave the
+        /// iframe childless.
+        /// </summary>
+        private static async Task<string> CaptureActiveDataIframeYamlAsync(
+            IPage page,
+            int? depth,
+            bool boxes,
+            int startDepth)
+        {
+            if (page == null || page.IsClosed)
+            {
+                return null;
+            }
+
+            try
+            {
+                string focused = await CaptureYamlFromFocusedChildFrameAsync(
+                    page,
+                    depth,
+                    boxes,
+                    startDepth).ConfigureAwait(false);
+                if (!string.IsNullOrEmpty(focused))
+                {
+                    return focused;
+                }
+
+                IElementHandle enterRoot = await page.FrameLocator("iframe, frame")
+                    .Locator("body, frameset")
+                    .ElementHandleAsync(2_000f)
+                    .ConfigureAwait(false);
+                if (enterRoot == null)
+                {
+                    return await CaptureYamlFromAnyChildFrameAsync(page, depth, boxes, startDepth)
+                        .ConfigureAwait(false);
+                }
+
+                IFrame child = await enterRoot.OwnerFrameAsync().ConfigureAwait(false);
+                if (child == null || child.IsDetached)
+                {
+                    return await CaptureYamlFromAnyChildFrameAsync(page, depth, boxes, startDepth)
+                        .ConfigureAwait(false);
+                }
+
+                string prefix = await PrefixForAsync(page, child).ConfigureAwait(false);
+                string enterYaml = await AriaSnapshotOfficialAi
+                    .CaptureYamlAsync(enterRoot, depth, boxes, prefix, startDepth)
+                    .ConfigureAwait(false);
+                if (string.IsNullOrEmpty(enterYaml))
+                {
+                    return await CaptureYamlFromAnyChildFrameAsync(page, depth, boxes, startDepth)
+                        .ConfigureAwait(false);
+                }
+
+                return await StitchAsync(
+                    page,
+                    child,
+                    enterYaml,
+                    depth,
+                    boxes,
+                    Stopwatch.StartNew(),
+                    1_500,
+                    startDepth).ConfigureAwait(false);
+            }
+            catch (PlaywrightException)
+            {
+                return null;
+            }
+            catch (TimeoutException)
+            {
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Retries an empty multi-iframe stitch by DOM <c>querySelectorAll</c>
+        /// index via <c>FrameLocator.Nth</c> (srcdoc-safe; creation order differs).
+        /// The locator is scoped to <paramref name="frame"/> — page-level
+        /// <c>FrameLocator.Nth</c> only sees top-level iframes, so nested
+        /// retries would stitch the wrong sibling (ShouldStitchAllFrameSnapshots
+        /// under Windows suite load).
+        /// </summary>
+        private static async Task<string> CaptureChildYamlByDomIndexAsync(
+            IPage page,
+            IFrame frame,
+            string ariaRef,
+            int? depth,
+            bool boxes,
+            int startDepth)
+        {
+            if (page == null || page.IsClosed || frame == null || frame.IsDetached
+                || string.IsNullOrEmpty(ariaRef))
+            {
+                return null;
+            }
+
+            int? domIndex = await DomIndexForIframeRefAsync(frame, ariaRef).ConfigureAwait(false);
+            if (domIndex == null || domIndex.Value < 0)
+            {
+                return null;
+            }
+
+            try
+            {
+                IElementHandle enterRoot = await frame.FrameLocator("iframe, frame")
+                    .Nth(domIndex.Value)
+                    .Locator("body, frameset")
+                    .ElementHandleAsync(2_000f)
+                    .ConfigureAwait(false);
+                if (enterRoot == null)
+                {
+                    return null;
+                }
+
+                IFrame child = await enterRoot.OwnerFrameAsync().ConfigureAwait(false);
+                if (child == null || child.IsDetached)
+                {
+                    return null;
+                }
+
+                string prefix = await PrefixForAsync(page, child).ConfigureAwait(false);
+                string enterYaml = await AriaSnapshotOfficialAi
+                    .CaptureYamlAsync(enterRoot, depth, boxes, prefix, startDepth)
+                    .ConfigureAwait(false);
+                if (string.IsNullOrEmpty(enterYaml))
+                {
+                    return null;
+                }
+
+                return await StitchAsync(
+                    page,
+                    child,
+                    enterYaml,
+                    depth,
+                    boxes,
+                    Stopwatch.StartNew(),
+                    1_500,
+                    startDepth).ConfigureAwait(false);
+            }
+            catch (PlaywrightException)
+            {
+                return null;
+            }
+            catch (TimeoutException)
+            {
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Returns the document-order index of the iframe with <paramref name="ariaRef"/>.
+        /// </summary>
+        private static async Task<int?> DomIndexForIframeRefAsync(IFrame frame, string ariaRef)
+        {
+            try
+            {
+                int index = await frame.EvaluateAsync<int>(
+                    @"(ref) => {
+  const want = String(ref || '');
+  const frames = document.querySelectorAll('iframe, frame');
+  for (let i = 0; i < frames.length; i++) {
+    const aria = frames[i]._ariaRef;
+    if (aria && aria.ref === want) {
+      return i;
+    }
+  }
+  return -1;
+}",
+                    ariaRef).ConfigureAwait(false);
+                return index >= 0 ? index : null;
+            }
+            catch (PlaywrightException)
+            {
+                return null;
+            }
+            catch (TimeoutException)
+            {
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Waits until same-origin (srcdoc/data) iframes have a body so stitch
+        /// does not race empty ChildFrames under Windows suite load.
+        /// </summary>
+        private static async Task WaitForSameOriginIframeBodiesAsync(IPage page, float waitMs)
+        {
+            if (page == null || page.IsClosed || waitMs <= 0)
+            {
+                return;
+            }
+
+            try
+            {
+                await page.WaitForFunctionAsync(
+                    @"() => {
+  const frames = document.querySelectorAll('iframe:not([loading=""lazy""]), frame:not([loading=""lazy""])');
+  if (frames.length === 0) {
+    return true;
+  }
+  for (let i = 0; i < frames.length; i++) {
+    try {
+      const doc = frames[i].contentDocument;
+      if (!doc || !doc.body) {
+        return false;
+      }
+    } catch (e) {
+      // Cross-origin — skip.
+    }
+  }
+  return true;
+}",
+                    timeout: waitMs).ConfigureAwait(false);
+            }
+            catch (TimeoutException)
+            {
+            }
+            catch (PlaywrightException)
+            {
+            }
+        }
+
+        /// <summary>
+        /// Captures AI YAML from a non-main frame whose document currently has
+        /// focus — the Darwin path after focusing an input inside a data: iframe.
+        /// </summary>
+        private static async Task<string> CaptureYamlFromFocusedChildFrameAsync(
+            IPage page,
+            int? depth,
+            bool boxes,
+            int startDepth)
+        {
+            IReadOnlyList<IFrame> frames = page.Frames;
+            if (frames == null || frames.Count == 0)
+            {
+                return null;
+            }
+
+            IFrame main = page.MainFrame;
+            for (int i = 0; i < frames.Count; i++)
+            {
+                IFrame frame = frames[i];
+                if (frame == null
+                    || frame.IsDetached
+                    || ReferenceEquals(frame, main))
+                {
+                    continue;
+                }
+
+                bool hasFocus;
+                try
+                {
+                    hasFocus = await frame.EvaluateAsync<bool>(
+                            "() => { try { return !!document.hasFocus(); } catch (e) { return false; } }")
+                        .ConfigureAwait(false);
+                }
+                catch (PlaywrightException)
+                {
+                    continue;
+                }
+                catch (TimeoutException)
+                {
+                    continue;
+                }
+
+                if (!hasFocus)
+                {
+                    continue;
+                }
+
+                string yaml = await CaptureYamlFromFrameBodyAsync(page, frame, depth, boxes, startDepth)
+                    .ConfigureAwait(false);
+                if (!string.IsNullOrEmpty(yaml))
+                {
+                    return yaml;
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Last resort: snapshot the first non-main frame that already has a
+        /// populated body (single data: iframe pages after Focus).
+        /// </summary>
+        private static async Task<string> CaptureYamlFromAnyChildFrameAsync(
+            IPage page,
+            int? depth,
+            bool boxes,
+            int startDepth)
+        {
+            IReadOnlyList<IFrame> frames = page.Frames;
+            if (frames == null || frames.Count == 0)
+            {
+                return null;
+            }
+
+            IFrame main = page.MainFrame;
+            for (int i = 0; i < frames.Count; i++)
+            {
+                IFrame frame = frames[i];
+                if (frame == null
+                    || frame.IsDetached
+                    || ReferenceEquals(frame, main))
+                {
+                    continue;
+                }
+
+                if (!await FrameBodyHasChildrenAsync(frame, Stopwatch.StartNew(), 400)
+                    .ConfigureAwait(false))
+                {
+                    continue;
+                }
+
+                string yaml = await CaptureYamlFromFrameBodyAsync(page, frame, depth, boxes, startDepth)
+                    .ConfigureAwait(false);
+                if (!string.IsNullOrEmpty(yaml))
+                {
+                    return yaml;
+                }
+            }
+
+            return null;
+        }
+
+        private static async Task<string> CaptureYamlFromFrameBodyAsync(
+            IPage page,
+            IFrame frame,
+            int? depth,
+            bool boxes,
+            int startDepth)
+        {
+            if (frame == null || frame.IsDetached)
+            {
+                return null;
+            }
+
+            try
+            {
+                IElementHandle root = await frame.QuerySelectorAsync("body, frameset").ConfigureAwait(false);
+                if (root == null)
+                {
+                    return null;
+                }
+
+                string prefix = await PrefixForAsync(page, frame).ConfigureAwait(false);
+                string yaml = await AriaSnapshotOfficialAi
+                    .CaptureYamlAsync(root, depth, boxes, prefix, startDepth)
+                    .ConfigureAwait(false);
+                if (string.IsNullOrEmpty(yaml))
+                {
+                    return null;
+                }
+
+                return await StitchAsync(
+                    page,
+                    frame,
+                    yaml,
+                    depth,
+                    boxes,
+                    Stopwatch.StartNew(),
+                    1_500,
+                    startDepth).ConfigureAwait(false);
+            }
+            catch (PlaywrightException)
+            {
+                return null;
+            }
+            catch (TimeoutException)
+            {
+                return null;
+            }
+        }
+
         private static async Task<string> StitchJsonAsync(
             IPage page,
             IFrame frame,
             string json,
             int? depth,
             bool boxes,
-            float? timeout,
+            Stopwatch deadlineClock,
+            int budgetMs,
             int startDepth = 0)
         {
             if (string.IsNullOrEmpty(json))
@@ -393,7 +1089,7 @@ namespace PlaywrightNative.Helpers
                 return "[]";
             }
 
-            await WalkJsonAsync(page, frame, root, depth, boxes, timeout, startDepth).ConfigureAwait(false);
+            await WalkJsonAsync(page, frame, root, depth, boxes, deadlineClock, budgetMs, startDepth).ConfigureAwait(false);
             return root.ToJsonString();
         }
 
@@ -403,14 +1099,15 @@ namespace PlaywrightNative.Helpers
             JsonNode node,
             int? depth,
             bool boxes,
-            float? timeout,
+            Stopwatch deadlineClock,
+            int budgetMs,
             int nodeDepth)
         {
             if (node is JsonArray array)
             {
                 for (int i = 0; i < array.Count; i++)
                 {
-                    await WalkJsonAsync(page, frame, array[i], depth, boxes, timeout, nodeDepth).ConfigureAwait(false);
+                    await WalkJsonAsync(page, frame, array[i], depth, boxes, deadlineClock, budgetMs, nodeDepth).ConfigureAwait(false);
                 }
 
                 return;
@@ -426,19 +1123,24 @@ namespace PlaywrightNative.Helpers
             if (string.Equals(role, "iframe", StringComparison.Ordinal) && !string.IsNullOrEmpty(ariaRef)
                 && (depth == null || nodeDepth < depth.Value))
             {
-                (IFrame childFrame, JsonArray childNodes) = await CaptureFrameJsonAsync(
-                    page, frame, ariaRef, depth, boxes, nodeDepth + 1).ConfigureAwait(false);
+                (IFrame childFrame, JsonArray childNodes) = await RaceOrDefaultAsync(
+                    () => CaptureFrameJsonAsync(page, frame, ariaRef, depth, boxes, nodeDepth + 1),
+                    deadlineClock,
+                    budgetMs,
+                    fallback: (null, null)).ConfigureAwait(false);
                 if (childNodes != null && childFrame != null)
                 {
                     obj["children"] = childNodes;
-                    await WalkJsonAsync(page, childFrame, childNodes, depth, boxes, timeout, nodeDepth + 1).ConfigureAwait(false);
+                    await WalkJsonAsync(page, childFrame, childNodes, depth, boxes, deadlineClock, budgetMs, nodeDepth + 1)
+                        .ConfigureAwait(false);
                     return;
                 }
             }
 
             if (obj["children"] is JsonArray children)
             {
-                await WalkJsonAsync(page, frame, children, depth, boxes, timeout, nodeDepth + 1).ConfigureAwait(false);
+                await WalkJsonAsync(page, frame, children, depth, boxes, deadlineClock, budgetMs, nodeDepth + 1)
+                    .ConfigureAwait(false);
             }
         }
 
@@ -450,21 +1152,97 @@ namespace PlaywrightNative.Helpers
             bool boxes,
             int startDepth)
         {
-            IElementHandle iframeEl = await FindInFrameAsync(frame, ariaRef).ConfigureAwait(false);
-            IFrame child = null;
-            if (iframeEl != null)
+            if (await IsLazyIframeRefAsync(frame, ariaRef).ConfigureAwait(false))
             {
+                return (null, null);
+            }
+
+            IFrame child = await ChildFrameForAriaRefAsync(frame, ariaRef).ConfigureAwait(false);
+            if (child != null
+                && !child.IsDetached
+                && PopupOpenedHelper.IsBlankUrl(child.Url)
+                && !await FrameBodyHasChildrenAsync(child, Stopwatch.StartNew(), 500).ConfigureAwait(false))
+            {
+                child = null;
+            }
+
+            if (child == null || child.IsDetached)
+            {
+                string enterSel = "aria-ref=" + ariaRef + " >> internal:control=enter-frame >> body, frameset";
                 try
                 {
-                    child = await iframeEl.ContentFrameAsync().ConfigureAwait(false);
+                    IElementHandle enterRoot = await frame.Locator(enterSel).ElementHandleAsync(800).ConfigureAwait(false);
+                    if (enterRoot == null
+                        && await IframeRefSrcIsDataAsync(frame, ariaRef, Stopwatch.StartNew(), 500).ConfigureAwait(false))
+                    {
+                        enterRoot = await page.FrameLocator("iframe, frame").Locator("body, frameset")
+                            .ElementHandleAsync(800).ConfigureAwait(false);
+                    }
+
+                    if (enterRoot != null)
+                    {
+                        child = await enterRoot.OwnerFrameAsync().ConfigureAwait(false);
+                        if (child != null && !child.IsDetached)
+                        {
+                            string prefix = await PrefixForAsync(page, child).ConfigureAwait(false);
+                            string enterJson = await AriaSnapshotOfficialAi
+                                .CaptureJsonAsync(enterRoot, depth, boxes, prefix, startDepth)
+                                .ConfigureAwait(false);
+                            JsonNode enterParsed = JsonNode.Parse(enterJson ?? "[]");
+                            return (child, enterParsed as JsonArray);
+                        }
+                    }
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
+                {
+                }
+                catch (TimeoutException)
+                {
+                }
+
+                IElementHandle iframeEl = null;
+                if (await IsCaptureReadyIframeRefAsync(frame, ariaRef).ConfigureAwait(false))
+                {
+                    iframeEl = await FindInFrameAsync(frame, ariaRef).ConfigureAwait(false);
+                }
+
+                child = await ContentFrameOrNullAsync(iframeEl).ConfigureAwait(false);
+                if (child != null
+                    && !child.IsDetached
+                    && PopupOpenedHelper.IsBlankUrl(child.Url)
+                    && !await FrameBodyHasChildrenAsync(child, Stopwatch.StartNew(), 500).ConfigureAwait(false))
                 {
                     child = null;
+                    iframeEl = null;
+                }
+
+                if (iframeEl == null || child == null || child.IsDetached)
+                {
+                    try
+                    {
+                        iframeEl = await frame.QuerySelectorAsync("iframe, frame").ConfigureAwait(false);
+                    }
+                    catch (PlaywrightException)
+                    {
+                        iframeEl = null;
+                    }
+
+                    child = await ContentFrameOrNullAsync(iframeEl).ConfigureAwait(false);
+                }
+
+                if (child == null || child.IsDetached)
+                {
+                    child = await ChildFrameByElementIdentityAsync(frame, iframeEl).ConfigureAwait(false);
                 }
             }
 
             if (child == null || child.IsDetached)
+            {
+                return (null, null);
+            }
+
+            if (PopupOpenedHelper.IsBlankUrl(child.Url)
+                && !await FrameBodyHasChildrenAsync(child, Stopwatch.StartNew(), 500).ConfigureAwait(false))
             {
                 return (null, null);
             }
@@ -477,14 +1255,14 @@ namespace PlaywrightNative.Helpers
                     return (null, null);
                 }
 
-                string prefix = await PrefixForAsync(page, child).ConfigureAwait(false);
+                string childPrefix = await PrefixForAsync(page, child).ConfigureAwait(false);
                 string childJson = await AriaSnapshotOfficialAi
-                    .CaptureJsonAsync(childRoot, depth, boxes, prefix, startDepth)
+                    .CaptureJsonAsync(childRoot, depth, boxes, childPrefix, startDepth)
                     .ConfigureAwait(false);
                 JsonNode parsed = JsonNode.Parse(childJson ?? "[]");
                 return (child, parsed as JsonArray);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 return (null, null);
             }
@@ -498,7 +1276,7 @@ namespace PlaywrightNative.Helpers
             }
         }
 
-        private static async Task EnsurePrefixesAsync(IPage page)
+        private static async Task EnsurePrefixesAsync(IPage page, Stopwatch deadlineClock, int budgetMs)
         {
             Queue<IFrame> queue = new Queue<IFrame>();
             IFrame main = page.MainFrame;
@@ -511,6 +1289,11 @@ namespace PlaywrightNative.Helpers
             HashSet<IFrame> seen = new HashSet<IFrame>();
             while (queue.Count > 0)
             {
+                if (RemainingMs(deadlineClock, budgetMs) <= 0)
+                {
+                    return;
+                }
+
                 IFrame frame = queue.Dequeue();
                 if (frame == null || frame.IsDetached || !seen.Add(frame))
                 {
@@ -519,9 +1302,16 @@ namespace PlaywrightNative.Helpers
 
                 try
                 {
-                    await PrefixForAsync(page, frame).ConfigureAwait(false);
+                    // Cap per-frame prefix work so Darwin data: iframes cannot
+                    // burn the whole SnapshotForAI budget before stitch runs
+                    // (ShouldMarkIframeAsActiveWhenItContainsFocusedElement).
+                    await RaceOrDefaultAsync(
+                        () => PrefixForAsync(page, frame),
+                        deadlineClock,
+                        Math.Min(250, RemainingMs(deadlineClock, budgetMs)),
+                        fallback: string.Empty).ConfigureAwait(false);
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                     continue;
                 }
@@ -530,37 +1320,579 @@ namespace PlaywrightNative.Helpers
                     continue;
                 }
 
-                IReadOnlyList<IElementHandle> hosts;
-                try
+                // Prefer the frame tree over ContentFrame/describeNode — that
+                // path wedges unloaded lazy iframes and burns the stitch budget
+                // even when RaceOrDefaultAsync returns early.
+                IReadOnlyList<IFrame> children = frame.ChildFrames;
+                if (children != null)
                 {
-                    hosts = await frame.QuerySelectorAllAsync("iframe, frame").ConfigureAwait(false);
-                }
-                catch (PlaywrightNativeException)
-                {
-                    continue;
-                }
-                catch (TimeoutException)
-                {
-                    continue;
-                }
-
-                for (int i = 0; i < hosts.Count; i++)
-                {
-                    IFrame child;
-                    try
+                    for (int i = 0; i < children.Count; i++)
                     {
-                        child = await hosts[i].ContentFrameAsync().ConfigureAwait(false);
+                        IFrame child = children[i];
+                        if (child != null && !child.IsDetached)
+                        {
+                            queue.Enqueue(child);
+                        }
                     }
-                    catch (PlaywrightNativeException)
+                }
+
+                IReadOnlyList<IFrame> pageFrames = page.Frames;
+                if (pageFrames == null)
+                {
+                    continue;
+                }
+
+                for (int i = 0; i < pageFrames.Count; i++)
+                {
+                    IFrame candidate = pageFrames[i];
+                    if (candidate == null
+                        || candidate.IsDetached
+                        || !ReferenceEquals(candidate.ParentFrame, frame))
                     {
                         continue;
                     }
 
-                    if (child != null && !child.IsDetached)
+                    queue.Enqueue(candidate);
+                }
+            }
+        }
+
+        private static async Task<IFrame> ChildFrameForAriaRefAsync(IFrame frame, string ariaRef)
+        {
+            if (frame == null || frame.IsDetached || string.IsNullOrEmpty(ariaRef))
+            {
+                return null;
+            }
+
+            // Match by name/src first — ChildFrames is creation order, not DOM
+            // querySelectorAll order (srcdoc re-add swaps indices).
+            string[] info;
+            try
+            {
+                info = await frame.EvaluateAsync<string[]>(
+                    @"(ref) => {
+  const want = String(ref || '');
+  const frames = document.querySelectorAll('iframe, frame');
+  for (let i = 0; i < frames.length; i++) {
+    const aria = frames[i]._ariaRef;
+    if (aria && aria.ref === want) {
+      const el = frames[i];
+      let src = '';
+      try { src = el.getAttribute('src') || el.src || ''; } catch (e) {}
+      return [String(el.name || ''), String(src), String(i)];
+    }
+  }
+  if (frames.length === 1) {
+    const el = frames[0];
+    let src = '';
+    try { src = el.getAttribute('src') || el.src || ''; } catch (e) {}
+    return [String(el.name || ''), String(src), '0'];
+  }
+  return null;
+}",
+                    ariaRef).ConfigureAwait(false);
+            }
+            catch (PlaywrightException)
+            {
+                return SoleChildFrameOrNull(frame);
+            }
+            catch (TimeoutException)
+            {
+                return SoleChildFrameOrNull(frame);
+            }
+
+            if (info == null || info.Length < 3)
+            {
+                return SoleChildFrameOrNull(frame);
+            }
+
+            string wantName = info[0] ?? string.Empty;
+            string wantSrc = info[1] ?? string.Empty;
+
+            // Nested framesets parent some frames under an inner frameset, so
+            // direct ChildFrames is not enough. Search descendants, not creation index.
+            // Also include page.Frames parented here — Darwin data: iframes can be
+            // missing from ChildFrames while Focus/FrameLocator still see them.
+            List<IFrame> descendants = new List<IFrame>();
+            CollectFrames(frame, descendants);
+            CollectPageFramesUnder(frame, descendants);
+            if (!string.IsNullOrEmpty(wantName))
+            {
+                for (int i = 0; i < descendants.Count; i++)
+                {
+                    IFrame child = descendants[i];
+                    if (child == null
+                        || ReferenceEquals(child, frame)
+                        || child.IsDetached)
                     {
-                        queue.Enqueue(child);
+                        continue;
+                    }
+
+                    if (string.Equals(child.Name, wantName, StringComparison.Ordinal))
+                    {
+                        return child;
                     }
                 }
+            }
+
+            if (!string.IsNullOrEmpty(wantSrc)
+                && !wantSrc.StartsWith("about:", StringComparison.OrdinalIgnoreCase))
+            {
+                for (int i = 0; i < descendants.Count; i++)
+                {
+                    IFrame child = descendants[i];
+                    if (child == null || ReferenceEquals(child, frame) || child.IsDetached)
+                    {
+                        continue;
+                    }
+
+                    string childUrl = child.Url ?? string.Empty;
+                    if (childUrl.Contains(wantSrc, StringComparison.Ordinal)
+                        || wantSrc.Contains(childUrl, StringComparison.Ordinal)
+                        || string.Equals(childUrl, wantSrc, StringComparison.Ordinal))
+                    {
+                        return child;
+                    }
+                }
+            }
+
+            if (wantSrc.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+            {
+                IFrame dataChild = null;
+                int dataCount = 0;
+                for (int i = 0; i < descendants.Count; i++)
+                {
+                    IFrame child = descendants[i];
+                    if (child == null || ReferenceEquals(child, frame) || child.IsDetached)
+                    {
+                        continue;
+                    }
+
+                    if ((child.Url ?? string.Empty).StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+                    {
+                        dataCount++;
+                        dataChild = child;
+                    }
+                }
+
+                if (dataCount == 1)
+                {
+                    return dataChild;
+                }
+            }
+
+            // Multi-srcdoc (and empty-src) iframes share about:blank URLs — name/src
+            // matching cannot disambiguate. Use the DOM querySelectorAll index from
+            // the aria-ref evaluate and resolve by element identity (creation order
+            // of ChildFrames is not DOM order; ShouldPersistIframeReferences).
+            if (int.TryParse(info[2], NumberStyles.Integer, CultureInfo.InvariantCulture, out int domIndex)
+                && domIndex >= 0)
+            {
+                IFrame byDom = await ChildFrameByDomIndexAsync(frame, domIndex).ConfigureAwait(false);
+                if (byDom != null)
+                {
+                    return byDom;
+                }
+            }
+
+            int childCount = 0;
+            IFrame only = null;
+            for (int i = 0; i < descendants.Count; i++)
+            {
+                IFrame child = descendants[i];
+                if (child == null || ReferenceEquals(child, frame) || child.IsDetached)
+                {
+                    continue;
+                }
+
+                childCount++;
+                only = child;
+            }
+
+            if (childCount == 1)
+            {
+                // Darwin WebKit often leaves ChildFrames.Url at about:blank for data:
+                // documents after load. Still return it — CaptureChildYaml keeps
+                // blank frames that already have body children and only abandons
+                // empty blanks (ShouldSupportManyPropertiesOnIframes).
+                return only;
+            }
+
+            // Do not index-match ChildFrames when multiple — creation order ≠ DOM order.
+            return null;
+        }
+
+        /// <summary>
+        /// Resolves the child frame for the <paramref name="domIndex"/>-th
+        /// <c>iframe</c>/<c>frame</c> in document order (srcdoc-safe).
+        /// </summary>
+        private static async Task<IFrame> ChildFrameByDomIndexAsync(IFrame frame, int domIndex)
+        {
+            if (frame == null || frame.IsDetached || domIndex < 0)
+            {
+                return null;
+            }
+
+            IReadOnlyList<IElementHandle> hosts;
+            try
+            {
+                hosts = await frame.QuerySelectorAllAsync("iframe, frame").ConfigureAwait(false);
+            }
+            catch (PlaywrightException)
+            {
+                return null;
+            }
+            catch (TimeoutException)
+            {
+                return null;
+            }
+
+            if (hosts == null || domIndex >= hosts.Count)
+            {
+                return null;
+            }
+
+            return await ChildFrameByElementIdentityAsync(frame, hosts[domIndex]).ConfigureAwait(false);
+        }
+
+        private static IFrame SoleChildFrameOrNull(IFrame frame)
+        {
+            if (frame == null || frame.IsDetached)
+            {
+                return null;
+            }
+
+            List<IFrame> descendants = new List<IFrame>();
+            CollectFrames(frame, descendants);
+            CollectPageFramesUnder(frame, descendants);
+            int childCount = 0;
+            IFrame only = null;
+            for (int i = 0; i < descendants.Count; i++)
+            {
+                IFrame child = descendants[i];
+                if (child == null || ReferenceEquals(child, frame) || child.IsDetached)
+                {
+                    continue;
+                }
+
+                childCount++;
+                only = child;
+            }
+
+            return childCount == 1 ? only : null;
+        }
+
+        private static void CollectPageFramesUnder(IFrame parent, List<IFrame> into)
+        {
+            IPage page = parent?.Page;
+            IReadOnlyList<IFrame> frames = page?.Frames;
+            if (frames == null || into == null)
+            {
+                return;
+            }
+
+            for (int i = 0; i < frames.Count; i++)
+            {
+                IFrame candidate = frames[i];
+                if (candidate == null
+                    || candidate.IsDetached
+                    || ReferenceEquals(candidate, parent)
+                    || into.Contains(candidate))
+                {
+                    continue;
+                }
+
+                IFrame walk = candidate.ParentFrame;
+                while (walk != null)
+                {
+                    if (ReferenceEquals(walk, parent))
+                    {
+                        into.Add(candidate);
+                        break;
+                    }
+
+                    walk = walk.ParentFrame;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Resolves the child frame whose <c>FrameElement</c> is the same DOM node
+        /// as <paramref name="iframeEl"/> (srcdoc-safe, order-independent).
+        /// </summary>
+        private static async Task<IFrame> ChildFrameByElementIdentityAsync(
+            IFrame parent,
+            IElementHandle iframeEl)
+        {
+            if (parent == null || parent.IsDetached || iframeEl == null)
+            {
+                return null;
+            }
+
+            IReadOnlyList<IFrame> children = parent.ChildFrames;
+            List<IFrame> candidates = new List<IFrame>();
+            if (children != null)
+            {
+                for (int i = 0; i < children.Count; i++)
+                {
+                    if (children[i] != null && !candidates.Contains(children[i]))
+                    {
+                        candidates.Add(children[i]);
+                    }
+                }
+            }
+
+            CollectFrames(parent, candidates);
+            CollectPageFramesUnder(parent, candidates);
+
+            for (int i = 0; i < candidates.Count; i++)
+            {
+                IFrame child = candidates[i];
+                if (child == null || child.IsDetached || ReferenceEquals(child, parent))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    IElementHandle host = await FrameElementHelper.ResolveAsync(child).ConfigureAwait(false);
+                    if (host == null)
+                    {
+                        continue;
+                    }
+
+                    bool same = await iframeEl
+                        .EvaluateAsync<bool>("(a, b) => a === b", host)
+                        .ConfigureAwait(false);
+                    if (same)
+                    {
+                        return child;
+                    }
+                }
+                catch (PlaywrightException)
+                {
+                }
+                catch (TimeoutException)
+                {
+                }
+            }
+
+            return null;
+        }
+
+        private static async Task<bool> IframeRefSrcIsDataAsync(
+            IFrame frame,
+            string ariaRef,
+            Stopwatch deadlineClock,
+            int budgetMs)
+        {
+            if (frame == null || string.IsNullOrEmpty(ariaRef))
+            {
+                return false;
+            }
+
+            return await RaceOrDefaultAsync(
+                () => frame.EvaluateAsync<bool>(
+                    @"(ref) => {
+  const want = String(ref || '');
+  const frames = document.querySelectorAll('iframe, frame');
+  for (let i = 0; i < frames.length; i++) {
+    const aria = frames[i]._ariaRef;
+    if (aria && aria.ref === want) {
+      const src = frames[i].getAttribute('src') || frames[i].src || '';
+      return String(src).startsWith('data:');
+    }
+  }
+  if (frames.length === 1) {
+    const src = frames[0].getAttribute('src') || frames[0].src || '';
+    return String(src).startsWith('data:');
+  }
+  return false;
+}",
+                    ariaRef),
+                deadlineClock,
+                Math.Min(200, RemainingMs(deadlineClock, budgetMs)),
+                fallback: false).ConfigureAwait(false);
+        }
+
+        private static async Task<bool> FrameBodyHasChildrenAsync(
+            IFrame frame,
+            Stopwatch deadlineClock,
+            int budgetMs)
+        {
+            if (frame == null || frame.IsDetached)
+            {
+                return false;
+            }
+
+            return await RaceOrDefaultAsync(
+                () => frame.EvaluateAsync<bool>(
+                    "() => !!(document.body && document.body.children.length)"),
+                deadlineClock,
+                Math.Min(250, RemainingMs(deadlineClock, budgetMs)),
+                fallback: false).ConfigureAwait(false);
+        }
+
+        private static async Task<IFrame> ContentFrameOrNullAsync(IElementHandle iframeEl)
+        {
+            if (iframeEl == null)
+            {
+                return null;
+            }
+
+            try
+            {
+                // Never Evaluate / callFunctionOn the iframe objectId. Darwin
+                // WebKit never replies for unloaded lazy iframes, and a stuck
+                // command wedges the target until the NUnit 30s kill even when
+                // RaceOrDefaultAsync returns a fallback (the in-flight evaluate
+                // is not cancelled). Callers must fail-closed via parent-document
+                // lazy checks before this path; only attempt ContentFrame.
+                // Long enough for a loaded frameset frame on a slow runner.
+                // Unloaded lazy iframes never reach this path.
+                return await RaceOrDefaultAsync(
+                    () => iframeEl.ContentFrameAsync(),
+                    Stopwatch.StartNew(),
+                    1200,
+                    fallback: null).ConfigureAwait(false);
+            }
+            catch (PlaywrightException)
+            {
+                return null;
+            }
+            catch (TimeoutException)
+            {
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Parent-document check: every <c>iframe</c>/<c>frame</c> is
+        /// <c>loading=lazy</c> (safe — no iframe objectId evaluate).
+        /// </summary>
+        private static async Task<bool> FrameHasOnlyLazyIframesAsync(IFrame frame)
+        {
+            if (frame == null || frame.IsDetached)
+            {
+                return false;
+            }
+
+            try
+            {
+                return await frame.EvaluateAsync<bool>(
+                    @"() => {
+  const frames = document.querySelectorAll('iframe, frame');
+  if (!frames.length) return false;
+  for (let i = 0; i < frames.length; i++) {
+    if ((frames[i].getAttribute('loading') || '').toLowerCase() !== 'lazy') return false;
+  }
+  return true;
+}").ConfigureAwait(false);
+            }
+            catch (PlaywrightException)
+            {
+                // Fail open for named/loaded frames — a failed probe must not
+                // skip stitching (ShouldStitchAllFrameSnapshots).
+                return false;
+            }
+            catch (TimeoutException)
+            {
+                return false;
+            }
+        }
+
+        private static async Task<bool> IsLazyIframeRefAsync(IFrame frame, string ariaRef)
+        {
+            if (frame == null || frame.IsDetached || string.IsNullOrEmpty(ariaRef))
+            {
+                return false;
+            }
+
+            try
+            {
+                return await frame.EvaluateAsync<bool>(IsLazyIframeRefFunction, ariaRef)
+                    .ConfigureAwait(false);
+            }
+            catch (PlaywrightException)
+            {
+                // Fail closed — prefer an empty iframe stitch over a wedged session.
+                return true;
+            }
+            catch (TimeoutException)
+            {
+                return true;
+            }
+        }
+
+        /// <summary>
+        /// Parent-document check: iframe is safe for <c>ContentFrame</c> /
+        /// <c>DOM.describeNode</c>. Unloaded lazy frames return false without
+        /// touching the iframe objectId.
+        /// </summary>
+        private static async Task<bool> IsCaptureReadyIframeRefAsync(IFrame frame, string ariaRef)
+        {
+            if (frame == null || frame.IsDetached || string.IsNullOrEmpty(ariaRef))
+            {
+                return false;
+            }
+
+            try
+            {
+                return await frame.EvaluateAsync<bool>(IframeCaptureReadyByRefFunction, ariaRef)
+                    .ConfigureAwait(false);
+            }
+            catch (PlaywrightException)
+            {
+                return false;
+            }
+            catch (TimeoutException)
+            {
+                return false;
+            }
+        }
+
+        private static int RemainingMs(Stopwatch clock, int budgetMs)
+        {
+            if (budgetMs == Timeout.Infinite)
+            {
+                return int.MaxValue;
+            }
+
+            long left = budgetMs - clock.ElapsedMilliseconds;
+            return left <= 0 ? 0 : (int)Math.Min(int.MaxValue, left);
+        }
+
+        private static async Task<T> RaceOrDefaultAsync<T>(
+            Func<Task<T>> operation,
+            Stopwatch deadlineClock,
+            int budgetMs,
+            T fallback)
+        {
+            int left = RemainingMs(deadlineClock, budgetMs);
+            if (left <= 0)
+            {
+                return fallback;
+            }
+
+            Task<T> work = operation();
+            Task finished = await Task.WhenAny(work, Task.Delay(left)).ConfigureAwait(false);
+            if (finished != work)
+            {
+                // Leave the in-flight protocol call; callers treat timeout as empty iframe.
+                return fallback;
+            }
+
+            try
+            {
+                return await work.ConfigureAwait(false);
+            }
+            catch (PlaywrightException)
+            {
+                return fallback;
+            }
+            catch (TimeoutException)
+            {
+                return fallback;
             }
         }
 
@@ -575,7 +1907,7 @@ namespace PlaywrightNative.Helpers
                     return existing;
                 }
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
             catch (TimeoutException)
@@ -586,11 +1918,16 @@ namespace PlaywrightNative.Helpers
                 }
             }
 
+            // Cross-document navigation clears window.__pwAriaFramePrefix; the next
+            // main-frame assign must mint fN so refs re-number (upstream
+            // "should re-number refs across navigations…"). First assign stays "".
+            // Only flip UsedEmptyMainPrefix after a successful write — EnsurePrefixes
+            // RaceOrDefault can abandon mid-call; marking earlier let a retry mint
+            // f1 on the first snapshot (ShouldShowVisibleChildren → f1e1 vs e1).
             string prefix;
             if (frame.ParentFrame == null && !state.UsedEmptyMainPrefix)
             {
                 prefix = string.Empty;
-                state.UsedEmptyMainPrefix = true;
             }
             else
             {
@@ -601,8 +1938,12 @@ namespace PlaywrightNative.Helpers
             try
             {
                 await frame.EvaluateAsync<object>(WritePrefixFunction, prefix).ConfigureAwait(false);
+                if (prefix.Length == 0)
+                {
+                    state.UsedEmptyMainPrefix = true;
+                }
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
 
@@ -621,7 +1962,7 @@ namespace PlaywrightNative.Helpers
                 IJSHandle handle = await frame.EvaluateHandleAsync(FindRefFunction, ariaRef).ConfigureAwait(false);
                 return handle?.AsElement();
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 return null;
             }

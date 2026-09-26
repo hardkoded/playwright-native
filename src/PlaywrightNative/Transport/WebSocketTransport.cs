@@ -229,6 +229,17 @@ namespace PlaywrightNative.Transport
                         OnMessage?.Invoke(response);
                     }
                 }
+
+                // The loop condition also re-checks _webSocket.State every
+                // iteration, so a transient non-Open state (without a Close
+                // message or exception) exits this method silently. Left
+                // alone, every pending CDP command hangs forever with no
+                // error: _isClosed never flips, so SendAsync keeps accepting
+                // new commands that will never see a response.
+                if (!token.IsCancellationRequested)
+                {
+                    CloseWithReason($"WebSocket state changed to {_webSocket.State}");
+                }
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested)
             {

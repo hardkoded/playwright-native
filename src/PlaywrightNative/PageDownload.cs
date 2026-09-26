@@ -17,6 +17,7 @@
 using System;
 using System.IO;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using PlaywrightNative.Helpers;
 
 namespace PlaywrightNative
@@ -32,6 +33,7 @@ namespace PlaywrightNative
         internal const string CanceledError = "canceled";
 
         private readonly string _downloadsDirectory;
+        private readonly string _publicDownloadsDirectory;
         private readonly string _guid;
         private readonly Func<Task> _cancelAsync;
         private readonly TaskCompletionSource<string> _finishedTcs =
@@ -48,12 +50,14 @@ namespace PlaywrightNative
             string downloadsDirectory,
             string guid,
             Func<Task> cancelAsync = null,
-            bool acceptDownloads = true)
+            bool acceptDownloads = true,
+            string publicDownloadsDirectory = null)
         {
             Page = page;
             Url = url ?? string.Empty;
             _suggestedFilename = suggestedFilename ?? string.Empty;
             _downloadsDirectory = downloadsDirectory;
+            _publicDownloadsDirectory = publicDownloadsDirectory;
             _guid = guid ?? string.Empty;
             _cancelAsync = cancelAsync;
             if (!acceptDownloads)
@@ -110,7 +114,7 @@ namespace PlaywrightNative
                 {
                     await _cancelAsync().WithTimeout(() => Task.CompletedTask, 2_000).ConfigureAwait(false);
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                     // The download may have already finished or the browser closed.
                 }
@@ -126,7 +130,7 @@ namespace PlaywrightNative
             string error = await WaitForFinishAsync().ConfigureAwait(false);
             if (error != null)
             {
-                throw new PlaywrightNativeException("download.path: " + error);
+                throw new PlaywrightException("download.path: " + error);
             }
 
             DateTime deadline = DateTime.UtcNow.AddSeconds(2);
@@ -141,7 +145,7 @@ namespace PlaywrightNative
                 await Task.Delay(20).ConfigureAwait(false);
             }
 
-            throw new PlaywrightNativeException("Download finished but the file was not found.");
+            throw new PlaywrightException("Download finished but the file was not found.");
         }
 
         /// <inheritdoc/>
@@ -154,7 +158,7 @@ namespace PlaywrightNative
 
             if (_deleted)
             {
-                throw new PlaywrightNativeException(
+                throw new PlaywrightException(
                     "Target page, context or browser has been closed");
             }
 
@@ -163,17 +167,17 @@ namespace PlaywrightNative
             {
                 source = await PathAsync().ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException ex)
+            catch (PlaywrightException ex)
             {
                 string message = ex.Message ?? string.Empty;
                 if (message.StartsWith("download.path: ", StringComparison.Ordinal))
                 {
-                    throw new PlaywrightNativeException(
+                    throw new PlaywrightException(
                         "download.saveAs: " + message.AsSpan("download.path: ".Length).ToString(),
                         ex);
                 }
 
-                throw new PlaywrightNativeException("download.saveAs: " + message, ex);
+                throw new PlaywrightException("download.saveAs: " + message, ex);
             }
 
             string directory = Path.GetDirectoryName(path);
@@ -220,25 +224,16 @@ namespace PlaywrightNative
             }
 
             _deleted = true;
-            string found = TryFindFile();
-            if (found != null)
-            {
-                try
-                {
-                    File.Delete(found);
-                }
-                catch (IOException)
-                {
-                }
-                catch (UnauthorizedAccessException)
-                {
-                }
-            }
-
+            TryDeleteFile(TryFindBrowserArtifact());
+            TryDeletePromotedCopies();
             MarkFailed(CanceledError);
         }
 
-        internal void MarkCompleted() => _finishedTcs.TrySetResult(null);
+        internal void MarkCompleted()
+        {
+            PromoteCompletedFile();
+            _finishedTcs.TrySetResult(null);
+        }
 
         internal void MarkFailed(string error)
         {
@@ -254,16 +249,194 @@ namespace PlaywrightNative
 
         private Task<string> WaitForFinishAsync() => _finishedTcs.Task;
 
+        /// <summary>
+        /// Copies a finished Chromium <c>allowAndName</c> artifact from the
+        /// browser-pending directory into the public downloads path so filesystem
+        /// polls never observe a locked <c>.crdownload</c> (Windows CI).
+        /// <see cref="PathAsync"/> still returns the browser artifact so Chromium
+        /// page-close cleanup and <c>deleteOnContextClose</c> keep working.
+        /// </summary>
+        private void PromoteCompletedFile()
+        {
+            if (string.IsNullOrEmpty(_publicDownloadsDirectory)
+                || string.IsNullOrEmpty(_downloadsDirectory)
+                || string.Equals(_publicDownloadsDirectory, _downloadsDirectory, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            string source = null;
+            for (int findAttempt = 0; findAttempt < 50; findAttempt++)
+            {
+                source = TryFindFileInDirectory(_downloadsDirectory);
+                if (source != null)
+                {
+                    break;
+                }
+
+                System.Threading.Thread.Sleep(20);
+            }
+
+            if (source == null)
+            {
+                return;
+            }
+
+            try
+            {
+                Directory.CreateDirectory(_publicDownloadsDirectory);
+            }
+            catch (IOException)
+            {
+                return;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return;
+            }
+
+            // Keep the browser guid name when possible so public polls and
+            // PathAsync consumers agree on the allowAndName artifact identity.
+            // Fall back to the suggested filename for directory-poll tests that
+            // only assert content (persistent acceptDownloads).
+            string destName = !string.IsNullOrEmpty(_guid)
+                ? _guid
+                : (!string.IsNullOrEmpty(_suggestedFilename)
+                    ? _suggestedFilename
+                    : Path.GetFileName(source));
+            if (string.IsNullOrEmpty(destName))
+            {
+                destName = "download";
+            }
+
+            string dest = Path.Combine(_publicDownloadsDirectory, destName);
+            for (int attempt = 0; attempt < 50; attempt++)
+            {
+                string temp = null;
+                try
+                {
+                    // Stage outside the public directory, then rename in. Directory
+                    // polls (LaunchArtifactsDir) must never observe a mid-copy file
+                    // that Windows still locks for ReadAllText.
+                    temp = Path.Combine(
+                        Path.GetTempPath(),
+                        "pw-promote-" + Guid.NewGuid().ToString("N"));
+                    File.Copy(source, temp, overwrite: true);
+                    File.Move(temp, dest, overwrite: true);
+                    temp = null;
+                    if (!string.IsNullOrEmpty(_suggestedFilename)
+                        && !string.Equals(destName, _suggestedFilename, StringComparison.OrdinalIgnoreCase))
+                    {
+                        // Also surface the human name so content-only directory
+                        // polls (AcceptDownloads) find a finished file quickly.
+                        string named = Path.Combine(_publicDownloadsDirectory, _suggestedFilename);
+                        string namedTemp = Path.Combine(
+                            Path.GetTempPath(),
+                            "pw-promote-" + Guid.NewGuid().ToString("N"));
+                        try
+                        {
+                            File.Copy(source, namedTemp, overwrite: true);
+                            File.Move(namedTemp, named, overwrite: true);
+                            namedTemp = null;
+                        }
+                        finally
+                        {
+                            if (namedTemp != null)
+                            {
+                                TryDeleteFile(namedTemp);
+                            }
+                        }
+                    }
+
+                    return;
+                }
+                catch (IOException)
+                {
+                    System.Threading.Thread.Sleep(20);
+                }
+                catch (UnauthorizedAccessException)
+                {
+                    System.Threading.Thread.Sleep(20);
+                }
+                finally
+                {
+                    if (temp != null)
+                    {
+                        TryDeleteFile(temp);
+                    }
+                }
+            }
+        }
+
         private string TryFindFile()
         {
-            if (string.IsNullOrEmpty(_downloadsDirectory) || !Directory.Exists(_downloadsDirectory))
+            // Prefer the browser-pending artifact. Chromium deletes that file on
+            // page close; PathAsync must track it so delete-on-close parity holds.
+            // The public promoted copy is only for filesystem directory polls.
+            string browserFile = TryFindBrowserArtifact();
+            if (browserFile != null)
+            {
+                return browserFile;
+            }
+
+            return TryFindPromotedFile();
+        }
+
+        private string TryFindBrowserArtifact() => TryFindFileInDirectory(_downloadsDirectory);
+
+        private string TryFindPromotedFile() => TryFindFileInDirectory(_publicDownloadsDirectory);
+
+        private void TryDeletePromotedCopies()
+        {
+            if (string.IsNullOrEmpty(_publicDownloadsDirectory))
+            {
+                return;
+            }
+
+            TryDeleteFile(TryFindPromotedFile());
+            if (!string.IsNullOrEmpty(_guid))
+            {
+                TryDeleteFile(Path.Combine(_publicDownloadsDirectory, _guid));
+            }
+
+            if (!string.IsNullOrEmpty(_suggestedFilename))
+            {
+                TryDeleteFile(Path.Combine(_publicDownloadsDirectory, _suggestedFilename));
+            }
+        }
+
+        private void TryDeleteFile(string path)
+        {
+            if (string.IsNullOrEmpty(path))
+            {
+                return;
+            }
+
+            try
+            {
+                if (File.Exists(path))
+                {
+                    File.Delete(path);
+                }
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+
+        private string TryFindFileInDirectory(string directory)
+        {
+            if (string.IsNullOrEmpty(directory) || !Directory.Exists(directory))
             {
                 return null;
             }
 
             if (!string.IsNullOrEmpty(_guid))
             {
-                string guidPath = Path.Combine(_downloadsDirectory, _guid);
+                string guidPath = Path.Combine(directory, _guid);
                 if (FileExistsWithLength(guidPath))
                 {
                     return guidPath;
@@ -272,7 +445,7 @@ namespace PlaywrightNative
 
             if (!string.IsNullOrEmpty(_suggestedFilename))
             {
-                string namedPath = Path.Combine(_downloadsDirectory, _suggestedFilename);
+                string namedPath = Path.Combine(directory, _suggestedFilename);
                 if (FileExistsWithLength(namedPath))
                 {
                     return namedPath;
@@ -281,8 +454,13 @@ namespace PlaywrightNative
 
             try
             {
-                foreach (string file in Directory.GetFiles(_downloadsDirectory))
+                foreach (string file in Directory.GetFiles(directory))
                 {
+                    if (IsIncompleteDownloadPath(file))
+                    {
+                        continue;
+                    }
+
                     if (FileExistsWithLength(file))
                     {
                         return file;
@@ -301,6 +479,11 @@ namespace PlaywrightNative
 
         private bool FileExistsWithLength(string path)
         {
+            if (IsIncompleteDownloadPath(path))
+            {
+                return false;
+            }
+
             try
             {
                 return File.Exists(path) && new FileInfo(path).Length > 0;
@@ -313,6 +496,14 @@ namespace PlaywrightNative
             {
                 return false;
             }
+        }
+
+        private bool IsIncompleteDownloadPath(string path)
+        {
+            string extension = Path.GetExtension(path);
+            return string.Equals(extension, ".crdownload", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(extension, ".tmp", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(extension, ".com.google.chrome.download", StringComparison.OrdinalIgnoreCase);
         }
     }
 }

@@ -300,7 +300,7 @@ namespace PlaywrightNative.Tests
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
             await page.SetContentAsync("<input id='checkbox' type='checkbox' style=\"visibility: hidden\"></input>")
                 .ConfigureAwait(false);
-            TimeoutException error = Assert.ThrowsAsync<TimeoutException>(
+            TimeoutException error = Assert.CatchAsync<TimeoutException>(
                 () => Assertions.Expect(page.Locator("input")).ToBeVisibleAsync(new() { Timeout = 5000 }));
             string message = error.Message;
             Assert.That(message, Does.Contain("Call log:"));

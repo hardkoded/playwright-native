@@ -76,10 +76,19 @@ namespace PlaywrightNative.Helpers
         /// <param name="signal">Optional expect signal.</param>
         /// <returns>A task that completes after 50ms or when aborted.</returns>
         internal static Task DelayOrAbortAsync(AbortSignal signal)
+            => DelayOrAbortAsync(signal, 50);
+
+        /// <summary>
+        /// Poll delay that wakes early when <paramref name="signal"/> aborts.
+        /// </summary>
+        /// <param name="signal">Optional expect signal.</param>
+        /// <param name="millisecondsDelay">Poll interval in milliseconds.</param>
+        /// <returns>A task that completes after the delay or when aborted.</returns>
+        internal static Task DelayOrAbortAsync(AbortSignal signal, int millisecondsDelay)
         {
             if (signal == null)
             {
-                return Task.Delay(50);
+                return Task.Delay(millisecondsDelay);
             }
 
             if (signal.Aborted)
@@ -87,7 +96,7 @@ namespace PlaywrightNative.Helpers
                 return Task.CompletedTask;
             }
 
-            return Task.WhenAny(Task.Delay(50), signal.WhenAbortedAsync());
+            return Task.WhenAny(Task.Delay(millisecondsDelay), signal.WhenAbortedAsync());
         }
     }
 }

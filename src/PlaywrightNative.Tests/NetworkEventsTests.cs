@@ -45,20 +45,20 @@ namespace PlaywrightNative.Tests
             TaskCompletionSource<IRequest> tcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
             page.Request += (_, request) =>
             {
-                if (request.Url.StartsWith("data:", StringComparison.Ordinal))
+                if (request.Url.Contains("/empty.html", StringComparison.Ordinal))
                 {
                     tcs.TrySetResult(request);
                 }
             };
 
-            await page.GoToAsync("data:text/html,<div>request-event</div>").ConfigureAwait(false);
+            await page.GoToAsync(TestConstants.EmptyPage).ConfigureAwait(false);
 
             using CancellationTokenSource cts = new(5_000);
             cts.Token.Register(() => tcs.TrySetCanceled());
             IRequest received = await tcs.Task.ConfigureAwait(false);
 
             Assert.That(received, Is.Not.Null);
-            Assert.That(received.Url, Does.StartWith("data:text/html,"));
+            Assert.That(received.Url, Is.EqualTo(TestConstants.EmptyPage));
             Assert.That(received.Method, Is.EqualTo("GET"));
             Assert.That(received.IsNavigationRequest, Is.True);
         }
@@ -75,13 +75,13 @@ namespace PlaywrightNative.Tests
             TaskCompletionSource<IResponse> tcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
             page.Response += (_, response) =>
             {
-                if (response.Url.StartsWith("data:", StringComparison.Ordinal))
+                if (response.Url.Contains("/empty.html", StringComparison.Ordinal))
                 {
                     tcs.TrySetResult(response);
                 }
             };
 
-            await page.GoToAsync("data:text/html,<div>response-event</div>").ConfigureAwait(false);
+            await page.GoToAsync(TestConstants.EmptyPage).ConfigureAwait(false);
 
             using CancellationTokenSource cts = new(5_000);
             cts.Token.Register(() => tcs.TrySetCanceled());
@@ -122,7 +122,7 @@ namespace PlaywrightNative.Tests
                 }
             };
 
-            await page.GoToAsync("data:text/html,<div>request-finished</div>").ConfigureAwait(false);
+            await page.GoToAsync(TestConstants.EmptyPage).ConfigureAwait(false);
 
             // Give the RequestFinished event time to arrive after the navigation completes.
             await Task.Delay(500).ConfigureAwait(false);
@@ -133,8 +133,8 @@ namespace PlaywrightNative.Tests
                 Assert.That(finished, Has.Count.GreaterThanOrEqualTo(1), "Expected at least one RequestFinished event");
 
                 // Identity: the same IRequest instance is passed to both events.
-                IRequest navRequest = requests.FirstOrDefault(r => r.Url.StartsWith("data:", StringComparison.Ordinal));
-                IRequest navFinished = finished.FirstOrDefault(r => r.Url.StartsWith("data:", StringComparison.Ordinal));
+                IRequest navRequest = requests.FirstOrDefault(r => r.Url.Contains("/empty.html", StringComparison.Ordinal));
+                IRequest navFinished = finished.FirstOrDefault(r => r.Url.Contains("/empty.html", StringComparison.Ordinal));
                 Assert.That(navRequest, Is.Not.Null);
                 Assert.That(navFinished, Is.Not.Null);
                 Assert.That(navFinished, Is.SameAs(navRequest), "Request and RequestFinished should receive the same IRequest instance");

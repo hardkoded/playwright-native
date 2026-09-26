@@ -23,6 +23,7 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Features;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 using PlaywrightNative.TestServer;
@@ -191,7 +192,7 @@ namespace PlaywrightNative.Tests
                 await File.WriteAllTextAsync(Path.Combine(dir, "folder2", "file2.txt"), "file2 content").ConfigureAwait(false);
                 try
                 {
-                    PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+                    PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                         () => input.SetInputFilesAsync(new[]
                         {
                             Path.Combine(dir, "folder1"),
@@ -221,7 +222,7 @@ namespace PlaywrightNative.Tests
                 await File.WriteAllTextAsync(Path.Combine(dir, "folder1", "file1.txt"), "file1 content").ConfigureAwait(false);
                 try
                 {
-                    PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+                    PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                         () => input.SetInputFilesAsync(new[]
                         {
                             Path.Combine(dir, "folder1"),
@@ -251,7 +252,7 @@ namespace PlaywrightNative.Tests
                 await File.WriteAllTextAsync(Path.Combine(dir, "file1.txt"), "file1 content").ConfigureAwait(false);
                 try
                 {
-                    PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+                    PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                         () => input.SetInputFilesAsync(dir));
                     Assert.That(error.Message, Does.Contain("File input does not support directories, pass individual files instead"));
                 }
@@ -272,7 +273,7 @@ namespace PlaywrightNative.Tests
             {
                 await page.GoToAsync(Prefix + "/input/folderupload.html").ConfigureAwait(false);
                 IElementHandle input = await page.QuerySelectorAsync("input").ConfigureAwait(false);
-                PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+                PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                     () => input.SetInputFilesAsync(Asset("file to upload.txt")));
                 Assert.That(error.Message, Does.Contain("[webkitdirectory] input requires passing a path to a directory"));
             }).ConfigureAwait(false);
@@ -371,7 +372,9 @@ namespace PlaywrightNative.Tests
             await WithPageAsync(async page =>
             {
                 await page.GoToAsync(Prefix + "/input/fileupload.html").ConfigureAwait(false);
-                string outputDir = Path.Combine(Path.GetTempPath(), "pw-set-input-" + Guid.NewGuid().ToString("N"));
+                // Keep the large file under the process cwd so Path.GetRelativePath
+                // stays relative on Windows CI (temp is often on another drive).
+                string outputDir = Path.Combine(Directory.GetCurrentDirectory(), "pw-set-input-" + Guid.NewGuid().ToString("N"));
                 Directory.CreateDirectory(outputDir);
                 string uploadFile = Path.Combine(outputDir, "200MB.zip");
                 CreateLargeFile(uploadFile);

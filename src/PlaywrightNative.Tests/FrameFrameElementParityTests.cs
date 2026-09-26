@@ -19,6 +19,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Text.Json;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 using PlaywrightNative.TestServer;
@@ -222,7 +223,7 @@ namespace PlaywrightNative.Tests
             await page.GoToAsync(EmptyPage).ConfigureAwait(false);
             IFrame frame1 = await AttachFrameAsync(page, "frame1", EmptyPage).ConfigureAwait(false);
             await page.EvalOnSelectorAsync<object>("#frame1", "e => e.remove()").ConfigureAwait(false);
-            PlaywrightNativeException error = Assert.ThrowsAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.ThrowsAsync<PlaywrightException>(
                 () => frame1.FrameElementAsync());
             Assert.That(error.Message, Does.Contain("Frame has been detached."));
         }

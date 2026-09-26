@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 
@@ -106,7 +107,7 @@ namespace PlaywrightNative.Tests.Chromium
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldThrowOnEvaluationError()
         {
-            PlaywrightNativeException ex = Assert.ThrowsAsync<PlaywrightNativeException>(
+            PlaywrightException ex = Assert.ThrowsAsync<PlaywrightException>(
                 () => Page.EvaluateAsync<object>("throw new Error('test error')"));
             Assert.That(ex.Message, Does.Contain("test error"));
         }

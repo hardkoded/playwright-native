@@ -55,7 +55,7 @@ namespace PlaywrightNative.Helpers
                 {
                     handle = await queryOnceAsync().ConfigureAwait(false);
                 }
-                catch (Exception ex) when (PlaywrightNativeException.IsDestroyedContext(ex) || ClickAction.IsRetryable(ex))
+                catch (Exception ex) when (PlaywrightNative.Helpers.DestroyedContext.IsDestroyedContext(ex) || ClickAction.IsRetryable(ex))
                 {
                     handle = null;
                 }

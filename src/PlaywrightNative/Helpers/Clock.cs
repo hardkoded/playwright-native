@@ -16,8 +16,10 @@
  */
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Text.Json;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -144,9 +146,9 @@ namespace PlaywrightNative.Helpers
             {
                 return action();
             }
-            catch (PlaywrightNativeException ex)
+            catch (PlaywrightException ex)
             {
-                throw new PlaywrightNativeException("clock." + method + ": " + ex.Message, ex);
+                throw new PlaywrightException("clock." + method + ": " + ex.Message, ex);
             }
         }
 
@@ -166,16 +168,23 @@ namespace PlaywrightNative.Helpers
                 string call = argumentJs == null
                     ? "globalThis.__pwClock.controller." + method + "()"
                     : "globalThis.__pwClock.controller." + method + "(" + argumentJs + ")";
-                await EvaluateOnPagesAsync(call).ConfigureAwait(false);
+
+                // pauseAt/runFor/fastForward await embedder.setTimeout inside _runTo.
+                // On Darwin WebKit that never fires while awaitPromise holds the
+                // protocol evaluate — defer those calls off a microtask.
+                bool deferAwaitPromise = string.Equals(method, "pauseAt", StringComparison.Ordinal)
+                    || string.Equals(method, "runFor", StringComparison.Ordinal)
+                    || string.Equals(method, "fastForward", StringComparison.Ordinal);
+                await EvaluateOnPagesAsync(call, deferAwaitPromise).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException ex)
+            catch (PlaywrightException ex)
             {
                 if (ex.Message != null && ex.Message.StartsWith("clock.", StringComparison.Ordinal))
                 {
                     throw;
                 }
 
-                throw new PlaywrightNativeException("clock." + method + ": " + ex.Message, ex);
+                throw new PlaywrightException("clock." + method + ": " + ex.Message, ex);
             }
         }
 
@@ -198,7 +207,7 @@ namespace PlaywrightNative.Helpers
 
             string injector = ClockScript.BuildInjector(BrowserName());
             await _context.AddInitScriptAsync(injector).ConfigureAwait(false);
-            await EvaluateOnPagesAsync(injector).ConfigureAwait(false);
+            await EvaluateOnPagesAsync(injector, deferAwaitPromise: false).ConfigureAwait(false);
         }
 
         private string BrowserName()
@@ -207,13 +216,13 @@ namespace PlaywrightNative.Helpers
             {
                 return _context.Browser?.BrowserType?.Name;
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 return null;
             }
         }
 
-        private async Task EvaluateOnPagesAsync(string script)
+        private async Task EvaluateOnPagesAsync(string script, bool deferAwaitPromise)
         {
             IReadOnlyCollection<IPage> pages = _context.Pages;
             if (pages == null)
@@ -226,15 +235,137 @@ namespace PlaywrightNative.Helpers
                 IReadOnlyCollection<IFrame> frames = page.Frames;
                 if (frames == null || frames.Count == 0)
                 {
-                    await page.EvaluateAsync(script).ConfigureAwait(false);
+                    if (deferAwaitPromise)
+                    {
+                        await EvaluateClockScriptAsync(
+                                expression => page.EvaluateAsync(expression),
+                                expression => page.EvaluateAsync<string>(expression),
+                                script)
+                            .ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        await page.EvaluateAsync(script).ConfigureAwait(false);
+                    }
+
                     continue;
                 }
 
                 foreach (IFrame frame in frames)
                 {
-                    await frame.EvaluateAsync(script).ConfigureAwait(false);
+                    if (deferAwaitPromise)
+                    {
+                        await EvaluateClockScriptAsync(
+                                expression => frame.EvaluateAsync(expression),
+                                expression => frame.EvaluateAsync<string>(expression),
+                                script)
+                            .ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        await frame.EvaluateAsync(script).ConfigureAwait(false);
+                    }
                 }
             }
+        }
+
+        /// <summary>
+        /// Runs a clock controller expression without holding WIP
+        /// <c>awaitPromise</c> across embedder timers.
+        /// </summary>
+        /// <remarks>
+        /// <c>pauseAt</c> / <c>runFor</c> / <c>_runTo</c> / <c>_callFirstTimer</c>
+        /// await <c>embedder.setTimeout(0)</c>. On Darwin WebKit, native timers
+        /// do not fire while a protocol evaluate is blocked on
+        /// <c>awaitPromise</c>, so a direct <c>EvaluateAsync(controller.pauseAt(...))</c>
+        /// deadlocks until the NUnit timeout. Kick the work off a microtask,
+        /// return synchronously, then poll a completion marker so timers can run.
+        /// </remarks>
+        private async Task EvaluateClockScriptAsync(
+            Func<string, Task<JsonElement?>> evaluateAsync,
+            Func<string, Task<string>> evaluateStringAsync,
+            string script)
+        {
+            string marker = "__pwClockDone_" + Guid.NewGuid().ToString("N");
+            string markerJson = JsonSerializer.Serialize(marker);
+
+            // Fire-and-forget: schedule the (possibly async) controller call,
+            // then return synchronously so WebKit does not hold awaitPromise
+            // across embedder.setTimeout yields.
+            //
+            // Critically, the kickoff IIFE must take CanWrapExpression's sync
+            // returnByValue path. Avoid `.then(` in THIS template (use ['then']);
+            // embedded controller `script` may still mention Promise — sync IIFEs
+            // are always wrappable so that does not force awaitPromise, which
+            // deadlocks Darwin when deferred work waits on embedder timers.
+            //
+            // Prefer builtins.setTimeout(0) (macrotask) over queueMicrotask.
+            // Darwin WIP may flush microtasks before completing Runtime.evaluate,
+            // so a microtask that awaits embedder.setTimeout deadlocks inside the
+            // same evaluate (ClockInstallOptionsTests 30s hangs on mac shard2).
+            string kickoff =
+                "(() => {" +
+                "  const __pwK = " + markerJson + ";" +
+                "  try { delete globalThis[__pwK]; } catch (e) {}" +
+                "  const __pwDone = (ok, err) => {" +
+                "    globalThis[__pwK] = ok ? 'ok' : ('err:' + String(err && (err.stack || err)));" +
+                "  };" +
+                "  const __pwGo = () => {" +
+                "    try {" +
+                "      const __pwR = (" + script + ");" +
+                "      const __pwThen = __pwR && __pwR['then'];" +
+                "      if (typeof __pwThen === 'function') {" +
+                "        __pwThen.call(__pwR, () => __pwDone(true), (e) => __pwDone(false, e));" +
+                "      } else {" +
+                "        __pwDone(true);" +
+                "      }" +
+                "    } catch (e) {" +
+                "      __pwDone(false, e);" +
+                "    }" +
+                "  };" +
+                "  const __pwEmbed = (globalThis.__pwClock && globalThis.__pwClock.builtins)" +
+                "    ? globalThis.__pwClock.builtins.setTimeout" +
+                "    : globalThis.setTimeout;" +
+                "  __pwEmbed(__pwGo, 0);" +
+                "  return 0;" +
+                "})()";
+
+            await evaluateAsync(kickoff).ConfigureAwait(false);
+
+            // Parenthesize so CanWrapExpression takes the sync returnByValue path.
+            string poll = "(globalThis[" + markerJson + "])";
+            Stopwatch sw = Stopwatch.StartNew();
+
+            // Give Darwin WebKit a beat to drain the kickoff builtins.setTimeout(0)
+            // macrotask before Runtime.evaluate polls. Under suite load, a tight
+            // poll loop can starve embedder timers so runFor/pauseAt never finish
+            // (RunForShouldAcceptMinuteSecondString 30s hang on macOS WebKit).
+            await Task.Delay(50).ConfigureAwait(false);
+
+            int pollDelayMs = 50;
+            while (sw.ElapsedMilliseconds < 60_000)
+            {
+                string status = await evaluateStringAsync(poll).ConfigureAwait(false);
+                if (!string.IsNullOrEmpty(status))
+                {
+                    if (status.StartsWith("err:", StringComparison.Ordinal))
+                    {
+                        throw new PlaywrightException(status.Substring(4));
+                    }
+
+                    return;
+                }
+
+                // Back off while the marker is empty so protocol evaluates do not
+                // monopolize the WIP run loop ahead of embedder.setTimeout.
+                await Task.Delay(pollDelayMs).ConfigureAwait(false);
+                if (pollDelayMs < 100)
+                {
+                    pollDelayMs = Math.Min(100, pollDelayMs + 10);
+                }
+            }
+
+            throw new PlaywrightException("clock: timed out waiting for controller command");
         }
     }
 }
