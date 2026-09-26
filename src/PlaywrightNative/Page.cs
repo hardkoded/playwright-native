@@ -1287,6 +1287,19 @@ namespace PlaywrightNative
                 resolvedClip = ScreenshotScaleHelper.ViewportClip(_viewportSize, clipScale, scale);
             }
 
+            if (resolvedClip != null)
+            {
+                bool cssScale = ScreenshotScaleHelper.IsCss(scale);
+                ScreenshotEncode.EnsureDimension(
+                    (int)Math.Ceiling(resolvedClip.Width),
+                    deviceScale,
+                    cssScale);
+                ScreenshotEncode.EnsureDimension(
+                    (int)Math.Ceiling(resolvedClip.Height),
+                    deviceScale,
+                    cssScale);
+            }
+
             ScreenshotOptions options = new()
             {
                 Format = format,
