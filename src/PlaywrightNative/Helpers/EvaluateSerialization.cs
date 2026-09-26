@@ -244,7 +244,17 @@ namespace PlaywrightNative.Helpers
         /// <returns>An evaluable expression that returns the tagged payload.</returns>
         internal static string WithSerializedResult(string expression)
         {
-            return "(function(){ const s = (" + SerializeJs + "); const v = (" + expression +
+            // Trailing semicolons (common on IIFE installers like `(() => {…})();`)
+            // must not sit inside the parenthesized `const v = (…)` or JS reports
+            // "Unexpected token ';'".
+            string expr = expression ?? string.Empty;
+            expr = expr.TrimEnd();
+            while (expr.Length > 0 && expr[expr.Length - 1] == ';')
+            {
+                expr = expr.Substring(0, expr.Length - 1).TrimEnd();
+            }
+
+            return "(function(){ const s = (" + SerializeJs + "); const v = (" + expr +
                 "); if (v && typeof v.then === 'function') return v.then(s); return s(v); })()";
         }
 
@@ -269,38 +279,52 @@ namespace PlaywrightNative.Helpers
             }
 
             string trimmed = expression.TrimStart();
+
+            // Async functions/IIFEs must keep a handle so awaitPromise can settle.
+            if (trimmed.StartsWith("(async", StringComparison.Ordinal)
+                || trimmed.StartsWith("async ", StringComparison.Ordinal)
+                || trimmed.StartsWith("async(", StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            // Sync IIFEs / function expressions: always wrap. WithSerializedResult
+            // awaits any thenable completion value. Rejecting them because the BODY
+            // mentions Promise/.then/fetch forces EvaluateHandle+awaitPromise, which
+            // deadlocks Darwin when the IIFE only schedules work and returns sync
+            // (clock kickoff embeds controller scripts that contain those substrings).
+            if (trimmed.StartsWith('(') || trimmed.StartsWith("function", StringComparison.Ordinal))
+            {
+                return true;
+            }
+
             if (trimmed.Contains(".then(", StringComparison.Ordinal)
                 || trimmed.Contains("await ", StringComparison.Ordinal)
                 || trimmed.Contains("new Promise", StringComparison.Ordinal)
                 || trimmed.Contains("Promise.", StringComparison.Ordinal)
-                || trimmed.Contains("fetch(", StringComparison.Ordinal)
-                || trimmed.StartsWith("(async", StringComparison.Ordinal)
-                || trimmed.StartsWith("async ", StringComparison.Ordinal)
-                || trimmed.StartsWith("async(", StringComparison.Ordinal))
+                || trimmed.Contains("fetch(", StringComparison.Ordinal))
             {
-                // Thenables must keep a handle so WebKit can awaitPromise via
-                // callFunctionOn. Wrapping them with returnByValue:true drops
-                // the objectId and a second evaluate re-runs fetch/side effects.
+                // Bare thenable expressions must keep a handle so WebKit can
+                // awaitPromise via callFunctionOn. Wrapping them with
+                // returnByValue:true drops the objectId and a second evaluate
+                // re-runs fetch/side effects.
                 return false;
             }
 
-            return trimmed.StartsWith('(') || trimmed.StartsWith("function", StringComparison.Ordinal)
-
-                // Simple bare sync expressions (e.g. `1 + 1`) can be parenthesized for
-                // same-turn returnByValue serialize. Leaving them on the handle +
-                // MaterializeAsync(awaitPromise) path wedges Darwin WebKit forever
-                // (FrameEvaluateShouldRunInOwnWorld). Do NOT wrap property access /
-                // calls / object literals — those may be thenables without the
-                // keywords above (document.body.textContent, fonts.ready, …) and
-                // wrapping them caused macOS WebKit empty-stack timeouts.
-                || (!trimmed.Contains(';')
-                    && !trimmed.Contains('\n')
-                    && !trimmed.Contains('\r')
-                    && !trimmed.Contains('.')
-                    && !trimmed.Contains('(')
-                    && !trimmed.Contains('[')
-                    && !trimmed.Contains('{')
-                    && !trimmed.Contains('`'));
+            // Simple bare sync expressions (e.g. `1 + 1`) can be parenthesized for
+            // same-turn returnByValue serialize. Leaving them on the handle +
+            // MaterializeAsync(awaitPromise) path wedges Darwin WebKit forever
+            // (FrameEvaluateShouldRunInOwnWorld). Do NOT wrap property access /
+            // calls / object literals — those may be thenables without the
+            // keywords above (document.body.textContent, fonts.ready, …).
+            return !trimmed.Contains(';')
+                && !trimmed.Contains('\n')
+                && !trimmed.Contains('\r')
+                && !trimmed.Contains('.')
+                && !trimmed.Contains('(')
+                && !trimmed.Contains('[')
+                && !trimmed.Contains('{')
+                && !trimmed.Contains('`');
         }
 
         /// <summary>

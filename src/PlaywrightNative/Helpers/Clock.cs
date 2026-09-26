@@ -293,11 +293,11 @@ namespace PlaywrightNative.Helpers
             // then return synchronously so WebKit does not hold awaitPromise
             // across embedder.setTimeout yields.
             //
-            // Critically, avoid the substrings Promise. / .then( / await / async
-            // in this source. WKPage.CanWrapExpression treats those as thenables
-            // and forces EvaluateHandle + SerializeAwaitedJs (awaitPromise),
-            // which deadlocks Darwin WebKit when the deferred work itself waits
-            // on embedder timers — PauseAtShouldJumpAndStayFrozen flake.
+            // Critically, the kickoff IIFE must take CanWrapExpression's sync
+            // returnByValue path. Avoid `.then(` in THIS template (use ['then']);
+            // embedded controller `script` may still mention Promise — sync IIFEs
+            // are always wrappable so that does not force awaitPromise, which
+            // deadlocks Darwin when deferred work waits on embedder timers.
             //
             // Prefer builtins.setTimeout(0) (macrotask) over queueMicrotask.
             // Darwin WIP may flush microtasks before completing Runtime.evaluate,
