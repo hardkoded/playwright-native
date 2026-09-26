@@ -250,12 +250,13 @@ namespace PlaywrightNative.Helpers
 
         /// <summary>
         /// Returns whether <paramref name="expression"/> can be parenthesized as a
-        /// JavaScript expression (function IIFEs and wrapped calls). Programs such as
-        /// <c>1 + 5;</c> must stay two-step so the completion value is preserved.
-        /// Thenables (<c>Promise</c>, <c>fetch(</c>, <c>.then(</c>, <c>await</c>) must
-        /// keep a handle so WebKit can <c>awaitPromise</c> via <c>callFunctionOn</c>;
-        /// wrapping them with <c>returnByValue:true</c> drops the objectId and a second
-        /// evaluate re-runs side effects.
+        /// JavaScript expression (function IIFEs, wrapped calls, and bare expressions
+        /// without statement terminators). Programs such as <c>1 + 5;</c> must stay
+        /// two-step so the completion value is preserved. Thenables (<c>Promise</c>,
+        /// <c>fetch(</c>, <c>.then(</c>, <c>await</c>) must keep a handle so WebKit can
+        /// <c>awaitPromise</c> via <c>callFunctionOn</c>; wrapping them with
+        /// <c>returnByValue:true</c> drops the objectId and a second evaluate re-runs
+        /// side effects.
         /// </summary>
         /// <param name="expression">The already-invoked evaluate expression.</param>
         /// <returns><see langword="true"/> when same-turn serialize wrapping is safe.</returns>
@@ -282,7 +283,15 @@ namespace PlaywrightNative.Helpers
                 return false;
             }
 
-            return trimmed.StartsWith('(') || trimmed.StartsWith("function", StringComparison.Ordinal);
+            return trimmed.StartsWith('(') || trimmed.StartsWith("function", StringComparison.Ordinal)
+
+                // Bare expressions without statement terminators can be parenthesized for
+                // same-turn returnByValue serialize. Leaving `1 + 1` on the handle +
+                // MaterializeAsync(awaitPromise) path wedges Darwin WebKit forever
+                // (FrameEvaluateShouldRunInOwnWorld 30s empty-stack timeout).
+                || (trimmed.IndexOf(';') < 0
+                    && trimmed.IndexOf('\n') < 0
+                    && trimmed.IndexOf('\r') < 0);
         }
 
         /// <summary>

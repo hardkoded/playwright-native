@@ -4020,62 +4020,95 @@ namespace PlaywrightNative.WebKit
         /// <returns>The deserialized result.</returns>
         internal async Task<T> EvaluateSerializedInFrameAsync<T>(WKFrame frame, string expression)
         {
-            try
+            const int maxAttempts = 8;
+            for (int attempt = 0; ; attempt++)
             {
-                WKExecutionContext context = await WaitForFrameContextAsync(frame).ConfigureAwait(false);
-
-                // Child-frame requestStorageAccess must run under
-                // callFunctionOn+emulateUserGesture — Runtime.evaluate's gesture
-                // flag is not enough after OOPIF load on macOS. Check before the
-                // serialized-wrap path so RSA is never routed through plain evaluate.
-                bool needsUserGesture = frame?.ParentFrame != null
-                    && expression != null
-                    && expression.Contains("requestStorageAccess", StringComparison.Ordinal);
-
-                // Re-assert page activity after the frame context is ready so
-                // cross-process iframe navigations that steal focus between
-                // SetContent and evaluate do not leave requestStorageAccess
-                // without an active page (macOS). Skip immediately before RSA:
-                // setActiveAndFocused clears transient user activation that
-                // callFunctionOn+emulateUserGesture is about to grant.
-                if (frame?.ParentFrame != null && !needsUserGesture)
+                try
                 {
-                    try
-                    {
-                        await _session.SendAsync("Emulation.setActiveAndFocused", new { active = true })
-                            .ConfigureAwait(false);
-                    }
-                    catch (PlaywrightException)
-                    {
-                    }
+                    return await EvaluateOnceAsync().ConfigureAwait(false);
                 }
-
-                if (!needsUserGesture && EvaluateSerialization.CanWrapExpression(expression))
+                catch (PlaywrightException ex) when (attempt < maxAttempts - 1 && IsRetryableFrameEvaluateFailure(ex))
                 {
-                    JsonElement? wrapped = await context
-                        .EvaluateSerializedRemoteAsync(EvaluateSerialization.WithSerializedResult(expression))
-                        .ConfigureAwait(false);
-                    return EvaluateSerialization.ParseRemote<T>(wrapped);
+                    await Task.Delay(50).ConfigureAwait(false);
                 }
-
-                JsonElement? remote = needsUserGesture
-                    ? await EvaluateRequestStorageAccessAsync(context, expression, frame).ConfigureAwait(false)
-                    : await context.EvaluateHandleAsync(expression).ConfigureAwait(false);
-                if (needsUserGesture)
-                {
-                    // RSA path uses returnByValue:true — parse the primitive directly
-                    // instead of MaterializeAsync (no objectId for boolean results).
-                    return EvaluateSerialization.ParseRemote<T>(remote);
-                }
-
-                return await EvaluateSerialization.MaterializeAsync<T>(
-                    remote,
-                    id => context.EvaluateFunctionOnHandleAsync<JsonElement>(id, EvaluateSerialization.SerializeAwaitedJs),
-                    id => context.ReleaseHandleAsync(id)).ConfigureAwait(false);
             }
-            catch (PlaywrightException ex)
+
+            async Task<T> EvaluateOnceAsync()
             {
-                throw EvaluateSerialization.RewriteException(ex, frameEvaluate: true);
+                try
+                {
+                    WKExecutionContext context = await WaitForFrameContextAsync(frame).ConfigureAwait(false);
+
+                    // Child-frame requestStorageAccess must run under
+                    // callFunctionOn+emulateUserGesture — Runtime.evaluate's gesture
+                    // flag is not enough after OOPIF load on macOS. Check before the
+                    // serialized-wrap path so RSA is never routed through plain evaluate.
+                    bool needsUserGesture = frame?.ParentFrame != null
+                        && expression != null
+                        && expression.Contains("requestStorageAccess", StringComparison.Ordinal);
+
+                    // Re-assert page activity after the frame context is ready so
+                    // cross-process iframe navigations that steal focus between
+                    // SetContent and evaluate do not leave requestStorageAccess
+                    // without an active page (macOS). Skip immediately before RSA:
+                    // setActiveAndFocused clears transient user activation that
+                    // callFunctionOn+emulateUserGesture is about to grant.
+                    if (frame?.ParentFrame != null && !needsUserGesture)
+                    {
+                        try
+                        {
+                            await _session.SendAsync("Emulation.setActiveAndFocused", new { active = true })
+                                .ConfigureAwait(false);
+                        }
+                        catch (PlaywrightException)
+                        {
+                        }
+                    }
+
+                    if (!needsUserGesture && EvaluateSerialization.CanWrapExpression(expression))
+                    {
+                        JsonElement? wrapped = await context
+                            .EvaluateSerializedRemoteAsync(EvaluateSerialization.WithSerializedResult(expression))
+                            .ConfigureAwait(false);
+                        return EvaluateSerialization.ParseRemote<T>(wrapped);
+                    }
+
+                    JsonElement? remote = needsUserGesture
+                        ? await EvaluateRequestStorageAccessAsync(context, expression, frame).ConfigureAwait(false)
+                        : await context.EvaluateHandleAsync(expression).ConfigureAwait(false);
+                    if (needsUserGesture)
+                    {
+                        // RSA path uses returnByValue:true — parse the primitive directly
+                        // instead of MaterializeAsync (no objectId for boolean results).
+                        return EvaluateSerialization.ParseRemote<T>(remote);
+                    }
+
+                    return await EvaluateSerialization.MaterializeAsync<T>(
+                        remote,
+                        id => context.EvaluateFunctionOnHandleAsync<JsonElement>(id, EvaluateSerialization.SerializeAwaitedJs),
+                        id => context.ReleaseHandleAsync(id)).ConfigureAwait(false);
+                }
+                catch (PlaywrightException ex)
+                {
+                    throw EvaluateSerialization.RewriteException(ex, frameEvaluate: true);
+                }
+            }
+
+            static bool IsRetryableFrameEvaluateFailure(PlaywrightException ex)
+            {
+                if (ex == null)
+                {
+                    return false;
+                }
+
+                if (DestroyedContext.IsDestroyedContext(ex))
+                {
+                    return true;
+                }
+
+                string message = ex.Message ?? string.Empty;
+                return message.Contains("most likely because of a navigation", StringComparison.Ordinal)
+                    || message.Contains("Execution context was destroyed", StringComparison.Ordinal);
             }
         }
 

@@ -360,7 +360,10 @@ namespace PlaywrightNative.Helpers
                 Task fontsTask = page is WKPage webkit
                     ? EvaluateInWebKitUtilityAsync(webkit, "document.fonts && document.fonts.ready")
                     : page.EvaluateAsync("document.fonts && document.fonts.ready");
-                Task finished = await Task.WhenAny(fontsTask, Task.Delay(5_000)).ConfigureAwait(false);
+
+                // Keep the budget short so element screenshots with a 5s timeout still
+                // have time for visibility waits after fonts (ShouldWaitUntilVisible).
+                Task finished = await Task.WhenAny(fontsTask, Task.Delay(1_000)).ConfigureAwait(false);
                 if (finished == fontsTask)
                 {
                     await fontsTask.ConfigureAwait(false);
