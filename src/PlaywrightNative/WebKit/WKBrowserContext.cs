@@ -2915,7 +2915,15 @@ namespace PlaywrightNative.WebKit
             }
 
             string ua = _defaultSafariUserAgent;
-            if (string.IsNullOrEmpty(ua))
+
+            // ApplyEmulation runs before Target.resume. Probing navigator.userAgent
+            // on a paused Darwin target wedges Runtime.evaluate until the 20s
+            // WKSession command timeout — even budgeted WhenAny attempts leave
+            // orphans that then make StampNavigatorUserAgentAsync hang and eat
+            // LaunchAsyncHandleSIGINTFalseShouldStartAPage's NUnit 30s budget.
+            // Use the fallback Safari-token UA until the page is live; after
+            // resume EvaluateOnCurrent / recycle re-stamp covers the document.
+            if (string.IsNullOrEmpty(ua) && page.InitializedTask.IsCompleted)
             {
                 // Cap each probe: zombie targets after Darwin recycle hang until
                 // the 20s WKSession command timeout. Five unbounded retries ate
@@ -3024,14 +3032,19 @@ namespace PlaywrightNative.WebKit
     });
   } catch (e) {}
 })()";
-            try
+
+            // ApplyEmulation stamps before Target.resume. Unbounded EvaluateAsync
+            // on a paused Darwin target burns the full 20s WKSession command
+            // timeout (LaunchAsyncHandleSIGINTFalseShouldStartAPage empty-stack
+            // 30s). Only evaluate once the page is live, and bound the attempt;
+            // the init script below still covers navigations / EvaluateOnCurrent.
+            if (page.InitializedTask.IsCompleted)
             {
-                await page.EvaluateAsync(script).ConfigureAwait(false);
-            }
-#pragma warning disable RCS1075
-            catch (Exception)
-#pragma warning restore RCS1075
-            {
+                await EvaluateWithShortBudgetAsync(
+                        page,
+                        script,
+                        TimeSpan.FromSeconds(1.5))
+                    .ConfigureAwait(false);
             }
 
             if (_defaultSafariUaInitInstalled)

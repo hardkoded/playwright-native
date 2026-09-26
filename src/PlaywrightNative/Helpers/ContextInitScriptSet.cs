@@ -16,6 +16,7 @@
  */
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Playwright;
 
@@ -143,13 +144,40 @@ namespace PlaywrightNative.Helpers
                 // to be swallowed, leaving window.__fromContext unset when the later
                 // about:blank goto is same-document and does not re-run bootstrap
                 // (AddInitScriptAsyncShouldApplyToNewPage flake on macOS CI).
+                // Cap each attempt: a hung EvaluateAsync never throws, so an unbounded
+                // await would ignore the deadline and burn Launch/NewPage NUnit budgets
+                // (LaunchAsyncHandleSIGINTFalseShouldStartAPage 30s empty stack).
                 DateTime deadline = DateTime.UtcNow.AddSeconds(5);
                 Exception lastError = null;
                 while (DateTime.UtcNow < deadline)
                 {
+                    TimeSpan remaining = deadline - DateTime.UtcNow;
+                    if (remaining <= TimeSpan.Zero)
+                    {
+                        break;
+                    }
+
+                    TimeSpan attemptBudget = remaining > TimeSpan.FromSeconds(1.5)
+                        ? TimeSpan.FromSeconds(1.5)
+                        : remaining;
                     try
                     {
-                        await page.EvaluateAsync(entry.CurrentDocumentSource).ConfigureAwait(false);
+                        Task evalTask = page.EvaluateAsync(entry.CurrentDocumentSource);
+                        Task finished = await Task.WhenAny(evalTask, Task.Delay(attemptBudget))
+                            .ConfigureAwait(false);
+                        if (finished != evalTask)
+                        {
+                            _ = evalTask.ContinueWith(
+                                t => _ = t.Exception,
+                                CancellationToken.None,
+                                TaskContinuationOptions.OnlyOnFaulted,
+                                TaskScheduler.Default);
+                            lastError = new TimeoutException("EvaluateOnCurrentAsync attempt budget exceeded.");
+                            await Task.Delay(50).ConfigureAwait(false);
+                            continue;
+                        }
+
+                        await evalTask.ConfigureAwait(false);
                         lastError = null;
                         break;
                     }
