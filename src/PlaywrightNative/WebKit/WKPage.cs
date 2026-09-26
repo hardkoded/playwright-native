@@ -5083,45 +5083,27 @@ namespace PlaywrightNative.WebKit
                     }
                     else
                     {
-                        // Official addStyleContent waits for load/error so CSP-blocked
-                        // inline styles reject. WebKit awaitPromise is unreliable, so
-                        // poll a sentinel; if neither load nor error arrives quickly,
-                        // fall through so RaceWithCspError's console drain can win.
-                        string contentSentinel = "__pwStyleContent_" + Guid.NewGuid().ToString("N");
-                        string contentElementKey = contentSentinel + "El";
-                        string contentSentinelLiteral = JsonSerializer.Serialize(contentSentinel);
-                        string contentElementLiteral = JsonSerializer.Serialize(contentElementKey);
+                        // Match AddScriptTag inline content: return the STYLE element
+                        // from one evaluateHandle. The prior sentinel+onload poll added
+                        // extra callFunctionOn traffic that wedged Darwin under suite
+                        // load (mac shard2 ShouldReturnStyleElementHandle). CSP-blocked
+                        // inline styles still lose via RaceWithCspError's console drain.
                         string contentLiteral = JsonSerializer.Serialize(content);
-                        string contentInject = $@"(() => {{
-                            window[{contentSentinelLiteral}] = 0;
+                        string expression = $@"(() => {{
                             const style = document.createElement('style');
                             style.type = 'text/css';
                             style.appendChild(document.createTextNode({contentLiteral}));
-                            window[{contentElementLiteral}] = style;
-                            style.onload = () => {{ window[{contentSentinelLiteral}] = 1; }};
-                            style.onerror = () => {{ window[{contentSentinelLiteral}] = 2; }};
+                            let error = null;
+                            style.onerror = e => error = e;
                             document.head.appendChild(style);
-                            return true;
+                            if (error)
+                                throw error;
+                            return style;
                         }})()";
-                        await EvaluateExpressionAsync(contentInject).ConfigureAwait(false);
-                        try
-                        {
-                            await WaitForSentinelInFrameAsync(
-                                _frameManager.MainFrame,
-                                contentSentinel,
-                                "Failed to apply style content",
-                                timeoutMs: 500).ConfigureAwait(false);
-                        }
-                        catch (TimeoutException)
-                        {
-                            // Inline style may not fire load on some WebKit builds; the
-                            // CSP console race (with drain) still covers blocked styles.
-                            await EvaluateExpressionAsync("true").ConfigureAwait(false);
-                        }
+                        IElementHandle styleHandle = await EvaluateElementHandleAsync(expression).ConfigureAwait(false);
 
-                        IElementHandle styleHandle = await EvaluateElementHandleAsync($"window[{contentElementLiteral}]").ConfigureAwait(false);
-                        await EvaluateExpressionAsync(
-                            $"(() => {{ delete window[{contentSentinelLiteral}]; delete window[{contentElementLiteral}]; }})()").ConfigureAwait(false);
+                        // Official extra round-trip so async CSP console errors can win.
+                        await EvaluateExpressionAsync("true").ConfigureAwait(false);
                         return styleHandle;
                     }
                 }).ConfigureAwait(false);
@@ -6623,11 +6605,32 @@ namespace PlaywrightNative.WebKit
             string expression = $"window[{sentinelLiteral}]";
 
             // Poll the in-page sentinel: 0 = pending, 1 = loaded, 2 = error.
+            // Race each evaluate against the remaining budget so a hung
+            // Runtime.evaluate cannot outlive timeoutMs (Darwin suite load).
             int timeout = timeoutMs ?? (int)_defaultNavigationTimeout;
-            using System.Threading.CancellationTokenSource cts = new(timeout);
+            System.Diagnostics.Stopwatch sw = System.Diagnostics.Stopwatch.StartNew();
             while (true)
             {
-                int state = await EvaluateInFrameAsync<int>(frame, expression).ConfigureAwait(false);
+                long remainingMs = timeout - sw.ElapsedMilliseconds;
+                if (remainingMs <= 0)
+                {
+                    throw new TimeoutException(errorMessage + " (timed out)");
+                }
+
+                Task<int> evalTask = EvaluateInFrameAsync<int>(frame, expression);
+                Task finished = await Task.WhenAny(evalTask, Task.Delay((int)Math.Min(remainingMs, int.MaxValue)))
+                    .ConfigureAwait(false);
+                if (finished != evalTask)
+                {
+                    _ = evalTask.ContinueWith(
+                        t => _ = t.Exception,
+                        System.Threading.CancellationToken.None,
+                        TaskContinuationOptions.OnlyOnFaulted,
+                        TaskScheduler.Default);
+                    throw new TimeoutException(errorMessage + " (timed out)");
+                }
+
+                int state = await evalTask.ConfigureAwait(false);
                 if (state == 1)
                 {
                     return;
@@ -6638,7 +6641,7 @@ namespace PlaywrightNative.WebKit
                     throw new PlaywrightException(errorMessage);
                 }
 
-                if (cts.IsCancellationRequested)
+                if (sw.ElapsedMilliseconds >= timeout)
                 {
                     throw new TimeoutException(errorMessage + " (timed out)");
                 }

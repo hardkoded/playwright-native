@@ -442,17 +442,19 @@ namespace PlaywrightNative.WebKit
         /// <returns>The deserialized result.</returns>
         internal async Task<T> EvaluateFunctionOnHandleAsync<T>(string objectId, string functionDeclaration, params object[] args)
         {
-            // Race awaitPromise against context destruction — Promise evaluates
-            // (page-evaluate "nice error after navigation") hang on WebKit reload
-            // if callFunctionOn is not aborted when the old world goes away.
+            // Prefer awaitPromise:false (same as GetPropertyOnHandleAsync). Darwin WIP
+            // can wedge forever on awaitPromise:true for sync reads on some DOM nodes
+            // (STYLE after AddStyleTag — mac shard2 ShouldReturnStyleElementHandle 30s
+            // empty-stack timeouts cascading into later Launch/GoTo hangs). Race context
+            // destruction so Promise evaluates still abort on navigation.
             JsonElement? response = await RaceDestroyedAsync(_session.SendAsync("Runtime.callFunctionOn", new
             {
                 functionDeclaration,
                 objectId,
                 arguments = BuildHandleArguments(objectId, args),
-                returnByValue = true,
+                returnByValue = false,
                 emulateUserGesture = true,
-                awaitPromise = true,
+                awaitPromise = false,
             })).ConfigureAwait(false);
 
             if (response == null)
@@ -468,7 +470,59 @@ namespace PlaywrightNative.WebKit
                 return default;
             }
 
-            return DeserializeValue<T>(result);
+            if (IsPromiseRemote(result))
+            {
+                string promiseId = RemoteObject.GetObjectId(result);
+                if (string.IsNullOrEmpty(promiseId))
+                {
+                    return default;
+                }
+
+                JsonElement? awaited = await AwaitOrDestroyAsync(promiseId).ConfigureAwait(false);
+                if (awaited == null)
+                {
+                    return default;
+                }
+
+                ThrowIfThrown(awaited.Value);
+                return awaited.Value.TryGetProperty("result", out JsonElement awaitedResult)
+                    ? DeserializeValue<T>(awaitedResult)
+                    : default;
+            }
+
+            // Sync completion: primitives arrive without objectId; objects need a
+            // by-value round-trip without awaitPromise.
+            string resultId = RemoteObject.GetObjectId(result);
+            if (string.IsNullOrEmpty(resultId))
+            {
+                return DeserializeValue<T>(result);
+            }
+
+            try
+            {
+                JsonElement? byValue = await RaceDestroyedAsync(_session.SendAsync("Runtime.callFunctionOn", new
+                {
+                    objectId = resultId,
+                    functionDeclaration = "function() { return this; }",
+                    returnByValue = true,
+                    emulateUserGesture = true,
+                    awaitPromise = false,
+                })).ConfigureAwait(false);
+
+                if (byValue == null)
+                {
+                    return default;
+                }
+
+                ThrowIfThrown(byValue.Value);
+                return byValue.Value.TryGetProperty("result", out JsonElement byValueResult)
+                    ? DeserializeValue<T>(byValueResult)
+                    : default;
+            }
+            finally
+            {
+                await ReleaseHandleAsync(resultId).ConfigureAwait(false);
+            }
         }
 
         /// <summary>
@@ -481,6 +535,8 @@ namespace PlaywrightNative.WebKit
         /// <returns>The raw remote object, or <see langword="null"/>.</returns>
         internal async Task<JsonElement?> EvaluateHandleOnHandleAsync(string objectId, string functionDeclaration, params object[] args)
         {
+            // awaitPromise:false first — same Darwin STYLE/SCRIPT wedge as
+            // EvaluateFunctionOnHandleAsync. Await thenables in a second step.
             JsonElement? response = await RaceDestroyedAsync(_session.SendAsync("Runtime.callFunctionOn", new
             {
                 functionDeclaration,
@@ -488,7 +544,7 @@ namespace PlaywrightNative.WebKit
                 arguments = BuildHandleArguments(objectId, args),
                 returnByValue = false,
                 emulateUserGesture = true,
-                awaitPromise = true,
+                awaitPromise = false,
             })).ConfigureAwait(false);
 
             if (response == null)
@@ -504,7 +560,35 @@ namespace PlaywrightNative.WebKit
                 return null;
             }
 
-            return result;
+            if (!IsPromiseRemote(result))
+            {
+                return result;
+            }
+
+            string promiseId = RemoteObject.GetObjectId(result);
+            if (string.IsNullOrEmpty(promiseId))
+            {
+                return result;
+            }
+
+            JsonElement? awaited = await RaceDestroyedAsync(_session.SendAsync("Runtime.callFunctionOn", new
+            {
+                objectId = promiseId,
+                functionDeclaration = "async function() { return await this; }",
+                returnByValue = false,
+                emulateUserGesture = true,
+                awaitPromise = true,
+            })).ConfigureAwait(false);
+
+            if (awaited == null)
+            {
+                return null;
+            }
+
+            ThrowIfThrown(awaited.Value);
+            return awaited.Value.TryGetProperty("result", out JsonElement awaitedResult)
+                ? awaitedResult
+                : null;
         }
 
         /// <summary>
