@@ -3030,15 +3030,20 @@ namespace PlaywrightNative.Chromium
                     throw new PlaywrightException("frame was detached");
                 }
 
-                // Require the target lifecycle to be currently recorded. A load that
-                // fired mid-Page.navigate can be cleared by a later frameNavigated
-                // (data: under Windows suite load) while sawTargetLifecycle stays true,
-                // making GoTo return with LifecycleEvents == { commit } only
-                // (GoToShouldClearLifecycleOnNewNavigation). networkidle already
-                // required currently-present for the same reason.
+                // Fast-path: lifecycle may have fired during navigate (sawTargetLifecycle)
+                // or already be present in LifecycleEvents after subscribe.
+                // networkidle is special: a premature idle during Page.navigate can be
+                // revoked when page scripts start fetches — require it currently present
+                // (ShouldWaitForNetworkidleToSucceedNavigation).
+                //
+                // sawTargetLifecycle is cleared on each new-document FrameNavigated so a
+                // load that was wiped by a later commit cannot satisfy this check alone
+                // (GoToShouldClearLifecycleOnNewNavigation).
                 bool networkIdle = string.Equals(targetLifecycleEvent, "networkidle", StringComparison.Ordinal);
                 bool lifecycleReady =
-                    frame.LifecycleEvents.Contains(targetLifecycleEvent) &&
+                    (networkIdle
+                        ? frame.LifecycleEvents.Contains(targetLifecycleEvent)
+                        : (sawTargetLifecycle || frame.LifecycleEvents.Contains(targetLifecycleEvent))) &&
                     (expectedDocumentId == null || frame.DocumentId == expectedDocumentId) &&
                     (string.IsNullOrEmpty(expectedDocumentId)
                         ? string.Equals(
