@@ -372,9 +372,20 @@ namespace PlaywrightNative.Chromium
                     && !string.IsNullOrEmpty(candidate.Url)
                     && NavigationRequestUrlsMatch(candidate.Url, url))
                 {
-                    // URL-only matches still require document-navigation tracking so
-                    // subresources that share the page loaderId are not adopted.
-                    if (!candidate.TracksDocumentNavigation)
+                    // URL-only matches normally require document-navigation tracking so
+                    // subresources that share the page loaderId are not adopted. Under
+                    // Windows suite load the main document can omit Document type until
+                    // (or without) Fetch promotion — still adopt a usable main-frame GET
+                    // response so concurrent-goto recovery finds the 200.
+                    bool mainFrameDocumentGuess = candidate.Frame?.ParentFrame == null
+                        && string.Equals(candidate.Method, "GET", StringComparison.OrdinalIgnoreCase)
+                        && !candidate.IsFavicon
+                        && HasUsableResponse(candidate)
+                        && (string.IsNullOrEmpty(candidate.ResourceType)
+                            || string.Equals(candidate.ResourceType, "Other", StringComparison.OrdinalIgnoreCase)
+                            || NetworkRequestEvents.IsDocumentNavigation(candidate.ResourceType));
+
+                    if (!candidate.TracksDocumentNavigation && !mainFrameDocumentGuess)
                     {
                         return false;
                     }
@@ -1896,6 +1907,14 @@ namespace PlaywrightNative.Chromium
             {
                 request.PromoteToDocumentNavigation(pausedType);
                 RememberRecentNavigationRequest(request);
+
+                // Response may have landed before Fetch promotion; OnResponseReceived
+                // skipped the committed ring while TracksDocumentNavigation was false.
+                // Latch it now so ERR_ABORTED recovery still sees the document 200.
+                if (request.Response is CRResponse already && already.Status != 204)
+                {
+                    _page.LatchCommittedNavigationResponse(already);
+                }
             }
 
             request.UpdatePostData(RequestPostData.FromProtocol(pausedRequest));

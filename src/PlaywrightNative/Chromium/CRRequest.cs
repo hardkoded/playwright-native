@@ -245,15 +245,17 @@ namespace PlaywrightNative.Chromium
                 }
 
                 // Fetch-paired Chromium navigations under Windows suite load can omit
-                // ResourceType and use requestId != loaderId while still carrying the
-                // frame loader as DocumentId. Treat main-frame GETs with an empty type
-                // as document navigations so concurrent-goto recovery can find the 200
+                // ResourceType (or report Other) and use requestId != loaderId while
+                // still carrying the frame loader as DocumentId. Treat main-frame GETs
+                // without a concrete subresource type as document navigations so
+                // concurrent-goto recovery can find the 200
                 // (ShouldReturnFromGotoIfNewNavigationIsStarted).
-                if (string.IsNullOrEmpty(ResourceType)
-                    && !string.IsNullOrEmpty(DocumentId)
+                if (!string.IsNullOrEmpty(DocumentId)
                     && string.Equals(Method, "GET", StringComparison.OrdinalIgnoreCase)
                     && Frame?.ParentFrame == null
-                    && !IsFavicon)
+                    && !IsFavicon
+                    && (string.IsNullOrEmpty(ResourceType)
+                        || string.Equals(ResourceType, "Other", StringComparison.OrdinalIgnoreCase)))
                 {
                     return true;
                 }

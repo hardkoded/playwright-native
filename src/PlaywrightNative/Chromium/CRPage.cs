@@ -4657,6 +4657,15 @@ namespace PlaywrightNative.Chromium
         }
 
         /// <summary>
+        /// Latches a document response into the concurrent-goto recovery ring.
+        /// Used when Fetch promotes a request after <c>responseReceived</c> already
+        /// fired without <see cref="CRRequest.TracksDocumentNavigation"/>.
+        /// </summary>
+        /// <param name="response">A committed document response.</param>
+        internal void LatchCommittedNavigationResponse(CRResponse response)
+            => RememberCommittedNavigationResponse(response);
+
+        /// <summary>
         /// A JavaScript dialog can only open after a real document commit. Mark
         /// that commit so <see cref="Page.IsClientInitialized"/> and popup
         /// <c>reportAsNew</c> are not stuck waiting on <c>frameNavigated</c>
