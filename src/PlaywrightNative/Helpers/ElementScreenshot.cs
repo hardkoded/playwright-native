@@ -72,12 +72,12 @@ namespace PlaywrightNative.Helpers
                 throw new ArgumentNullException(nameof(page));
             }
 
-            // Wait for visible/stable before decorations (fonts / style injection).
-            // Fonts.ready can take up the screenshot timeout if awaited first, then
-            // WaitForScreenshotReadyAsync inside the capture callback times out even
-            // after the test has made the element visible (ShouldWaitUntilVisible).
-            await WaitForScreenshotReadyAsync(element, timeout).ConfigureAwait(false);
-
+            // Do NOT wait for Stable before CaptureAsync: infinite CSS/Web animations
+            // never stabilize, and FinishAnimationsAsync runs inside CaptureAsync
+            // (ScreenshotAsyncShouldDisableAnimations /
+            // ShouldNotCaptureInfiniteCssAnimation). Visibility/stable wait stays in
+            // CaptureClipAsync after decorations — fonts budget is short so
+            // ShouldWaitUntilVisible still has time after WaitForFontsAsync.
             return await ScreenshotDecorations.CaptureAsync(
                 page,
                 animations,

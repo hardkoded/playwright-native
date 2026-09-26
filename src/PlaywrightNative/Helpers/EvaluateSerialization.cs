@@ -250,13 +250,14 @@ namespace PlaywrightNative.Helpers
 
         /// <summary>
         /// Returns whether <paramref name="expression"/> can be parenthesized as a
-        /// JavaScript expression (function IIFEs, wrapped calls, and bare expressions
-        /// without statement terminators). Programs such as <c>1 + 5;</c> must stay
-        /// two-step so the completion value is preserved. Thenables (<c>Promise</c>,
-        /// <c>fetch(</c>, <c>.then(</c>, <c>await</c>) must keep a handle so WebKit can
+        /// JavaScript expression (function IIFEs, wrapped calls, and simple bare
+        /// sync expressions such as <c>1 + 1</c>). Programs such as <c>1 + 5;</c>
+        /// must stay two-step so the completion value is preserved. Thenables
+        /// (<c>Promise</c>, <c>fetch(</c>, <c>.then(</c>, <c>await</c>, property
+        /// access that may yield a thenable) must keep a handle so WebKit can
         /// <c>awaitPromise</c> via <c>callFunctionOn</c>; wrapping them with
-        /// <c>returnByValue:true</c> drops the objectId and a second evaluate re-runs
-        /// side effects.
+        /// <c>returnByValue:true</c> drops the objectId and a second evaluate
+        /// re-runs side effects or wedges Darwin.
         /// </summary>
         /// <param name="expression">The already-invoked evaluate expression.</param>
         /// <returns><see langword="true"/> when same-turn serialize wrapping is safe.</returns>
@@ -285,13 +286,21 @@ namespace PlaywrightNative.Helpers
 
             return trimmed.StartsWith('(') || trimmed.StartsWith("function", StringComparison.Ordinal)
 
-                // Bare expressions without statement terminators can be parenthesized for
-                // same-turn returnByValue serialize. Leaving `1 + 1` on the handle +
+                // Simple bare sync expressions (e.g. `1 + 1`) can be parenthesized for
+                // same-turn returnByValue serialize. Leaving them on the handle +
                 // MaterializeAsync(awaitPromise) path wedges Darwin WebKit forever
-                // (FrameEvaluateShouldRunInOwnWorld 30s empty-stack timeout).
-                || (trimmed.IndexOf(';') < 0
-                    && trimmed.IndexOf('\n') < 0
-                    && trimmed.IndexOf('\r') < 0);
+                // (FrameEvaluateShouldRunInOwnWorld). Do NOT wrap property access /
+                // calls / object literals — those may be thenables without the
+                // keywords above (document.body.textContent, fonts.ready, …) and
+                // wrapping them caused macOS WebKit empty-stack timeouts.
+                || (!trimmed.Contains(';')
+                    && !trimmed.Contains('\n')
+                    && !trimmed.Contains('\r')
+                    && !trimmed.Contains('.')
+                    && !trimmed.Contains('(')
+                    && !trimmed.Contains('[')
+                    && !trimmed.Contains('{')
+                    && !trimmed.Contains('`'));
         }
 
         /// <summary>
