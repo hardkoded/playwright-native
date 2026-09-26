@@ -335,6 +335,14 @@ namespace PlaywrightNative.Helpers
             // Parenthesize so CanWrapExpression takes the sync returnByValue path.
             string poll = "(globalThis[" + markerJson + "])";
             Stopwatch sw = Stopwatch.StartNew();
+
+            // Give Darwin WebKit a beat to drain the kickoff builtins.setTimeout(0)
+            // macrotask before Runtime.evaluate polls. Under suite load, a tight
+            // poll loop can starve embedder timers so runFor/pauseAt never finish
+            // (RunForShouldAcceptMinuteSecondString 30s hang on macOS WebKit).
+            await Task.Delay(50).ConfigureAwait(false);
+
+            int pollDelayMs = 50;
             while (sw.ElapsedMilliseconds < 60_000)
             {
                 string status = await evaluateStringAsync(poll).ConfigureAwait(false);
@@ -348,9 +356,13 @@ namespace PlaywrightNative.Helpers
                     return;
                 }
 
-                // Give Darwin WebKit time to drain embedder timers between polls;
-                // a 5ms hammer can starve setTimeout while pauseAt/_runTo awaits it.
-                await Task.Delay(20).ConfigureAwait(false);
+                // Back off while the marker is empty so protocol evaluates do not
+                // monopolize the WIP run loop ahead of embedder.setTimeout.
+                await Task.Delay(pollDelayMs).ConfigureAwait(false);
+                if (pollDelayMs < 100)
+                {
+                    pollDelayMs = Math.Min(100, pollDelayMs + 10);
+                }
             }
 
             throw new PlaywrightException("clock: timed out waiting for controller command");
