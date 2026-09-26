@@ -1010,6 +1010,8 @@ namespace PlaywrightNative.WebKit
             // requestfinished now that the response is public.
             if (publicRequest.IsFinishWaiterCompleted())
             {
+                _requestsById.TryRemove(requestId, out _);
+                _handledIntercepts.TryRemove(requestId, out _);
                 RaiseRequestFinished(publicRequest);
                 if (publicRequest != request)
                 {
@@ -1041,20 +1043,32 @@ namespace PlaywrightNative.WebKit
                 return;
             }
 
-            if (_requestsById.TryRemove(requestId, out WKRequest request))
+            if (!_requestsById.TryGetValue(requestId, out WKRequest request))
             {
-                double baseline = request.TimingRequestTime > 0
-                    ? request.TimingRequestTime
-                    : request.TimestampSeconds;
-                ResourceTimingParser.ApplyResponseEnd(
-                    request.Timing,
-                    baseline,
-                    ResourceTimingParser.ReadDouble(p, "timestamp"));
-                ResourceTimingParser.FillMissingFromResponseEnd(request.Timing);
-                request.EncodedDataLength = ReadEncodedBodyLength(p);
-                request.Finished = true;
-                ApplyFinishedMetrics(request, p);
-                RaiseRequestFinished(request);
+                return;
+            }
+
+            double baseline = request.TimingRequestTime > 0
+                ? request.TimingRequestTime
+                : request.TimestampSeconds;
+            ResourceTimingParser.ApplyResponseEnd(
+                request.Timing,
+                baseline,
+                ResourceTimingParser.ReadDouble(p, "timestamp"));
+            ResourceTimingParser.FillMissingFromResponseEnd(request.Timing);
+            request.EncodedDataLength = ReadEncodedBodyLength(p);
+            request.Finished = true;
+            ApplyFinishedMetrics(request, p);
+            RaiseRequestFinished(request);
+
+            // Navigation requestfinished is deferred while Response is null
+            // (WKPage.OnRequestFinished). Keep the entry so a late
+            // responseReceived or redirect willBeSent can still attach the
+            // Response and emit DONE — TryRemove here would drop fulfill /
+            // redirect hops and hang GoTo (RouteRequestUrlIsAccessibleInsideHandler).
+            if (request.Response != null || !request.IsNavigationRequest)
+            {
+                _requestsById.TryRemove(requestId, out _);
             }
         }
 

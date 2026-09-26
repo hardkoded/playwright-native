@@ -5439,11 +5439,11 @@ namespace PlaywrightNative.WebKit
             // Emitting page requestfinished while Response is still null places DONE
             // before the 302 Response event (ShouldSupportRedirects expects
             // GET,302,DONE). Defer the page event until Response is known —
-            // responseReceived raises finished for redirects and for finish-waiter
-            // races once the response is public.
+            // responseReceived / redirect willBeSent raise finished once Response
+            // is public. Do not clear inflight here; the request stays mapped in
+            // WKNetworkManager until that late Response path runs.
             if (publicRequest.Response == null && publicRequest.IsNavigationRequest)
             {
-                TrackInflight(publicRequest, started: false);
                 return;
             }
 

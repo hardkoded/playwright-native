@@ -95,6 +95,24 @@ namespace PlaywrightNative.Helpers
                 timing.SecureConnectionStart = -1;
             }
 
+            // WebKit SSL timings can report requestStart a few sub-ms before
+            // connectEnd after float rounding (ShouldWorkForSsl). Snap forward
+            // rather than marking unavailable so SecureConnection→Request stays
+            // a usable chain.
+            if (timing.RequestStart > 0
+                && timing.ConnectEnd > 0
+                && timing.RequestStart < timing.ConnectEnd)
+            {
+                timing.RequestStart = timing.ConnectEnd;
+            }
+
+            if (timing.ResponseStart > 0
+                && timing.RequestStart > 0
+                && timing.ResponseStart < timing.RequestStart)
+            {
+                timing.ResponseStart = timing.RequestStart;
+            }
+
             return ReadDouble(resourceTiming, "requestTime");
         }
 
