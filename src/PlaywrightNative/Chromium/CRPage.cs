@@ -2817,6 +2817,38 @@ namespace PlaywrightNative.Chromium
             string targetLifecycleEvent = WaitUntilMapping.ToLifecycleEvent(waitUntil);
             string apiName = frame.ParentFrame == null ? "page.goto" : "frame.goto";
             int waitMs = timeout <= 0 ? System.Threading.Timeout.Infinite : timeout;
+            bool ensureLifecycleOnExit = false;
+
+            void EnsurePromisedLifecycleRecorded()
+            {
+                // FrameNavigated can wipe LifecycleEvents after the wait resolved
+                // (or after an earlier replay) but before we unsubscribe — leave
+                // callers inspecting MainFrame.LifecycleEvents with only {commit}
+                // (GoToShouldClearLifecycleOnNewNavigation).
+                if (string.Equals(targetLifecycleEvent, "networkidle", StringComparison.Ordinal))
+                {
+                    return;
+                }
+
+                if (frame.LifecycleEvents.Contains(targetLifecycleEvent))
+                {
+                    return;
+                }
+
+                if (string.Equals(targetLifecycleEvent, "load", StringComparison.Ordinal)
+                    || string.Equals(targetLifecycleEvent, "DOMContentLoaded", StringComparison.Ordinal))
+                {
+                    if (!frame.LifecycleEvents.Contains("DOMContentLoaded"))
+                    {
+                        frame.OnLifecycleEvent("DOMContentLoaded");
+                    }
+
+                    if (string.Equals(targetLifecycleEvent, "load", StringComparison.Ordinal))
+                    {
+                        frame.OnLifecycleEvent("load");
+                    }
+                }
+            }
 
             // Already on about:blank navigating to about:blank: do not short-circuit
             // before NavigateFrameAsync. A Task.Yield replay raced ActionTrace's own
@@ -2976,6 +3008,7 @@ namespace PlaywrightNative.Chromium
                     frame.LifecycleChanged -= OnLifecycle;
                     _frameManager.FrameDetached -= OnDetached;
                     _frameManager.FrameNavigated -= OnNavigated;
+                    EnsurePromisedLifecycleRecorded();
                     frame.Url = NavigationTimeout.PreserveUserInfo(url, frame.Url);
                     return;
                 }
@@ -2993,6 +3026,7 @@ namespace PlaywrightNative.Chromium
                         frame.LifecycleChanged -= OnLifecycle;
                         _frameManager.FrameDetached -= OnDetached;
                         _frameManager.FrameNavigated -= OnNavigated;
+                        EnsurePromisedLifecycleRecorded();
                         frame.Url = NavigationTimeout.PreserveUserInfo(url, frame.Url);
                         return;
                     }
@@ -3006,6 +3040,7 @@ namespace PlaywrightNative.Chromium
                         frame.LifecycleChanged -= OnLifecycle;
                         _frameManager.FrameDetached -= OnDetached;
                         _frameManager.FrameNavigated -= OnNavigated;
+                        EnsurePromisedLifecycleRecorded();
                         frame.Url = NavigationTimeout.PreserveUserInfo(url, frame.Url);
                         return;
                     }
@@ -3065,25 +3100,8 @@ namespace PlaywrightNative.Chromium
                 // once the frame really has the new URL.
                 if (lifecycleReady)
                 {
-                    // sawTargetLifecycle can win after FrameNavigated wiped live
-                    // events down to {commit} (EmptyPage / MITM TLS under load).
-                    // Replay so LifecycleEvents matches the waitUntil GoTo promised.
-                    if (!networkIdle
-                        && !frame.LifecycleEvents.Contains(targetLifecycleEvent)
-                        && (string.Equals(targetLifecycleEvent, "load", StringComparison.Ordinal)
-                            || string.Equals(targetLifecycleEvent, "DOMContentLoaded", StringComparison.Ordinal)))
-                    {
-                        if (!frame.LifecycleEvents.Contains("DOMContentLoaded"))
-                        {
-                            frame.OnLifecycleEvent("DOMContentLoaded");
-                        }
-
-                        if (string.Equals(targetLifecycleEvent, "load", StringComparison.Ordinal))
-                        {
-                            frame.OnLifecycleEvent("load");
-                        }
-                    }
-
+                    EnsurePromisedLifecycleRecorded();
+                    ensureLifecycleOnExit = true;
                     frame.Url = NavigationTimeout.PreserveUserInfo(url, frame.Url);
                     return;
                 }
@@ -3099,6 +3117,7 @@ namespace PlaywrightNative.Chromium
                     await ReplayPageInitScriptsAsync().ConfigureAwait(false);
                     frame.OnLifecycleEvent("DOMContentLoaded");
                     frame.OnLifecycleEvent("load");
+                    ensureLifecycleOnExit = true;
                     return;
                 }
 
@@ -3116,6 +3135,7 @@ namespace PlaywrightNative.Chromium
                     frame.Url = NavigationTimeout.PreserveUserInfo(url, frame.Url);
                     frame.OnLifecycleEvent("DOMContentLoaded");
                     frame.OnLifecycleEvent("load");
+                    ensureLifecycleOnExit = true;
                     return;
                 }
 
@@ -3151,32 +3171,19 @@ namespace PlaywrightNative.Chromium
                 else
                 {
                     await lifecycleTcs.Task.ConfigureAwait(false);
-
-                    // FrameNavigated can wipe load after OnLifecycle already completed
-                    // the wait TCS (EmptyPage under suite load). Replay so GoTo's
-                    // waitUntil matches LifecycleEvents for callers that inspect them.
-                    if (!frame.LifecycleEvents.Contains(targetLifecycleEvent)
-                        && (string.Equals(targetLifecycleEvent, "load", StringComparison.Ordinal)
-                            || string.Equals(targetLifecycleEvent, "DOMContentLoaded", StringComparison.Ordinal))
-                        && (expectedDocumentId == null
-                            || string.Equals(frame.DocumentId, expectedDocumentId, StringComparison.Ordinal)))
-                    {
-                        if (!frame.LifecycleEvents.Contains("DOMContentLoaded"))
-                        {
-                            frame.OnLifecycleEvent("DOMContentLoaded");
-                        }
-
-                        if (string.Equals(targetLifecycleEvent, "load", StringComparison.Ordinal))
-                        {
-                            frame.OnLifecycleEvent("load");
-                        }
-                    }
+                    EnsurePromisedLifecycleRecorded();
                 }
 
+                ensureLifecycleOnExit = true;
                 frame.Url = NavigationTimeout.PreserveUserInfo(url, frame.Url);
             }
             finally
             {
+                if (ensureLifecycleOnExit)
+                {
+                    EnsurePromisedLifecycleRecorded();
+                }
+
                 Crashed -= OnCrashed;
                 Closed -= OnClosed;
                 frame.LifecycleChanged -= OnLifecycle;

@@ -420,11 +420,25 @@ namespace PlaywrightNative
         /// <param name="documentId">The document ID (loader ID) for this navigation.</param>
         internal void OnNavigated(string url, string name, string documentId)
         {
+            string nextDocumentId = documentId ?? string.Empty;
+
+            // A second commit for the same loaderId must not wipe load/DCL —
+            // Chromium can re-deliver frameNavigated after GoTo already resolved
+            // waitUntil, leaving LifecycleEvents as {commit} only
+            // (GoToShouldClearLifecycleOnNewNavigation).
+            bool sameDocument = !string.IsNullOrEmpty(nextDocumentId)
+                && string.Equals(_documentId, nextDocumentId, StringComparison.Ordinal);
+
             _url = url ?? string.Empty;
             _name = name ?? string.Empty;
-            _documentId = documentId ?? string.Empty;
-            ClearLifecycleEvents();
-            OnLifecycleEvent("commit");
+            _documentId = nextDocumentId;
+
+            if (!sameDocument)
+            {
+                ClearLifecycleEvents();
+                OnLifecycleEvent("commit");
+            }
+
             Navigated?.Invoke();
         }
 
