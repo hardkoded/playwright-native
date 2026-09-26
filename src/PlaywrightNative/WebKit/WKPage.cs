@@ -5435,6 +5435,18 @@ namespace PlaywrightNative.WebKit
                 return;
             }
 
+            // loadingFinished can race ahead of responseReceived on redirect hops.
+            // Emitting page requestfinished while Response is still null places DONE
+            // before the 302 Response event (ShouldSupportRedirects expects
+            // GET,302,DONE). Defer the page event until Response is known —
+            // responseReceived raises finished for redirects and for finish-waiter
+            // races once the response is public.
+            if (publicRequest.Response == null && publicRequest.IsNavigationRequest)
+            {
+                TrackInflight(publicRequest, started: false);
+                return;
+            }
+
             // Redirect hops complete before the final document request. Do not
             // treat them as the pending navigation requestfinished; that flag
             // would swallow the hop DONE under process-swap races
