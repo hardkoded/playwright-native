@@ -44,6 +44,7 @@ namespace PlaywrightNative.Helpers
             // selector clicks must treat it like a destroyed context and re-query.
             return message.Contains("Cannot find context", StringComparison.Ordinal)
                 || message.Contains("Execution context was destroyed", StringComparison.Ordinal)
+                || message.Contains("Execution context is not yet available", StringComparison.Ordinal)
                 || message.Contains("Inspected target navigated", StringComparison.Ordinal)
                 || message.Contains("Missing injected script", StringComparison.OrdinalIgnoreCase);
         }

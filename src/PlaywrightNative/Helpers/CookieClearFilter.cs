@@ -279,10 +279,13 @@ namespace PlaywrightNative.Helpers
                     }
 
                     string storePath = string.IsNullOrEmpty(cookie.Path) ? "/" : cookie.Path;
-                    string script =
-                        "document.cookie = " +
-                        System.Text.Json.JsonSerializer.Serialize(
-                            cookie.Name + "=; Max-Age=0; path=" + storePath);
+
+                    // Parenthesize so CanWrapExpression takes the sync returnByValue
+                    // path — a bare `document.cookie = …` assignment otherwise goes
+                    // through MaterializeAsync(awaitPromise) and can wedge Darwin.
+                    string assignment = System.Text.Json.JsonSerializer.Serialize(
+                        cookie.Name + "=; Max-Age=0; path=" + storePath);
+                    string script = "(() => { document.cookie = " + assignment + "; return true; })()";
                     try
                     {
                         await page.EvaluateAsync(script).ConfigureAwait(false);

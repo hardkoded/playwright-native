@@ -438,6 +438,25 @@ namespace PlaywrightNative.Helpers
                 return ParseRemote<T>(remote);
             }
 
+            // Sync primitives often still carry an objectId on WebKit. Running
+            // SerializeAwaitedJs (awaitPromise) on them wedges Darwin forever
+            // (Date.now(), matchMedia(...).matches, FrameEvaluate `1 + 1` before
+            // bare-wrap). Prefer the already-present by-value payload.
+            if (HasInlinePrimitivePayload(remote.Value))
+            {
+                try
+                {
+                    return ParseRemote<T>(remote);
+                }
+                finally
+                {
+                    if (release != null)
+                    {
+                        await release(objectId).ConfigureAwait(false);
+                    }
+                }
+            }
+
             try
             {
                 JsonElement tagged = await serializeOnHandle(objectId).ConfigureAwait(false);
@@ -450,6 +469,40 @@ namespace PlaywrightNative.Helpers
                     await release(objectId).ConfigureAwait(false);
                 }
             }
+        }
+
+        /// <summary>
+        /// Returns whether <paramref name="remote"/> already carries a typed primitive
+        /// <c>value</c> (or undefined) that <see cref="ParseRemote{T}"/> can read
+        /// without a second protocol round-trip.
+        /// </summary>
+        /// <param name="remote">A protocol remote object.</param>
+        /// <returns><see langword="true"/> when inline materialization is safe.</returns>
+        private static bool HasInlinePrimitivePayload(JsonElement remote)
+        {
+            if (!remote.TryGetProperty("type", out JsonElement typeEl)
+                || typeEl.ValueKind != JsonValueKind.String)
+            {
+                return false;
+            }
+
+            string type = typeEl.GetString();
+            if (string.Equals(type, "undefined", StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            if (string.Equals(type, "number", StringComparison.Ordinal)
+                || string.Equals(type, "boolean", StringComparison.Ordinal)
+                || string.Equals(type, "string", StringComparison.Ordinal)
+                || string.Equals(type, "bigint", StringComparison.Ordinal)
+                || string.Equals(type, "symbol", StringComparison.Ordinal))
+            {
+                return remote.TryGetProperty("value", out _)
+                    || remote.TryGetProperty("unserializableValue", out _);
+            }
+
+            return false;
         }
 
         private static object VisitArgument(object value, IDictionary<object, int> seen, IdBox ids, string path)

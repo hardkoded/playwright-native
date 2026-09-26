@@ -299,7 +299,9 @@ namespace PlaywrightNative.Helpers
                         }
                         catch (Exception ex) when (DestroyedContext.IsDestroyedContext(ex)
                             || (ex is PlaywrightException pe
-                                && pe.Message.Contains(NavigatingMessage, StringComparison.Ordinal)))
+                                && (pe.Message.Contains(NavigatingMessage, StringComparison.Ordinal)
+                                    || pe.Message.Contains("not yet available", StringComparison.Ordinal)
+                                    || pe.Message.Contains("most likely because of a navigation", StringComparison.Ordinal))))
                         {
                             if (attempt >= maxAttempts - 1)
                             {
