@@ -2867,7 +2867,22 @@ namespace PlaywrightNative.Chromium
 
             void OnNavigated(Frame navigated, string documentId)
             {
-                if (!ReferenceEquals(navigated, frame) || !navigationSettled)
+                if (!ReferenceEquals(navigated, frame))
+                {
+                    return;
+                }
+
+                // A new-document commit clears LifecycleEvents. Drop any mid-navigate
+                // sawTargetLifecycle so GoTo cannot resolve on a cleared load
+                // (GoToShouldClearLifecycleOnNewNavigation).
+                if (!string.IsNullOrEmpty(documentId)
+                    && (expectedDocumentId == null
+                        || !string.Equals(documentId, expectedDocumentId, StringComparison.Ordinal)))
+                {
+                    sawTargetLifecycle = false;
+                }
+
+                if (!navigationSettled)
                 {
                     return;
                 }
@@ -3015,16 +3030,15 @@ namespace PlaywrightNative.Chromium
                     throw new PlaywrightException("frame was detached");
                 }
 
-                // Fast-path: lifecycle may have fired during navigate (sawTargetLifecycle)
-                // or already be present in LifecycleEvents after subscribe.
-                // networkidle is special: a premature idle during Page.navigate can be
-                // revoked when page scripts start fetches — require it currently present
-                // (ShouldWaitForNetworkidleToSucceedNavigation).
+                // Require the target lifecycle to be currently recorded. A load that
+                // fired mid-Page.navigate can be cleared by a later frameNavigated
+                // (data: under Windows suite load) while sawTargetLifecycle stays true,
+                // making GoTo return with LifecycleEvents == { commit } only
+                // (GoToShouldClearLifecycleOnNewNavigation). networkidle already
+                // required currently-present for the same reason.
                 bool networkIdle = string.Equals(targetLifecycleEvent, "networkidle", StringComparison.Ordinal);
                 bool lifecycleReady =
-                    (networkIdle
-                        ? frame.LifecycleEvents.Contains(targetLifecycleEvent)
-                        : (sawTargetLifecycle || frame.LifecycleEvents.Contains(targetLifecycleEvent))) &&
+                    frame.LifecycleEvents.Contains(targetLifecycleEvent) &&
                     (expectedDocumentId == null || frame.DocumentId == expectedDocumentId) &&
                     (string.IsNullOrEmpty(expectedDocumentId)
                         ? string.Equals(
@@ -3057,6 +3071,23 @@ namespace PlaywrightNative.Chromium
                 {
                     frame.Url = NavigationTimeout.PreserveUserInfo(url, frame.Url);
                     await ReplayPageInitScriptsAsync().ConfigureAwait(false);
+                    frame.OnLifecycleEvent("DOMContentLoaded");
+                    frame.OnLifecycleEvent("load");
+                    return;
+                }
+
+                // data: navigations under suite load can clear a mid-navigate load and
+                // leave only commit without a second Page.loadEventFired. Replay like
+                // about:blank so LifecycleEvents matches what GoTo promised
+                // (GoToShouldClearLifecycleOnNewNavigation).
+                if (!string.IsNullOrEmpty(url)
+                    && url.StartsWith("data:", StringComparison.OrdinalIgnoreCase)
+                    && !string.IsNullOrEmpty(expectedDocumentId)
+                    && string.Equals(frame.DocumentId, expectedDocumentId, StringComparison.Ordinal)
+                    && frame.LifecycleEvents.Contains("commit")
+                    && !frame.LifecycleEvents.Contains(targetLifecycleEvent))
+                {
+                    frame.Url = NavigationTimeout.PreserveUserInfo(url, frame.Url);
                     frame.OnLifecycleEvent("DOMContentLoaded");
                     frame.OnLifecycleEvent("load");
                     return;
