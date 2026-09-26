@@ -2810,10 +2810,10 @@ namespace PlaywrightNative.Chromium
                     return;
                 }
 
-                // networkidle can fire then be revoked (new request / iframe). Only
-                // treat the event as observed while it is currently present — same
-                // as SetContentInFrameAsync (ShouldWaitForNetworkidleToSucceedNavigation).
-                if (!frame.LifecycleEvents.Contains(targetLifecycleEvent))
+                // networkidle can fire then be revoked (new request / iframe). Ignore
+                // the event unless it is currently present — same as SetContent.
+                if (string.Equals(targetLifecycleEvent, "networkidle", StringComparison.Ordinal)
+                    && !frame.LifecycleEvents.Contains(targetLifecycleEvent))
                 {
                     return;
                 }
@@ -2990,12 +2990,16 @@ namespace PlaywrightNative.Chromium
                     throw new PlaywrightException("frame was detached");
                 }
 
-                // Fast-path only when the target lifecycle is currently present.
-                // sawTargetLifecycle alone is not enough — a premature networkidle
-                // during Page.navigate can be revoked when page scripts start
-                // fetches (ShouldWaitForNetworkidleToSucceedNavigation).
+                // Fast-path: lifecycle may have fired during navigate (sawTargetLifecycle)
+                // or already be present in LifecycleEvents after subscribe.
+                // networkidle is special: a premature idle during Page.navigate can be
+                // revoked when page scripts start fetches — require it currently present
+                // (ShouldWaitForNetworkidleToSucceedNavigation).
+                bool networkIdle = string.Equals(targetLifecycleEvent, "networkidle", StringComparison.Ordinal);
                 bool lifecycleReady =
-                    frame.LifecycleEvents.Contains(targetLifecycleEvent) &&
+                    (networkIdle
+                        ? frame.LifecycleEvents.Contains(targetLifecycleEvent)
+                        : (sawTargetLifecycle || frame.LifecycleEvents.Contains(targetLifecycleEvent))) &&
                     (expectedDocumentId == null || frame.DocumentId == expectedDocumentId) &&
                     (string.IsNullOrEmpty(expectedDocumentId)
                         ? string.Equals(
@@ -3033,55 +3037,38 @@ namespace PlaywrightNative.Chromium
                     return;
                 }
 
-                long waitStartTicks = Environment.TickCount64;
+                using var cts = new System.Threading.CancellationTokenSource(waitMs);
+                cts.Token.Register(
+                    () => lifecycleTcs.TrySetException(
+                        NavigationTimeout.Exceeded(apiName, url, NavigationTimeout.WaitUntilName(waitUntil), timeout)));
 
-                // Keep waiting until the target lifecycle is currently present —
-                // a revoked networkidle must not count as success.
-                while (!frame.LifecycleEvents.Contains(targetLifecycleEvent))
+                if (networkIdle)
                 {
-                    int remainingMs = waitMs == System.Threading.Timeout.Infinite
-                        ? System.Threading.Timeout.Infinite
-                        : Math.Max(0, waitMs - (int)(Environment.TickCount64 - waitStartTicks));
-                    if (remainingMs == 0)
+                    // Keep waiting until networkidle is currently present — a revoked
+                    // idle must not count as success (mirrors SetContentInFrameAsync).
+                    while (!frame.LifecycleEvents.Contains(targetLifecycleEvent))
                     {
-                        throw NavigationTimeout.Exceeded(
-                            apiName, url, NavigationTimeout.WaitUntilName(waitUntil), timeout);
-                    }
-
-                    if (lifecycleTcs.Task.IsCompleted)
-                    {
-                        if (lifecycleTcs.Task.IsFaulted || lifecycleTcs.Task.IsCanceled)
+                        if (lifecycleTcs.Task.IsCompleted)
                         {
-                            await lifecycleTcs.Task.ConfigureAwait(false);
+                            if (lifecycleTcs.Task.IsFaulted || lifecycleTcs.Task.IsCanceled)
+                            {
+                                await lifecycleTcs.Task.ConfigureAwait(false);
+                            }
+
+                            lifecycleTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
                         }
 
-                        lifecycleTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
-                    }
+                        if (frame.LifecycleEvents.Contains(targetLifecycleEvent))
+                        {
+                            break;
+                        }
 
-                    if (frame.LifecycleEvents.Contains(targetLifecycleEvent))
-                    {
-                        break;
-                    }
-
-                    using var cts = remainingMs == System.Threading.Timeout.Infinite
-                        ? null
-                        : new System.Threading.CancellationTokenSource(remainingMs);
-                    CancellationTokenRegistration registration = default;
-                    if (cts != null)
-                    {
-                        registration = cts.Token.Register(() => lifecycleTcs.TrySetException(
-                            NavigationTimeout.Exceeded(
-                                apiName, url, NavigationTimeout.WaitUntilName(waitUntil), timeout)));
-                    }
-
-                    try
-                    {
                         await lifecycleTcs.Task.ConfigureAwait(false);
                     }
-                    finally
-                    {
-                        await registration.DisposeAsync().ConfigureAwait(false);
-                    }
+                }
+                else
+                {
+                    await lifecycleTcs.Task.ConfigureAwait(false);
                 }
 
                 frame.Url = NavigationTimeout.PreserveUserInfo(url, frame.Url);
