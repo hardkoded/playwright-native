@@ -26,12 +26,17 @@ CHROMIUM_BUILD="1234"
 CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/ms-playwright"
 CHROMIUM_DIR="$CACHE_DIR/chromium-${CHROMIUM_BUILD}"
 
-# The library multi-targets netstandard2.1 (NuGet packaging only) and net10.0.
-# The Cloud Agent dev environment only exercises net10.0 -- the test suite always
-# runs with `-f net10.0` -- so we build that target framework here to warm the
-# build without depending on the packaging-only netstandard2.1 output.
-echo "==> Building PlaywrightNative.sln (net10.0)"
-dotnet build ./src/PlaywrightNative.sln -f net10.0
+# Every project in the solution targets net10.0 only, so we build the solution
+# without a `-f`/`--framework` override -- exactly as CI does
+# (`dotnet build ./src/PlaywrightNative.sln`). Passing `-f net10.0` here sets
+# TargetFramework as a global property across the whole solution, which makes
+# the GeneratePackageOnBuild pack step of PlaywrightNative.csproj spawn an inner
+# build of the project that races the parallel project-to-project build already
+# running for it. That race intermittently fails with "the process cannot access
+# <PlaywrightNative>.nupkg because it is being used by another process". Building
+# without the override lets MSBuild deduplicate the project build and pack once.
+echo "==> Building PlaywrightNative.sln"
+dotnet build ./src/PlaywrightNative.sln
 
 echo "==> Creating HTTPS development certificate for the test server"
 dotnet dev-certs https --clean
