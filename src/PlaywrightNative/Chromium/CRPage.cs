@@ -2823,6 +2823,11 @@ namespace PlaywrightNative.Chromium
                     return false;
                 }
 
+                // Keep probes short: EvaluateAsync's default 5s context wait used to
+                // block GoTo while LifecycleChanged/FrameNavigated were already
+                // armed, and under Windows persistent load that window correlated
+                // with DialogAcceptShouldWork "Page crashed" / context timeouts.
+                const int probeContextMs = 250;
                 for (int attempt = 0; attempt < 80; attempt++)
                 {
                     if (_crashed || _closedTcs.Task.IsCompleted)
@@ -2843,15 +2848,28 @@ namespace PlaywrightNative.Chromium
 
                     try
                     {
-                        string href = await EvaluateAsync<string>("location.href").ConfigureAwait(false);
-                        string readyState = await EvaluateAsync<string>("document.readyState").ConfigureAwait(false);
-                        bool hrefIsData = !string.IsNullOrEmpty(href)
-                            && href.StartsWith("data:", StringComparison.OrdinalIgnoreCase);
-                        bool ready = string.Equals(readyState, "interactive", StringComparison.Ordinal)
-                            || string.Equals(readyState, "complete", StringComparison.Ordinal);
-                        if (hrefIsData && ready)
+                        CRExecutionContext context = await WaitForFrameExecutionContextAsync(
+                                targetFrame,
+                                probeContextMs)
+                            .ConfigureAwait(false);
+                        context = targetFrame.ExecutionContext ?? context;
+                        JsonElement snapshot = await context.EvaluateAsync<JsonElement>(
+                            @"(() => ({ href: location.href, ready: document.readyState }))()")
+                            .ConfigureAwait(false);
+                        if (snapshot.ValueKind == JsonValueKind.Object
+                            && snapshot.TryGetProperty("href", out JsonElement hrefEl)
+                            && snapshot.TryGetProperty("ready", out JsonElement readyEl))
                         {
-                            return true;
+                            string href = hrefEl.GetString();
+                            string readyState = readyEl.GetString();
+                            bool hrefIsData = !string.IsNullOrEmpty(href)
+                                && href.StartsWith("data:", StringComparison.OrdinalIgnoreCase);
+                            bool ready = string.Equals(readyState, "interactive", StringComparison.Ordinal)
+                                || string.Equals(readyState, "complete", StringComparison.Ordinal);
+                            if (hrefIsData && ready)
+                            {
+                                return true;
+                            }
                         }
                     }
                     catch (TimeoutException)

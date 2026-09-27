@@ -1502,6 +1502,14 @@ namespace PlaywrightNative
             return new Locator(_frame, inner._steps, scope, inner._description);
         }
 
+        /// <summary>
+        /// Whether this locator resolves through an iframe / frame scope
+        /// (including <c>frameLocator</c> chains). Locator-handler hide waits
+        /// treat frame-resolve timeouts as detached/hidden.
+        /// </summary>
+        /// <returns><see langword="true"/> when the locator is frame-scoped.</returns>
+        internal bool HasFrameScope() => IsAnyFrameLocator();
+
         private static async Task<IReadOnlyList<IElementHandle>> QueryStepAsync(IFrame frame, IElementHandle parent, Step step, bool ariaDescendants = true)
         {
             if (step.Script != null)

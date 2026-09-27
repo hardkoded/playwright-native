@@ -247,7 +247,8 @@ namespace PlaywrightNative.Helpers
         private static async Task<bool> IsAnyVisibleAsync(
             ILocator locator,
             int queryTimeoutMs,
-            bool assumeVisibleOnTimeout)
+            bool assumeVisibleOnTimeout,
+            bool treatDetachedAsHidden = false)
         {
             IReadOnlyList<IElementHandle> handles;
             try
@@ -259,6 +260,15 @@ namespace PlaywrightNative.Helpers
             catch (TimeoutException)
             {
                 return assumeVisibleOnTimeout;
+            }
+            catch (PlaywrightException ex) when (
+                treatDetachedAsHidden
+                && (ClosedTarget.IsClosed(ex)
+                    || DestroyedContext.IsDestroyedContext(ex)
+                    || IsFrameDetachedMessage(ex)))
+            {
+                // Overlay owner frame was removed (ShouldWorkWhenOwnerFrameDetaches).
+                return false;
             }
             catch (PlaywrightException ex) when (ClosedTarget.IsClosed(ex))
             {
@@ -288,6 +298,14 @@ namespace PlaywrightNative.Helpers
                         return true;
                     }
                 }
+                catch (PlaywrightException ex) when (
+                    treatDetachedAsHidden
+                    && (ClosedTarget.IsClosed(ex)
+                        || DestroyedContext.IsDestroyedContext(ex)
+                        || IsFrameDetachedMessage(ex)))
+                {
+                    return false;
+                }
                 catch (PlaywrightException ex) when (ClosedTarget.IsClosed(ex))
                 {
                     throw;
@@ -300,10 +318,42 @@ namespace PlaywrightNative.Helpers
             return false;
         }
 
+        private static bool IsFrameDetachedMessage(Exception ex)
+        {
+            string message = ex?.Message ?? string.Empty;
+            return message.Contains("Frame was detached", StringComparison.OrdinalIgnoreCase)
+                || message.Contains("frame was detached", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool IsFrameScopedLocator(ILocator locator)
+        {
+            // Prefer the concrete frame-scope bit when available; otherwise fall
+            // back to the official enter-frame / any-frame control tokens in the
+            // locator's printed selector chain.
+            if (locator is Locator concrete)
+            {
+                return concrete.HasFrameScope();
+            }
+
+            string text = locator?.ToString() ?? string.Empty;
+            return FrameSelector.ContainsControl(text)
+                || text.Contains("iframe", StringComparison.OrdinalIgnoreCase)
+                || text.Contains("frameLocator", StringComparison.OrdinalIgnoreCase);
+        }
+
         private static async Task WaitHiddenAsync(ILocator locator, float? timeout)
         {
             int timeoutMs = TimeoutSettings.TimeoutMs(timeout);
             Stopwatch sw = Stopwatch.StartNew();
+
+            // Frame-scoped overlays (iframe body) can hang ElementHandles after the
+            // handler removes the iframe — treat resolve timeouts as hidden
+            // (ShouldWorkWhenOwnerFrameDetaches). Main-frame overlays must keep
+            // waiting on probe timeouts so ShouldWaitForHiddenByDefault2 still sees
+            // a single handler invocation and the official hide timeout message.
+            bool frameScoped = IsFrameScopedLocator(locator);
+            bool assumeVisibleOnTimeout = !frameScoped;
+
             while (true)
             {
                 // Check the wall clock before each probe so a hung visibility
@@ -316,13 +366,11 @@ namespace PlaywrightNative.Helpers
 
                 int queryMs = RemainingQueryMs(timeoutMs, sw);
 
-                // After the handler dismisses (e.g. removes an iframe), probes can
-                // time out while resolving the frame; treat that as hidden so
-                // ShouldWorkWhenOwnerFrameDetaches does not wait forever.
                 bool visible = await IsAnyVisibleAsync(
                     locator,
                     queryMs,
-                    assumeVisibleOnTimeout: false).ConfigureAwait(false);
+                    assumeVisibleOnTimeout,
+                    treatDetachedAsHidden: true).ConfigureAwait(false);
                 if (!visible)
                 {
                     return;
