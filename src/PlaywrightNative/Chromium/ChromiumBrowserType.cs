@@ -70,6 +70,11 @@ namespace PlaywrightNative.Chromium
             "--export-tagged-pdf",
             "--enable-automation",
 
+            // Headful Chromium blocks media.play() without a user gesture.
+            // Official Playwright historically shipped this switch so capability
+            // smoke (should play audio) advances currentTime under CI load.
+            "--autoplay-policy=no-user-gesture-required",
+
             // Official Playwright Chromium disables HttpsUpgrades so plain HTTP
             // navigations (e.g. http://non-existent.com via a test proxy) stay
             // HTTP. Without it, Chromium upgrades to HTTPS CONNECT and proxy

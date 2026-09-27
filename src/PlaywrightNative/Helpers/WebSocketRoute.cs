@@ -521,7 +521,22 @@ namespace PlaywrightNative.Helpers
                 }
             }
 
-            _ = WebSocketRouter.EvaluateDispatchAsync(_page, request);
+            // Resolve the creating frame before dispatch so sendToPage lands in
+            // the iframe that owns the socket (ShouldEmitCloseUponFrameDetach
+            // under WebKit Linux suite load otherwise only hit the main world).
+            try
+            {
+                await ResolveFrameAsync().ConfigureAwait(false);
+            }
+            catch (PlaywrightException)
+            {
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+
+            await WebSocketRouter.EvaluateDispatchAsync(_page, request, _frame)
+                .ConfigureAwait(false);
             FlushEarlyPage();
             _server?.FlushEarly();
         }

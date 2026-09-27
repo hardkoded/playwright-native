@@ -776,16 +776,31 @@ namespace PlaywrightNative.Helpers
         /// this after <see cref="EnqueueDispatchAsync"/>; <c>_seq</c> drops duplicates
         /// when a binding return already applied the payload.
         /// </summary>
-        internal static Task EvaluateDispatchAsync(IPage page, Dictionary<string, object> request)
+        /// <param name="page">Owning page.</param>
+        /// <param name="request">Dispatch payload.</param>
+        /// <param name="preferredFrame">Creating frame when known (iframe sockets).</param>
+        /// <returns>A task that completes when evaluate has been kicked off.</returns>
+        internal static async Task EvaluateDispatchAsync(
+            IPage page,
+            Dictionary<string, object> request,
+            IFrame preferredFrame = null)
         {
             if (page == null || request == null)
             {
-                return Task.CompletedTask;
+                return;
             }
 
             string json = JsonSerializer.Serialize(request);
             string script = "try{if(typeof globalThis.__pwWebSocketDispatch==='function')globalThis.__pwWebSocketDispatch(" + json + ")}catch(e){}";
-            return EvaluateWithoutAwaitingPromiseAsync(page, script);
+
+            // Prefer the creating frame so iframe-owned sockets receive sendToPage
+            // even when the main-world evaluate races ahead of child contexts.
+            if (preferredFrame != null && !preferredFrame.IsDetached)
+            {
+                await EvaluateOnFrameAsync(preferredFrame, script).ConfigureAwait(false);
+            }
+
+            await EvaluateWithoutAwaitingPromiseAsync(page, script).ConfigureAwait(false);
         }
 
         private static Task EvaluateWithoutAwaitingPromiseAsync(IPage page, string script)
