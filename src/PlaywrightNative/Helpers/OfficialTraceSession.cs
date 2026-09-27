@@ -1119,9 +1119,19 @@ namespace PlaywrightNative.Helpers
 
             try
             {
-                await Task.WhenAll(pending).ConfigureAwait(false);
+                // Bound the whole flush so a stuck BodyAsync / capture cannot hang
+                // StopChunk for the full NUnit budget (ShouldNotEmitAfterWithoutBefore).
+                Task all = Task.WhenAll(pending);
+                Task finished = await Task.WhenAny(all, Task.Delay(2_000)).ConfigureAwait(false);
+                if (finished == all)
+                {
+                    await all.ConfigureAwait(false);
+                }
             }
             catch (PlaywrightException)
+            {
+            }
+            catch (TimeoutException)
             {
             }
             catch (InvalidOperationException)
@@ -1303,8 +1313,15 @@ namespace PlaywrightNative.Helpers
                     string name;
                     using (ActionTrace.SuppressRecording())
                     {
-                        name = await page.EvaluateAsync<string>(
-                            "(() => { const b = document.querySelector('button'); return b ? (b.innerText || b.textContent || '') : ''; })()").ConfigureAwait(false);
+                        Task<string> nameTask = page.EvaluateAsync<string>(
+                            "(() => { const b = document.querySelector('button'); return b ? (b.innerText || b.textContent || '') : ''; })()");
+                        Task finished = await Task.WhenAny(nameTask, Task.Delay(1_000)).ConfigureAwait(false);
+                        if (finished != nameTask)
+                        {
+                            continue;
+                        }
+
+                        name = await nameTask.ConfigureAwait(false);
                     }
 
                     var children = new List<Dictionary<string, object>>();

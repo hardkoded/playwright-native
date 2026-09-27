@@ -793,14 +793,36 @@ namespace PlaywrightNative.Helpers
             string json = JsonSerializer.Serialize(request);
             string script = "try{if(typeof globalThis.__pwWebSocketDispatch==='function')globalThis.__pwWebSocketDispatch(" + json + ")}catch(e){}";
 
+            // Fire into every known context first so a hung frame.Evaluate cannot
+            // block iframe sendToPage (ShouldEmitCloseUponFrameDetach).
+            await EvaluateWithoutAwaitingPromiseAsync(page, script).ConfigureAwait(false);
+
             // Prefer the creating frame so iframe-owned sockets receive sendToPage
             // even when the main-world evaluate races ahead of child contexts.
             if (preferredFrame != null && !preferredFrame.IsDetached)
             {
-                await EvaluateOnFrameAsync(preferredFrame, script).ConfigureAwait(false);
+                try
+                {
+                    await EvaluateOnFrameAsync(preferredFrame, script)
+                        .WaitAsync(TimeSpan.FromMilliseconds(500))
+                        .ConfigureAwait(false);
+                }
+                catch (TimeoutException)
+                {
+                }
             }
+            else
+            {
+                foreach (IFrame frame in page.Frames)
+                {
+                    if (frame == null || frame.IsDetached || frame.ParentFrame == null)
+                    {
+                        continue;
+                    }
 
-            await EvaluateWithoutAwaitingPromiseAsync(page, script).ConfigureAwait(false);
+                    _ = EvaluateOnFrameAsync(frame, script);
+                }
+            }
         }
 
         private static Task EvaluateWithoutAwaitingPromiseAsync(IPage page, string script)
@@ -1166,6 +1188,13 @@ namespace PlaywrightNative.Helpers
             try
             {
                 await route.WaitUntilPageReadyAsync().ConfigureAwait(false);
+                if (!route.CreatedInMainFrame)
+                {
+                    // Resolve the creating iframe before ConnectToServer/Send so
+                    // the first dispatch already prefers the child world.
+                    await route.ResolveFrameAsync().ConfigureAwait(false);
+                }
+
                 Task task = handler(route);
                 if (task != null)
                 {

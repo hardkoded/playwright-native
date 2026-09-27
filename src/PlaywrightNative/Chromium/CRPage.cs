@@ -1747,11 +1747,28 @@ namespace PlaywrightNative.Chromium
                     && isolatedId.TryGetInt32(out int isolatedContextId))
                 {
                     CRExecutionContext writeContext = new CRExecutionContext(frameSession, isolatedContextId);
-                    await writeContext.EvaluateFunctionAsync<bool>(writeHtml, html).WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+                    int writeMs = RemainingWriteBudgetMs(timeout, startTicks);
+                    try
+                    {
+                        await writeContext.EvaluateFunctionAsync<bool>(writeHtml, html)
+                            .WaitAsync(TimeSpan.FromMilliseconds(writeMs))
+                            .ConfigureAwait(false);
+                    }
+                    catch (TimeoutException)
+                    {
+                        // Utility-world write can stall under Windows suite load with
+                        // large HTML (ShouldHaveANicePreviewForNonAsciiAttributesChildren).
+                        // Fall back to the main world before failing SetContent.
+                        await EvaluateFunctionInFrameAsync<bool>(frame, writeHtml, html)
+                            .WaitAsync(TimeSpan.FromMilliseconds(RemainingWriteBudgetMs(timeout, startTicks)))
+                            .ConfigureAwait(false);
+                    }
                 }
                 else
                 {
-                    await EvaluateFunctionInFrameAsync<bool>(frame, writeHtml, html).WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+                    await EvaluateFunctionInFrameAsync<bool>(frame, writeHtml, html)
+                        .WaitAsync(TimeSpan.FromMilliseconds(RemainingWriteBudgetMs(timeout, startTicks)))
+                        .ConfigureAwait(false);
                 }
 
                 // document.open destroys the main-world context. Wait briefly for a
@@ -1822,6 +1839,20 @@ namespace PlaywrightNative.Chromium
             finally
             {
                 frame.LifecycleChanged -= OnLifecycle;
+            }
+
+            static int RemainingWriteBudgetMs(int timeoutMs, long startedTicks)
+            {
+                if (timeoutMs == System.Threading.Timeout.Infinite)
+                {
+                    return 30_000;
+                }
+
+                int remaining = timeoutMs - (int)(Environment.TickCount64 - startedTicks);
+
+                // Keep a floor so a near-exhausted budget still gets one write attempt,
+                // and a ceiling so createIsolatedWorld's 5s wait cannot consume everything.
+                return Math.Clamp(remaining, 1_000, Math.Max(5_000, timeoutMs / 2));
             }
         }
 

@@ -3911,6 +3911,24 @@ namespace PlaywrightNative.WebKit
                 }
             }
 
+            // Include live frame contexts even when _frameContexts lagged
+            // (iframe WebSocket sendToPage under suite load).
+            foreach (WKFrame frame in _frameManager.Frames)
+            {
+                if (frame == null)
+                {
+                    continue;
+                }
+
+                if (TryGetFrameContext(frame, out WKExecutionContext frameContext)
+                    && frameContext != null
+                    && frameContext.ContextId != 0
+                    && !contextIds.Contains(frameContext.ContextId))
+                {
+                    contextIds.Add(frameContext.ContextId);
+                }
+            }
+
             foreach (int contextId in contextIds)
             {
                 try

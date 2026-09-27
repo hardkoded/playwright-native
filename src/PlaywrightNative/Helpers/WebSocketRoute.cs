@@ -335,7 +335,28 @@ namespace PlaywrightNative.Helpers
                 return;
             }
 
-            foreach (IFrame candidate in page.Frames)
+            // Under WebKit Linux suite load a stuck main-world evaluate used to
+            // starve iframe probes (ShouldEmitCloseUponFrameDetach). Probe
+            // children first for non-main sockets and bound each probe.
+            List<IFrame> candidates = new List<IFrame>();
+            foreach (IFrame frame in page.Frames)
+            {
+                if (frame == null || frame.IsDetached)
+                {
+                    continue;
+                }
+
+                if (!CreatedInMainFrame && frame.ParentFrame != null)
+                {
+                    candidates.Insert(0, frame);
+                }
+                else
+                {
+                    candidates.Add(frame);
+                }
+            }
+
+            foreach (IFrame candidate in candidates)
             {
                 if (candidate == null || candidate.IsDetached)
                 {
@@ -344,9 +365,16 @@ namespace PlaywrightNative.Helpers
 
                 try
                 {
-                    bool has = await candidate.EvaluateAsync<bool>(
+                    Task<bool> probe = candidate.EvaluateAsync<bool>(
                         "(id) => typeof globalThis.__pwWebSocketHas === 'function' && globalThis.__pwWebSocketHas(id)",
-                        _id).ConfigureAwait(false);
+                        _id);
+                    Task finished = await Task.WhenAny(probe, Task.Delay(250)).ConfigureAwait(false);
+                    if (finished != probe)
+                    {
+                        continue;
+                    }
+
+                    bool has = await probe.ConfigureAwait(false);
                     if (has)
                     {
                         _frame = candidate;
@@ -356,9 +384,38 @@ namespace PlaywrightNative.Helpers
                 catch (PlaywrightException)
                 {
                 }
+                catch (TimeoutException)
+                {
+                }
             }
 
-            _frame = CreatedInMainFrame ? page.MainFrame : _frame;
+            if (CreatedInMainFrame)
+            {
+                _frame = page.MainFrame;
+                return;
+            }
+
+            // Single-child fallback when the has-probe raced the socket map.
+            IFrame soleChild = null;
+            foreach (IFrame frame in page.Frames)
+            {
+                if (frame == null || frame.IsDetached || frame.ParentFrame == null)
+                {
+                    continue;
+                }
+
+                if (soleChild != null)
+                {
+                    return;
+                }
+
+                soleChild = frame;
+            }
+
+            if (soleChild != null)
+            {
+                _frame = soleChild;
+            }
         }
 
         private static IWebSocketFrame ToFrame(string data, bool binary)
