@@ -5049,9 +5049,20 @@ namespace PlaywrightNative.WebKit
                         return handle;
                     }
 
+                    // Inline content: inject via returnByValue (true), stash the
+                    // SCRIPT on window, then fetch the handle in a second evaluate.
+                    // Returning SCRIPT from evaluateHandle in one shot has wedged
+                    // Darwin WebKit under suite load the same way STYLE handles did
+                    // (AddScriptTagAsyncExecutesInlineContent 30s hang on mac shard4).
                     string contentLiteral = JsonSerializer.Serialize(content);
-                    string expression = $@"(() => {{
+                    string inlineSentinel = "__pwScriptInline_" + Guid.NewGuid().ToString("N");
+                    string inlineElementKey = inlineSentinel + "El";
+                    string inlineSentinelLiteral = JsonSerializer.Serialize(inlineSentinel);
+                    string inlineElementLiteral = JsonSerializer.Serialize(inlineElementKey);
+                    string inlineInject = $@"(() => {{
+                        window[{inlineSentinelLiteral}] = 0;
                         const script = document.createElement('script');
+                        window[{inlineElementLiteral}] = script;
                         script.type = {typeLiteral} || 'text/javascript';
                         script.text = {contentLiteral};
                         let error = null;
@@ -5059,9 +5070,24 @@ namespace PlaywrightNative.WebKit
                         document.head.appendChild(script);
                         if (error)
                             throw error;
-                        return script;
+                        window[{inlineSentinelLiteral}] = 1;
+                        return true;
                     }})()";
-                    IElementHandle contentHandle = await EvaluateElementHandleInFrameAsync(frame, expression).ConfigureAwait(false);
+                    await EvaluateInFrameAsync<object>(frame, inlineInject).ConfigureAwait(false);
+                    await WaitForSentinelInFrameAsync(
+                            frame,
+                            inlineSentinel,
+                            "Failed to inject inline script",
+                            timeoutMs: 5_000)
+                        .ConfigureAwait(false);
+                    IElementHandle contentHandle = await EvaluateElementHandleInFrameAsync(
+                            frame,
+                            $"window[{inlineElementLiteral}]")
+                        .ConfigureAwait(false);
+                    await EvaluateInFrameAsync<object>(
+                        frame,
+                        $"(() => {{ delete window[{inlineSentinelLiteral}]; delete window[{inlineElementLiteral}]; }})()")
+                        .ConfigureAwait(false);
 
                     // Official extra round-trip so async CSP console errors can win the race.
                     await EvaluateInFrameAsync<object>(frame, "true").ConfigureAwait(false);
