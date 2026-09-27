@@ -1226,6 +1226,11 @@ namespace PlaywrightNative
             string format = ScreenshotFormat.ToProtocol(type);
             int? resolvedQuality = ScreenshotValidate.ResolvedQuality(type, quality);
             double deviceScale = _context is ChromiumBrowserContext crContext ? crContext.DeviceScaleFactor : 1;
+            if (_emulatedDeviceScaleFactor > deviceScale)
+            {
+                deviceScale = _emulatedDeviceScaleFactor;
+            }
+
             double clipScale = ScreenshotScaleHelper.ClipScale(scale, deviceScale);
             bool captureFullPage = fullPage ?? false;
             ScreenshotClip resolvedClip;
@@ -1364,6 +1369,11 @@ namespace PlaywrightNative
             string format = ScreenshotFormat.ToProtocol(type);
             int? resolvedQuality = ScreenshotValidate.ResolvedQuality(type, quality);
             double deviceScale = _context is ChromiumBrowserContext crContext ? crContext.DeviceScaleFactor : 1;
+            if (_emulatedDeviceScaleFactor > deviceScale)
+            {
+                deviceScale = _emulatedDeviceScaleFactor;
+            }
+
             double clipScale = ScreenshotScaleHelper.ClipScale(scale, deviceScale);
             ScreenshotOptions options = new()
             {

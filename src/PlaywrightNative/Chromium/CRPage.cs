@@ -4189,7 +4189,7 @@ namespace PlaywrightNative.Chromium
 
             try
             {
-                return await CaptureWithNavigationRetryAsync(parameters).ConfigureAwait(false);
+                return await CaptureWithNavigationRetryAsync(parameters, options.Clip).ConfigureAwait(false);
             }
             finally
             {
@@ -4200,16 +4200,20 @@ namespace PlaywrightNative.Chromium
             }
         }
 
-        internal async Task<byte[]> CaptureWithNavigationRetryAsync(System.Collections.Generic.Dictionary<string, object> parameters)
+        internal async Task<byte[]> CaptureWithNavigationRetryAsync(
+            System.Collections.Generic.Dictionary<string, object> parameters,
+            ScreenshotClip clip = null)
         {
             const string navigating = "Cannot take a screenshot while page is navigating";
+            TimeSpan captureTimeout = CaptureScreenshotTimeout(clip);
+            bool largeCapture = IsLargeScreenshotCapture(clip);
             for (int attempt = 0; ; attempt++)
             {
                 try
                 {
                     JsonElement? response = await _client.SendAsync("Page.captureScreenshot", parameters)
                         .WithTimeout(
-                            TimeSpan.FromSeconds(8),
+                            captureTimeout,
                             _ => new TimeoutException(navigating))
                         .ConfigureAwait(false);
                     if (!response.HasValue || !response.Value.TryGetProperty("data", out JsonElement data))
@@ -4219,6 +4223,14 @@ namespace PlaywrightNative.Chromium
 
                     string base64 = data.GetString();
                     return string.IsNullOrEmpty(base64) ? Array.Empty<byte>() : Convert.FromBase64String(base64);
+                }
+                catch (TimeoutException) when (largeCapture)
+                {
+                    // Large full-page captures (DSF × tall document) often exceed
+                    // the short mid-nav probe. Retrying stacks concurrent CDP
+                    // captures and can OOM/crash the page on Windows
+                    // (ShouldThrowIfScreenshotSizeIsTooLargeWithDeviceScaleFactor).
+                    throw;
                 }
                 catch (Exception ex) when (
                     ex is TimeoutException
@@ -4238,6 +4250,25 @@ namespace PlaywrightNative.Chromium
                     await Task.Delay(50).ConfigureAwait(false);
                 }
             }
+
+            // Mid-nav probe for small captures; tall/full-page shots need headroom
+            // so Windows Chromium can finish encoding without stacking retries.
+            static TimeSpan CaptureScreenshotTimeout(ScreenshotClip shot)
+            {
+                if (shot == null || shot.Width <= 0 || shot.Height <= 0)
+                {
+                    return TimeSpan.FromSeconds(8);
+                }
+
+                double area = Math.Max(shot.Width, 1) * Math.Max(shot.Height, 1);
+
+                // ~8s baseline; grow toward 60s for ~500×16383 device-scale pages.
+                int seconds = (int)Math.Clamp(8 + (area / 2_000_000.0), 8, 60);
+                return TimeSpan.FromSeconds(seconds);
+            }
+
+            static bool IsLargeScreenshotCapture(ScreenshotClip shot)
+                => shot != null && (shot.Width >= 4_000 || shot.Height >= 4_000);
         }
 
         /// <summary>
