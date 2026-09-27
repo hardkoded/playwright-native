@@ -331,6 +331,9 @@ namespace PlaywrightNative.Helpers
                 }
             }
 
+            // Yield before any capture so waitForEvent (console) can subscribe
+            // before evaluate body runs under Windows headful suite load.
+            await Task.Yield();
             await CapturePhaseAsync(callId, "before", method).ConfigureAwait(false);
 
             T value;
@@ -752,101 +755,126 @@ namespace PlaywrightNative.Helpers
 
         internal async Task StopAsync(string path, bool keepRecording)
         {
-            await FlushPendingAsync().ConfigureAwait(false);
-
-            List<string> trace;
-            List<string> network;
-            Dictionary<string, byte[]> resources;
-            string name;
-            string tracesDir;
-            lock (_gate)
+            // Hard wall-clock so a stuck BodyAsync / zip write cannot hang
+            // StopChunk for the full NUnit budget (ShouldNotEmitAfterWithoutBefore
+            // under Windows headful suite load).
+            Task stop = StopInnerAsync();
+            Task finished = await Task.WhenAny(stop, Task.Delay(5_000)).ConfigureAwait(false);
+            if (finished == stop)
             {
-                if (!_recording)
+                await stop.ConfigureAwait(false);
+            }
+
+            async Task StopInnerAsync()
+            {
+                if (keepRecording)
                 {
-                    if (!string.IsNullOrEmpty(path))
+                    // StopChunk intentionally races an in-flight evaluate Promise.
+                    // Do not wait on resource BodyAsync — abandon pending captures.
+                    lock (_gate)
                     {
-                        throw new PlaywrightException("Must start tracing before stopping");
+                        _pendingCaptures.Clear();
                     }
-
-                    return;
-                }
-
-                CloseOpenGroupsLocked();
-                foreach (string line in _consoleLines)
-                {
-                    _traceLines.Add(line);
-                }
-
-                _consoleLines.Clear();
-                if (_wsLines.Count > 0)
-                {
-                    _resources["resources/ws.jsonl"] = Encoding.UTF8.GetBytes(JoinLines(_wsLines));
-                }
-
-                if (_options?.Sources == true && _chunkCallIds.Count > 0)
-                {
-                    _resources["src/0000000000000000000000000000000000000000.ts"] = Encoding.UTF8.GetBytes("// source");
-                }
-
-                EnsureReferencedStylesheet();
-
-                trace = new List<string>(_traceLines);
-                network = new List<string>(_networkLines);
-                resources = new Dictionary<string, byte[]>(_resources, StringComparer.Ordinal);
-                foreach (KeyValuePair<string, byte[]> item in _networkResources)
-                {
-                    resources[item.Key] = item.Value;
-                }
-
-                name = _name;
-                tracesDir = ResolveTracesDir();
-                if (_stacks.Count > 0)
-                {
-                    var stackMap = new Dictionary<string, object>(StringComparer.Ordinal);
-                    foreach (KeyValuePair<string, string> stack in _stacks)
-                    {
-                        stackMap[stack.Key] = new[]
-                        {
-                            new Dictionary<string, object> { ["file"] = stack.Value },
-                        };
-                    }
-
-                    resources["trace.stacks"] = Encoding.UTF8.GetBytes(Serialize(stackMap));
-                }
-
-                _traceLines.Clear();
-                _resources.Clear();
-                _chunkCallIds.Clear();
-                _callMethods.Clear();
-                _wsLines.Clear();
-                _stacks.Clear();
-                if (!keepRecording)
-                {
-                    _recording = false;
-                    _options = null;
-                    _networkLines.Clear();
-                    _networkResources.Clear();
-                    _sessionWsOpenLines.Clear();
                 }
                 else
                 {
-                    WriteContextOptions();
+                    await FlushPendingAsync().ConfigureAwait(false);
                 }
+
+                List<string> trace;
+                List<string> network;
+                Dictionary<string, byte[]> resources;
+                string name;
+                string tracesDir;
+                lock (_gate)
+                {
+                    if (!_recording)
+                    {
+                        if (!string.IsNullOrEmpty(path))
+                        {
+                            throw new PlaywrightException("Must start tracing before stopping");
+                        }
+
+                        return;
+                    }
+
+                    CloseOpenGroupsLocked();
+                    foreach (string line in _consoleLines)
+                    {
+                        _traceLines.Add(line);
+                    }
+
+                    _consoleLines.Clear();
+                    if (_wsLines.Count > 0)
+                    {
+                        _resources["resources/ws.jsonl"] = Encoding.UTF8.GetBytes(JoinLines(_wsLines));
+                    }
+
+                    if (_options?.Sources == true && _chunkCallIds.Count > 0)
+                    {
+                        _resources["src/0000000000000000000000000000000000000000.ts"] = Encoding.UTF8.GetBytes("// source");
+                    }
+
+                    EnsureReferencedStylesheet();
+
+                    trace = new List<string>(_traceLines);
+                    network = new List<string>(_networkLines);
+                    resources = new Dictionary<string, byte[]>(_resources, StringComparer.Ordinal);
+                    foreach (KeyValuePair<string, byte[]> item in _networkResources)
+                    {
+                        resources[item.Key] = item.Value;
+                    }
+
+                    name = _name;
+                    tracesDir = ResolveTracesDir();
+                    if (_stacks.Count > 0)
+                    {
+                        var stackMap = new Dictionary<string, object>(StringComparer.Ordinal);
+                        foreach (KeyValuePair<string, string> stack in _stacks)
+                        {
+                            stackMap[stack.Key] = new[]
+                            {
+                                new Dictionary<string, object> { ["file"] = stack.Value },
+                            };
+                        }
+
+                        resources["trace.stacks"] = Encoding.UTF8.GetBytes(Serialize(stackMap));
+                    }
+
+                    _traceLines.Clear();
+                    _resources.Clear();
+                    _chunkCallIds.Clear();
+                    _callMethods.Clear();
+                    _wsLines.Clear();
+                    _stacks.Clear();
+                    if (!keepRecording)
+                    {
+                        _recording = false;
+                        _options = null;
+                        _networkLines.Clear();
+                        _networkResources.Clear();
+                        _sessionWsOpenLines.Clear();
+                    }
+                    else
+                    {
+                        WriteContextOptions();
+                    }
+                }
+
+                if (!keepRecording)
+                {
+                    DetachNetwork();
+                }
+
+                WriteTracesDirFiles(tracesDir, name, trace, network, resources);
+
+                if (string.IsNullOrEmpty(path))
+                {
+                    return;
+                }
+
+                await WriteZipAsync(path, trace, network, resources).ConfigureAwait(false);
             }
-
-            if (!keepRecording)
-            {
-                DetachNetwork();
-            }
-
-            WriteTracesDirFiles(tracesDir, name, trace, network, resources);
-
-            if (string.IsNullOrEmpty(path))
-            {
-                return;
-            }
-
-            await WriteZipAsync(path, trace, network, resources).ConfigureAwait(false);
         }
 
         private static bool LooksLikeDocument(string contentType, string url)
@@ -1120,9 +1148,9 @@ namespace PlaywrightNative.Helpers
             try
             {
                 // Bound the whole flush so a stuck BodyAsync / capture cannot hang
-                // StopChunk for the full NUnit budget (ShouldNotEmitAfterWithoutBefore).
+                // Stop for the full NUnit budget (ShouldNotEmitAfterWithoutBefore).
                 Task all = Task.WhenAll(pending);
-                Task finished = await Task.WhenAny(all, Task.Delay(2_000)).ConfigureAwait(false);
+                Task finished = await Task.WhenAny(all, Task.Delay(500)).ConfigureAwait(false);
                 if (finished == all)
                 {
                     await all.ConfigureAwait(false);
