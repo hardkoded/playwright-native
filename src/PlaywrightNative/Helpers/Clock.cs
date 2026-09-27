@@ -336,13 +336,15 @@ namespace PlaywrightNative.Helpers
             string poll = "(globalThis[" + markerJson + "])";
             Stopwatch sw = Stopwatch.StartNew();
 
-            // Give Darwin WebKit a beat to drain the kickoff builtins.setTimeout(0)
+            // Give Darwin WebKit time to drain the kickoff builtins.setTimeout(0)
             // macrotask before Runtime.evaluate polls. Under suite load, a tight
-            // poll loop can starve embedder timers so runFor/pauseAt never finish
-            // (RunForShouldAcceptMinuteSecondString 30s hang on macOS WebKit).
-            await Task.Delay(50).ConfigureAwait(false);
+            // poll loop starves embedder timers so runFor/pauseAt never finish
+            // (RunForShouldAcceptMinuteSecondString 30s hang on macOS WebKit,
+            // which then leaves a wedged MiniBrowser and cascades into later
+            // Launch/GoTo/Click timeouts on the same shard).
+            await Task.Delay(200).ConfigureAwait(false);
 
-            int pollDelayMs = 50;
+            int pollDelayMs = 150;
             while (sw.ElapsedMilliseconds < 60_000)
             {
                 string status = await evaluateStringAsync(poll).ConfigureAwait(false);
@@ -359,9 +361,9 @@ namespace PlaywrightNative.Helpers
                 // Back off while the marker is empty so protocol evaluates do not
                 // monopolize the WIP run loop ahead of embedder.setTimeout.
                 await Task.Delay(pollDelayMs).ConfigureAwait(false);
-                if (pollDelayMs < 100)
+                if (pollDelayMs < 300)
                 {
-                    pollDelayMs = Math.Min(100, pollDelayMs + 10);
+                    pollDelayMs = Math.Min(300, pollDelayMs + 50);
                 }
             }
 
