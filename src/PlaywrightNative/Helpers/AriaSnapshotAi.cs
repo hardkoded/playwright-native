@@ -470,6 +470,7 @@ namespace PlaywrightNative.Helpers
                     {
                         childYaml = await CaptureActiveDataIframeYamlAsync(
                             page,
+                            frame,
                             depth,
                             boxes,
                             lineDepth + 1).ConfigureAwait(false);
@@ -563,11 +564,14 @@ namespace PlaywrightNative.Helpers
 
                 // Darwin: aria-ref enter-frame can miss after FocusAsync while CSS
                 // FrameLocator still resolves (ShouldSupportManyPropertiesOnIframes).
+                // Scope to <paramref name="frame"/> — page-level FrameLocator picks
+                // the first top-level frame and can re-stitch a frameset child into
+                // a nested srcdoc iframe (ShouldStitchIframesInsideAFramesetFrame).
                 if (enterRoot == null
                     && await IframeRefSrcIsDataAsync(frame, ariaRef, deadlineClock, budgetMs).ConfigureAwait(false))
                 {
                     enterRoot = await RaceOrDefaultAsync(
-                        () => page.FrameLocator("iframe, frame").Locator("body, frameset")
+                        () => frame.FrameLocator("iframe, frame").Locator("body, frameset")
                             .ElementHandleAsync(Math.Min(800f, RemainingMs(deadlineClock, budgetMs))),
                         deadlineClock,
                         Math.Min(900, RemainingMs(deadlineClock, budgetMs)),
@@ -691,11 +695,22 @@ namespace PlaywrightNative.Helpers
         /// </summary>
         private static async Task<string> CaptureActiveDataIframeYamlAsync(
             IPage page,
+            IFrame ownerFrame,
             int? depth,
             bool boxes,
             int startDepth)
         {
             if (page == null || page.IsClosed)
+            {
+                return null;
+            }
+
+            // Scope CSS FrameLocator to the iframe's owner document — page-level
+            // FrameLocator picks the first top-level frame and can re-stitch a
+            // frameset child into a nested srcdoc iframe
+            // (ShouldStitchIframesInsideAFramesetFrame).
+            IFrame scope = ownerFrame ?? page.MainFrame;
+            if (scope == null || scope.IsDetached)
             {
                 return null;
             }
@@ -712,7 +727,7 @@ namespace PlaywrightNative.Helpers
                     return focused;
                 }
 
-                IElementHandle enterRoot = await page.FrameLocator("iframe, frame")
+                IElementHandle enterRoot = await scope.FrameLocator("iframe, frame")
                     .Locator("body, frameset")
                     .ElementHandleAsync(2_000f)
                     .ConfigureAwait(false);
@@ -1175,7 +1190,10 @@ namespace PlaywrightNative.Helpers
                     if (enterRoot == null
                         && await IframeRefSrcIsDataAsync(frame, ariaRef, Stopwatch.StartNew(), 500).ConfigureAwait(false))
                     {
-                        enterRoot = await page.FrameLocator("iframe, frame").Locator("body, frameset")
+                        // Nested stitch must stay scoped to <paramref name="frame"/> —
+                        // page FrameLocator would grab the top-level frameset child
+                        // (ShouldStitchIframesInsideAFramesetFrame).
+                        enterRoot = await frame.FrameLocator("iframe, frame").Locator("body, frameset")
                             .ElementHandleAsync(800).ConfigureAwait(false);
                     }
 

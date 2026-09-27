@@ -3795,14 +3795,22 @@ namespace PlaywrightNative.WebKit
         /// <param name="state">The load state to wait for.</param>
         /// <param name="timeout">Timeout in milliseconds. <c>0</c> waits forever.</param>
         /// <returns>A task that completes when the state is reached.</returns>
-        internal Task WaitForFrameLoadStateAsync(WKFrame frame, LoadState state, float? timeout)
+        internal async Task WaitForFrameLoadStateAsync(WKFrame frame, LoadState state, float? timeout)
         {
             if (frame == null || frame.ParentFrame == null)
             {
-                return WaitForLoadStateAsync(state, timeout);
+                await WaitForLoadStateAsync(state, timeout).ConfigureAwait(false);
+                return;
             }
 
-            return frame.WaitForLoadStateAsync(state, timeout, "frame.waitForLoadState");
+            // about:blank child iframes can finish load before frame load events
+            // are subscribed (ShouldResolveImmediatelyWhenAlreadyLoaded).
+            IFrame publicFrame = GetOrCreateFrame(frame);
+            await LoadStateSeed.TryFromDocumentAsync(publicFrame, frame.OnLifecycleEvent)
+                .ConfigureAwait(false);
+
+            await frame.WaitForLoadStateAsync(state, timeout, "frame.waitForLoadState")
+                .ConfigureAwait(false);
         }
 
         /// <summary>
