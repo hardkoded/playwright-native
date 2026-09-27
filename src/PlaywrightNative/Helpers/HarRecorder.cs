@@ -3086,6 +3086,13 @@ namespace PlaywrightNative.Helpers
                 }
                 catch (PlaywrightException)
                 {
+                }
+
+                // AwaitPageJsonAsync returns default on timeout (not an exception),
+                // so always fall back to TitleAsync when the HAR page title is still
+                // empty (ShouldHavePagesInPersistentContext under Windows load).
+                if (string.IsNullOrEmpty(Title))
+                {
                     try
                     {
                         string title = await AwaitPageTitleAsync().ConfigureAwait(false);
@@ -3219,7 +3226,7 @@ namespace PlaywrightNative.Helpers
                 Task<string> task = Page.TitleAsync();
                 try
                 {
-                    return await task.WaitAsync(TimeSpan.FromMilliseconds(250)).ConfigureAwait(false);
+                    return await task.WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
                 }
                 catch (TimeoutException)
                 {
