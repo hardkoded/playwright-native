@@ -2809,8 +2809,12 @@ namespace PlaywrightNative.Chromium
                     || candidate.StartsWith("about:blank?", StringComparison.OrdinalIgnoreCase)
                     || candidate.StartsWith("about:blank#", StringComparison.OrdinalIgnoreCase);
 
-            // Confirms a data: document is usable when FrameNavigated/commit lag
-            // behind Page.navigate (persistent context under Windows suite load).
+            // Confirms a data: document is usable when FrameNavigated lags behind
+            // Page.navigate (persistent context under Windows suite load).
+            // Do not treat LifecycleEvents.Contains("commit") as landed — that flag
+            // survives from the prior about:blank document until FrameNavigated
+            // clears it, and would make GoTo return while querySelector still
+            // sees a blank DOM (PressAsyncDispatchesKey / FillAsyncSetsInputValue).
             async Task<bool> TryConfirmDataDocumentReadyAsync(Frame targetFrame, string targetUrl)
             {
                 if (targetFrame == null || string.IsNullOrEmpty(targetUrl)
@@ -2819,15 +2823,15 @@ namespace PlaywrightNative.Chromium
                     return false;
                 }
 
-                for (int attempt = 0; attempt < 40; attempt++)
+                for (int attempt = 0; attempt < 80; attempt++)
                 {
                     if (_crashed || _closedTcs.Task.IsCompleted)
                     {
                         return false;
                     }
 
-                    if (targetFrame.LifecycleEvents.Contains("commit")
-                        || string.Equals(
+                    // FrameNavigated already published the data: URL — usable.
+                    if (string.Equals(
                             NavigationTimeout.WithoutUserInfo(targetFrame.Url),
                             NavigationTimeout.WithoutUserInfo(targetUrl),
                             StringComparison.Ordinal)
@@ -3181,18 +3185,18 @@ namespace PlaywrightNative.Chromium
                 // about:blank so LifecycleEvents matches what GoTo promised
                 // (GoToShouldClearLifecycleOnNewNavigation).
                 //
-                // Require evidence the navigation landed (commit, DocumentId, frame
-                // URL already data:, or document.readyState via evaluate) — without
-                // that, replaying load returns GoTo while the browser is still on
-                // about:blank and QuerySelector misses the new DOM
-                // (FillAsyncSetsInputValue on Windows CI). Do not require commit AND
-                // DocumentId together: FrameNavigated can race Page.navigate under
-                // persistent+HAR and same-loader re-delivers may skip a fresh commit
-                // (ShouldHavePagesInPersistentContext). When protocol events lag on
-                // persistent Windows, confirm via readyState so GoTo cannot hang the
-                // full navigation timeout (DialogAcceptShouldWork).
-                bool dataNavigationLanded = frame.LifecycleEvents.Contains("commit")
-                    || (!string.IsNullOrEmpty(expectedDocumentId)
+                // Require evidence the *new* document landed (DocumentId from
+                // Page.navigate, frame URL already data:, or location.href +
+                // readyState via evaluate). Do NOT treat LifecycleEvents "commit"
+                // alone as landed — that event remains from the prior about:blank
+                // until FrameNavigated clears it, and replaying load then returns
+                // GoTo while QuerySelector still misses the new DOM
+                // (PressAsyncDispatchesKey / FillAsyncSetsInputValue on Windows).
+                // When protocol events lag on persistent Windows, confirm via
+                // readyState so GoTo cannot hang the full navigation timeout
+                // (DialogAcceptShouldWork).
+                bool dataNavigationLanded =
+                    (!string.IsNullOrEmpty(expectedDocumentId)
                         && string.Equals(frame.DocumentId, expectedDocumentId, StringComparison.Ordinal))
                     || string.Equals(
                         NavigationTimeout.WithoutUserInfo(frame.Url),
