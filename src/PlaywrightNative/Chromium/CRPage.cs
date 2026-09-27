@@ -2809,6 +2809,61 @@ namespace PlaywrightNative.Chromium
                     || candidate.StartsWith("about:blank?", StringComparison.OrdinalIgnoreCase)
                     || candidate.StartsWith("about:blank#", StringComparison.OrdinalIgnoreCase);
 
+            // Confirms a data: document is usable when FrameNavigated/commit lag
+            // behind Page.navigate (persistent context under Windows suite load).
+            async Task<bool> TryConfirmDataDocumentReadyAsync(Frame targetFrame, string targetUrl)
+            {
+                if (targetFrame == null || string.IsNullOrEmpty(targetUrl)
+                    || !targetUrl.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+                {
+                    return false;
+                }
+
+                for (int attempt = 0; attempt < 40; attempt++)
+                {
+                    if (_crashed || _closedTcs.Task.IsCompleted)
+                    {
+                        return false;
+                    }
+
+                    if (targetFrame.LifecycleEvents.Contains("commit")
+                        || string.Equals(
+                            NavigationTimeout.WithoutUserInfo(targetFrame.Url),
+                            NavigationTimeout.WithoutUserInfo(targetUrl),
+                            StringComparison.Ordinal)
+                        || (!string.IsNullOrEmpty(targetFrame.Url)
+                            && targetFrame.Url.StartsWith("data:", StringComparison.OrdinalIgnoreCase)))
+                    {
+                        return true;
+                    }
+
+                    try
+                    {
+                        string href = await EvaluateAsync<string>("location.href").ConfigureAwait(false);
+                        string readyState = await EvaluateAsync<string>("document.readyState").ConfigureAwait(false);
+                        bool hrefIsData = !string.IsNullOrEmpty(href)
+                            && href.StartsWith("data:", StringComparison.OrdinalIgnoreCase);
+                        bool ready = string.Equals(readyState, "interactive", StringComparison.Ordinal)
+                            || string.Equals(readyState, "complete", StringComparison.Ordinal);
+                        if (hrefIsData && ready)
+                        {
+                            return true;
+                        }
+                    }
+                    catch (PlaywrightException)
+                    {
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                        return false;
+                    }
+
+                    await Task.Delay(25).ConfigureAwait(false);
+                }
+
+                return false;
+            }
+
             url = NavigationTimeout.CompleteUserUrl(url);
             ThrowIfWebUiWouldCrashIsolatedContext();
             referrer = NavigationTimeout.ReferrerFromExtraHeaders(referrer, _networkManager.ExtraHttpHeaders);
@@ -3126,13 +3181,16 @@ namespace PlaywrightNative.Chromium
                 // about:blank so LifecycleEvents matches what GoTo promised
                 // (GoToShouldClearLifecycleOnNewNavigation).
                 //
-                // Require evidence the navigation landed (commit, DocumentId, or frame
-                // URL already data:) — without that, replaying load returns GoTo while
-                // the browser is still on about:blank and QuerySelector misses the
-                // new DOM (FillAsyncSetsInputValue on Windows CI). Do not require
-                // commit AND DocumentId together: FrameNavigated can race Page.navigate
-                // under persistent+HAR and same-loader re-delivers may skip a fresh
-                // commit (ShouldHavePagesInPersistentContext).
+                // Require evidence the navigation landed (commit, DocumentId, frame
+                // URL already data:, or document.readyState via evaluate) — without
+                // that, replaying load returns GoTo while the browser is still on
+                // about:blank and QuerySelector misses the new DOM
+                // (FillAsyncSetsInputValue on Windows CI). Do not require commit AND
+                // DocumentId together: FrameNavigated can race Page.navigate under
+                // persistent+HAR and same-loader re-delivers may skip a fresh commit
+                // (ShouldHavePagesInPersistentContext). When protocol events lag on
+                // persistent Windows, confirm via readyState so GoTo cannot hang the
+                // full navigation timeout (DialogAcceptShouldWork).
                 bool dataNavigationLanded = frame.LifecycleEvents.Contains("commit")
                     || (!string.IsNullOrEmpty(expectedDocumentId)
                         && string.Equals(frame.DocumentId, expectedDocumentId, StringComparison.Ordinal))
@@ -3145,14 +3203,22 @@ namespace PlaywrightNative.Chromium
                 if (!string.IsNullOrEmpty(url)
                     && url.StartsWith("data:", StringComparison.OrdinalIgnoreCase)
                     && !networkIdle
-                    && dataNavigationLanded
                     && !frame.LifecycleEvents.Contains(targetLifecycleEvent))
                 {
-                    frame.Url = NavigationTimeout.PreserveUserInfo(url, frame.Url);
-                    frame.OnLifecycleEvent("DOMContentLoaded");
-                    frame.OnLifecycleEvent("load");
-                    ensureLifecycleOnExit = true;
-                    return;
+                    if (!dataNavigationLanded)
+                    {
+                        dataNavigationLanded = await TryConfirmDataDocumentReadyAsync(frame, url)
+                            .ConfigureAwait(false);
+                    }
+
+                    if (dataNavigationLanded)
+                    {
+                        frame.Url = NavigationTimeout.PreserveUserInfo(url, frame.Url);
+                        frame.OnLifecycleEvent("DOMContentLoaded");
+                        frame.OnLifecycleEvent("load");
+                        ensureLifecycleOnExit = true;
+                        return;
+                    }
                 }
 
                 using var cts = new System.Threading.CancellationTokenSource(waitMs);
