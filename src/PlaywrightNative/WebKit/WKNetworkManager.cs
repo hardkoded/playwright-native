@@ -41,6 +41,11 @@ namespace PlaywrightNative.WebKit
         private readonly WKTargetSession _session;
         private readonly WKPage _page;
         private readonly ConcurrentDictionary<string, WKRequest> _requestsById = new();
+
+        // Navigations whose loadingFinished raced ahead of Response — removed from
+        // _requestsById so WebKit can reuse the requestId, but kept here so a late
+        // responseReceived / redirect willBeSent can still attach Response + DONE.
+        private readonly ConcurrentDictionary<string, WKRequest> _deferredNavigationFinished = new();
         private readonly ConcurrentDictionary<string, WKWebSocket> _webSockets = new();
         private readonly List<WKRouteEntry> _routes = new();
         private readonly ConcurrentDictionary<string, JsonElement> _requestIdToRequestWillBeSent = new();
@@ -74,9 +79,8 @@ namespace PlaywrightNative.WebKit
         internal void Dispose()
         {
             _session.MessageReceived -= OnMessage;
-            foreach (KeyValuePair<string, WKRequest> pair in _requestsById)
+            foreach (WKRequest request in EnumerateTrackedRequests())
             {
-                WKRequest request = pair.Value;
                 if (request == null)
                 {
                     continue;
@@ -97,6 +101,9 @@ namespace PlaywrightNative.WebKit
                     _page.OnRequestFinished(request);
                 }
             }
+
+            _requestsById.Clear();
+            _deferredNavigationFinished.Clear();
         }
 
         /// <summary>
@@ -105,10 +112,13 @@ namespace PlaywrightNative.WebKit
         /// <param name="error">The target-closed error.</param>
         internal void AbortInflightClosed(Exception error)
         {
-            foreach (KeyValuePair<string, WKRequest> pair in _requestsById)
+            foreach (WKRequest request in EnumerateTrackedRequests())
             {
-                pair.Value?.AbortClosed(error);
+                request?.AbortClosed(error);
             }
+
+            _requestsById.Clear();
+            _deferredNavigationFinished.Clear();
         }
 
         /// <summary>
@@ -533,6 +543,34 @@ namespace PlaywrightNative.WebKit
             System.Console.Error.WriteLine($"[WKNetworkManager] Route handler error: {ex}");
         }
 
+        private IEnumerable<WKRequest> EnumerateTrackedRequests()
+        {
+            foreach (KeyValuePair<string, WKRequest> pair in _requestsById)
+            {
+                yield return pair.Value;
+            }
+
+            foreach (KeyValuePair<string, WKRequest> pair in _deferredNavigationFinished)
+            {
+                yield return pair.Value;
+            }
+        }
+
+        private bool TryTakeRequest(string requestId, out WKRequest request)
+        {
+            if (_requestsById.TryRemove(requestId, out request))
+            {
+                _deferredNavigationFinished.TryRemove(requestId, out _);
+                return true;
+            }
+
+            return _deferredNavigationFinished.TryRemove(requestId, out request);
+        }
+
+        private bool TryGetRequest(string requestId, out WKRequest request)
+            => _requestsById.TryGetValue(requestId, out request)
+                || _deferredNavigationFinished.TryGetValue(requestId, out request);
+
         private void OnMessage(string method, JsonElement? parameters)
         {
             switch (method)
@@ -736,7 +774,7 @@ namespace PlaywrightNative.WebKit
             if (p.TryGetProperty("redirectResponse", out JsonElement redirectResponse)
                 && redirectResponse.ValueKind == JsonValueKind.Object)
             {
-                if (_requestsById.TryRemove(requestId, out WKRequest existingRequest))
+                if (TryTakeRequest(requestId, out WKRequest existingRequest))
                 {
                     _handledIntercepts.TryRemove(requestId, out _);
 
@@ -889,13 +927,17 @@ namespace PlaywrightNative.WebKit
             // Service-worker (and other non-intercepted) responses: willBeSent was
             // buffered while interception was enabled, but requestIntercepted never
             // arrives. Materialize the request without a route, matching wkPage.ts.
+            // Skip when the id is only parked in the deferred-finished map (loadingFinished
+            // raced ahead of Response) — rematerializing would orphan that waiter.
             if (!_requestsById.ContainsKey(requestId)
+                && !_deferredNavigationFinished.ContainsKey(requestId)
                 && _requestIdToRequestWillBeSent.TryRemove(requestId, out JsonElement bufferedWillBeSent))
             {
                 CreateRequestFromWillBeSent(bufferedWillBeSent, allowRoute: false);
             }
 
-            if (!_requestsById.TryGetValue(requestId, out WKRequest request))
+            if (!_requestsById.TryGetValue(requestId, out WKRequest request)
+                && !_deferredNavigationFinished.TryRemove(requestId, out request))
             {
                 return;
             }
@@ -993,7 +1035,7 @@ namespace PlaywrightNative.WebKit
             // without DONE).
             if (ResponseHeaders.IsRedirectStatus(status))
             {
-                _requestsById.TryRemove(requestId, out _);
+                TryTakeRequest(requestId, out _);
                 _handledIntercepts.TryRemove(requestId, out _);
                 RaiseRequestFinished(publicRequest);
                 if (publicRequest != request)
@@ -1010,7 +1052,7 @@ namespace PlaywrightNative.WebKit
             // requestfinished now that the response is public.
             if (publicRequest.IsFinishWaiterCompleted())
             {
-                _requestsById.TryRemove(requestId, out _);
+                TryTakeRequest(requestId, out _);
                 _handledIntercepts.TryRemove(requestId, out _);
                 RaiseRequestFinished(publicRequest);
                 if (publicRequest != request)
@@ -1043,7 +1085,7 @@ namespace PlaywrightNative.WebKit
                 return;
             }
 
-            if (!_requestsById.TryGetValue(requestId, out WKRequest request))
+            if (!_requestsById.TryRemove(requestId, out WKRequest request))
             {
                 return;
             }
@@ -1062,13 +1104,13 @@ namespace PlaywrightNative.WebKit
             RaiseRequestFinished(request);
 
             // Navigation requestfinished is deferred while Response is null
-            // (WKPage.OnRequestFinished). Keep the entry so a late
-            // responseReceived or redirect willBeSent can still attach the
-            // Response and emit DONE — TryRemove here would drop fulfill /
-            // redirect hops and hang GoTo (RouteRequestUrlIsAccessibleInsideHandler).
-            if (request.Response != null || !request.IsNavigationRequest)
+            // (WKPage.OnRequestFinished). Park the request under a side map so a
+            // late responseReceived / redirect willBeSent can still attach Response
+            // and emit DONE — without blocking WebKit requestId reuse in
+            // _requestsById (which hung subsequent navigations / IsVisible data: GoTo).
+            if (request.Response == null && request.IsNavigationRequest)
             {
-                _requestsById.TryRemove(requestId, out _);
+                _deferredNavigationFinished[requestId] = request;
             }
         }
 
@@ -1144,14 +1186,14 @@ namespace PlaywrightNative.WebKit
             // Upstream wkPage.ts: loadingFailed without requestIntercepted (e.g. service
             // worker / cancelled fetches) — materialize the buffered willBeSent without
             // a route so Page.Request / RequestFailed still fire under interception.
-            if (!_requestsById.ContainsKey(requestId)
+            if (!TryGetRequest(requestId, out _)
                 && _requestIdToRequestWillBeSent.TryRemove(requestId, out JsonElement bufferedWillBeSent))
             {
                 CreateRequestFromWillBeSent(bufferedWillBeSent, allowRoute: false);
             }
 
             WKRequest request = null;
-            if (_requestsById.TryRemove(requestId, out WKRequest removed))
+            if (TryTakeRequest(requestId, out WKRequest removed))
             {
                 request = removed;
                 string errorText = GetString(p, "errorText");
