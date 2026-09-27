@@ -57,6 +57,14 @@ namespace PlaywrightNative.Input
                 steps = 1;
             }
 
+            // Dragging with a button held needs intermediate moves so Chromium
+            // extends the text selection (ShouldSelectTheTextWithMouse under
+            // headful suite load with a single jump).
+            if (steps == 1 && _pressedButtons.Count > 0)
+            {
+                steps = 5;
+            }
+
             double fromX = _x;
             double fromY = _y;
 

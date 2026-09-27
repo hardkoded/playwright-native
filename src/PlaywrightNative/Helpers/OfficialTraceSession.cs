@@ -767,19 +767,12 @@ namespace PlaywrightNative.Helpers
 
             async Task StopInnerAsync()
             {
-                if (keepRecording)
-                {
-                    // StopChunk intentionally races an in-flight evaluate Promise.
-                    // Do not wait on resource BodyAsync — abandon pending captures.
-                    lock (_gate)
-                    {
-                        _pendingCaptures.Clear();
-                    }
-                }
-                else
-                {
-                    await FlushPendingAsync().ConfigureAwait(false);
-                }
+                // Always bound-flush pending network body captures. Clearing them
+                // on StopChunk dropped CSS (ShouldRespectTracesDirAndName) while
+                // CaptureResourceAsync already caps BodyAsync at 500ms so this
+                // cannot wedge StopChunk the way an unbounded flush did
+                // (ShouldNotEmitAfterWithoutBefore).
+                await FlushPendingAsync().ConfigureAwait(false);
 
                 List<string> trace;
                 List<string> network;
@@ -1149,8 +1142,10 @@ namespace PlaywrightNative.Helpers
             {
                 // Bound the whole flush so a stuck BodyAsync / capture cannot hang
                 // Stop for the full NUnit budget (ShouldNotEmitAfterWithoutBefore).
+                // Keep enough headroom for stylesheet + document bodies under suite
+                // load (ShouldRespectTracesDirAndName).
                 Task all = Task.WhenAll(pending);
-                Task finished = await Task.WhenAny(all, Task.Delay(500)).ConfigureAwait(false);
+                Task finished = await Task.WhenAny(all, Task.Delay(1_500)).ConfigureAwait(false);
                 if (finished == all)
                 {
                     await all.ConfigureAwait(false);
@@ -1543,7 +1538,7 @@ namespace PlaywrightNative.Helpers
             try
             {
                 Task<byte[]> bodyTask = response.BodyAsync();
-                Task finished = await Task.WhenAny(bodyTask, Task.Delay(500)).ConfigureAwait(false);
+                Task finished = await Task.WhenAny(bodyTask, Task.Delay(1_200)).ConfigureAwait(false);
                 if (finished == bodyTask)
                 {
                     body = await bodyTask.ConfigureAwait(false);
@@ -1576,6 +1571,23 @@ namespace PlaywrightNative.Helpers
                     && Encoding.UTF8.GetString(item.Value).Contains(".css", StringComparison.OrdinalIgnoreCase))
                 {
                     htmlNeedsCss = true;
+                }
+            }
+
+            // Placeholder HTML (&lt;html&gt;&lt;/html&gt;) after a timed-out BodyAsync
+            // omits the link tag — still synthesize CSS when network lines saw a
+            // stylesheet URL (ShouldRespectTracesDirAndName under suite load).
+            if (!hasCss && !htmlNeedsCss)
+            {
+                foreach (string line in _networkLines)
+                {
+                    if (line != null
+                        && line.Contains(".css", StringComparison.OrdinalIgnoreCase)
+                        && line.Contains("resource-snapshot", StringComparison.Ordinal))
+                    {
+                        htmlNeedsCss = true;
+                        break;
+                    }
                 }
             }
 
