@@ -3126,13 +3126,26 @@ namespace PlaywrightNative.Chromium
                 // about:blank so LifecycleEvents matches what GoTo promised
                 // (GoToShouldClearLifecycleOnNewNavigation).
                 //
-                // Do not require commit / DocumentId parity: after Page.navigate returns,
-                // FrameNavigated may still be racing (persistent context + HAR under CI),
-                // and same-loader re-delivers skip a fresh commit. Waiting then hangs
-                // ShouldHavePagesInPersistentContext's data: GoTo for the full timeout.
+                // Require evidence the navigation landed (commit, DocumentId, or frame
+                // URL already data:) — without that, replaying load returns GoTo while
+                // the browser is still on about:blank and QuerySelector misses the
+                // new DOM (FillAsyncSetsInputValue on Windows CI). Do not require
+                // commit AND DocumentId together: FrameNavigated can race Page.navigate
+                // under persistent+HAR and same-loader re-delivers may skip a fresh
+                // commit (ShouldHavePagesInPersistentContext).
+                bool dataNavigationLanded = frame.LifecycleEvents.Contains("commit")
+                    || (!string.IsNullOrEmpty(expectedDocumentId)
+                        && string.Equals(frame.DocumentId, expectedDocumentId, StringComparison.Ordinal))
+                    || string.Equals(
+                        NavigationTimeout.WithoutUserInfo(frame.Url),
+                        NavigationTimeout.WithoutUserInfo(url),
+                        StringComparison.Ordinal)
+                    || (!string.IsNullOrEmpty(frame.Url)
+                        && frame.Url.StartsWith("data:", StringComparison.OrdinalIgnoreCase));
                 if (!string.IsNullOrEmpty(url)
                     && url.StartsWith("data:", StringComparison.OrdinalIgnoreCase)
                     && !networkIdle
+                    && dataNavigationLanded
                     && !frame.LifecycleEvents.Contains(targetLifecycleEvent))
                 {
                     frame.Url = NavigationTimeout.PreserveUserInfo(url, frame.Url);
