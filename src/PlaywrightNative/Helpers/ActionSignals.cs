@@ -326,13 +326,14 @@ namespace PlaywrightNative.Helpers
                 await barrier.WaitForAsync(timeout).ConfigureAwait(false);
             }
 
-            // Navigable WebKit clicks: wait for a non-blank main-frame navigation
-            // to settle (FrameNavigated + load). Returning on a provisional URL /
-            // barrier idle alone races a following goto
-            // (ShouldWorkWithGotoFollowingClick under suite load).
-            if (!chromiumPage
-                && page != null
-                && (expectNavigation || sawNavigationSignal))
+            // Navigable clicks: wait for a non-blank main-frame navigation to
+            // settle (URL flip after FrameNavigated). Returning on barrier idle
+            // alone races public framenavigated listeners — Chromium form GET
+            // under Windows suite load resolved click as route|click|navigated
+            // (ShouldAwaitFormGetOnClick); WebKit also needs this for
+            // ShouldWorkWithGotoFollowingClick.
+            if (page != null
+                && (expectNavigation || (!chromiumPage && sawNavigationSignal)))
             {
                 await WaitForWebKitNavigationSettleAsync(
                     page,
@@ -383,7 +384,9 @@ namespace PlaywrightNative.Helpers
 
                     // Give the document commit a beat after the public URL flips
                     // so a following goto is not interrupted by the form GET
-                    // (ShouldWorkWithGotoFollowingClick under suite load).
+                    // (ShouldWorkWithGotoFollowingClick under suite load), and so
+                    // public FrameNavigated handlers run before click resolves
+                    // (ShouldAwaitFormGetOnClick on Chromium headful Windows).
                     await Task.Delay(50).ConfigureAwait(false);
                     return;
                 }
