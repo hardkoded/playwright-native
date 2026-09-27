@@ -315,10 +315,14 @@ namespace PlaywrightNative.Helpers
                 }
 
                 int queryMs = RemainingQueryMs(timeoutMs, sw);
+
+                // After the handler dismisses (e.g. removes an iframe), probes can
+                // time out while resolving the frame; treat that as hidden so
+                // ShouldWorkWhenOwnerFrameDetaches does not wait forever.
                 bool visible = await IsAnyVisibleAsync(
                     locator,
                     queryMs,
-                    assumeVisibleOnTimeout: true).ConfigureAwait(false);
+                    assumeVisibleOnTimeout: false).ConfigureAwait(false);
                 if (!visible)
                 {
                     return;

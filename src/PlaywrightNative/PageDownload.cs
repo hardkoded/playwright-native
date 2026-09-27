@@ -324,6 +324,13 @@ namespace PlaywrightNative
                     File.Copy(source, temp, overwrite: true);
                     File.Move(temp, dest, overwrite: true);
                     temp = null;
+                    if (!WaitUntilReadable(dest))
+                    {
+                        TryDeleteFile(dest);
+                        System.Threading.Thread.Sleep(20);
+                        continue;
+                    }
+
                     if (!string.IsNullOrEmpty(_suggestedFilename)
                         && !string.Equals(destName, _suggestedFilename, StringComparison.OrdinalIgnoreCase))
                     {
@@ -338,6 +345,10 @@ namespace PlaywrightNative
                             File.Copy(source, namedTemp, overwrite: true);
                             File.Move(namedTemp, named, overwrite: true);
                             namedTemp = null;
+                            if (!WaitUntilReadable(named))
+                            {
+                                TryDeleteFile(named);
+                            }
                         }
                         finally
                         {
@@ -504,6 +515,41 @@ namespace PlaywrightNative
             return string.Equals(extension, ".crdownload", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(extension, ".tmp", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(extension, ".com.google.chrome.download", StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
+        /// Waits until <paramref name="path"/> can be opened for read on Windows
+        /// (Chromium / AV may briefly hold the promoted artifact).
+        /// </summary>
+        /// <param name="path">Promoted download path.</param>
+        /// <returns><see langword="true"/> when the file is readable.</returns>
+        private bool WaitUntilReadable(string path)
+        {
+            for (int attempt = 0; attempt < 50; attempt++)
+            {
+                try
+                {
+                    using FileStream stream = new FileStream(
+                        path,
+                        FileMode.Open,
+                        FileAccess.Read,
+                        FileShare.ReadWrite);
+                    if (stream.Length > 0)
+                    {
+                        return true;
+                    }
+                }
+                catch (IOException)
+                {
+                }
+                catch (UnauthorizedAccessException)
+                {
+                }
+
+                System.Threading.Thread.Sleep(20);
+            }
+
+            return false;
         }
     }
 }

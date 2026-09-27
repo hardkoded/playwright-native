@@ -2854,6 +2854,11 @@ namespace PlaywrightNative.Chromium
                             return true;
                         }
                     }
+                    catch (TimeoutException)
+                    {
+                        // Execution context not ready yet mid data: navigate —
+                        // keep polling (DialogAcceptShouldWork on Windows).
+                    }
                     catch (PlaywrightException)
                     {
                     }
