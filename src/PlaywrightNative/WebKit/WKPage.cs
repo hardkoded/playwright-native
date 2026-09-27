@@ -85,6 +85,7 @@ namespace PlaywrightNative.WebKit
         private readonly ConcurrentDictionary<string, WKWorker> _workers = new(StringComparer.Ordinal);
         private readonly ConcurrentDictionary<WKWorker, WebKitWorker> _directWorkers = new();
         private readonly ConcurrentDictionary<string, WKFrameSession> _frameSessions = new(StringComparer.Ordinal);
+        private readonly ConcurrentDictionary<string, byte> _inflightRequestIds = new(StringComparer.Ordinal);
         private readonly PageConsoleLog _consoleLog = new();
         private readonly PageEventLog<string> _pageErrors = new();
         private readonly PageEventLog<IRequest> _requests = new(NetworkRequestEvents.RecentRequestLimit);
@@ -3257,6 +3258,7 @@ namespace PlaywrightNative.WebKit
                 else
                 {
                     _frameManager.MainFrame.ClearLifecycleEvents();
+                    ResetInflightTracking();
                 }
 
                 _pendingNavigationUrl = url;
@@ -3650,6 +3652,7 @@ namespace PlaywrightNative.WebKit
                     _pendingDomContentTcs = domTcs;
                     _lifecycleEvents.Clear();
                     _frameManager.MainFrame?.ClearLifecycleEvents();
+                    ResetInflightTracking();
                 }
             }
 
@@ -5440,10 +5443,11 @@ namespace PlaywrightNative.WebKit
             // before the 302 Response event (ShouldSupportRedirects expects
             // GET,302,DONE). Defer the page event until Response is known —
             // responseReceived / redirect willBeSent raise finished once Response
-            // is public. Do not clear inflight here; the request stays mapped in
-            // WKNetworkManager until that late Response path runs.
+            // is public. Clear inflight now so networkidle cannot wedge while the
+            // late Response path is still pending (idempotent TrackInflight).
             if (publicRequest.Response == null && publicRequest.IsNavigationRequest)
             {
+                TrackInflight(publicRequest, started: false);
                 return;
             }
 
@@ -7467,10 +7471,17 @@ namespace PlaywrightNative.WebKit
             }
         }
 
+        private void ResetInflightTracking()
+        {
+            _inflightRequestIds.Clear();
+            Interlocked.Exchange(ref _inflightCount, 0);
+        }
+
         private void TrackInflight(WKRequest request, bool started)
         {
             if (request == null
                 || request.FrameUnavailable
+                || string.IsNullOrEmpty(request.RequestId)
                 || NetworkIdleRules.IsExcluded(request.Url, request.ResourceType))
             {
                 return;
@@ -7484,13 +7495,26 @@ namespace PlaywrightNative.WebKit
                 return;
             }
 
+            // Idempotent: deferred navigation requestfinished clears inflight early,
+            // then the late Response path finishes again. requestId reuse after the
+            // side-map park must not double-count or leave sticky networkidle.
             if (started)
             {
+                if (!_inflightRequestIds.TryAdd(request.RequestId, 0))
+                {
+                    return;
+                }
+
                 Interlocked.Increment(ref _inflightCount);
                 frame.OnInflightRequestStarted(request.RequestId);
             }
             else
             {
+                if (!_inflightRequestIds.TryRemove(request.RequestId, out _))
+                {
+                    return;
+                }
+
                 Interlocked.Decrement(ref _inflightCount);
                 frame.OnInflightRequestFinished(request.RequestId);
             }
