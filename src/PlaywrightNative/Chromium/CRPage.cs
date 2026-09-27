@@ -3125,11 +3125,14 @@ namespace PlaywrightNative.Chromium
                 // leave only commit without a second Page.loadEventFired. Replay like
                 // about:blank so LifecycleEvents matches what GoTo promised
                 // (GoToShouldClearLifecycleOnNewNavigation).
+                //
+                // Do not require commit / DocumentId parity: after Page.navigate returns,
+                // FrameNavigated may still be racing (persistent context + HAR under CI),
+                // and same-loader re-delivers skip a fresh commit. Waiting then hangs
+                // ShouldHavePagesInPersistentContext's data: GoTo for the full timeout.
                 if (!string.IsNullOrEmpty(url)
                     && url.StartsWith("data:", StringComparison.OrdinalIgnoreCase)
-                    && !string.IsNullOrEmpty(expectedDocumentId)
-                    && string.Equals(frame.DocumentId, expectedDocumentId, StringComparison.Ordinal)
-                    && frame.LifecycleEvents.Contains("commit")
+                    && !networkIdle
                     && !frame.LifecycleEvents.Contains(targetLifecycleEvent))
                 {
                     frame.Url = NavigationTimeout.PreserveUserInfo(url, frame.Url);
