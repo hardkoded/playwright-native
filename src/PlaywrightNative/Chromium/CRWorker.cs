@@ -110,12 +110,22 @@ namespace PlaywrightNative.Chromium
             }
         }
 
-        private void ResetExecutionContext()
+        private void ResetExecutionContext(bool clearScriptLoaded)
         {
             lock (_contextLock)
             {
                 _context = null;
-                _workerScriptLoaded = false;
+
+                // Official dedicated-worker sessions never clear workerScriptLoaded on
+                // Runtime.executionContextDestroyed / executionContextsCleared — that
+                // CDP event fires once. Clearing the flag here leaves Evaluate hung
+                // forever waiting for a second Inspector.workerScriptLoaded that never
+                // arrives (observed as 30s NUnit timeouts under Chromium headful CI).
+                if (clearScriptLoaded)
+                {
+                    _workerScriptLoaded = false;
+                }
+
                 if (_contextTcs.Task.IsCompleted)
                 {
                     _contextTcs = new TaskCompletionSource<CRExecutionContext>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -138,15 +148,20 @@ namespace PlaywrightNative.Chromium
                 return;
             }
 
-            if (method == "Inspector.targetCrashed" || method == "Runtime.executionContextsCleared")
+            if (method == "Inspector.targetCrashed")
             {
-                ResetExecutionContext();
+                // Official CRServiceWorker.destroyExecutionContext on crash: script
+                // must load again after Chrome restarts the worker.
+                ResetExecutionContext(clearScriptLoaded: true);
                 return;
             }
 
-            if (method == "Runtime.executionContextDestroyed")
+            if (method == "Runtime.executionContextsCleared"
+                || method == "Runtime.executionContextDestroyed")
             {
-                ResetExecutionContext();
+                // Official dedicated workers use session.once for context creation
+                // and do not reset the evaluate gate here — workerScriptLoaded is
+                // one-shot. Clearing it caused 30s Evaluate hangs under headful CI.
                 return;
             }
 
