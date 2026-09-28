@@ -1296,10 +1296,6 @@ namespace PlaywrightNative.Helpers
 
         private static async Task EnsurePrefixesAsync(IPage page, Stopwatch deadlineClock, int budgetMs)
         {
-            // Wait briefly for the frame tree to settle so sibling iframes get
-            // lower fN prefixes than nested ones (ShouldStitchAllFrameSnapshots).
-            await WaitForFrameTreeStableAsync(page, deadlineClock, budgetMs).ConfigureAwait(false);
-
             Queue<IFrame> queue = new Queue<IFrame>();
             IFrame main = page.MainFrame;
             if (main == null)
@@ -1307,7 +1303,21 @@ namespace PlaywrightNative.Helpers
                 return;
             }
 
-            queue.Enqueue(main);
+            // Prefer page.Frames sorted by depth so sibling top-level iframes
+            // get f1/f2 before nested f3/f4 (ShouldStitchAllFrameSnapshots),
+            // without querySelectorAll/ContentFrame on unloaded lazy iframes
+            // which wedges the target (ReturnEmptySnapshotWhenIframeIsNotLoaded).
+            List<IFrame> byDepth = FramesByDepth(page);
+            for (int i = 0; i < byDepth.Count; i++)
+            {
+                queue.Enqueue(byDepth[i]);
+            }
+
+            if (queue.Count == 0)
+            {
+                queue.Enqueue(main);
+            }
+
             HashSet<IFrame> seen = new HashSet<IFrame>();
             while (queue.Count > 0)
             {
@@ -1342,121 +1352,87 @@ namespace PlaywrightNative.Helpers
                     continue;
                 }
 
-                // Prefer the frame tree over ContentFrame/describeNode — that
-                // path wedges unloaded lazy iframes and burns the stitch budget
-                // even when RaceOrDefaultAsync returns early.
-                // Enqueue direct children in document order (querySelectorAll),
-                // falling back to ChildFrames / page.Frames.
-                List<IFrame> orderedChildren = await OrderedChildFramesAsync(frame).ConfigureAwait(false);
-                for (int i = 0; i < orderedChildren.Count; i++)
+                IReadOnlyList<IFrame> children = frame.ChildFrames;
+                if (children != null)
                 {
-                    IFrame child = orderedChildren[i];
-                    if (child != null && !child.IsDetached)
+                    for (int i = 0; i < children.Count; i++)
                     {
-                        queue.Enqueue(child);
-                    }
-                }
-            }
-        }
-
-        private static async Task WaitForFrameTreeStableAsync(IPage page, Stopwatch deadlineClock, int budgetMs)
-        {
-            if (page == null)
-            {
-                return;
-            }
-
-            int last = -1;
-            for (int attempt = 0; attempt < 10; attempt++)
-            {
-                if (RemainingMs(deadlineClock, budgetMs) < 200)
-                {
-                    return;
-                }
-
-                IReadOnlyList<IFrame> frames = page.Frames;
-                int count = frames?.Count ?? 0;
-                if (count == last && count > 1)
-                {
-                    return;
-                }
-
-                last = count;
-                await Task.Delay(40).ConfigureAwait(false);
-            }
-        }
-
-        private static async Task<List<IFrame>> OrderedChildFramesAsync(IFrame frame)
-        {
-            List<IFrame> ordered = new List<IFrame>();
-            if (frame == null || frame.IsDetached)
-            {
-                return ordered;
-            }
-
-            try
-            {
-                IReadOnlyList<IElementHandle> hosts = await frame
-                    .QuerySelectorAllAsync("iframe, frame")
-                    .ConfigureAwait(false);
-                if (hosts != null)
-                {
-                    for (int i = 0; i < hosts.Count; i++)
-                    {
-                        IFrame child = await ContentFrameOrNullAsync(hosts[i]).ConfigureAwait(false);
+                        IFrame child = children[i];
                         if (child != null && !child.IsDetached)
                         {
-                            ordered.Add(child);
+                            queue.Enqueue(child);
                         }
                     }
                 }
-            }
-            catch (PlaywrightException)
-            {
-            }
-            catch (TimeoutException)
-            {
-            }
 
-            if (ordered.Count > 0)
-            {
-                return ordered;
-            }
-
-            HashSet<IFrame> seen = new HashSet<IFrame>();
-            IReadOnlyList<IFrame> children = frame.ChildFrames;
-            if (children != null)
-            {
-                for (int i = 0; i < children.Count; i++)
+                IReadOnlyList<IFrame> pageFrames = page.Frames;
+                if (pageFrames == null)
                 {
-                    IFrame child = children[i];
-                    if (child != null && !child.IsDetached && seen.Add(child))
-                    {
-                        ordered.Add(child);
-                    }
+                    continue;
                 }
-            }
 
-            IPage page = frame.Page;
-            IReadOnlyList<IFrame> pageFrames = page?.Frames;
-            if (pageFrames != null)
-            {
                 for (int i = 0; i < pageFrames.Count; i++)
                 {
                     IFrame candidate = pageFrames[i];
                     if (candidate == null
                         || candidate.IsDetached
-                        || !ReferenceEquals(candidate.ParentFrame, frame)
-                        || !seen.Add(candidate))
+                        || !ReferenceEquals(candidate.ParentFrame, frame))
                     {
                         continue;
                     }
 
-                    ordered.Add(candidate);
+                    queue.Enqueue(candidate);
                 }
             }
+        }
 
-            return ordered;
+        private static List<IFrame> FramesByDepth(IPage page)
+        {
+            List<IFrame> result = new List<IFrame>();
+            if (page?.MainFrame == null)
+            {
+                return result;
+            }
+
+            IReadOnlyList<IFrame> frames = page.Frames;
+            if (frames == null || frames.Count == 0)
+            {
+                result.Add(page.MainFrame);
+                return result;
+            }
+
+            List<(int Depth, int Index, IFrame Frame)> ranked = new List<(int, int, IFrame)>();
+            for (int i = 0; i < frames.Count; i++)
+            {
+                IFrame frame = frames[i];
+                if (frame == null || frame.IsDetached)
+                {
+                    continue;
+                }
+
+                int depth = 0;
+                IFrame walk = frame.ParentFrame;
+                while (walk != null && depth < 64)
+                {
+                    depth++;
+                    walk = walk.ParentFrame;
+                }
+
+                ranked.Add((depth, i, frame));
+            }
+
+            ranked.Sort((a, b) =>
+            {
+                int byDepth = a.Depth.CompareTo(b.Depth);
+                return byDepth != 0 ? byDepth : a.Index.CompareTo(b.Index);
+            });
+
+            for (int i = 0; i < ranked.Count; i++)
+            {
+                result.Add(ranked[i].Frame);
+            }
+
+            return result;
         }
 
         private static async Task<IFrame> ChildFrameForAriaRefAsync(IFrame frame, string ariaRef)
