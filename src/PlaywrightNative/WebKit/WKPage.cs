@@ -5202,7 +5202,7 @@ namespace PlaywrightNative.WebKit
                                 _frameManager.MainFrame,
                                 inlineSentinel,
                                 "Failed to inject inline style",
-                                timeoutMs: 5_000)
+                                timeoutMs: 1_000)
                             .ConfigureAwait(false);
                         IElementHandle styleHandle = await EvaluateElementHandleAsync(
                                 $"window[{inlineElementLiteral}]")
