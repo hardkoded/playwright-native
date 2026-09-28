@@ -298,6 +298,8 @@ namespace PlaywrightNative.Helpers
                             return await capture().ConfigureAwait(false);
                         }
                         catch (Exception ex) when (DestroyedContext.IsDestroyedContext(ex)
+                            || (ex is TimeoutException te
+                                && te.Message.Contains("Failed to inject inline style", StringComparison.Ordinal))
                             || (ex is PlaywrightException pe
                                 && (pe.Message.Contains(NavigatingMessage, StringComparison.Ordinal)
                                     || pe.Message.Contains("not yet available", StringComparison.Ordinal)
