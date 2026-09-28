@@ -60,6 +60,9 @@ namespace PlaywrightNative.Chromium
         private JsonElement? _dragState;
         private double _lastX;
         private double _lastY;
+        private double _lastDownX;
+        private double _lastDownY;
+        private bool _hasLastDown;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="CRDragManager"/> class.
@@ -74,6 +77,27 @@ namespace PlaywrightNative.Chromium
         /// Whether an intercepted HTML5 drag is in progress.
         /// </summary>
         internal bool IsDragging => _dragState.HasValue;
+
+        /// <summary>
+        /// Records the last mouse-down point so left-button moves can skip HTML5
+        /// drag intercept when the gesture is textarea/input text selection.
+        /// </summary>
+        /// <param name="x">Down x.</param>
+        /// <param name="y">Down y.</param>
+        internal void NoteMouseDown(double x, double y)
+        {
+            _lastDownX = x;
+            _lastDownY = y;
+            _hasLastDown = true;
+        }
+
+        /// <summary>
+        /// Clears the last mouse-down point after mouse-up / cancelled drag.
+        /// </summary>
+        internal void NoteMouseUp()
+        {
+            _hasLastDown = false;
+        }
 
         /// <summary>
         /// Cancels an in-flight intercepted drag (Escape). Returns
@@ -99,6 +123,7 @@ namespace PlaywrightNative.Chromium
                 },
             }).ConfigureAwait(false);
             _dragState = null;
+            _hasLastDown = false;
             return true;
         }
 
@@ -137,6 +162,16 @@ namespace PlaywrightNative.Chromium
             }
 
             if (button != Input.MouseButton.Left)
+            {
+                await moveCallback().ConfigureAwait(false);
+                return;
+            }
+
+            // setInterceptDrags + mid-gesture evaluates disrupt textarea text
+            // selection under headful Chromium suite load (ShouldSelectTheTextWithMouse
+            // keeps only a trailing fragment). Skip HTML5 intercept when the
+            // mousedown hit a text field — hit-test via CDP, never main-world evaluate.
+            if (_hasLastDown && await IsTextSelectGestureAsync(_lastDownX, _lastDownY).ConfigureAwait(false))
             {
                 await moveCallback().ConfigureAwait(false);
                 return;
@@ -223,6 +258,91 @@ namespace PlaywrightNative.Chromium
                 modifiers = modifiers.ToCdpMask(),
             }).ConfigureAwait(false);
             _dragState = null;
+            _hasLastDown = false;
+        }
+
+        private async Task<bool> IsTextSelectGestureAsync(double x, double y)
+        {
+            try
+            {
+                JsonElement? located = await _page.Session.SendAsync(
+                    "DOM.getNodeForLocation",
+                    new
+                    {
+                        x = Math.Floor(x),
+                        y = Math.Floor(y),
+                        includeUserAgentShadowDOM = true,
+                    })
+                    .WaitAsync(TimeSpan.FromMilliseconds(250))
+                    .ConfigureAwait(false);
+                if (!located.HasValue
+                    || !located.Value.TryGetProperty("backendNodeId", out JsonElement backendEl)
+                    || !backendEl.TryGetInt32(out int backendNodeId)
+                    || backendNodeId == 0)
+                {
+                    return false;
+                }
+
+                JsonElement? described = await _page.Session.SendAsync(
+                    "DOM.describeNode",
+                    new { backendNodeId, depth = 0 })
+                    .WaitAsync(TimeSpan.FromMilliseconds(250))
+                    .ConfigureAwait(false);
+                if (!described.HasValue
+                    || !described.Value.TryGetProperty("node", out JsonElement node)
+                    || !node.TryGetProperty("nodeName", out JsonElement nameEl))
+                {
+                    return false;
+                }
+
+                string nodeName = nameEl.GetString();
+                if (string.IsNullOrEmpty(nodeName))
+                {
+                    return false;
+                }
+
+                if (nodeName.Equals("TEXTAREA", StringComparison.OrdinalIgnoreCase)
+                    || nodeName.Equals("INPUT", StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+
+                if (node.TryGetProperty("attributes", out JsonElement attrs)
+                    && attrs.ValueKind == JsonValueKind.Array)
+                {
+                    string pendingName = null;
+                    foreach (JsonElement item in attrs.EnumerateArray())
+                    {
+                        if (pendingName == null)
+                        {
+                            pendingName = item.GetString();
+                            continue;
+                        }
+
+                        if (string.Equals(pendingName, "contenteditable", StringComparison.OrdinalIgnoreCase))
+                        {
+                            string attrValue = item.GetString();
+                            if (!string.Equals(attrValue, "false", StringComparison.OrdinalIgnoreCase))
+                            {
+                                return true;
+                            }
+                        }
+
+                        pendingName = null;
+                    }
+                }
+            }
+            catch (PlaywrightException)
+            {
+            }
+            catch (TimeoutException)
+            {
+            }
+            catch (OperationCanceledException)
+            {
+            }
+
+            return false;
         }
 
         private async Task EvaluateInAllFramesAsync(string expression)

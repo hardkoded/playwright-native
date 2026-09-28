@@ -87,6 +87,7 @@ namespace PlaywrightNative.Chromium
         private int _reportedAsNew;
         private bool _debuggerResumed;
         private bool _crashed;
+        private int _chromeCrashFallbackEpoch;
         private string _emulatedMedia = string.Empty;
         private string _emulatedColorScheme = "light";
         private string _emulatedReducedMotion = "no-preference";
@@ -551,6 +552,12 @@ namespace PlaywrightNative.Chromium
             if (IsChromiumCrashUrl(url))
             {
                 ArmChromeCrashFallback();
+            }
+            else
+            {
+                // Cancel any pending chrome://crash Page.crash fallback — a delayed
+                // probe must not kill a later non-crash document on this session.
+                Interlocked.Increment(ref _chromeCrashFallbackEpoch);
             }
 
             // Under Windows suite load a superseding GoTo can Page.navigate before the
@@ -5571,10 +5578,11 @@ namespace PlaywrightNative.Chromium
         /// </summary>
         private void ArmChromeCrashFallback()
         {
-            _ = EnsureChromeCrashReportedAsync();
+            int epoch = Interlocked.Increment(ref _chromeCrashFallbackEpoch);
+            _ = EnsureChromeCrashReportedAsync(epoch);
         }
 
-        private async Task EnsureChromeCrashReportedAsync()
+        private async Task EnsureChromeCrashReportedAsync(int epoch)
         {
             try
             {
@@ -5587,7 +5595,12 @@ namespace PlaywrightNative.Chromium
 
             // Page may have closed between arming and the delay (Windows headful
             // crash probes). Never Page.crash a recycled or closed session.
-            if (_crashed || _client.IsClosed || _closedTcs.Task.IsCompleted)
+            // Epoch mismatch means a later navigation cancelled this probe so we
+            // do not kill an unrelated document under suite load.
+            if (epoch != Volatile.Read(ref _chromeCrashFallbackEpoch)
+                || _crashed
+                || _client.IsClosed
+                || _closedTcs.Task.IsCompleted)
             {
                 return;
             }
@@ -5612,7 +5625,10 @@ namespace PlaywrightNative.Chromium
 
             // After an explicit Page.crash, silence means the protocol dropped
             // Inspector.targetCrashed (Windows headful). Same fallback as WebKit.
-            if (!_crashed && !_client.IsClosed && !_closedTcs.Task.IsCompleted)
+            if (epoch == Volatile.Read(ref _chromeCrashFallbackEpoch)
+                && !_crashed
+                && !_client.IsClosed
+                && !_closedTcs.Task.IsCompleted)
             {
                 OnInspectorTargetCrashed();
             }

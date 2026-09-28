@@ -73,6 +73,7 @@ namespace PlaywrightNative.Chromium
                 return Task.CompletedTask;
             }
 
+            _dragManager.NoteMouseDown(x, y);
             int buttonsMask = buttons.ToCdpMask();
 
             return _session.SendAsync("Input.dispatchMouseEvent", new
@@ -91,23 +92,31 @@ namespace PlaywrightNative.Chromium
         /// <summary>
         /// Dispatches <c>mouseReleased</c>, or completes an intercepted drag with <c>drop</c>.
         /// </summary>
-        public Task UpAsync(double x, double y, Input.MouseButton button, IReadOnlyCollection<Input.MouseButton> buttons, IReadOnlyCollection<Input.KeyboardModifier> modifiers, int clickCount)
+        public async Task UpAsync(double x, double y, Input.MouseButton button, IReadOnlyCollection<Input.MouseButton> buttons, IReadOnlyCollection<Input.KeyboardModifier> modifiers, int clickCount)
         {
-            if (_dragManager.IsDragging)
+            try
             {
-                return _dragManager.DropAsync(x, y, modifiers);
-            }
+                if (_dragManager.IsDragging)
+                {
+                    await _dragManager.DropAsync(x, y, modifiers).ConfigureAwait(false);
+                    return;
+                }
 
-            return _session.SendAsync("Input.dispatchMouseEvent", new
+                await _session.SendAsync("Input.dispatchMouseEvent", new
+                {
+                    type = "mouseReleased",
+                    button = button.ToCdpName(),
+                    buttons = buttons.ToCdpMask(),
+                    x,
+                    y,
+                    modifiers = modifiers.ToCdpMask(),
+                    clickCount,
+                }).ConfigureAwait(false);
+            }
+            finally
             {
-                type = "mouseReleased",
-                button = button.ToCdpName(),
-                buttons = buttons.ToCdpMask(),
-                x,
-                y,
-                modifiers = modifiers.ToCdpMask(),
-                clickCount,
-            });
+                _dragManager.NoteMouseUp();
+            }
         }
 
         /// <summary>
