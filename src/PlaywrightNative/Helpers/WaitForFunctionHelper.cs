@@ -258,7 +258,7 @@ namespace PlaywrightNative.Helpers
                 ? new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously).Task
                 : Task.Delay(timeoutMs);
             Func<Task> delayAsync = pollingInterval.HasValue && pollingInterval.Value > 0
-                ? () => Task.Delay((int)pollingInterval.Value)
+                ? () => DelayAtLeastAsync((int)pollingInterval.Value)
                 : rafAsync ?? (() => Task.Delay(16));
 
             while (true)
@@ -320,6 +320,23 @@ namespace PlaywrightNative.Helpers
                 else
                 {
                     await WhenAnyOrTimeoutAsync(delay, timeoutTask, sw, timeoutMs, apiName).ConfigureAwait(false);
+                }
+            }
+
+            // Task.Delay can return ~1ms early on Windows; pad until the requested
+            // interval has elapsed (ShouldPollOnInterval).
+            static async Task DelayAtLeastAsync(int milliseconds)
+            {
+                if (milliseconds <= 0)
+                {
+                    return;
+                }
+
+                Stopwatch delaySw = Stopwatch.StartNew();
+                await Task.Delay(milliseconds).ConfigureAwait(false);
+                while (delaySw.ElapsedMilliseconds < milliseconds)
+                {
+                    await Task.Delay(1).ConfigureAwait(false);
                 }
             }
         }

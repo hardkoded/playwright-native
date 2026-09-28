@@ -2866,17 +2866,9 @@ namespace PlaywrightNative.Chromium
                         return false;
                     }
 
-                    // FrameNavigated already published the data: URL — usable.
-                    if (string.Equals(
-                            NavigationTimeout.WithoutUserInfo(targetFrame.Url),
-                            NavigationTimeout.WithoutUserInfo(targetUrl),
-                            StringComparison.Ordinal)
-                        || (!string.IsNullOrEmpty(targetFrame.Url)
-                            && targetFrame.Url.StartsWith("data:", StringComparison.OrdinalIgnoreCase)))
-                    {
-                        return true;
-                    }
-
+                    // Do not treat frame.Url == data: alone as landed — Windows
+                    // suite load can publish the URL before querySelector sees the
+                    // new DOM (TypeAsyncProducesText / FillAsyncSetsInputValue NRE).
                     try
                     {
                         CRExecutionContext context = await WaitForFrameExecutionContextAsync(
@@ -2885,11 +2877,16 @@ namespace PlaywrightNative.Chromium
                             .ConfigureAwait(false);
                         context = targetFrame.ExecutionContext ?? context;
                         JsonElement snapshot = await context.EvaluateAsync<JsonElement>(
-                            @"(() => ({ href: location.href, ready: document.readyState }))()")
+                            @"(() => ({
+  href: location.href,
+  ready: document.readyState,
+  hasBody: !!document.body
+}))()")
                             .ConfigureAwait(false);
                         if (snapshot.ValueKind == JsonValueKind.Object
                             && snapshot.TryGetProperty("href", out JsonElement hrefEl)
-                            && snapshot.TryGetProperty("ready", out JsonElement readyEl))
+                            && snapshot.TryGetProperty("ready", out JsonElement readyEl)
+                            && snapshot.TryGetProperty("hasBody", out JsonElement bodyEl))
                         {
                             string href = hrefEl.GetString();
                             string readyState = readyEl.GetString();
@@ -2897,7 +2894,8 @@ namespace PlaywrightNative.Chromium
                                 && href.StartsWith("data:", StringComparison.OrdinalIgnoreCase);
                             bool ready = string.Equals(readyState, "interactive", StringComparison.Ordinal)
                                 || string.Equals(readyState, "complete", StringComparison.Ordinal);
-                            if (hrefIsData && ready)
+                            bool hasBody = bodyEl.ValueKind == JsonValueKind.True;
+                            if (hrefIsData && ready && hasBody)
                             {
                                 return true;
                             }
@@ -3249,15 +3247,12 @@ namespace PlaywrightNative.Chromium
                 // When protocol events lag on persistent Windows, confirm via
                 // readyState so GoTo cannot hang the full navigation timeout
                 // (DialogAcceptShouldWork).
+                // Require DocumentId match or evaluate confirm — frame.Url alone
+                // can publish before querySelector sees the new DOM under Windows
+                // suite load (TypeAsyncProducesText NRE).
                 bool dataNavigationLanded =
-                    (!string.IsNullOrEmpty(expectedDocumentId)
-                        && string.Equals(frame.DocumentId, expectedDocumentId, StringComparison.Ordinal))
-                    || string.Equals(
-                        NavigationTimeout.WithoutUserInfo(frame.Url),
-                        NavigationTimeout.WithoutUserInfo(url),
-                        StringComparison.Ordinal)
-                    || (!string.IsNullOrEmpty(frame.Url)
-                        && frame.Url.StartsWith("data:", StringComparison.OrdinalIgnoreCase));
+                    !string.IsNullOrEmpty(expectedDocumentId)
+                    && string.Equals(frame.DocumentId, expectedDocumentId, StringComparison.Ordinal);
                 if (!string.IsNullOrEmpty(url)
                     && url.StartsWith("data:", StringComparison.OrdinalIgnoreCase)
                     && !networkIdle
