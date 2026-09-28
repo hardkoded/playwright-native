@@ -4147,56 +4147,74 @@ namespace PlaywrightNative.Chromium
         {
             options ??= new ScreenshotOptions();
 
-            System.Collections.Generic.Dictionary<string, object> parameters = new()
+            CRScreencast screencast = PublicPage is Page publicPage
+                ? publicPage.Screencast as CRScreencast
+                : null;
+            if (screencast != null)
             {
-                ["format"] = options.Format,
-                ["captureBeyondViewport"] = options.FullPage || options.CaptureBeyondViewport,
-            };
-
-            if (options.Quality.HasValue && ScreenshotFormat.SupportsQuality(options.Format))
-            {
-                parameters["quality"] = options.Quality.Value;
-            }
-
-            if (options.Clip != null)
-            {
-                parameters["clip"] = new
-                {
-                    x = options.Clip.X,
-                    y = options.Clip.Y,
-                    width = options.Clip.Width,
-                    height = options.Clip.Height,
-                    scale = options.Clip.Scale > 0 ? options.Clip.Scale : 1.0,
-                };
-            }
-
-            if (options.OmitBackground && options.Format != "jpeg")
-            {
-                await _client.SendAsync("Emulation.setDefaultBackgroundColorOverride", new
-                {
-                    color = new { r = 0, g = 0, b = 0, a = 0 },
-                }).ConfigureAwait(false);
-            }
-
-            Frame main = MainFrame;
-            if (main != null)
-            {
-                IReadOnlyCollection<string> lifecycle = main.LifecycleEvents;
-                if (!lifecycle.Contains("DOMContentLoaded") && !lifecycle.Contains("load"))
-                {
-                    throw new PlaywrightException("Cannot take a screenshot while page is navigating");
-                }
+                await screencast.PauseForScreenshotAsync().ConfigureAwait(false);
             }
 
             try
             {
-                return await CaptureWithNavigationRetryAsync(parameters, options.Clip).ConfigureAwait(false);
+                System.Collections.Generic.Dictionary<string, object> parameters = new()
+                {
+                    ["format"] = options.Format,
+                    ["captureBeyondViewport"] = options.FullPage || options.CaptureBeyondViewport,
+                };
+
+                if (options.Quality.HasValue && ScreenshotFormat.SupportsQuality(options.Format))
+                {
+                    parameters["quality"] = options.Quality.Value;
+                }
+
+                if (options.Clip != null)
+                {
+                    parameters["clip"] = new
+                    {
+                        x = options.Clip.X,
+                        y = options.Clip.Y,
+                        width = options.Clip.Width,
+                        height = options.Clip.Height,
+                        scale = options.Clip.Scale > 0 ? options.Clip.Scale : 1.0,
+                    };
+                }
+
+                if (options.OmitBackground && options.Format != "jpeg")
+                {
+                    await _client.SendAsync("Emulation.setDefaultBackgroundColorOverride", new
+                    {
+                        color = new { r = 0, g = 0, b = 0, a = 0 },
+                    }).ConfigureAwait(false);
+                }
+
+                Frame main = MainFrame;
+                if (main != null)
+                {
+                    IReadOnlyCollection<string> lifecycle = main.LifecycleEvents;
+                    if (!lifecycle.Contains("DOMContentLoaded") && !lifecycle.Contains("load"))
+                    {
+                        throw new PlaywrightException("Cannot take a screenshot while page is navigating");
+                    }
+                }
+
+                try
+                {
+                    return await CaptureWithNavigationRetryAsync(parameters, options.Clip).ConfigureAwait(false);
+                }
+                finally
+                {
+                    if (options.OmitBackground && options.Format != "jpeg")
+                    {
+                        await _client.SendAsync("Emulation.setDefaultBackgroundColorOverride").ConfigureAwait(false);
+                    }
+                }
             }
             finally
             {
-                if (options.OmitBackground && options.Format != "jpeg")
+                if (screencast != null)
                 {
-                    await _client.SendAsync("Emulation.setDefaultBackgroundColorOverride").ConfigureAwait(false);
+                    await screencast.ResumeAfterScreenshotAsync().ConfigureAwait(false);
                 }
             }
         }

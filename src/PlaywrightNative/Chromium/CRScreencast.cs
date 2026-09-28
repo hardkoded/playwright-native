@@ -35,6 +35,8 @@ namespace PlaywrightNative.Chromium
         private ScreencastVideoWriter _video;
         private ScreencastVideoWriter _artifactsVideo;
         private bool _started;
+        private bool _pausedForScreenshot;
+        private int _quality;
         private int _maxWidth;
         private int _maxHeight;
 
@@ -63,6 +65,7 @@ namespace PlaywrightNative.Chromium
             int maxHeight = height > 0 ? height : 800;
             maxWidth &= ~1;
             maxHeight &= ~1;
+            _quality = quality > 0 ? quality : 90;
             _maxWidth = maxWidth;
             _maxHeight = maxHeight;
 
@@ -87,7 +90,7 @@ namespace PlaywrightNative.Chromium
                 await _page.CrPage.Session.SendAsync("Page.startScreencast", new
                 {
                     format = "jpeg",
-                    quality = quality > 0 ? quality : 90,
+                    quality = _quality,
                     maxWidth,
                     maxHeight,
                     everyNthFrame = 1,
@@ -186,37 +189,104 @@ namespace PlaywrightNative.Chromium
         /// <inheritdoc/>
         public Task HideOverlaysAsync() => ScreencastOverlay.SetVisibleAsync(_page, visible: false);
 
-        private static bool JpegMatchesSize(byte[] buffer, int expectedWidth, int expectedHeight)
+        /// <summary>
+        /// Temporarily stops CDP screencast around <c>Page.captureScreenshot</c>.
+        /// Concurrent screencast + screenshot can detach the target on Windows
+        /// Chromium headful (<c>start should finish when page is closed</c>).
+        /// </summary>
+        /// <returns>A task that completes when screencast is paused or a no-op.</returns>
+        internal Task PauseForScreenshotAsync()
         {
-            int i = 2;
-            while (i < buffer.Length - 8)
+            lock (_gate)
             {
-                if (buffer[i] != 0xFF)
+                if (!_started || _pausedForScreenshot)
                 {
-                    break;
+                    return Task.CompletedTask;
                 }
 
-                byte marker = buffer[i + 1];
-                int segmentLength = (buffer[i + 2] << 8) | buffer[i + 3];
-                if ((marker >= 0xC0 && marker <= 0xC3)
-                    || (marker >= 0xC5 && marker <= 0xC7)
-                    || (marker >= 0xC9 && marker <= 0xCB)
-                    || (marker >= 0xCD && marker <= 0xCF))
-                {
-                    int height = (buffer[i + 5] << 8) | buffer[i + 6];
-                    int width = (buffer[i + 7] << 8) | buffer[i + 8];
-                    return width == expectedWidth && height == expectedHeight;
-                }
-
-                if (segmentLength < 2)
-                {
-                    break;
-                }
-
-                i += 2 + segmentLength;
+                _pausedForScreenshot = true;
             }
 
-            return false;
+            return PauseForScreenshotCoreAsync();
+        }
+
+        /// <summary>
+        /// Restarts CDP screencast after <see cref="PauseForScreenshotAsync"/>.
+        /// </summary>
+        /// <returns>A task that completes when screencast is resumed or a no-op.</returns>
+        internal Task ResumeAfterScreenshotAsync()
+        {
+            lock (_gate)
+            {
+                if (!_started || !_pausedForScreenshot)
+                {
+                    return Task.CompletedTask;
+                }
+            }
+
+            return ResumeAfterScreenshotCoreAsync();
+        }
+
+        private async Task PauseForScreenshotCoreAsync()
+        {
+            _page.CrPage.Session.MessageReceived -= OnMessage;
+            try
+            {
+                await _page.CrPage.Session.SendAsync("Page.stopScreencast").ConfigureAwait(false);
+            }
+            catch (TargetClosedException)
+            {
+                lock (_gate)
+                {
+                    _pausedForScreenshot = false;
+                }
+
+                throw;
+            }
+            catch (PlaywrightException)
+            {
+            }
+        }
+
+        private async Task ResumeAfterScreenshotCoreAsync()
+        {
+            _page.CrPage.Session.MessageReceived += OnMessage;
+            try
+            {
+                await _page.CrPage.Session.SendAsync("Page.startScreencast", new
+                {
+                    format = "jpeg",
+                    quality = _quality,
+                    maxWidth = _maxWidth,
+                    maxHeight = _maxHeight,
+                    everyNthFrame = 1,
+                }).ConfigureAwait(false);
+            }
+            catch (TargetClosedException)
+            {
+                _page.CrPage.Session.MessageReceived -= OnMessage;
+                lock (_gate)
+                {
+                    _pausedForScreenshot = false;
+                }
+
+                throw;
+            }
+            catch (PlaywrightException)
+            {
+                _page.CrPage.Session.MessageReceived -= OnMessage;
+                lock (_gate)
+                {
+                    _pausedForScreenshot = false;
+                }
+
+                return;
+            }
+
+            lock (_gate)
+            {
+                _pausedForScreenshot = false;
+            }
         }
 
         private void ThrowIfClosed()
@@ -239,6 +309,7 @@ namespace PlaywrightNative.Chromium
                 }
 
                 _started = false;
+                _pausedForScreenshot = false;
                 _onFrame = null;
                 _video = null;
                 return true;
@@ -324,6 +395,39 @@ namespace PlaywrightNative.Chromium
             }
 
             _ = DeliverFrameAsync(frame, jpeg, sessionId);
+
+            static bool JpegMatchesSize(byte[] buffer, int expectedWidth, int expectedHeight)
+            {
+                int i = 2;
+                while (i < buffer.Length - 8)
+                {
+                    if (buffer[i] != 0xFF)
+                    {
+                        break;
+                    }
+
+                    byte marker = buffer[i + 1];
+                    int segmentLength = (buffer[i + 2] << 8) | buffer[i + 3];
+                    if ((marker >= 0xC0 && marker <= 0xC3)
+                        || (marker >= 0xC5 && marker <= 0xC7)
+                        || (marker >= 0xC9 && marker <= 0xCB)
+                        || (marker >= 0xCD && marker <= 0xCF))
+                    {
+                        int height = (buffer[i + 5] << 8) | buffer[i + 6];
+                        int width = (buffer[i + 7] << 8) | buffer[i + 8];
+                        return width == expectedWidth && height == expectedHeight;
+                    }
+
+                    if (segmentLength < 2)
+                    {
+                        break;
+                    }
+
+                    i += 2 + segmentLength;
+                }
+
+                return false;
+            }
         }
 
         private Task DeliverFrameAsync(ScreencastFrame frame, byte[] jpeg, int sessionId)
