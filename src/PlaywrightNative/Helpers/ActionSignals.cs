@@ -308,18 +308,19 @@ namespace PlaywrightNative.Helpers
                 sw,
                 sawDocumentRequest).ConfigureAwait(false);
 
-            // Speculative WebKit willCheck retains without a document request
-            // must not block non-navigating clicks (scroll=none 2s budgets).
-            // Drop once before waiting, then keep dropping while WaitForAsync
-            // runs — a late willCheck after the first drop re-arms the barrier
-            // (ShouldClickInViewportElementWhenScrollIsNone under Darwin load).
+            // Speculative willCheck / late Network navigations must not block
+            // non-navigating clicks (scroll=none 2s budgets). Snapshot whether a
+            // document request was seen during the post-press poll — a late
+            // OnRequest after that decision must not flip us into waiting for a
+            // commit that never lands (ShouldClickInViewportElementWhenScrollIsNone
+            // on Windows Chromium under suite load; Darwin WebKit likewise).
+            bool sawDocAtDecision = sawDocumentRequest != null && sawDocumentRequest();
             if (!expectNavigation
                 && barrier != null
-                && (sawDocumentRequest == null || !sawDocumentRequest()))
+                && !sawDocAtDecision)
             {
-                barrier.DropOrphanedPolicyNavigations();
-                await WaitBarrierDroppingOrphansAsync(barrier, timeout, sawDocumentRequest)
-                    .ConfigureAwait(false);
+                barrier.DropOrphanedNavigations();
+                await WaitBarrierDroppingOrphansAsync(barrier, timeout).ConfigureAwait(false);
             }
             else
             {
@@ -418,17 +419,15 @@ namespace PlaywrightNative.Helpers
         /// </summary>
         private static async Task WaitBarrierDroppingOrphansAsync(
             ActionSignalBarrier barrier,
-            float? timeout,
-            Func<bool> sawDocumentRequest)
+            float? timeout)
         {
             Task wait = barrier.WaitForAsync(timeout);
             while (!wait.IsCompleted)
             {
-                if (sawDocumentRequest == null || !sawDocumentRequest())
-                {
-                    barrier.DropOrphanedPolicyNavigations();
-                }
-
+                // Keep clearing late policy + document retains for non-navigating
+                // clicks — a Network request after the poll decision must not
+                // stick the barrier for the full timeout.
+                barrier.DropOrphanedNavigations();
                 await Task.WhenAny(wait, Task.Delay(16)).ConfigureAwait(false);
             }
 

@@ -150,6 +150,29 @@ namespace PlaywrightNative.Helpers
         }
 
         /// <summary>
+        /// Drops every navigation retain (policy + document) after a
+        /// non-navigating action confirmed no document request during its
+        /// post-press poll. A late Network navigation request can otherwise
+        /// arm a document retain after that decision and hang
+        /// <see cref="WaitForAsync"/> for the full click budget
+        /// (<c>ShouldClickInViewportElementWhenScrollIsNone</c> on Windows
+        /// Chromium under suite load).
+        /// </summary>
+        internal void DropOrphanedNavigations()
+        {
+            lock (_lock)
+            {
+                int pending = _pendingPolicyNavigations + _pendingDocumentNavigations;
+                _pendingPolicyNavigations = 0;
+                _pendingDocumentNavigations = 0;
+                for (int i = 0; i < pending; i++)
+                {
+                    ReleaseUnderLock();
+                }
+            }
+        }
+
+        /// <summary>
         /// Releases a single document-request retain when that navigation fails.
         /// </summary>
         internal void OnDocumentNavigationAborted()
