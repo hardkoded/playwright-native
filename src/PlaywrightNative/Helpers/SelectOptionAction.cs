@@ -53,18 +53,7 @@ namespace PlaywrightNative.Helpers
                 throw new ArgumentNullException(nameof(handle));
             }
 
-            try
-            {
-                await WaitForElementStateHelper.WaitVisibleUnlessForcedAsync(handle, force, timeout).ConfigureAwait(false);
-            }
-            catch (TimeoutException)
-            {
-                // Under suite load a Visible probe can burn the short action
-                // timeout before selectOption reports "not enabled". Continue into
-                // the select poll so disabled-optgroup errors stay PlaywrightException
-                // (ShouldWaitForOptgroupToBeEnabled).
-            }
-
+            await WaitForElementStateHelper.WaitVisibleUnlessForcedAsync(handle, force, timeout).ConfigureAwait(false);
             if (scroll != ActionScroll.None)
             {
                 await handle.EvaluateAsync<bool>(ElementStateScript.ScrollIntoViewIfNeededFunction).ConfigureAwait(false);
