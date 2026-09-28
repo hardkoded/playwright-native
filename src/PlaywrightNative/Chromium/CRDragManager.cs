@@ -64,6 +64,11 @@ namespace PlaywrightNative.Chromium
         private double _lastDownY;
         private bool _hasLastDown;
 
+        // When the document has no [draggable=true], skip setInterceptDrags for
+        // this press — mid-gesture intercept corrupts textarea selection under
+        // headful Chromium suite load (ShouldSelectTheTextWithMouse).
+        private bool _skipInterceptThisPress;
+
         /// <summary>
         /// Initializes a new instance of the <see cref="CRDragManager"/> class.
         /// </summary>
@@ -79,16 +84,27 @@ namespace PlaywrightNative.Chromium
         internal bool IsDragging => _dragState.HasValue;
 
         /// <summary>
-        /// Records the last mouse-down point so left-button moves can skip HTML5
-        /// drag intercept when the gesture is textarea/input text selection.
+        /// Records the last mouse-down point and latches whether HTML5 drag
+        /// intercept is needed for this press.
         /// </summary>
         /// <param name="x">Down x.</param>
         /// <param name="y">Down y.</param>
-        internal void NoteMouseDown(double x, double y)
+        /// <returns>A task that completes when the down has been recorded.</returns>
+        internal async Task NoteMouseDownAsync(double x, double y)
         {
             _lastDownX = x;
             _lastDownY = y;
             _hasLastDown = true;
+            _skipInterceptThisPress = !await DocumentHasDraggableAsync().ConfigureAwait(false);
+
+            // Let the compositor apply the pointer at the press point before
+            // mousePressed when we are not about to HTML5-drag (text selection
+            // / plain held moves). Double-rAF matches the test's own Rafraf
+            // settle without injecting extra mousemove events.
+            if (_skipInterceptThisPress)
+            {
+                await SettleFramesAsync().ConfigureAwait(false);
+            }
         }
 
         /// <summary>
@@ -97,6 +113,7 @@ namespace PlaywrightNative.Chromium
         internal void NoteMouseUp()
         {
             _hasLastDown = false;
+            _skipInterceptThisPress = false;
         }
 
         /// <summary>
@@ -124,6 +141,7 @@ namespace PlaywrightNative.Chromium
             }).ConfigureAwait(false);
             _dragState = null;
             _hasLastDown = false;
+            _skipInterceptThisPress = false;
             return true;
         }
 
@@ -167,11 +185,11 @@ namespace PlaywrightNative.Chromium
                 return;
             }
 
-            // setInterceptDrags + mid-gesture evaluates disrupt textarea text
-            // selection under headful Chromium suite load (ShouldSelectTheTextWithMouse
-            // keeps only a trailing fragment). Skip HTML5 intercept when the
-            // mousedown hit a text field — hit-test via CDP, never main-world evaluate.
-            if (_hasLastDown && await IsTextSelectGestureAsync(_lastDownX, _lastDownY).ConfigureAwait(false))
+            // No [draggable=true] in the document: skip setInterceptDrags so
+            // textarea selection is not corrupted under headful suite load.
+            // Keep a single mouseMoved (no auto-steps) — multi-step breaks
+            // event-list parity for non-drag held moves.
+            if (_hasLastDown && _skipInterceptThisPress)
             {
                 await moveCallback().ConfigureAwait(false);
                 return;
@@ -259,78 +277,66 @@ namespace PlaywrightNative.Chromium
             }).ConfigureAwait(false);
             _dragState = null;
             _hasLastDown = false;
+            _skipInterceptThisPress = false;
         }
 
-        private async Task<bool> IsTextSelectGestureAsync(double x, double y)
+        private async Task SettleFramesAsync()
         {
             try
             {
-                JsonElement? located = await _page.Session.SendAsync(
-                    "DOM.getNodeForLocation",
-                    new
-                    {
-                        x = Math.Floor(x),
-                        y = Math.Floor(y),
-                        includeUserAgentShadowDOM = true,
-                    })
-                    .WaitAsync(TimeSpan.FromMilliseconds(250))
+                Frame main = _page.FrameManager.MainFrame;
+                if (main == null)
+                {
+                    return;
+                }
+
+                CRExecutionContext context = await _page.GetUtilityWorldAsync(main)
+                    .WaitAsync(TimeSpan.FromMilliseconds(500))
                     .ConfigureAwait(false);
-                if (!located.HasValue
-                    || !located.Value.TryGetProperty("backendNodeId", out JsonElement backendEl)
-                    || !backendEl.TryGetInt32(out int backendNodeId)
-                    || backendNodeId == 0)
+                if (context == null)
                 {
-                    return false;
+                    return;
                 }
 
-                JsonElement? described = await _page.Session.SendAsync(
-                    "DOM.describeNode",
-                    new { backendNodeId, depth = 0 })
-                    .WaitAsync(TimeSpan.FromMilliseconds(250))
+                await context.EvaluateAsync<object>(
+                        "new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => r(true))))")
+                    .WaitAsync(TimeSpan.FromMilliseconds(500))
                     .ConfigureAwait(false);
-                if (!described.HasValue
-                    || !described.Value.TryGetProperty("node", out JsonElement node)
-                    || !node.TryGetProperty("nodeName", out JsonElement nameEl))
-                {
-                    return false;
-                }
+            }
+            catch (PlaywrightException)
+            {
+            }
+            catch (TimeoutException)
+            {
+            }
+            catch (OperationCanceledException)
+            {
+            }
+        }
 
-                string nodeName = nameEl.GetString();
-                if (string.IsNullOrEmpty(nodeName))
-                {
-                    return false;
-                }
-
-                if (nodeName.Equals("TEXTAREA", StringComparison.OrdinalIgnoreCase)
-                    || nodeName.Equals("INPUT", StringComparison.OrdinalIgnoreCase))
+        private async Task<bool> DocumentHasDraggableAsync()
+        {
+            try
+            {
+                Frame main = _page.FrameManager.MainFrame;
+                if (main == null)
                 {
                     return true;
                 }
 
-                if (node.TryGetProperty("attributes", out JsonElement attrs)
-                    && attrs.ValueKind == JsonValueKind.Array)
+                CRExecutionContext context = await _page.GetUtilityWorldAsync(main)
+                    .WaitAsync(TimeSpan.FromMilliseconds(500))
+                    .ConfigureAwait(false);
+                if (context == null)
                 {
-                    string pendingName = null;
-                    foreach (JsonElement item in attrs.EnumerateArray())
-                    {
-                        if (pendingName == null)
-                        {
-                            pendingName = item.GetString();
-                            continue;
-                        }
-
-                        if (string.Equals(pendingName, "contenteditable", StringComparison.OrdinalIgnoreCase))
-                        {
-                            string attrValue = item.GetString();
-                            if (!string.Equals(attrValue, "false", StringComparison.OrdinalIgnoreCase))
-                            {
-                                return true;
-                            }
-                        }
-
-                        pendingName = null;
-                    }
+                    return true;
                 }
+
+                bool? has = await context.EvaluateAsync<bool?>(
+                        "!!document.querySelector('[draggable=true], [draggable=\"\"]')")
+                    .WaitAsync(TimeSpan.FromMilliseconds(500))
+                    .ConfigureAwait(false);
+                return has == true;
             }
             catch (PlaywrightException)
             {
@@ -342,7 +348,8 @@ namespace PlaywrightNative.Chromium
             {
             }
 
-            return false;
+            // Fail open: keep HTML5 intercept if we cannot probe.
+            return true;
         }
 
         private async Task EvaluateInAllFramesAsync(string expression)

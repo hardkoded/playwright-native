@@ -66,17 +66,17 @@ namespace PlaywrightNative.Chromium
         /// <summary>
         /// Dispatches <c>mousePressed</c>. Skipped while an intercepted drag is active.
         /// </summary>
-        public Task DownAsync(double x, double y, Input.MouseButton button, IReadOnlyCollection<Input.MouseButton> buttons, IReadOnlyCollection<Input.KeyboardModifier> modifiers, int clickCount)
+        public async Task DownAsync(double x, double y, Input.MouseButton button, IReadOnlyCollection<Input.MouseButton> buttons, IReadOnlyCollection<Input.KeyboardModifier> modifiers, int clickCount)
         {
             if (_dragManager.IsDragging)
             {
-                return Task.CompletedTask;
+                return;
             }
 
-            _dragManager.NoteMouseDown(x, y);
+            await _dragManager.NoteMouseDownAsync(x, y).ConfigureAwait(false);
             int buttonsMask = buttons.ToCdpMask();
 
-            return _session.SendAsync("Input.dispatchMouseEvent", new
+            await _session.SendAsync("Input.dispatchMouseEvent", new
             {
                 type = "mousePressed",
                 button = button.ToCdpName(),
@@ -86,7 +86,7 @@ namespace PlaywrightNative.Chromium
                 modifiers = modifiers.ToCdpMask(),
                 clickCount,
                 force = buttonsMask > 0 ? 0.5 : 0.0,
-            });
+            }).ConfigureAwait(false);
         }
 
         /// <summary>
