@@ -5174,14 +5174,19 @@ namespace PlaywrightNative.WebKit
                     }
                     else
                     {
-                        // Match AddScriptTag inline content: return the STYLE element
-                        // from one evaluateHandle. The prior sentinel+onload poll added
-                        // extra callFunctionOn traffic that wedged Darwin under suite
-                        // load (mac shard2 ShouldReturnStyleElementHandle). CSP-blocked
-                        // inline styles still lose via RaceWithCspError's console drain.
+                        // Inline content: inject via returnByValue, stash STYLE on
+                        // window, then fetch the handle — same pattern as AddScriptTag.
+                        // Returning STYLE from evaluateHandle in one shot still wedges
+                        // Darwin under suite load (mac shard2 ShouldReturnStyleElementHandle).
                         string contentLiteral = JsonSerializer.Serialize(content);
-                        string expression = $@"(() => {{
+                        string inlineSentinel = "__pwStyleInline_" + Guid.NewGuid().ToString("N");
+                        string inlineElementKey = inlineSentinel + "El";
+                        string inlineSentinelLiteral = JsonSerializer.Serialize(inlineSentinel);
+                        string inlineElementLiteral = JsonSerializer.Serialize(inlineElementKey);
+                        string inlineInject = $@"(() => {{
+                            window[{inlineSentinelLiteral}] = 0;
                             const style = document.createElement('style');
+                            window[{inlineElementLiteral}] = style;
                             style.type = 'text/css';
                             style.appendChild(document.createTextNode({contentLiteral}));
                             let error = null;
@@ -5189,9 +5194,22 @@ namespace PlaywrightNative.WebKit
                             document.head.appendChild(style);
                             if (error)
                                 throw error;
-                            return style;
+                            window[{inlineSentinelLiteral}] = 1;
+                            return true;
                         }})()";
-                        IElementHandle styleHandle = await EvaluateElementHandleAsync(expression).ConfigureAwait(false);
+                        await EvaluateExpressionAsync(inlineInject).ConfigureAwait(false);
+                        await WaitForSentinelInFrameAsync(
+                                _frameManager.MainFrame,
+                                inlineSentinel,
+                                "Failed to inject inline style",
+                                timeoutMs: 5_000)
+                            .ConfigureAwait(false);
+                        IElementHandle styleHandle = await EvaluateElementHandleAsync(
+                                $"window[{inlineElementLiteral}]")
+                            .ConfigureAwait(false);
+                        await EvaluateExpressionAsync(
+                                $"(() => {{ delete window[{inlineSentinelLiteral}]; delete window[{inlineElementLiteral}]; }})()")
+                            .ConfigureAwait(false);
 
                         // Official extra round-trip so async CSP console errors can win.
                         await EvaluateExpressionAsync("true").ConfigureAwait(false);
