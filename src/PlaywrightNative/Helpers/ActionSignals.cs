@@ -268,19 +268,15 @@ namespace PlaywrightNative.Helpers
                 ? (expectNavigation ? 64 : 16)
                 : (expectNavigation ? 64 : 8);
             int timeoutMs = TimeoutSettings.TimeoutMs(timeout);
-            bool sawNavigationSignal = false;
             for (int i = 0; i < pollLimit; i++)
             {
                 if (sawDocumentRequest != null && sawDocumentRequest())
                 {
-                    sawNavigationSignal = true;
                     break;
                 }
 
                 if (barrier != null && barrier.HasPendingNavigations)
                 {
-                    sawNavigationSignal = true;
-
                     // Navigable WebKit clicks must not early-break on willCheck alone:
                     // didCheck cancel releases that retain before the form GET is
                     // retained, and WaitForAsync would then return too early.
@@ -333,8 +329,14 @@ namespace PlaywrightNative.Helpers
             // under Windows suite load resolved click as route|click|navigated
             // (ShouldAwaitFormGetOnClick); WebKit also needs this for
             // ShouldWorkWithGotoFollowingClick.
+            //
+            // Do not settle on willCheck-only signals when no document request
+            // was seen: WaitUntilIdleAsync then waits the full click budget for
+            // a commit that never lands (Darwin ShouldNotHitScrollBar under
+            // suite load — orphaned policy retains after a horizontal overflow
+            // scroll click).
             if (page != null
-                && (expectNavigation || (!chromiumPage && sawNavigationSignal)))
+                && (expectNavigation || (!chromiumPage && sawDocAtDecision)))
             {
                 await WaitForWebKitNavigationSettleAsync(
                     page,
@@ -403,8 +405,18 @@ namespace PlaywrightNative.Helpers
                 }
                 else if (barrier != null && barrier.HasPendingNavigations)
                 {
-                    await barrier.WaitUntilIdleAsync(timeout).ConfigureAwait(false);
-                    continue;
+                    // Non-navigating clicks: late willCheck must not burn the
+                    // settle budget via WaitUntilIdleAsync (full timeout per
+                    // retain). Drop orphans and keep polling for a URL flip.
+                    if (!expectNavigation)
+                    {
+                        barrier.DropOrphanedNavigations();
+                    }
+                    else
+                    {
+                        await barrier.WaitUntilIdleAsync(timeout).ConfigureAwait(false);
+                        continue;
+                    }
                 }
 
                 await Task.Delay(16).ConfigureAwait(false);
