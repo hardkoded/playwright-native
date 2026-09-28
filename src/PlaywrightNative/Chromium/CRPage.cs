@@ -2880,13 +2880,15 @@ namespace PlaywrightNative.Chromium
                             @"(() => ({
   href: location.href,
   ready: document.readyState,
-  hasBody: !!document.body
+  hasBody: !!document.body,
+  childCount: document.body ? document.body.childNodes.length : 0
 }))()")
                             .ConfigureAwait(false);
                         if (snapshot.ValueKind == JsonValueKind.Object
                             && snapshot.TryGetProperty("href", out JsonElement hrefEl)
                             && snapshot.TryGetProperty("ready", out JsonElement readyEl)
-                            && snapshot.TryGetProperty("hasBody", out JsonElement bodyEl))
+                            && snapshot.TryGetProperty("hasBody", out JsonElement bodyEl)
+                            && snapshot.TryGetProperty("childCount", out JsonElement childEl))
                         {
                             string href = hrefEl.GetString();
                             string readyState = readyEl.GetString();
@@ -2895,7 +2897,16 @@ namespace PlaywrightNative.Chromium
                             bool ready = string.Equals(readyState, "interactive", StringComparison.Ordinal)
                                 || string.Equals(readyState, "complete", StringComparison.Ordinal);
                             bool hasBody = bodyEl.ValueKind == JsonValueKind.True;
-                            if (hrefIsData && ready && hasBody)
+                            int childCount = childEl.ValueKind == JsonValueKind.Number
+                                ? childEl.GetInt32()
+                                : 0;
+
+                            // Require at least one body child when the data: URL carries
+                            // markup; empty data:text/html, still has ready+body with 0
+                            // children and must not block GoTo.
+                            bool markupExpected = targetUrl.Contains('<');
+                            if (hrefIsData && ready && hasBody
+                                && (!markupExpected || childCount > 0))
                             {
                                 return true;
                             }
@@ -3247,22 +3258,17 @@ namespace PlaywrightNative.Chromium
                 // When protocol events lag on persistent Windows, confirm via
                 // readyState so GoTo cannot hang the full navigation timeout
                 // (DialogAcceptShouldWork).
-                // Require DocumentId match or evaluate confirm — frame.Url alone
-                // can publish before querySelector sees the new DOM under Windows
-                // suite load (TypeAsyncProducesText NRE).
-                bool dataNavigationLanded =
-                    !string.IsNullOrEmpty(expectedDocumentId)
-                    && string.Equals(frame.DocumentId, expectedDocumentId, StringComparison.Ordinal);
+                // Always confirm via evaluate before replaying load — DocumentId
+                // from Page.navigate (and frame.Url) can land before querySelector
+                // sees the new body under Windows suite load
+                // (UncheckAsyncUnchecksBox / FocusAsyncSetsActiveElement NRE).
                 if (!string.IsNullOrEmpty(url)
                     && url.StartsWith("data:", StringComparison.OrdinalIgnoreCase)
                     && !networkIdle
                     && !frame.LifecycleEvents.Contains(targetLifecycleEvent))
                 {
-                    if (!dataNavigationLanded)
-                    {
-                        dataNavigationLanded = await TryConfirmDataDocumentReadyAsync(frame, url)
-                            .ConfigureAwait(false);
-                    }
+                    bool dataNavigationLanded = await TryConfirmDataDocumentReadyAsync(frame, url)
+                        .ConfigureAwait(false);
 
                     if (dataNavigationLanded)
                     {

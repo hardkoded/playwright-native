@@ -139,7 +139,10 @@ namespace PlaywrightNative.Helpers
                 }
                 catch (TimeoutException)
                 {
-                    throw new TimeoutException($"element.waitForElementState({wanted}): Timeout {timeoutMs}ms exceeded.");
+                    // Per-probe race expired — keep polling until the outer timeout
+                    // (Windows SelectOption 1000ms Visible waits were aborting on a
+                    // single slow CDP evaluate under suite load).
+                    done = false;
                 }
                 catch (PlaywrightException ex) when (!IsNotAttached(ex))
                 {
