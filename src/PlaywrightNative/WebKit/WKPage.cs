@@ -5237,6 +5237,9 @@ namespace PlaywrightNative.WebKit
                         // window, then fetch the handle — same pattern as AddScriptTag.
                         // Returning STYLE from evaluateHandle in one shot still wedges
                         // Darwin under suite load (mac shard2 ShouldReturnStyleElementHandle).
+                        // Use the frame evaluate path (not EvaluateExpressionAsync) so
+                        // blank→blank GoTo context recycling matches AddScriptTag.
+                        WKFrame styleFrame = _frameManager.MainFrame;
                         string contentLiteral = JsonSerializer.Serialize(content);
                         string inlineSentinel = "__pwStyleInline_" + Guid.NewGuid().ToString("N");
                         string inlineElementKey = inlineSentinel + "El";
@@ -5256,22 +5259,24 @@ namespace PlaywrightNative.WebKit
                             window[{inlineSentinelLiteral}] = 1;
                             return true;
                         }})()";
-                        await EvaluateExpressionAsync(inlineInject).ConfigureAwait(false);
+                        await EvaluateInFrameAsync<object>(styleFrame, inlineInject).ConfigureAwait(false);
                         await WaitForSentinelInFrameAsync(
-                                _frameManager.MainFrame,
+                                styleFrame,
                                 inlineSentinel,
                                 "Failed to inject inline style",
                                 timeoutMs: 1_000)
                             .ConfigureAwait(false);
-                        IElementHandle styleHandle = await EvaluateElementHandleAsync(
+                        IElementHandle styleHandle = await EvaluateElementHandleInFrameAsync(
+                                styleFrame,
                                 $"window[{inlineElementLiteral}]")
                             .ConfigureAwait(false);
-                        await EvaluateExpressionAsync(
+                        await EvaluateInFrameAsync<object>(
+                                styleFrame,
                                 $"(() => {{ delete window[{inlineSentinelLiteral}]; delete window[{inlineElementLiteral}]; }})()")
                             .ConfigureAwait(false);
 
                         // Official extra round-trip so async CSP console errors can win.
-                        await EvaluateExpressionAsync("true").ConfigureAwait(false);
+                        await EvaluateInFrameAsync<object>(styleFrame, "true").ConfigureAwait(false);
                         return styleHandle;
                     }
                 }).ConfigureAwait(false);
@@ -10454,10 +10459,11 @@ namespace PlaywrightNative.WebKit
                     }
 
                     // Bound readyState evaluate — Darwin Runtime.evaluate can wedge
-                    // forever under suite load. An unbounded await here also wedged
-                    // NavigateAsync.finally (awaits blankWedgeSeedTask), hanging
-                    // blank→blank GoTo past the NUnit budget
-                    // (FramesShouldIncludeMainAndIframe on macOS CI).
+                    // under suite load. Do not abandon an in-flight evaluate and start
+                    // another: orphaned Runtime.evaluate calls wedge the target session
+                    // so the following AddStyleTag / handle evaluate hangs until the
+                    // NUnit budget (ShouldReturnStyleElementHandle on mac shard2 after
+                    // blank→blank GoTo). Await or observe the same task before retrying.
                     string readyState;
                     try
                     {
@@ -10466,13 +10472,28 @@ namespace PlaywrightNative.WebKit
                             .ConfigureAwait(false);
                         if (readyRace != readyTask)
                         {
-                            await Task.Delay(25).ConfigureAwait(false);
-                            continue;
+                            Task observed = await Task.WhenAny(readyTask, Task.Delay(2_000))
+                                .ConfigureAwait(false);
+                            if (observed != readyTask)
+                            {
+                                _ = readyTask.ContinueWith(
+                                    static t => _ = t.Exception,
+                                    CancellationToken.None,
+                                    TaskContinuationOptions.OnlyOnFaulted,
+                                    TaskScheduler.Default);
+                                await Task.Delay(25).ConfigureAwait(false);
+                                continue;
+                            }
                         }
 
                         readyState = await readyTask.ConfigureAwait(false);
                     }
                     catch (PlaywrightException)
+                    {
+                        await Task.Delay(25).ConfigureAwait(false);
+                        continue;
+                    }
+                    catch (TimeoutException)
                     {
                         await Task.Delay(25).ConfigureAwait(false);
                         continue;
