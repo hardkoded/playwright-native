@@ -45,7 +45,11 @@ namespace PlaywrightNative.Helpers
         /// Click-then-<c>WaitForDialog</c> pattern (browsercontext-events
         /// inline-script popup) can subscribe before an in-process prompt is
         /// auto-dismissed. Yield alone can starve under macOS suite-load
-        /// thread-pool pressure; a 1ms delay gives waiters a reliable turn.
+        /// thread-pool pressure; a short delay gives waiters a reliable turn.
+        /// Windows Chromium headful under suite load needs more than 1ms —
+        /// CDP can deliver <c>javascriptDialogOpening</c> on a background
+        /// thread before the test arms <c>WaitForDialogAsync</c>
+        /// (<c>ShouldBeAbleToCaptureAlert</c>).
         /// </summary>
         /// <param name="emitAndMaybeDismiss">
         /// Captures listeners, raises <c>Dialog</c>, then auto-dismisses when
@@ -181,7 +185,11 @@ namespace PlaywrightNative.Helpers
             try
             {
                 await Task.Yield();
-                await Task.Delay(1).ConfigureAwait(false);
+
+                // 50ms: Windows Chromium headful suite load can deliver the
+                // dialog CDP event before WaitForDialogAsync subscribes when
+                // evaluate is started first (ShouldBeAbleToCaptureAlert).
+                await Task.Delay(50).ConfigureAwait(false);
                 emitAndMaybeDismiss();
             }
 #pragma warning disable RCS1075
