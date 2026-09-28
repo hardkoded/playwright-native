@@ -3337,13 +3337,29 @@ namespace PlaywrightNative.WebKit
                         .ConfigureAwait(false);
                     if (blankOrFileToBlank && completed == blankWedgeProbe)
                     {
-                        blankWedgeProbe = new TaskCompletionSource<bool>(
-                            TaskCreationOptions.RunContinuationsAsynchronously).Task;
                         if (!sendTask.IsCompleted && !waitTcs.Task.IsCompleted)
                         {
-                            int wedgeSeedGeneration = Interlocked.Increment(ref _lifecycleSeedGeneration);
-                            blankWedgeSeedTask = SeedLifecycleFromReadyStateAfterDataNavigationAsync(
-                                wedgeSeedGeneration);
+                            // Only start a new seed when the previous one finished.
+                            // Re-arming must not bump _lifecycleSeedGeneration while a
+                            // seed is still polling — that aborted exhaust and left
+                            // blank→blank waiters armed until NUnit killed the test.
+                            if (blankWedgeSeedTask.IsCompleted)
+                            {
+                                int wedgeSeedGeneration = Interlocked.Increment(ref _lifecycleSeedGeneration);
+                                blankWedgeSeedTask = SeedLifecycleFromReadyStateAfterDataNavigationAsync(
+                                    wedgeSeedGeneration);
+                            }
+
+                            // Keep probing until navigate RPC or waiters complete —
+                            // a single never-completing replacement left no recovery
+                            // when SeedLifecycle stuck on Runtime.evaluate
+                            // (FramesShouldIncludeMainAndIframe on macOS CI).
+                            blankWedgeProbe = Task.Delay(2_000, blankWedgeProbeCts.Token);
+                        }
+                        else
+                        {
+                            blankWedgeProbe = new TaskCompletionSource<bool>(
+                                TaskCreationOptions.RunContinuationsAsynchronously).Task;
                         }
 
                         continue;
@@ -3564,9 +3580,18 @@ namespace PlaywrightNative.WebKit
                     blankWedgeProbeCts.Dispose();
                 }
 
+                // Invalidate in-flight seed so it can leave its poll loop; still
+                // bound the await — a wedged readyState evaluate must not block
+                // NavigateAsync return after waiters already completed/timed out.
+                Interlocked.Increment(ref _lifecycleSeedGeneration);
                 try
                 {
-                    await blankWedgeSeedTask.ConfigureAwait(false);
+                    Task seedDone = await Task.WhenAny(blankWedgeSeedTask, Task.Delay(500))
+                        .ConfigureAwait(false);
+                    if (seedDone == blankWedgeSeedTask)
+                    {
+                        await blankWedgeSeedTask.ConfigureAwait(false);
+                    }
                 }
                 catch (PlaywrightException)
                 {
@@ -10394,11 +10419,24 @@ namespace PlaywrightNative.WebKit
                         continue;
                     }
 
+                    // Bound readyState evaluate — Darwin Runtime.evaluate can wedge
+                    // forever under suite load. An unbounded await here also wedged
+                    // NavigateAsync.finally (awaits blankWedgeSeedTask), hanging
+                    // blank→blank GoTo past the NUnit budget
+                    // (FramesShouldIncludeMainAndIframe on macOS CI).
                     string readyState;
                     try
                     {
-                        readyState = await seedContext.EvaluateAsync<string>("document.readyState")
+                        Task<string> readyTask = seedContext.EvaluateAsync<string>("document.readyState");
+                        Task readyRace = await Task.WhenAny(readyTask, Task.Delay(250))
                             .ConfigureAwait(false);
+                        if (readyRace != readyTask)
+                        {
+                            await Task.Delay(25).ConfigureAwait(false);
+                            continue;
+                        }
+
+                        readyState = await readyTask.ConfigureAwait(false);
                     }
                     catch (PlaywrightException)
                     {
