@@ -242,12 +242,16 @@ namespace PlaywrightNative.Helpers
         const hay = exact ? String(raw || '').replace(/\s+/g, ' ').trim() : String(raw || '').replace(/\s+/g, ' ').trim().toLowerCase();
         return exact ? hay === String(text || '').replace(/\s+/g, ' ').trim() : hay.indexOf(needle) !== -1;
     };
+    // Prefer textContent: WebKit Runtime.evaluate can stall indefinitely on
+    // label.innerText (layout) inside freshly attached srcdoc iframes, burning
+    // the 20s command timeout and the NUnit 30s budget (AttributeGetBy iframe).
+    const labelText = (node) => String((node && (node.textContent || node.innerText)) || '');
     const labelledByText = (el) => {
         const labelled = el.getAttribute('aria-labelledby');
         if (!labelled) return '';
         const parts = String(labelled).split(/\s+/).map((id) => {
             const n = document.getElementById(id);
-            return n ? (n.innerText || n.textContent || '') : '';
+            return n ? labelText(n) : '';
         });
         return parts.join(' ').replace(/\s+/g, ' ').trim();
     };
@@ -262,7 +266,7 @@ namespace PlaywrightNative.Helpers
     const labels = document.querySelectorAll('label');
     for (let i = 0; i < labels.length; i++) {
         const label = labels[i];
-        if (!ok(label.innerText || label.textContent || '')) continue;
+        if (!ok(labelText(label))) continue;
         const forId = label.getAttribute('for');
         if (forId) {
             const el = document.getElementById(forId);
@@ -291,12 +295,14 @@ namespace PlaywrightNative.Helpers
         re.lastIndex = 0;
         return re.test(String(raw || ''));
     };
+    // Prefer textContent — see FindAllByLabel (WebKit srcdoc iframe evaluate stall).
+    const labelText = (node) => String((node && (node.textContent || node.innerText)) || '');
     const labelledByText = (el) => {
         const labelled = el.getAttribute('aria-labelledby');
         if (!labelled) return '';
         const parts = String(labelled).split(/\s+/).map((id) => {
             const n = document.getElementById(id);
-            return n ? (n.innerText || n.textContent || '') : '';
+            return n ? labelText(n) : '';
         });
         return parts.join(' ').replace(/\s+/g, ' ').trim();
     };
@@ -311,7 +317,7 @@ namespace PlaywrightNative.Helpers
     const labels = document.querySelectorAll('label');
     for (let i = 0; i < labels.length; i++) {
         const label = labels[i];
-        if (!ok(label.innerText || label.textContent || '')) continue;
+        if (!ok(labelText(label))) continue;
         const forId = label.getAttribute('for');
         if (forId) {
             const el = document.getElementById(forId);

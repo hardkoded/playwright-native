@@ -426,7 +426,21 @@ namespace PlaywrightNative.WebKit
         {
             EnsureNotDisposed();
             (string contentFrameId, _) = await _page.DescribeNodeFrameIdsAsync(ObjectId).ConfigureAwait(false);
-            return _page.TryGetFrameById(contentFrameId);
+            if (string.IsNullOrEmpty(contentFrameId))
+            {
+                return null;
+            }
+
+            IFrame frame = _page.TryGetFrameById(contentFrameId);
+            if (frame != null)
+            {
+                return frame;
+            }
+
+            // DOM.describeNode can report contentFrameId a beat before Page.frameAttached
+            // registers the child (srcdoc SetContent → FrameLocator GetBy*). Brief poll
+            // so the first locator resolve does not burn a full WaitForHandle cycle.
+            return await _page.WaitForFrameByIdAsync(contentFrameId, 250).ConfigureAwait(false);
         }
 
         /// <inheritdoc/>

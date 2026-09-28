@@ -2414,6 +2414,40 @@ namespace PlaywrightNative.WebKit
         }
 
         /// <summary>
+        /// Polls until <paramref name="frameId"/> is registered in the frame manager,
+        /// or <paramref name="timeoutMs"/> elapses.
+        /// </summary>
+        /// <param name="frameId">The protocol frame id.</param>
+        /// <param name="timeoutMs">Maximum wait in milliseconds.</param>
+        /// <returns>The public frame, or <see langword="null"/> when still unknown.</returns>
+        internal async Task<IFrame> WaitForFrameByIdAsync(string frameId, int timeoutMs)
+        {
+            if (string.IsNullOrEmpty(frameId))
+            {
+                return null;
+            }
+
+            IFrame existing = TryGetFrameById(frameId);
+            if (existing != null || timeoutMs <= 0)
+            {
+                return existing;
+            }
+
+            System.Diagnostics.Stopwatch sw = System.Diagnostics.Stopwatch.StartNew();
+            while (sw.ElapsedMilliseconds < timeoutMs)
+            {
+                await Task.Delay(20).ConfigureAwait(false);
+                IFrame frame = TryGetFrameById(frameId);
+                if (frame != null)
+                {
+                    return frame;
+                }
+            }
+
+            return TryGetFrameById(frameId);
+        }
+
+        /// <summary>
         /// Resolves a protocol owner-frame id on this page, or another page in
         /// the same context when the node was adopted.
         /// </summary>
