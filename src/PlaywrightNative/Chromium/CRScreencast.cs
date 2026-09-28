@@ -193,10 +193,17 @@ namespace PlaywrightNative.Chromium
         /// Temporarily stops CDP screencast around <c>Page.captureScreenshot</c>.
         /// Concurrent screencast + screenshot can detach the target on Windows
         /// Chromium headful (<c>start should finish when page is closed</c>).
+        /// Headless keeps screencast active so <c>EnsureSomeFrames</c> can flush
+        /// into the recording without deadlocking async <c>onFrame</c> backpressure.
         /// </summary>
         /// <returns>A task that completes when screencast is paused or a no-op.</returns>
         internal Task PauseForScreenshotAsync()
         {
+            if (!ShouldPauseForScreenshot())
+            {
+                return Task.CompletedTask;
+            }
+
             lock (_gate)
             {
                 if (!_started || _pausedForScreenshot)
@@ -227,6 +234,18 @@ namespace PlaywrightNative.Chromium
             return ResumeAfterScreenshotCoreAsync();
         }
 
+        private static bool ShouldPauseForScreenshot()
+        {
+            if (!OperatingSystem.IsWindows())
+            {
+                return false;
+            }
+
+            string headless = Environment.GetEnvironmentVariable("HEADLESS");
+            return !string.Equals(headless, "true", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(headless, "1", StringComparison.OrdinalIgnoreCase);
+        }
+
         private async Task PauseForScreenshotCoreAsync()
         {
             _page.CrPage.Session.MessageReceived -= OnMessage;
@@ -250,6 +269,18 @@ namespace PlaywrightNative.Chromium
 
         private async Task ResumeAfterScreenshotCoreAsync()
         {
+            TaskCompletionSource<bool> frameSeen = new TaskCompletionSource<bool>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+
+            void OnFirstFrame(string method, JsonElement? parameters)
+            {
+                if (method == "Page.screencastFrame")
+                {
+                    frameSeen.TrySetResult(true);
+                }
+            }
+
+            _page.CrPage.Session.MessageReceived += OnFirstFrame;
             _page.CrPage.Session.MessageReceived += OnMessage;
             try
             {
@@ -264,6 +295,7 @@ namespace PlaywrightNative.Chromium
             }
             catch (TargetClosedException)
             {
+                _page.CrPage.Session.MessageReceived -= OnFirstFrame;
                 _page.CrPage.Session.MessageReceived -= OnMessage;
                 lock (_gate)
                 {
@@ -274,6 +306,7 @@ namespace PlaywrightNative.Chromium
             }
             catch (PlaywrightException)
             {
+                _page.CrPage.Session.MessageReceived -= OnFirstFrame;
                 _page.CrPage.Session.MessageReceived -= OnMessage;
                 lock (_gate)
                 {
@@ -283,9 +316,31 @@ namespace PlaywrightNative.Chromium
                 return;
             }
 
-            lock (_gate)
+            try
             {
-                _pausedForScreenshot = false;
+                // Re-prime one CDP frame after the pause so headed Windows
+                // EnsureSomeFrames still lands a sample in the recording.
+                // Do not await the deliver chain: async onFrame backpressure
+                // can hold it while screenshot is still in flight.
+                try
+                {
+                    await _page.EvaluateAsync(
+                        "() => new Promise(f => requestAnimationFrame(() => requestAnimationFrame(f)))")
+                        .ConfigureAwait(false);
+                }
+                catch (PlaywrightException)
+                {
+                }
+
+                await Task.WhenAny(frameSeen.Task, Task.Delay(500)).ConfigureAwait(false);
+            }
+            finally
+            {
+                _page.CrPage.Session.MessageReceived -= OnFirstFrame;
+                lock (_gate)
+                {
+                    _pausedForScreenshot = false;
+                }
             }
         }
 
