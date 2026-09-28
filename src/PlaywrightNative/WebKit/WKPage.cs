@@ -5449,7 +5449,14 @@ namespace PlaywrightNative.WebKit
             }
 
             Response?.Invoke(this, response);
-            if (response?.WKRequest?.Finished == true)
+
+            // Redirect hops must emit requestfinished when the Response is public.
+            // Under Ubuntu WebKit suite load, loadingFinished / willBeSent finish can
+            // race such that RaiseRequestFinished is skipped after Response was already
+            // raised — ShouldSupportRedirects then sees GET,302 without DONE.
+            if (response?.WKRequest != null
+                && (response.WKRequest.Finished
+                    || ResponseHeaders.IsRedirectStatus(response.Status)))
             {
                 OnRequestFinished(response.WKRequest);
             }
