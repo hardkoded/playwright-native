@@ -92,37 +92,10 @@ namespace PlaywrightNative.Helpers
                     // its body; if waitForEvent delayed subscribe until after that yield,
                     // console.log from a racing evaluate could fire with no listener
                     // (tracing "should not emit after w/o before" hangs 30s).
-                    // Replay the most recent console message after subscribe when it
-                    // raced ahead under Windows headful + tracing snapshots.
-                    Task<T> consoleWait = WaitTypedAsync<T, IConsoleMessage>(
-                        page,
-                        h => page.Console += h,
-                        h => page.Console -= h,
-                        matches,
-                        timeout,
-                        existingAfterSubscribe: async () =>
-                        {
-                            IReadOnlyList<IConsoleMessage> messages =
-                                await page.ConsoleMessagesAsync().ConfigureAwait(false);
-                            if (messages == null || messages.Count == 0)
-                            {
-                                return Array.Empty<T>();
-                            }
-
-                            IConsoleMessage last = messages[messages.Count - 1];
-                            if (last != null && matches((T)(object)last))
-                            {
-                                return new T[] { (T)(object)last };
-                            }
-
-                            return Array.Empty<T>();
-                        });
-                    return ActionTrace.RunAsync(
-                        page.Context,
-                        "Wait for event \"console\"",
-                        "Page",
-                        "waitForEvent",
-                        () => consoleWait);
+                    // Replay only messages that arrived after this wait started — replaying
+                    // the absolute last ConsoleMessages entry re-delivers prior logs
+                    // (ShouldFireOrientationchangeEvent got "1" for the second wait).
+                    return WaitConsoleEventAsync(page, matches, timeout);
                 case "Dialog":
                     // Resolve inline so waitForEvent('dialog') completes during
                     // RaiseDialog (same as Load). Deferred predicate ContinueWith
@@ -382,6 +355,62 @@ namespace PlaywrightNative.Helpers
                 abortOnPageClose: page,
                 abortOnPageCrash: true).ConfigureAwait(false);
             return (T)(object)PageErrorText.Parse(message);
+        }
+
+        /// <summary>
+        /// Console waitForEvent: capture the ConsoleMessages baseline before
+        /// ActionTrace can yield, subscribe, then replay only messages that
+        /// arrived after that baseline (race under tracing Snapshots).
+        /// </summary>
+        private static async Task<T> WaitConsoleEventAsync<T>(
+            IPage page,
+            Func<T, bool> matches,
+            float? timeout)
+        {
+            int consoleBaseline = 0;
+            try
+            {
+                IReadOnlyList<IConsoleMessage> existing =
+                    await page.ConsoleMessagesAsync().ConfigureAwait(false);
+                consoleBaseline = existing?.Count ?? 0;
+            }
+            catch (Exception)
+            {
+                consoleBaseline = 0;
+            }
+
+            Task<T> consoleWait = WaitTypedAsync<T, IConsoleMessage>(
+                page,
+                h => page.Console += h,
+                h => page.Console -= h,
+                matches,
+                timeout,
+                existingAfterSubscribe: async () =>
+                {
+                    IReadOnlyList<IConsoleMessage> messages =
+                        await page.ConsoleMessagesAsync().ConfigureAwait(false);
+                    if (messages == null || messages.Count <= consoleBaseline)
+                    {
+                        return Array.Empty<T>();
+                    }
+
+                    for (int i = consoleBaseline; i < messages.Count; i++)
+                    {
+                        IConsoleMessage msg = messages[i];
+                        if (msg != null && matches((T)(object)msg))
+                        {
+                            return new T[] { (T)(object)msg };
+                        }
+                    }
+
+                    return Array.Empty<T>();
+                });
+            return await ActionTrace.RunAsync(
+                page.Context,
+                "Wait for event \"console\"",
+                "Page",
+                "waitForEvent",
+                () => consoleWait).ConfigureAwait(false);
         }
 
         private static async Task<T> WaitTypedAsync<T, TEvent>(
