@@ -3091,6 +3091,14 @@ namespace PlaywrightNative.Chromium
             Closed += OnClosed;
             Crashed += OnCrashed;
 
+            // Crash may have landed before subscribe (suite-load renderer death
+            // during LaunchPersistent about:blank). Fail fast instead of hanging
+            // the full navigation timeout.
+            if (_crashed)
+            {
+                OnCrashed(this, EventArgs.Empty);
+            }
+
             // Race Page.navigate with the navigation timeout. A hanging server
             // can keep the CDP command outstanding; official progress.race
             // aborts the whole goto, not just the lifecycle wait.
@@ -4909,6 +4917,10 @@ namespace PlaywrightNative.Chromium
         /// </summary>
         internal void DidClose()
         {
+            // Cancel any pending chrome://crash Page.crash probe — DidClose means
+            // this session must not receive a delayed kill meant for a prior probe.
+            Interlocked.Increment(ref _chromeCrashFallbackEpoch);
+
             _logger?.LogDebug("Page {TargetId} closed.", _targetId);
             _client.MessageReceived -= OnSessionEvent;
             _client.Dispose();
@@ -5573,11 +5585,19 @@ namespace PlaywrightNative.Chromium
 
         /// <summary>
         /// Official Chromium crash probe is <c>chrome://crash</c>. On some Windows
-        /// headful hosts <c>Inspector.targetCrashed</c> is delayed or omitted; arm a
+        /// hosts <c>Inspector.targetCrashed</c> is delayed or omitted; arm a
         /// <c>Page.crash</c> fallback (same idea as WebKit's EnsureCrashReported).
+        /// Linux/macOS deliver <c>Inspector.targetCrashed</c> reliably — skip the
+        /// synthetic <c>Page.crash</c> there so a delayed probe cannot kill a later
+        /// non-crash document under suite load (persistent GoTo flakes on Ubuntu).
         /// </summary>
         private void ArmChromeCrashFallback()
         {
+            if (!OperatingSystem.IsWindows())
+            {
+                return;
+            }
+
             int epoch = Interlocked.Increment(ref _chromeCrashFallbackEpoch);
             _ = EnsureChromeCrashReportedAsync(epoch);
         }
@@ -5597,10 +5617,13 @@ namespace PlaywrightNative.Chromium
             // crash probes). Never Page.crash a recycled or closed session.
             // Epoch mismatch means a later navigation cancelled this probe so we
             // do not kill an unrelated document under suite load.
+            // Also refuse once the frame shows a real http(s)/file URL — epoch
+            // cancel can race the Delay, and Page.crash must not murder EmptyPage.
             if (epoch != Volatile.Read(ref _chromeCrashFallbackEpoch)
                 || _crashed
                 || _client.IsClosed
-                || _closedTcs.Task.IsCompleted)
+                || _closedTcs.Task.IsCompleted
+                || !ChromeCrashFallbackStillOnProbeDocument())
             {
                 return;
             }
@@ -5628,10 +5651,31 @@ namespace PlaywrightNative.Chromium
             if (epoch == Volatile.Read(ref _chromeCrashFallbackEpoch)
                 && !_crashed
                 && !_client.IsClosed
-                && !_closedTcs.Task.IsCompleted)
+                && !_closedTcs.Task.IsCompleted
+                && ChromeCrashFallbackStillOnProbeDocument())
             {
                 OnInspectorTargetCrashed();
             }
+        }
+
+        /// <summary>
+        /// Whether the main frame is still on a crash-probe document (blank or
+        /// <c>chrome://crash|kill|hang</c>). Once GoTo lands an application URL,
+        /// a delayed <c>Page.crash</c> must not run.
+        /// </summary>
+        /// <returns><see langword="true"/> when the probe may still fire.</returns>
+        private bool ChromeCrashFallbackStillOnProbeDocument()
+        {
+            string url = MainFrame?.Url;
+            if (string.IsNullOrEmpty(url)
+                || string.Equals(url, "about:blank", StringComparison.OrdinalIgnoreCase)
+                || url.StartsWith("about:blank?", StringComparison.OrdinalIgnoreCase)
+                || url.StartsWith("about:blank#", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            return IsChromiumCrashUrl(url);
         }
 
         private bool IsChromiumCrashUrl(string url)
