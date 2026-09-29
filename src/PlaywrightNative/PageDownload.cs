@@ -42,6 +42,7 @@ namespace PlaywrightNative
         private string _suggestedFilename;
         private bool _deleted;
         private bool _eventFired;
+        private Task _promoteTask = Task.CompletedTask;
 
         internal PageDownload(
             IPage page,
@@ -92,12 +93,14 @@ namespace PlaywrightNative
         public async Task DeleteAsync()
         {
             string path = await PathAsync().ConfigureAwait(false);
-            if (File.Exists(path))
-            {
-                File.Delete(path);
-            }
 
+            // Abort / finish promote before unlink — Windows cannot delete a
+            // file while PromoteCompletedFile still holds a ReadWrite stream
+            // (ShouldDeleteFile on winhl).
             _deleted = true;
+            await WaitForPromoteAsync().ConfigureAwait(false);
+            DeleteFileWithRetry(path);
+            TryDeletePromotedCopies();
         }
 
         /// <inheritdoc/>
@@ -223,7 +226,16 @@ namespace PlaywrightNative
                 return;
             }
 
+            // Mark deleted first so an in-flight promote stops holding the
+            // browser artifact (ShouldDeleteDownloadsOnContextDestruction).
             _deleted = true;
+            Task promote = _promoteTask;
+            DateTime deadline = DateTime.UtcNow.AddSeconds(2);
+            while (!promote.IsCompleted && DateTime.UtcNow < deadline)
+            {
+                System.Threading.Thread.Sleep(20);
+            }
+
             TryDeleteFile(TryFindBrowserArtifact());
             TryDeletePromotedCopies();
             MarkFailed(CanceledError);
@@ -242,11 +254,14 @@ namespace PlaywrightNative
                 return;
             }
 
-            _ = Task.Run(() =>
+            _promoteTask = Task.Run(() =>
             {
                 try
                 {
-                    PromoteCompletedFile();
+                    if (!_deleted)
+                    {
+                        PromoteCompletedFile();
+                    }
                 }
                 catch (IOException)
                 {
@@ -280,7 +295,8 @@ namespace PlaywrightNative
         /// </summary>
         private void PromoteCompletedFile()
         {
-            if (string.IsNullOrEmpty(_publicDownloadsDirectory)
+            if (_deleted
+                || string.IsNullOrEmpty(_publicDownloadsDirectory)
                 || string.IsNullOrEmpty(_downloadsDirectory)
                 || string.Equals(_publicDownloadsDirectory, _downloadsDirectory, StringComparison.OrdinalIgnoreCase))
             {
@@ -290,6 +306,11 @@ namespace PlaywrightNative
             string source = null;
             for (int findAttempt = 0; findAttempt < 50; findAttempt++)
             {
+                if (_deleted)
+                {
+                    return;
+                }
+
                 source = TryFindFileInDirectory(_downloadsDirectory);
                 if (source != null)
                 {
@@ -299,7 +320,7 @@ namespace PlaywrightNative
                 System.Threading.Thread.Sleep(20);
             }
 
-            if (source == null)
+            if (source == null || _deleted)
             {
                 return;
             }
@@ -334,6 +355,11 @@ namespace PlaywrightNative
             string dest = Path.Combine(_publicDownloadsDirectory, destName);
             for (int attempt = 0; attempt < 50; attempt++)
             {
+                if (_deleted)
+                {
+                    return;
+                }
+
                 string temp = null;
                 try
                 {
@@ -345,6 +371,12 @@ namespace PlaywrightNative
                         Path.GetTempPath(),
                         "pw-promote-" + Guid.NewGuid().ToString("N"));
                     CopyUnlocked(source, temp);
+                    if (_deleted)
+                    {
+                        TryDeleteFile(temp);
+                        return;
+                    }
+
                     if (!WaitUntilReadable(temp))
                     {
                         TryDeleteFile(temp);
@@ -468,17 +500,55 @@ namespace PlaywrightNative
                 return;
             }
 
-            try
+            DeleteFileWithRetry(path);
+        }
+
+        private void DeleteFileWithRetry(string path)
+        {
+            if (string.IsNullOrEmpty(path))
             {
-                if (File.Exists(path))
+                return;
+            }
+
+            for (int attempt = 0; attempt < 50; attempt++)
+            {
+                try
                 {
+                    if (!File.Exists(path))
+                    {
+                        return;
+                    }
+
                     File.Delete(path);
+                    return;
+                }
+                catch (IOException)
+                {
+                    System.Threading.Thread.Sleep(20);
+                }
+                catch (UnauthorizedAccessException)
+                {
+                    System.Threading.Thread.Sleep(20);
                 }
             }
-            catch (IOException)
+        }
+
+        private async Task WaitForPromoteAsync()
+        {
+            Task promote = _promoteTask;
+            if (promote == null || promote.IsCompleted)
+            {
+                return;
+            }
+
+            try
+            {
+                await promote.WithTimeout(() => Task.CompletedTask, 5_000).ConfigureAwait(false);
+            }
+            catch (PlaywrightException)
             {
             }
-            catch (UnauthorizedAccessException)
+            catch (TimeoutException)
             {
             }
         }

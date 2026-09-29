@@ -2158,6 +2158,24 @@ namespace PlaywrightNative.WebKit
                 await WaitForNonBlankPopupUrlAsync().ConfigureAwait(false);
             }
 
+            // window.open(url) commits the destination before inline scripts run.
+            // Chromium waits for a live execution context here; wait for
+            // DOMContentLoaded so evaluate(window.time) works under suite load
+            // (ShouldRunTimeBeforePopup on Linux WebKit).
+            if (!_closed && !PopupOpenedHelper.IsBlankUrl(_mainFrameUrl))
+            {
+                try
+                {
+                    await WaitForLoadStateAsync(LoadState.DOMContentLoaded, 2_000f)
+                        .ConfigureAwait(false);
+                }
+#pragma warning disable RCS1075
+                catch (Exception)
+#pragma warning restore RCS1075
+                {
+                }
+            }
+
             // Closed popups must still raise BrowserContext.Page — otherwise
             // WaitForPageAsync hangs (ConsoleEventShouldWorkInPopup2).
             ReportPopupAsNewOnce();
