@@ -202,8 +202,35 @@ namespace PlaywrightNative.Helpers
                     // Unbounded ElementHandles during navigation can hang the
                     // whole expect/action loop; treat a timed-out probe as not
                     // visible so we skip the handler instead of blocking forever.
-                    if (!await IsAnyVisibleAsync(entry.Locator, queryMs, assumeVisibleOnTimeout: false)
-                        .ConfigureAwait(false))
+                    // Frame-scoped overlays (data: iframe body) can lag ContentFrame
+                    // under Windows headful suite load — briefly retry before skip
+                    // so ShouldWorkWhenOwnerFrameDetaches still removes the iframe.
+                    bool visible = await IsAnyVisibleAsync(
+                            entry.Locator,
+                            queryMs,
+                            assumeVisibleOnTimeout: false)
+                        .ConfigureAwait(false);
+                    if (!visible && IsFrameScopedLocator(entry.Locator))
+                    {
+                        Stopwatch attachSw = Stopwatch.StartNew();
+                        while (!visible && attachSw.ElapsedMilliseconds < 1_500)
+                        {
+                            await Task.Delay(50).ConfigureAwait(false);
+                            queryMs = RemainingQueryMs(timeoutMs, sw);
+                            if (queryMs <= 0 && timeoutMs != Timeout.Infinite)
+                            {
+                                break;
+                            }
+
+                            visible = await IsAnyVisibleAsync(
+                                    entry.Locator,
+                                    queryMs,
+                                    assumeVisibleOnTimeout: false)
+                                .ConfigureAwait(false);
+                        }
+                    }
+
+                    if (!visible)
                     {
                         continue;
                     }

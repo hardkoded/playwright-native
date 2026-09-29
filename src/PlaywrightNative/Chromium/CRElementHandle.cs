@@ -603,7 +603,23 @@ namespace PlaywrightNative.Chromium
         internal async Task<IFrame> ContentFrameAsync()
         {
             EnsureNotDisposed();
-            string frameId = await _page.DescribeNodeContentFrameIdAsync(Context.Session, ObjectId).ConfigureAwait(false);
+
+            // data: iframes under Windows headful suite load can lag both
+            // DOM.describeNode frameId and Page.frameAttached. Poll both so
+            // FrameLocator body locator-handler checkpoints still see the overlay
+            // (ShouldWorkWhenOwnerFrameDetaches).
+            const int attachPollMs = 1_500;
+            string frameId = await _page.DescribeNodeContentFrameIdAsync(Context.Session, ObjectId)
+                .ConfigureAwait(false);
+            if (string.IsNullOrEmpty(frameId))
+            {
+                frameId = await _page.WaitForDescribeNodeContentFrameIdAsync(
+                        Context.Session,
+                        ObjectId,
+                        attachPollMs)
+                    .ConfigureAwait(false);
+            }
+
             if (string.IsNullOrEmpty(frameId))
             {
                 return null;
@@ -615,10 +631,7 @@ namespace PlaywrightNative.Chromium
                 return frame;
             }
 
-            // DOM.describeNode can report frameId before Page.frameAttached registers
-            // the child (data: iframe + FrameLocator body for locator handlers). Brief
-            // poll so the first handler checkpoint does not treat the overlay as gone.
-            return await _page.WaitForFrameByIdAsync(frameId, 250).ConfigureAwait(false);
+            return await _page.WaitForFrameByIdAsync(frameId, attachPollMs).ConfigureAwait(false);
         }
 
         /// <summary>

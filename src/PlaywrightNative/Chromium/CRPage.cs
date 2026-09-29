@@ -2671,6 +2671,42 @@ namespace PlaywrightNative.Chromium
         }
 
         /// <summary>
+        /// Polls <c>DOM.describeNode</c> until the iframe host reports a content
+        /// <c>frameId</c>, or <paramref name="timeoutMs"/> elapses. Used when the
+        /// element is already an <c>IFRAME</c> but CDP has not yet attached the
+        /// child (data: createElement under Windows headful load).
+        /// </summary>
+        /// <param name="session">The CDP session that owns <paramref name="objectId"/>.</param>
+        /// <param name="objectId">The CDP remote object id of the host element.</param>
+        /// <param name="timeoutMs">Maximum wait in milliseconds.</param>
+        /// <returns>The content frame id, or <see langword="null"/>.</returns>
+        internal async Task<string> WaitForDescribeNodeContentFrameIdAsync(
+            CRSession session,
+            string objectId,
+            int timeoutMs)
+        {
+            if (session == null || string.IsNullOrEmpty(objectId) || timeoutMs <= 0)
+            {
+                return null;
+            }
+
+            System.Diagnostics.Stopwatch sw = System.Diagnostics.Stopwatch.StartNew();
+            while (sw.ElapsedMilliseconds < timeoutMs)
+            {
+                string frameId = await DescribeNodeContentFrameIdAsync(session, objectId)
+                    .ConfigureAwait(false);
+                if (!string.IsNullOrEmpty(frameId))
+                {
+                    return frameId;
+                }
+
+                await Task.Delay(20).ConfigureAwait(false);
+            }
+
+            return await DescribeNodeContentFrameIdAsync(session, objectId).ConfigureAwait(false);
+        }
+
+        /// <summary>
         /// Unwraps a public element handle produced by this page.
         /// </summary>
         /// <param name="handle">A public element handle.</param>
