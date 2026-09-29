@@ -1977,38 +1977,67 @@ namespace PlaywrightNative.Helpers
         private static async Task<string> PrefixForAsync(IPage page, IFrame frame)
         {
             State state = GetState(page);
+
+            // Protocol evaluates must stay outside Gate: EnsurePrefixes wraps this in
+            // RaceOrDefault, and a hung Evaluate on a lazy iframe would otherwise keep
+            // Gate held after the waiter abandons — burning the shared SnapshotForAI
+            // budget so CaptureYaml returns empty (ReturnEmptySnapshotWhenIframeIsNotLoaded).
+            try
+            {
+                string existing = await frame.EvaluateAsync<string>(ReadPrefixFunction).ConfigureAwait(false);
+                if (existing != null)
+                {
+                    await state.Gate.WaitAsync().ConfigureAwait(false);
+                    try
+                    {
+                        state.Assigned[frame] = new PrefixSlot(existing, written: true);
+                    }
+                    finally
+                    {
+                        state.Gate.Release();
+                    }
+
+                    return existing;
+                }
+            }
+            catch (PlaywrightException)
+            {
+            }
+            catch (TimeoutException)
+            {
+                if (frame.ParentFrame != null)
+                {
+                    return string.Empty;
+                }
+            }
+
+            // Cross-document navigation clears window.__pwAriaFramePrefix; the next
+            // main-frame assign must mint fN so refs re-number (upstream
+            // "should re-number refs across navigations…"). First assign stays "".
+            // Allocate under Gate only (no awaits) so EnsurePrefixes and Capture cannot
+            // both observe UsedEmptyMainPrefix false then one mint "" while the other
+            // mints f1 (ShouldOmitRedundantNameWhenAContributingWrapperIsCollapsed).
+            string prefix;
             await state.Gate.WaitAsync().ConfigureAwait(false);
             try
             {
-                try
+                if (state.Assigned.TryGetValue(frame, out PrefixSlot slot))
                 {
-                    string existing = await frame.EvaluateAsync<string>(ReadPrefixFunction).ConfigureAwait(false);
-                    if (existing != null)
+                    // Concurrent allocator still writing into the current document.
+                    if (!slot.Written)
                     {
-                        return existing;
+                        return slot.Prefix;
                     }
-                }
-                catch (PlaywrightException)
-                {
-                }
-                catch (TimeoutException)
-                {
-                    if (frame.ParentFrame != null)
-                    {
-                        return string.Empty;
-                    }
+
+                    // Written earlier but window read was null → document navigated;
+                    // drop the stale slot and mint again.
+                    state.Assigned.Remove(frame);
                 }
 
-                // Cross-document navigation clears window.__pwAriaFramePrefix; the next
-                // main-frame assign must mint fN so refs re-number (upstream
-                // "should re-number refs across navigations…"). First assign stays "".
-                // Serialize under Gate so EnsurePrefixes RaceOrDefault and Capture cannot
-                // both observe UsedEmptyMainPrefix false then one mint "" while the other
-                // mints f1 (ShouldOmitRedundantNameWhenAContributingWrapperIsCollapsed).
-                string prefix;
                 if (frame.ParentFrame == null && !state.UsedEmptyMainPrefix)
                 {
                     prefix = string.Empty;
+                    state.UsedEmptyMainPrefix = true;
                 }
                 else
                 {
@@ -2016,24 +2045,36 @@ namespace PlaywrightNative.Helpers
                     prefix = "f" + state.NextFrameId.ToString(CultureInfo.InvariantCulture);
                 }
 
-                try
-                {
-                    await frame.EvaluateAsync<object>(WritePrefixFunction, prefix).ConfigureAwait(false);
-                    if (prefix.Length == 0)
-                    {
-                        state.UsedEmptyMainPrefix = true;
-                    }
-                }
-                catch (PlaywrightException)
-                {
-                }
-
-                return prefix;
+                state.Assigned[frame] = new PrefixSlot(prefix, written: false);
             }
             finally
             {
                 state.Gate.Release();
             }
+
+            try
+            {
+                await frame.EvaluateAsync<object>(WritePrefixFunction, prefix).ConfigureAwait(false);
+            }
+            catch (PlaywrightException)
+            {
+            }
+
+            await state.Gate.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                if (state.Assigned.TryGetValue(frame, out PrefixSlot slot)
+                    && string.Equals(slot.Prefix, prefix, StringComparison.Ordinal))
+                {
+                    state.Assigned[frame] = new PrefixSlot(prefix, written: true);
+                }
+            }
+            finally
+            {
+                state.Gate.Release();
+            }
+
+            return prefix;
         }
 
         private static async Task<IElementHandle> FindInFrameAsync(IFrame frame, string ariaRef)
@@ -2085,9 +2126,24 @@ namespace PlaywrightNative.Helpers
             return state;
         }
 
+        private sealed class PrefixSlot
+        {
+            internal PrefixSlot(string prefix, bool written)
+            {
+                Prefix = prefix;
+                Written = written;
+            }
+
+            internal string Prefix { get; }
+
+            internal bool Written { get; }
+        }
+
         private sealed class State
         {
             internal SemaphoreSlim Gate { get; } = new SemaphoreSlim(1, 1);
+
+            internal Dictionary<IFrame, PrefixSlot> Assigned { get; } = new Dictionary<IFrame, PrefixSlot>();
 
             internal int NextFrameId { get; set; }
 
