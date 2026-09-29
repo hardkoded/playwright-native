@@ -2948,6 +2948,30 @@ namespace PlaywrightNative.Chromium
             int waitMs = timeout <= 0 ? System.Threading.Timeout.Infinite : timeout;
             bool ensureLifecycleOnExit = false;
 
+            // Persistent auto-attach fires InitializeAsync without awaiting it.
+            // NewPageAsync waits; mirror that so the first GoTo does not race
+            // Page/Runtime/Network enable under suite load (Page crashed flakes).
+            if (!InitializedTask.IsCompleted)
+            {
+                try
+                {
+                    await InitializedTask.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+                }
+                catch (TimeoutException)
+                {
+                }
+            }
+
+            if (_crashed)
+            {
+                throw new PlaywrightException($"{apiName}: Page crashed");
+            }
+
+            if (_closedTcs.Task.IsCompleted)
+            {
+                throw new TargetClosedException(DriverMessages.BrowserOrContextClosedExceptionMessage);
+            }
+
             void EnsurePromisedLifecycleRecorded()
             {
                 // FrameNavigated can wipe LifecycleEvents after the wait resolved
@@ -3090,14 +3114,6 @@ namespace PlaywrightNative.Chromium
             _frameManager.FrameNavigated += OnNavigated;
             Closed += OnClosed;
             Crashed += OnCrashed;
-
-            // Crash may have landed before subscribe (suite-load renderer death
-            // during LaunchPersistent about:blank). Fail fast instead of hanging
-            // the full navigation timeout.
-            if (_crashed)
-            {
-                OnCrashed(this, EventArgs.Empty);
-            }
 
             // Race Page.navigate with the navigation timeout. A hanging server
             // can keep the CDP command outstanding; official progress.race

@@ -246,6 +246,7 @@ namespace PlaywrightNative
                 }
 
                 await ApplyPersistentEmulationAsync(context, options).ConfigureAwait(false);
+                await WaitForChromiumPersistentPagesInitializedAsync(context).ConfigureAwait(false);
                 return context;
             }
             catch (Exception ex)
@@ -467,6 +468,49 @@ namespace PlaywrightNative
             finally
             {
                 context.Page -= OnFirstPage;
+            }
+        }
+
+        /// <summary>
+        /// Chromium persistent auto-attach starts <c>CRPage.InitializeAsync</c> without
+        /// awaiting it (unlike <c>NewPageAsync</c>). Wait so the first caller GoTo does
+        /// not race Page/Runtime/Network enable under suite load
+        /// (<c>ContextAddCookiesShouldWork</c> / CacheStorage <c>Page crashed</c>).
+        /// </summary>
+        /// <param name="context">The persistent context just launched.</param>
+        /// <returns>A task that completes when initial pages are initialized or the grace expires.</returns>
+        private static async Task WaitForChromiumPersistentPagesInitializedAsync(IBrowserContext context)
+        {
+            if (context is not Chromium.ChromiumBrowserContext chromium)
+            {
+                return;
+            }
+
+            for (int attempt = 0; attempt < 50 && chromium.Pages.Count == 0; attempt++)
+            {
+                await Task.Delay(20).ConfigureAwait(false);
+            }
+
+            List<Task> inits = new();
+            foreach (IPage page in chromium.Pages)
+            {
+                if (page is Page chromiumPage)
+                {
+                    inits.Add(chromiumPage.CrPage.InitializedTask);
+                }
+            }
+
+            if (inits.Count == 0)
+            {
+                return;
+            }
+
+            try
+            {
+                await Task.WhenAll(inits).WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+            }
+            catch (TimeoutException)
+            {
             }
         }
 
