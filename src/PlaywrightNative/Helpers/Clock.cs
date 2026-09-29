@@ -345,7 +345,12 @@ namespace PlaywrightNative.Helpers
             await Task.Delay(200).ConfigureAwait(false);
 
             int pollDelayMs = 150;
-            while (sw.ElapsedMilliseconds < 60_000)
+
+            // Cap well under typical NUnit 30s budgets so a wedged Darwin session
+            // surfaces "clock: timed out…" instead of an empty-stack abort that
+            // cascades into later GoTo hangs on the same shard
+            // (TimeStringShouldFreezeDateNow on macOS WebKit).
+            while (sw.ElapsedMilliseconds < 12_000)
             {
                 string status = await evaluateStringAsync(poll).ConfigureAwait(false);
                 if (!string.IsNullOrEmpty(status))

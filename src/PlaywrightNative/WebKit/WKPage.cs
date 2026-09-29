@@ -118,6 +118,7 @@ namespace PlaywrightNative.WebKit
         private string _mainFrameId;
         private string _mainFrameUrl = "about:blank";
         private int _lifecycleSeedGeneration;
+        private Task _lifecycleSeedTask = Task.CompletedTask;
         private TaskCompletionSource<bool> _pendingLoadTcs;
         private TaskCompletionSource<bool> _pendingDomContentTcs;
         private TaskCompletionSource<bool> _pendingCommitTcs;
@@ -3379,9 +3380,7 @@ namespace PlaywrightNative.WebKit
                             // blank→blank waiters armed until NUnit killed the test.
                             if (blankWedgeSeedTask.IsCompleted)
                             {
-                                int wedgeSeedGeneration = Interlocked.Increment(ref _lifecycleSeedGeneration);
-                                blankWedgeSeedTask = SeedLifecycleFromReadyStateAfterDataNavigationAsync(
-                                    wedgeSeedGeneration);
+                                blankWedgeSeedTask = StartOwnedLifecycleSeedAsync();
                             }
 
                             // Keep probing until navigate RPC or waiters complete —
@@ -3544,9 +3543,7 @@ namespace PlaywrightNative.WebKit
                     if (PopupOpenedHelper.IsBlankUrl(url)
                         || url.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
                     {
-                        int seedGeneration = Interlocked.Increment(ref _lifecycleSeedGeneration);
-                        blankWedgeSeedTask = SeedLifecycleFromReadyStateAfterDataNavigationAsync(
-                            seedGeneration);
+                        blankWedgeSeedTask = StartOwnedLifecycleSeedAsync();
                     }
 
                     Task lifecycle = await Task.WhenAny(waitTcs.Task, timeoutTask).ConfigureAwait(false);
@@ -8675,69 +8672,87 @@ namespace PlaywrightNative.WebKit
                 // document 'click' listeners (view-scale mobile tests count them).
                 // Save/restore activeElement so pages that focus on load
                 // (keyboard.html) keep their intended focus for key events.
+                // Bound each protocol hop — a wedged Darwin target must not sit
+                // on CommandTimeoutMs (20s) after GoTo already returned
+                // (BaseURL page.goto NUnit 30s kills on mac shard2).
                 if (target != null)
                 {
                     try
                     {
-                        await target.SendAsync(
-                                "Runtime.evaluate",
-                                new
-                                {
-                                    expression =
-                                        "(() => { try {" +
-                                        " window.__pwItpPrevActive = document.activeElement;" +
-                                        " const i = document.createElement('input');" +
-                                        " i.id = '__pw_itp_pulse';" +
-                                        " i.setAttribute('aria-hidden', 'true');" +
-                                        " i.style.cssText = 'position:fixed;left:-9999px;top:0;width:1px;height:1px;opacity:0;pointer-events:none';" +
-                                        " document.documentElement.appendChild(i);" +
-                                        " i.focus({ preventScroll: true });" +
-                                        "} catch (_) {} return true; })()",
-                                    returnByValue = true,
-                                })
+                        await BoundProtocolAsync(
+                                target.SendAsync(
+                                    "Runtime.evaluate",
+                                    new
+                                    {
+                                        expression =
+                                            "(() => { try {" +
+                                            " window.__pwItpPrevActive = document.activeElement;" +
+                                            " const i = document.createElement('input');" +
+                                            " i.id = '__pw_itp_pulse';" +
+                                            " i.setAttribute('aria-hidden', 'true');" +
+                                            " i.style.cssText = 'position:fixed;left:-9999px;top:0;width:1px;height:1px;opacity:0;pointer-events:none';" +
+                                            " document.documentElement.appendChild(i);" +
+                                            " i.focus({ preventScroll: true });" +
+                                            "} catch (_) {} return true; })()",
+                                        returnByValue = true,
+                                    }),
+                                2_000)
                             .ConfigureAwait(false);
                     }
                     catch (PlaywrightException)
+                    {
+                    }
+                    catch (TimeoutException)
                     {
                     }
                 }
 
                 // Page-proxy keyDown with text + target insertText — same trusted
                 // path as WKRawKeyboard for form entry (ITP How-To #1).
-                await _session.SendAsync(
-                        "Input.dispatchKeyEvent",
-                        new
-                        {
-                            type = "keyDown",
-                            modifiers = 0,
-                            windowsVirtualKeyCode = 32,
-                            code = "Space",
-                            key = " ",
-                            text = " ",
-                            unmodifiedText = " ",
-                        })
+                await BoundProtocolAsync(
+                        _session.SendAsync(
+                            "Input.dispatchKeyEvent",
+                            new
+                            {
+                                type = "keyDown",
+                                modifiers = 0,
+                                windowsVirtualKeyCode = 32,
+                                code = "Space",
+                                key = " ",
+                                text = " ",
+                                unmodifiedText = " ",
+                            }),
+                        2_000)
                     .ConfigureAwait(false);
                 if (target != null)
                 {
                     try
                     {
-                        await target.SendAsync("Page.insertText", new { text = " " }).ConfigureAwait(false);
+                        await BoundProtocolAsync(
+                                target.SendAsync("Page.insertText", new { text = " " }),
+                                2_000)
+                            .ConfigureAwait(false);
                     }
                     catch (PlaywrightException)
                     {
                     }
+                    catch (TimeoutException)
+                    {
+                    }
                 }
 
-                await _session.SendAsync(
-                        "Input.dispatchKeyEvent",
-                        new
-                        {
-                            type = "keyUp",
-                            modifiers = 0,
-                            windowsVirtualKeyCode = 32,
-                            code = "Space",
-                            key = " ",
-                        })
+                await BoundProtocolAsync(
+                        _session.SendAsync(
+                            "Input.dispatchKeyEvent",
+                            new
+                            {
+                                type = "keyUp",
+                                modifiers = 0,
+                                windowsVirtualKeyCode = 32,
+                                code = "Space",
+                                key = " ",
+                            }),
+                        2_000)
                     .ConfigureAwait(false);
 
                 // RLS hadUserInteraction is already recorded; restoring focus does not clear it.
@@ -8745,22 +8760,27 @@ namespace PlaywrightNative.WebKit
                 {
                     try
                     {
-                        await target.SendAsync(
-                                "Runtime.evaluate",
-                                new
-                                {
-                                    expression =
-                                        "(() => { try {" +
-                                        " document.getElementById('__pw_itp_pulse')?.remove();" +
-                                        " const prev = window.__pwItpPrevActive;" +
-                                        " delete window.__pwItpPrevActive;" +
-                                        " if (prev && typeof prev.focus === 'function') prev.focus({ preventScroll: true });" +
-                                        "} catch (_) {} return true; })()",
-                                    returnByValue = true,
-                                })
+                        await BoundProtocolAsync(
+                                target.SendAsync(
+                                    "Runtime.evaluate",
+                                    new
+                                    {
+                                        expression =
+                                            "(() => { try {" +
+                                            " document.getElementById('__pw_itp_pulse')?.remove();" +
+                                            " const prev = window.__pwItpPrevActive;" +
+                                            " delete window.__pwItpPrevActive;" +
+                                            " if (prev && typeof prev.focus === 'function') prev.focus({ preventScroll: true });" +
+                                            "} catch (_) {} return true; })()",
+                                        returnByValue = true,
+                                    }),
+                                2_000)
                             .ConfigureAwait(false);
                     }
                     catch (PlaywrightException)
+                    {
+                    }
+                    catch (TimeoutException)
                     {
                     }
                 }
@@ -8781,6 +8801,27 @@ namespace PlaywrightNative.WebKit
                     _firstPartyInteractionHosts.Remove(host);
                 }
             }
+        }
+
+        private async Task BoundProtocolAsync(Task send, int timeoutMs)
+        {
+            if (send == null)
+            {
+                return;
+            }
+
+            Task completed = await Task.WhenAny(send, Task.Delay(timeoutMs)).ConfigureAwait(false);
+            if (completed != send)
+            {
+                _ = send.ContinueWith(
+                    static t => _ = t.Exception,
+                    CancellationToken.None,
+                    TaskContinuationOptions.OnlyOnFaulted,
+                    TaskScheduler.Default);
+                return;
+            }
+
+            await send.ConfigureAwait(false);
         }
 
         /// <summary>
@@ -10410,8 +10451,11 @@ namespace PlaywrightNative.WebKit
                         && _mainFrameUrl.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
                     || seedBlankPending)
                 {
-                    int seedGeneration = Interlocked.Increment(ref _lifecycleSeedGeneration);
-                    _ = SeedLifecycleFromReadyStateAfterDataNavigationAsync(seedGeneration);
+                    // Reuse an in-flight NavigateAsync-owned seed. Starting another
+                    // bumps _lifecycleSeedGeneration and aborts the peer mid-
+                    // Runtime.evaluate, orphaning WIP commands that wedge Clock /
+                    // later GoTo (TimeStringShouldFreezeDateNow on mac shard2).
+                    StartOrReuseLifecycleSeed();
                 }
                 else
                 {
@@ -10444,6 +10488,45 @@ namespace PlaywrightNative.WebKit
             }
         }
 
+        private Task StartOwnedLifecycleSeedAsync()
+        {
+            int seedGeneration = Interlocked.Increment(ref _lifecycleSeedGeneration);
+            Task seed = SeedLifecycleFromReadyStateAfterDataNavigationAsync(seedGeneration);
+            Volatile.Write(ref _lifecycleSeedTask, seed);
+            return seed;
+        }
+
+        private void StartOrReuseLifecycleSeed()
+        {
+            Task existing = Volatile.Read(ref _lifecycleSeedTask);
+            if (existing != null && !existing.IsCompleted)
+            {
+                return;
+            }
+
+            _ = StartOwnedLifecycleSeedAsync();
+        }
+
+        private void ObserveLifecycleReadyTask(Task readyTask)
+        {
+            if (readyTask == null)
+            {
+                return;
+            }
+
+            if (readyTask.IsCompleted)
+            {
+                _ = readyTask.Exception;
+                return;
+            }
+
+            _ = readyTask.ContinueWith(
+                static t => _ = t.Exception,
+                CancellationToken.None,
+                TaskContinuationOptions.OnlyOnFaulted,
+                TaskScheduler.Default);
+        }
+
         private async Task SeedLifecycleFromReadyStateAfterDataNavigationAsync(int seedGeneration)
         {
             try
@@ -10459,6 +10542,7 @@ namespace PlaywrightNative.WebKit
                 {
                     if (Volatile.Read(ref _lifecycleSeedGeneration) != seedGeneration)
                     {
+                        ObserveLifecycleReadyTask(readyTask);
                         return;
                     }
 
@@ -10484,20 +10568,39 @@ namespace PlaywrightNative.WebKit
                     // so the following AddStyleTag / handle evaluate hangs until the
                     // NUnit budget (ShouldReturnStyleElementHandle on mac shard2 after
                     // blank→blank GoTo). Keep one readyTask for the whole seed.
+                    // Skip starting a new evaluate when the deadline is nearly gone —
+                    // fall through to exhaust instead of leaving a 20s CommandTimeout.
                     string readyState;
                     try
                     {
                         if (readyTask == null)
                         {
+                            if (remainingMs < 100)
+                            {
+                                break;
+                            }
+
                             readyTask = seedContext.EvaluateAsync<string>("document.readyState");
                         }
                         else if (readyTask.IsFaulted)
                         {
                             _ = readyTask.Exception;
+                            if (remainingMs < 100)
+                            {
+                                readyTask = null;
+                                break;
+                            }
+
                             readyTask = seedContext.EvaluateAsync<string>("document.readyState");
                         }
                         else if (readyTask.IsCanceled)
                         {
+                            if (remainingMs < 100)
+                            {
+                                readyTask = null;
+                                break;
+                            }
+
                             readyTask = seedContext.EvaluateAsync<string>("document.readyState");
                         }
 
@@ -10533,6 +10636,7 @@ namespace PlaywrightNative.WebKit
 
                     if (Volatile.Read(ref _lifecycleSeedGeneration) != seedGeneration)
                     {
+                        ObserveLifecycleReadyTask(readyTask);
                         return;
                     }
 
@@ -10659,14 +10763,7 @@ namespace PlaywrightNative.WebKit
                 // fault unobserved after we fall through to exhaust. Do not
                 // await it here — CommandTimeoutMs is 20s and would again blow
                 // the NUnit budget; exhaust must run on the wall-clock deadline.
-                if (readyTask != null && !readyTask.IsCompleted)
-                {
-                    _ = readyTask.ContinueWith(
-                        static t => _ = t.Exception,
-                        CancellationToken.None,
-                        TaskContinuationOptions.OnlyOnFaulted,
-                        TaskScheduler.Default);
-                }
+                ObserveLifecycleReadyTask(readyTask);
 
                 // blank destination / data:: if readyState polling never saw a usable
                 // context (Darwin target recycle under suite load), still complete
