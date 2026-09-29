@@ -5,6 +5,7 @@
 // You may obtain a copy of the License at
 // http://www.apache.org/licenses/LICENSE-2.0
 
+using System;
 using System.Threading.Tasks;
 
 namespace PlaywrightNative.Helpers
@@ -77,6 +78,42 @@ namespace PlaywrightNative.Helpers
         /// <returns>A task that completes after 50ms or when aborted.</returns>
         internal static Task DelayOrAbortAsync(AbortSignal signal)
             => DelayOrAbortAsync(signal, 50);
+
+        /// <summary>
+        /// Upstream <c>retryWithProgressAndBackoff</c> delays:
+        /// <c>[20, 50, 100, 100, 500]</c>, each capped by <c>timeout/5</c>.
+        /// Dense fixed 50ms polls starve page timers under Windows suite load
+        /// (ShouldNotMissElementThatAppearsBetweenRetriesBeforeTheDeadline).
+        /// </summary>
+        /// <param name="attempt">Zero-based poll index after a failed probe.</param>
+        /// <param name="timeoutMs">Expect timeout budget in milliseconds.</param>
+        /// <returns>Delay in milliseconds for this attempt.</returns>
+        internal static int BackoffDelayMs(int attempt, int timeoutMs)
+        {
+            int[] delays = { 20, 50, 100, 100, 500 };
+            int index = attempt < 0 ? 0 : (attempt >= delays.Length ? delays.Length - 1 : attempt);
+            int delay = delays[index];
+            if (timeoutMs > 0 && timeoutMs != int.MaxValue)
+            {
+                int cap = Math.Max(20, timeoutMs / 5);
+                if (delay > cap)
+                {
+                    delay = cap;
+                }
+            }
+
+            return delay;
+        }
+
+        /// <summary>
+        /// Backoff poll delay that wakes early when <paramref name="signal"/> aborts.
+        /// </summary>
+        /// <param name="signal">Optional expect signal.</param>
+        /// <param name="attempt">Zero-based poll index after a failed probe.</param>
+        /// <param name="timeoutMs">Expect timeout budget in milliseconds.</param>
+        /// <returns>A task that completes after the backoff delay or when aborted.</returns>
+        internal static Task DelayOrAbortWithBackoffAsync(AbortSignal signal, int attempt, int timeoutMs)
+            => DelayOrAbortAsync(signal, BackoffDelayMs(attempt, timeoutMs));
 
         /// <summary>
         /// Poll delay that wakes early when <paramref name="signal"/> aborts.

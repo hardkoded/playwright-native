@@ -95,6 +95,7 @@ namespace PlaywrightNative
             // .not.toBeVisible() succeeds immediately when nothing matches
             // (missing elements are not visible).
             bool oneShotPending = true;
+            int pollAttempt = 0;
 
             while (true)
             {
@@ -227,7 +228,11 @@ namespace PlaywrightNative
                         await CaptureExpectAriaSnapshotAsync(snapshotKind).ConfigureAwait(false));
                 }
 
-                await ExpectAbort.DelayOrAbortAsync(signal).ConfigureAwait(false);
+                // Upstream backoff: dense 50ms polls starve page setTimeout under
+                // Windows suite load (expect-timeout appears-between-retries).
+                await ExpectAbort.DelayOrAbortWithBackoffAsync(signal, pollAttempt, timeoutMs)
+                    .ConfigureAwait(false);
+                pollAttempt++;
             }
         }
 
