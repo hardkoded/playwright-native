@@ -179,27 +179,38 @@ namespace PlaywrightNative
                 if (timeoutMs != Timeout.Infinite && sw.ElapsedMilliseconds >= timeoutMs)
                 {
                     // A poll that started before the element appeared can return
-                    // hidden and then cross the deadline. One more probe catches
-                    // an element that showed up between retries (expect-timeout).
+                    // hidden and then cross the deadline. Keep probing briefly past
+                    // the deadline so an element that shows up between retries is
+                    // not missed (ShouldNotMissElementThatAppearsBetweenRetries
+                    // BeforeTheDeadline — 1500ms show / 1800ms expect under
+                    // Windows suite load).
                     if (wantVisible && !_negate)
                     {
-                        try
+                        System.Diagnostics.Stopwatch grace = System.Diagnostics.Stopwatch.StartNew();
+                        while (grace.ElapsedMilliseconds < 400)
                         {
-                            IReadOnlyList<IElementHandle> lastChance = await ElementHandlesOrEmptyAsync(200).ConfigureAwait(false);
-                            if (lastChance.Count == 1)
+                            try
                             {
-                                bool nowVisible = await lastChance[0].IsVisibleAsync().ConfigureAwait(false);
-                                if (nowVisible)
+                                IReadOnlyList<IElementHandle> lastChance =
+                                    await ElementHandlesOrEmptyAsync(150).ConfigureAwait(false);
+                                if (lastChance.Count == 1)
                                 {
-                                    return;
+                                    bool nowVisible = await lastChance[0].IsVisibleAsync()
+                                        .ConfigureAwait(false);
+                                    if (nowVisible)
+                                    {
+                                        return;
+                                    }
                                 }
                             }
-                        }
-                        catch (PlaywrightException)
-                        {
-                        }
-                        catch (TimeoutException)
-                        {
+                            catch (PlaywrightException)
+                            {
+                            }
+                            catch (TimeoutException)
+                            {
+                            }
+
+                            await Task.Delay(25).ConfigureAwait(false);
                         }
                     }
 

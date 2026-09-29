@@ -204,7 +204,52 @@ namespace PlaywrightNative.Chromium
             await Task.Yield();
 
             await FillAction.WaitUnlessForcedAsync(this, force, timeout).ConfigureAwait(false);
-            await _crElement.FillAsync(value, preventScroll: scroll == ActionScroll.None).ConfigureAwait(false);
+
+            IPage page = _crElement.Page.PublicPage;
+            TaskCompletionSource<bool> navigated = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            EventHandler<IFrame> onNavigated = (_, frame) =>
+            {
+                if (frame?.ParentFrame == null)
+                {
+                    navigated.TrySetResult(true);
+                }
+            };
+            if (page != null)
+            {
+                page.FrameNavigated += onNavigated;
+            }
+
+            try
+            {
+                Task fillTask = _crElement.FillAsync(value, preventScroll: scroll == ActionScroll.None);
+                Task finished = await Task.WhenAny(fillTask, navigated.Task).ConfigureAwait(false);
+                if (ReferenceEquals(finished, fillTask))
+                {
+                    try
+                    {
+                        await fillTask.ConfigureAwait(false);
+                    }
+                    catch (PlaywrightException ex) when (
+                        DestroyedContext.IsDestroyedContext(ex)
+                        || (ex.Message != null
+                            && ex.Message.Contains(
+                                EvaluateSerialization.NavigationMessage,
+                                StringComparison.Ordinal)))
+                    {
+                        // Official fill does not throw when the fill triggers navigation.
+                    }
+                }
+
+                // Main-frame navigation observed during fill — succeed without
+                // awaiting a CDP reply that may never arrive under Windows load.
+            }
+            finally
+            {
+                if (page != null)
+                {
+                    page.FrameNavigated -= onNavigated;
+                }
+            }
         }
 
         /// <inheritdoc/>
