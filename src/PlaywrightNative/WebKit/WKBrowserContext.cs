@@ -2727,6 +2727,11 @@ namespace PlaywrightNative.WebKit
 
         private async Task ReportAsNewAfterInitAsync(WKPage page)
         {
+            // Snapshot before await: NewPage clears CreatePageIsInFlight when it
+            // returns, and a deferred report must not take the popup path (which
+            // waits for non-blank + document ready and can inject traced Evaluate
+            // into the next GoTo under suite load).
+            bool createPageInFlight = CreatePageIsInFlight();
             try
             {
                 await page.InitializedTask.ConfigureAwait(false);
@@ -2747,7 +2752,7 @@ namespace PlaywrightNative.WebKit
             // window.open(url) popups must wait for the first non-blank URL so
             // BrowserContextEvent.Page observers see the committed destination
             // (should have url / opener), not the intermediate about:blank.
-            if (!CreatePageIsInFlight())
+            if (!createPageInFlight)
             {
                 await page.PrepareAndReportPopupAsync().ConfigureAwait(false);
                 return;

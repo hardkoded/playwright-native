@@ -2158,22 +2158,14 @@ namespace PlaywrightNative.WebKit
                 await WaitForNonBlankPopupUrlAsync().ConfigureAwait(false);
             }
 
-            // window.open(url) commits the destination before inline scripts run.
-            // Chromium waits for a live execution context here; wait for
-            // DOMContentLoaded so evaluate(window.time) works under suite load
-            // (ShouldRunTimeBeforePopup on Linux WebKit).
+            // window.open(url) commits before inline scripts run. Poll readyState
+            // via the frame execution context — never public WaitForLoadState /
+            // page.EvaluateAsync, which ActionTrace records as "Evaluate" and
+            // which can race into NewPage traces when ReportAsNewAfterInitAsync
+            // sees CreatePageIsInFlight false after await (mac tracing shards).
             if (!_closed && !PopupOpenedHelper.IsBlankUrl(_mainFrameUrl))
             {
-                try
-                {
-                    await WaitForLoadStateAsync(LoadState.DOMContentLoaded, 2_000f)
-                        .ConfigureAwait(false);
-                }
-#pragma warning disable RCS1075
-                catch (Exception)
-#pragma warning restore RCS1075
-                {
-                }
+                await WaitForPopupDocumentInteractiveAsync().ConfigureAwait(false);
             }
 
             // Closed popups must still raise BrowserContext.Page — otherwise
@@ -6617,6 +6609,42 @@ namespace PlaywrightNative.WebKit
                 {
                     await Task.Delay(50).ConfigureAwait(false);
                 }
+            }
+        }
+
+        /// <summary>
+        /// Waits until the main document is interactive/complete so inline scripts
+        /// from <c>window.open(url)</c> have run (<c>ShouldRunTimeBeforePopup</c>).
+        /// </summary>
+        /// <returns>A task that completes when ready or the brief budget ends.</returns>
+        private async Task WaitForPopupDocumentInteractiveAsync()
+        {
+            DateTime deadline = DateTime.UtcNow.AddMilliseconds(500);
+            while (!_closed && DateTime.UtcNow < deadline)
+            {
+                try
+                {
+                    if (TryGetFrameContext(_frameManager.MainFrame, out WKExecutionContext context)
+                        && context != null)
+                    {
+                        string readyState = await context.EvaluateAsync<string>("document.readyState")
+                            .ConfigureAwait(false);
+                        if (string.Equals(readyState, "interactive", StringComparison.Ordinal)
+                            || string.Equals(readyState, "complete", StringComparison.Ordinal))
+                        {
+                            return;
+                        }
+                    }
+                }
+                catch (PlaywrightException)
+                {
+                }
+                catch (TimeoutException)
+                {
+                    return;
+                }
+
+                await Task.Delay(20).ConfigureAwait(false);
             }
         }
 

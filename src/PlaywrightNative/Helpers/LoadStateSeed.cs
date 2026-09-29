@@ -66,7 +66,13 @@ namespace PlaywrightNative.Helpers
 
             try
             {
-                string readyState = await page.EvaluateAsync<string>("(() => document.readyState)()").ConfigureAwait(false);
+                string readyState;
+                using (ActionTrace.SuppressRecording())
+                {
+                    readyState = await page.EvaluateAsync<string>("(() => document.readyState)()")
+                        .ConfigureAwait(false);
+                }
+
                 Apply(record, readyState);
             }
             catch (PlaywrightException)
@@ -92,7 +98,13 @@ namespace PlaywrightNative.Helpers
 
             try
             {
-                string readyState = await frame.EvaluateAsync<string>("(() => document.readyState)()").ConfigureAwait(false);
+                string readyState;
+                using (ActionTrace.SuppressRecording())
+                {
+                    readyState = await frame.EvaluateAsync<string>("(() => document.readyState)()")
+                        .ConfigureAwait(false);
+                }
+
                 Apply(record, readyState);
             }
             catch (PlaywrightException)

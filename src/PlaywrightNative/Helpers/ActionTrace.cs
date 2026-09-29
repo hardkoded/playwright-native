@@ -80,7 +80,7 @@ namespace PlaywrightNative.Helpers
             }
 
             OfficialTraceSession session = OfficialTraceSession.Active(context);
-            if (session == null || Depth.Value > 0)
+            if (session == null || Suppress.Value > 0 || Depth.Value > 0)
             {
                 return body();
             }
@@ -102,7 +102,7 @@ namespace PlaywrightNative.Helpers
             }
 
             OfficialTraceSession session = OfficialTraceSession.Active(context);
-            if (session == null || Depth.Value > 0)
+            if (session == null || Suppress.Value > 0 || Depth.Value > 0)
             {
                 return body();
             }
