@@ -198,6 +198,11 @@ namespace PlaywrightNative.Chromium
         /// <inheritdoc/>
         public async Task FillAsync(string value, bool? noWaitAfter = default, float? timeout = default, bool? force = default, ActionScroll scroll = default)
         {
+            // Yield so Task.WhenAll(FillAsync, WaitForNavigationAsync) can arm
+            // the navigation waiter before date/input fill fires location.href
+            // (ShouldNotThrowWhenFillCausesNavigation — C# evaluates Fill first).
+            await Task.Yield();
+
             await FillAction.WaitUnlessForcedAsync(this, force, timeout).ConfigureAwait(false);
             await _crElement.FillAsync(value, preventScroll: scroll == ActionScroll.None).ConfigureAwait(false);
         }

@@ -1669,7 +1669,15 @@ namespace PlaywrightNative.Helpers
                             await HalfCloseAfterErrorPageAsync(browserClient).ConfigureAwait(false);
                             try
                             {
-                                await handshakeTask.ConfigureAwait(false);
+                                // ForceClose may not unblock SslStream on every
+                                // platform; do not await the cancelled handshake
+                                // unbounded after the error page is already painted.
+                                await handshakeTask
+                                    .WaitAsync(TimeSpan.FromMilliseconds(100))
+                                    .ConfigureAwait(false);
+                            }
+                            catch (TimeoutException)
+                            {
                             }
                             catch (IOException)
                             {
@@ -1826,18 +1834,32 @@ namespace PlaywrightNative.Helpers
 #pragma warning disable CA5359
                 options.RemoteCertificateValidationCallback = (_, _, _, _) => true;
 #pragma warning restore CA5359
-                await tls.AuthenticateAsServerAsync(options, _cts.Token).ConfigureAwait(false);
+                await tls.AuthenticateAsServerAsync(options, _cts.Token)
+                    .WaitAsync(TimeSpan.FromMilliseconds(400), _cts.Token)
+                    .ConfigureAwait(false);
 
                 if (tls.NegotiatedApplicationProtocol.Equals(SslApplicationProtocol.Http2))
                 {
-                    await WriteHttp2ErrorAsync(tls, body, _cts.Token).ConfigureAwait(false);
+                    await WriteHttp2ErrorAsync(tls, body, _cts.Token)
+                        .WaitAsync(TimeSpan.FromMilliseconds(400), _cts.Token)
+                        .ConfigureAwait(false);
                 }
                 else
                 {
-                    await WriteHttp11ErrorAsync(tls, body, _cts.Token).ConfigureAwait(false);
+                    await WriteHttp11ErrorAsync(tls, body, _cts.Token)
+                        .WaitAsync(TimeSpan.FromMilliseconds(400), _cts.Token)
+                        .ConfigureAwait(false);
                 }
 
-                await tls.FlushAsync(_cts.Token).ConfigureAwait(false);
+                await tls.FlushAsync(_cts.Token)
+                    .WaitAsync(TimeSpan.FromMilliseconds(200), _cts.Token)
+                    .ConfigureAwait(false);
+            }
+            catch (TimeoutException)
+            {
+                // Browser already dropped the SOCKS tunnel — do not stall the
+                // accept loop / page.goto for the full client-cert fixture timeout
+                // (BrowserShouldNotHangOnTlsErrorsDuringTls12Handshake headful flake).
             }
             catch (IOException)
             {
@@ -1854,7 +1876,12 @@ namespace PlaywrightNative.Helpers
                 {
                     // Send close_notify without tearing down the TCP socket the
                     // Darwin bypass shim is still piping toward WebKit.
-                    await tls.DisposeAsync().ConfigureAwait(false);
+                    await tls.DisposeAsync().AsTask()
+                        .WaitAsync(TimeSpan.FromMilliseconds(200))
+                        .ConfigureAwait(false);
+                }
+                catch (TimeoutException)
+                {
                 }
                 catch (IOException)
                 {

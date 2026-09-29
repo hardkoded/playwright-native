@@ -95,7 +95,15 @@ namespace PlaywrightNative.Chromium
             _lastDownX = x;
             _lastDownY = y;
             _hasLastDown = true;
-            _skipInterceptThisPress = !await DocumentHasDraggableAsync().ConfigureAwait(false);
+
+            // Skip HTML5 intercept when the press is text selection (textarea/
+            // input/contenteditable) OR the document has no [draggable=true].
+            // Mid-gesture setInterceptDrags corrupts headed Chromium selection
+            // under suite load (ShouldSelectTheTextWithMouse). Prefer skipping
+            // on probe failure so we do not enable intercept by accident.
+            bool textSelect = await IsTextSelectGestureAsync(x, y).ConfigureAwait(false);
+            bool hasDraggable = !textSelect && await DocumentHasDraggableAsync().ConfigureAwait(false);
+            _skipInterceptThisPress = textSelect || !hasDraggable;
 
             // Let the compositor apply the pointer at the press point before
             // mousePressed when we are not about to HTML5-drag (text selection
@@ -321,7 +329,7 @@ namespace PlaywrightNative.Chromium
                 Frame main = _page.FrameManager.MainFrame;
                 if (main == null)
                 {
-                    return true;
+                    return false;
                 }
 
                 CRExecutionContext context = await _page.GetUtilityWorldAsync(main)
@@ -329,7 +337,7 @@ namespace PlaywrightNative.Chromium
                     .ConfigureAwait(false);
                 if (context == null)
                 {
-                    return true;
+                    return false;
                 }
 
                 bool? has = await context.EvaluateAsync<bool?>(
@@ -348,8 +356,100 @@ namespace PlaywrightNative.Chromium
             {
             }
 
-            // Fail open: keep HTML5 intercept if we cannot probe.
-            return true;
+            // Fail closed for intercept: under suite load a missed probe must
+            // not enable setInterceptDrags and corrupt text selection.
+            return false;
+        }
+
+        /// <summary>
+        /// Hit-tests the mouse-down point via CDP (never main-world evaluate)
+        /// and returns whether it is a text-editing target where HTML5 drag
+        /// intercept would corrupt selection.
+        /// </summary>
+        /// <param name="x">Down x.</param>
+        /// <param name="y">Down y.</param>
+        /// <returns><see langword="true"/> when the target is a text field.</returns>
+        private async Task<bool> IsTextSelectGestureAsync(double x, double y)
+        {
+            try
+            {
+                JsonElement? located = await _page.Session.SendAsync(
+                    "DOM.getNodeForLocation",
+                    new
+                    {
+                        x = Math.Floor(x),
+                        y = Math.Floor(y),
+                        includeUserAgentShadowDOM = true,
+                    })
+                    .WaitAsync(TimeSpan.FromMilliseconds(250))
+                    .ConfigureAwait(false);
+                if (!located.HasValue
+                    || !located.Value.TryGetProperty("backendNodeId", out JsonElement backendEl)
+                    || !backendEl.TryGetInt32(out int backendNodeId)
+                    || backendNodeId == 0)
+                {
+                    return false;
+                }
+
+                JsonElement? described = await _page.Session.SendAsync(
+                    "DOM.describeNode",
+                    new { backendNodeId, depth = 0 })
+                    .WaitAsync(TimeSpan.FromMilliseconds(250))
+                    .ConfigureAwait(false);
+                if (!described.HasValue
+                    || !described.Value.TryGetProperty("node", out JsonElement node)
+                    || !node.TryGetProperty("nodeName", out JsonElement nameEl))
+                {
+                    return false;
+                }
+
+                string nodeName = nameEl.GetString();
+                if (string.IsNullOrEmpty(nodeName))
+                {
+                    return false;
+                }
+
+                if (nodeName.Equals("TEXTAREA", StringComparison.OrdinalIgnoreCase)
+                    || nodeName.Equals("INPUT", StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+
+                if (node.TryGetProperty("attributes", out JsonElement attrs)
+                    && attrs.ValueKind == JsonValueKind.Array)
+                {
+                    string pendingName = null;
+                    foreach (JsonElement item in attrs.EnumerateArray())
+                    {
+                        if (pendingName == null)
+                        {
+                            pendingName = item.GetString();
+                            continue;
+                        }
+
+                        string value = item.GetString();
+                        if (string.Equals(pendingName, "contenteditable", StringComparison.OrdinalIgnoreCase)
+                            && !string.IsNullOrEmpty(value)
+                            && !string.Equals(value, "false", StringComparison.OrdinalIgnoreCase))
+                        {
+                            return true;
+                        }
+
+                        pendingName = null;
+                    }
+                }
+            }
+            catch (PlaywrightException)
+            {
+            }
+            catch (TimeoutException)
+            {
+            }
+            catch (OperationCanceledException)
+            {
+            }
+
+            return false;
         }
 
         private async Task EvaluateInAllFramesAsync(string expression)

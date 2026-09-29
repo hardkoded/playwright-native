@@ -202,7 +202,47 @@ namespace PlaywrightNative.Helpers
                         h => page.Popup += h,
                         h => page.Popup -= h,
                         matches,
-                        timeout);
+                        timeout,
+                        existingAfterSubscribe: async () =>
+                        {
+                            // evaluate-first CaptureAlert can emit Popup /
+                            // ReportPopupAsNew before WaitForPopupAsync subscribes.
+                            List<IPage> ready = new();
+                            if (page.Context == null)
+                            {
+                                return (IReadOnlyList<T>)(object)ready;
+                            }
+
+                            foreach (IPage candidate in page.Context.Pages)
+                            {
+                                if (ReferenceEquals(candidate, page))
+                                {
+                                    continue;
+                                }
+
+                                if (candidate is not IHasClientInitializedPage init
+                                    || !init.IsClientInitialized)
+                                {
+                                    continue;
+                                }
+
+                                IPage opener = null;
+                                try
+                                {
+                                    opener = await candidate.OpenerAsync().ConfigureAwait(false);
+                                }
+                                catch (Microsoft.Playwright.PlaywrightException)
+                                {
+                                }
+
+                                if (ReferenceEquals(opener, page))
+                                {
+                                    ready.Add(candidate);
+                                }
+                            }
+
+                            return (IReadOnlyList<T>)(object)ready;
+                        });
                 case "FrameNavigated":
                     return WaitTypedAsync<T, IFrame>(
                         page,

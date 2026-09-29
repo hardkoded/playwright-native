@@ -5075,26 +5075,50 @@ namespace PlaywrightNative.Chromium
         /// A JavaScript dialog can only open after a real document commit. Mark
         /// that commit so <see cref="Page.IsClientInitialized"/> and popup
         /// <c>reportAsNew</c> are not stuck waiting on <c>frameNavigated</c>
-        /// while Chrome stalls CDP behind the open dialog. No-op for blank /
-        /// <c>javascript:</c> URLs (official omits <c>dialog.page</c> until
-        /// <c>reportAsNew</c>).
+        /// while Chrome stalls CDP behind the open dialog.
+        /// <c>about:blank</c> still triggers <c>reportAsNew</c> (CaptureAlert)
+        /// but does not force <c>HasCommittedNonInitialNavigation</c> — so
+        /// <c>javascript:</c> prompts that surface as blank keep
+        /// <c>dialog.page</c> null until real reportAsNew
+        /// (DialogEventShouldWorkInPopup2).
         /// </summary>
         /// <returns>
-        /// <see langword="true"/> when a non-blank, non-<c>javascript:</c> commit was marked.
+        /// <see langword="true"/> when <c>reportAsNew</c> should run (non-
+        /// <c>javascript:</c> dialogs, including <c>about:blank</c>).
         /// </returns>
         internal bool NoteDialogOpened()
         {
             string url = MainFrame?.Url ?? string.Empty;
-            if (string.IsNullOrEmpty(url)
-                || PopupOpenedHelper.IsInitialEmptyDocumentUrl(url)
-                || PopupOpenedHelper.IsBlankUrl(url)
-                || url.StartsWith("javascript:", StringComparison.OrdinalIgnoreCase))
+            if (url.StartsWith("javascript:", StringComparison.OrdinalIgnoreCase))
             {
+                // Still unblock init waiters — Chrome stalls CDP behind the dialog.
+                _firstNonInitialNavigationTcs.TrySetResult(true);
+                _initializationTcs.TrySetResult(true);
                 return false;
             }
 
-            HasCommittedNonInitialNavigation = true;
+            // Chrome stalls Page.getFrameTree / Runtime.evaluate while a modal
+            // dialog is open. Completing init + first-nav waiters unblocks
+            // PrepareForPopupReportAsync / EmitWhenReady so WaitForPopup is not
+            // deadlocked behind alert()/prompt() (ShouldBeAbleToCaptureAlert).
+            if (PopupOpenedHelper.IsInitialEmptyDocumentUrl(url)
+                && _frameManager.MainFrame != null)
+            {
+                _frameManager.MainFrame.Url = "about:blank";
+                url = "about:blank";
+            }
+
             _firstNonInitialNavigationTcs.TrySetResult(true);
+            _initializationTcs.TrySetResult(true);
+
+            // Real (non-blank) commits make dialog.Page available immediately.
+            // Leave blank alone so javascript: prompts that still look like
+            // about:blank keep dialog.Page null until reportAsNew.
+            if (!PopupOpenedHelper.IsBlankUrl(url))
+            {
+                HasCommittedNonInitialNavigation = true;
+            }
+
             return true;
         }
 
