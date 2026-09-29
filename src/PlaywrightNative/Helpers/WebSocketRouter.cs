@@ -799,29 +799,37 @@ namespace PlaywrightNative.Helpers
 
             // Prefer the creating frame so iframe-owned sockets receive sendToPage
             // even when the main-world evaluate races ahead of child contexts.
+            // If the preferred evaluate exceeds the budget, keep it in flight and
+            // also blast every child — a TimeoutException-only path dropped
+            // sendToPage under WebKit Linux suite load
+            // (ShouldEmitCloseUponFrameDetach).
             if (preferredFrame != null && !preferredFrame.IsDetached)
             {
+                Task preferredTask = EvaluateOnFrameAsync(preferredFrame, script);
                 try
                 {
-                    await EvaluateOnFrameAsync(preferredFrame, script)
-                        .WaitAsync(TimeSpan.FromMilliseconds(500))
+                    await preferredTask.WaitAsync(TimeSpan.FromMilliseconds(500))
                         .ConfigureAwait(false);
+                    return;
                 }
                 catch (TimeoutException)
                 {
                 }
             }
-            else
-            {
-                foreach (IFrame frame in page.Frames)
-                {
-                    if (frame == null || frame.IsDetached || frame.ParentFrame == null)
-                    {
-                        continue;
-                    }
 
-                    _ = EvaluateOnFrameAsync(frame, script);
+            foreach (IFrame frame in page.Frames)
+            {
+                if (frame == null || frame.IsDetached || frame.ParentFrame == null)
+                {
+                    continue;
                 }
+
+                if (preferredFrame != null && ReferenceEquals(frame, preferredFrame))
+                {
+                    continue;
+                }
+
+                _ = EvaluateOnFrameAsync(frame, script);
             }
         }
 

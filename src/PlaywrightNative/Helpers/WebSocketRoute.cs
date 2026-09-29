@@ -335,9 +335,40 @@ namespace PlaywrightNative.Helpers
                 return;
             }
 
-            // Under WebKit Linux suite load a stuck main-world evaluate used to
-            // starve iframe probes (ShouldEmitCloseUponFrameDetach). Probe
-            // children first for non-main sockets and bound each probe.
+            // Single iframe owns non-main sockets in the common case. Resolve it
+            // before any has-probe evaluates — orphaned Runtime.evaluate probes
+            // wedge WebKit under suite load so sendToPage / FrameLogAsync hang
+            // (ShouldEmitCloseUponFrameDetach on Linux WebKit CI).
+            if (!CreatedInMainFrame)
+            {
+                IFrame soleChild = null;
+                int childCount = 0;
+                foreach (IFrame frame in page.Frames)
+                {
+                    if (frame == null || frame.IsDetached || frame.ParentFrame == null)
+                    {
+                        continue;
+                    }
+
+                    childCount++;
+                    soleChild = frame;
+                    if (childCount > 1)
+                    {
+                        soleChild = null;
+                        break;
+                    }
+                }
+
+                if (soleChild != null)
+                {
+                    _frame = soleChild;
+                    return;
+                }
+            }
+
+            // Multiple frames: probe children first for non-main sockets and
+            // bound each probe. Observe abandoned evaluates so they cannot
+            // fault unobserved while we move on.
             List<IFrame> candidates = new List<IFrame>();
             foreach (IFrame frame in page.Frames)
             {
@@ -371,6 +402,11 @@ namespace PlaywrightNative.Helpers
                     Task finished = await Task.WhenAny(probe, Task.Delay(250)).ConfigureAwait(false);
                     if (finished != probe)
                     {
+                        _ = probe.ContinueWith(
+                            static t => _ = t.Exception,
+                            System.Threading.CancellationToken.None,
+                            TaskContinuationOptions.OnlyOnFaulted,
+                            TaskScheduler.Default);
                         continue;
                     }
 
@@ -392,29 +428,6 @@ namespace PlaywrightNative.Helpers
             if (CreatedInMainFrame)
             {
                 _frame = page.MainFrame;
-                return;
-            }
-
-            // Single-child fallback when the has-probe raced the socket map.
-            IFrame soleChild = null;
-            foreach (IFrame frame in page.Frames)
-            {
-                if (frame == null || frame.IsDetached || frame.ParentFrame == null)
-                {
-                    continue;
-                }
-
-                if (soleChild != null)
-                {
-                    return;
-                }
-
-                soleChild = frame;
-            }
-
-            if (soleChild != null)
-            {
-                _frame = soleChild;
             }
         }
 
