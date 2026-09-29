@@ -2266,17 +2266,24 @@ namespace PlaywrightNative
                 {
                     // Last-chance read so failure messages still include Received
                     // when the final poll timed out empty (ShouldSupportFailure).
-                    if (last == null)
+                    // Match toHaveText: recover when last is null OR blank, and give
+                    // the probe a generous budget — under WebKit macOS suite load,
+                    // 250ms still misses the already-filled input.
+                    if (string.IsNullOrEmpty(last))
                     {
                         try
                         {
                             IReadOnlyList<IElementHandle> final =
-                                await ElementHandlesOrEmptyAsync(250).ConfigureAwait(false);
+                                await ElementHandlesOrEmptyAsync(5_000).ConfigureAwait(false);
                             if (final.Count == 1)
                             {
-                                last = await final[0]
+                                string recovered = await final[0]
                                     .EvaluateAsync<string>(ElementStateScript.InputValueFunction)
                                     .ConfigureAwait(false) ?? string.Empty;
+                                if (!string.IsNullOrEmpty(recovered))
+                                {
+                                    last = recovered;
+                                }
                             }
                         }
                         catch (TimeoutException)

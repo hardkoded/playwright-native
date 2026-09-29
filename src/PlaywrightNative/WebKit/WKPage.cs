@@ -3529,16 +3529,20 @@ namespace PlaywrightNative.WebKit
                         break;
                     }
 
-                    // blank→blank often skips Page.frameNavigated / loadEventFired on
-                    // Darwin WebKit after persistent relaunch. Seed from readyState when
-                    // the navigate RPC finished but lifecycle waiters are still open.
+                    // blank→blank and blank→data: often skip Page.frameNavigated /
+                    // loadEventFired on Darwin WebKit. Seed from readyState when the
+                    // navigate RPC finished but lifecycle waiters are still open.
                     // Do not synchronously complete Load waiters here — that races the
                     // in-flight document swap and surfaces "Execution context was
                     // destroyed" on the next evaluate (macOS CI regression on tip
                     // 495d8c0). Seed uses a non-blocking context lookup instead.
                     // Track on blankWedgeSeedTask so finally can bound-await it (same as
                     // the wedge-probe path) instead of fire-and-forget orphans.
-                    if (PopupOpenedHelper.IsBlankUrl(url))
+                    // data: must seed here too — commit-path seeding alone races past
+                    // waiter arming (QuerySelectorShouldReturnNullForNoMatch hung the
+                    // full NUnit 30s budget on macOS CI when GoTo(data:) never completed).
+                    if (PopupOpenedHelper.IsBlankUrl(url)
+                        || url.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
                     {
                         int seedGeneration = Interlocked.Increment(ref _lifecycleSeedGeneration);
                         blankWedgeSeedTask = SeedLifecycleFromReadyStateAfterDataNavigationAsync(
@@ -10542,18 +10546,27 @@ namespace PlaywrightNative.WebKit
                     // completes (ShouldNavigateFromFileUrlToAboutBlank). Limit that
                     // pending-only path to blank/file start URLs so http→blank is
                     // unchanged.
+                    //
+                    // blank→data: same shape — pending is data: while _mainFrameUrl is
+                    // still about:blank until frameNavigated. Keep polling / exhaust
+                    // (QuerySelectorShouldReturnNullForNoMatch on macOS CI).
                     string url = _mainFrameUrl;
                     bool allowBlankSeed;
                     bool pendingBlankFromBlankOrFile;
+                    bool pendingDataFromBlankOrFile;
                     lock (_navigationLock)
                     {
                         bool pendingBlank = _pendingLoadTcs != null
                             && PopupOpenedHelper.IsBlankUrl(_pendingNavigationUrl);
+                        bool pendingData = _pendingLoadTcs != null
+                            && !string.IsNullOrEmpty(_pendingNavigationUrl)
+                            && _pendingNavigationUrl.StartsWith("data:", StringComparison.OrdinalIgnoreCase);
                         string startUrl = _navigationStartUrl;
                         bool startBlankOrFile = PopupOpenedHelper.IsBlankUrl(startUrl)
                             || (!string.IsNullOrEmpty(startUrl)
                                 && startUrl.StartsWith("file:", StringComparison.OrdinalIgnoreCase));
                         pendingBlankFromBlankOrFile = pendingBlank && startBlankOrFile;
+                        pendingDataFromBlankOrFile = pendingData && startBlankOrFile;
                         allowBlankSeed = pendingBlank
                             && PopupOpenedHelper.IsBlankUrl(url);
                     }
@@ -10561,7 +10574,8 @@ namespace PlaywrightNative.WebKit
                     if (string.IsNullOrEmpty(url)
                         || (!url.StartsWith("data:", StringComparison.OrdinalIgnoreCase)
                             && !allowBlankSeed
-                            && !pendingBlankFromBlankOrFile))
+                            && !pendingBlankFromBlankOrFile
+                            && !pendingDataFromBlankOrFile))
                     {
                         return;
                     }
@@ -10569,7 +10583,7 @@ namespace PlaywrightNative.WebKit
                     if (!allowBlankSeed
                         && !url.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
                     {
-                        // Pending about:blank but document URL not updated yet —
+                        // Pending about:blank / data: but document URL not updated yet —
                         // wait for commit or fall through to the exhaust settle.
                         await Task.Delay(25).ConfigureAwait(false);
                         continue;
@@ -10696,6 +10710,21 @@ namespace PlaywrightNative.WebKit
                     if (allowBlankSeed
                         && !PopupOpenedHelper.IsBlankUrl(_mainFrameUrl)
                         && !string.IsNullOrEmpty(_pendingNavigationUrl))
+                    {
+                        _mainFrameUrl = _pendingNavigationUrl;
+                        if (_frameManager.MainFrame != null)
+                        {
+                            _frameManager.MainFrame.Url = _mainFrameUrl;
+                        }
+                    }
+
+                    // blank→data: same promotion when frameNavigated never arrived
+                    // (QuerySelectorShouldReturnNullForNoMatch hung GoTo on macOS CI).
+                    if (allowDataSeed
+                        && (string.IsNullOrEmpty(_mainFrameUrl)
+                            || !_mainFrameUrl.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+                        && !string.IsNullOrEmpty(_pendingNavigationUrl)
+                        && _pendingNavigationUrl.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
                     {
                         _mainFrameUrl = _pendingNavigationUrl;
                         if (_frameManager.MainFrame != null)
