@@ -231,16 +231,34 @@ namespace PlaywrightNative.Chromium
                 {
                     await moveCallback().ConfigureAwait(false);
                     expectingDrag = await CleanupDragInAllFramesAsync().ConfigureAwait(false);
+
+                    // Await dragIntercepted while the handler is still subscribed.
+                    // Unsubscribing first (prior finally) dropped late Input.dragIntercepted
+                    // events and hung ShouldWork forever under Windows headless suite load.
+                    if (expectingDrag)
+                    {
+                        Task completed = await Task.WhenAny(
+                                dragInterceptedTcs.Task,
+                                Task.Delay(5_000))
+                            .ConfigureAwait(false);
+                        if (completed != dragInterceptedTcs.Task)
+                        {
+                            throw new PlaywrightException(
+                                "Input.dragIntercepted was not received within 5s after dragstart");
+                        }
+
+                        _dragState = await dragInterceptedTcs.Task.ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        _dragState = null;
+                    }
                 }
                 finally
                 {
                     client.MessageReceived -= OnDragIntercepted;
                     await client.SendAsync("Input.setInterceptDrags", new { enabled = false }).ConfigureAwait(false);
                 }
-
-                _dragState = expectingDrag
-                    ? await dragInterceptedTcs.Task.ConfigureAwait(false)
-                    : null;
             }
             catch
             {

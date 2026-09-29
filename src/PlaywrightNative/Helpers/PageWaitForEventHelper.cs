@@ -92,12 +92,31 @@ namespace PlaywrightNative.Helpers
                     // its body; if waitForEvent delayed subscribe until after that yield,
                     // console.log from a racing evaluate could fire with no listener
                     // (tracing "should not emit after w/o before" hangs 30s).
+                    // Replay the most recent console message after subscribe when it
+                    // raced ahead under Windows headful + tracing snapshots.
                     Task<T> consoleWait = WaitTypedAsync<T, IConsoleMessage>(
                         page,
                         h => page.Console += h,
                         h => page.Console -= h,
                         matches,
-                        timeout);
+                        timeout,
+                        existingAfterSubscribe: async () =>
+                        {
+                            IReadOnlyList<IConsoleMessage> messages =
+                                await page.ConsoleMessagesAsync().ConfigureAwait(false);
+                            if (messages == null || messages.Count == 0)
+                            {
+                                return Array.Empty<T>();
+                            }
+
+                            IConsoleMessage last = messages[messages.Count - 1];
+                            if (last != null && matches((T)(object)last))
+                            {
+                                return new T[] { (T)(object)last };
+                            }
+
+                            return Array.Empty<T>();
+                        });
                     return ActionTrace.RunAsync(
                         page.Context,
                         "Wait for event \"console\"",

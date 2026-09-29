@@ -4246,6 +4246,14 @@ namespace PlaywrightNative.Chromium
                         height = options.Clip.Height,
                         scale = options.Clip.Scale > 0 ? options.Clip.Scale : 1.0,
                     };
+
+                    // At the Chromium PNG dimension ceiling, prefer speed over
+                    // quality so Windows headless does not OOM/crash the target
+                    // (ShouldThrowIfScreenshotSizeIsTooLarge TargetClosedException).
+                    if (options.Clip.Width >= 4_000 || options.Clip.Height >= 4_000)
+                    {
+                        parameters["optimizeForSpeed"] = true;
+                    }
                 }
 
                 if (options.OmitBackground && options.Format != "jpeg")
@@ -4317,6 +4325,11 @@ namespace PlaywrightNative.Chromium
                     // the short mid-nav probe. Retrying stacks concurrent CDP
                     // captures and can OOM/crash the page on Windows
                     // (ShouldThrowIfScreenshotSizeIsTooLargeWithDeviceScaleFactor).
+                    throw;
+                }
+                catch (TargetClosedException) when (largeCapture)
+                {
+                    // First capture already killed the target — do not retry.
                     throw;
                 }
                 catch (Exception ex) when (
