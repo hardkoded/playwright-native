@@ -6627,8 +6627,18 @@ namespace PlaywrightNative.WebKit
                     if (TryGetFrameContext(_frameManager.MainFrame, out WKExecutionContext context)
                         && context != null)
                     {
-                        string readyState = await context.EvaluateAsync<string>("document.readyState")
+                        // Cap each probe: inline prompt()/alert() blocks Runtime.evaluate
+                        // for the full command timeout and deadlocks click wait-after
+                        // (DialogEventShouldWorkWithInlineScriptTag on Linux WebKit).
+                        Task<string> readyTask = context.EvaluateAsync<string>("document.readyState");
+                        Task finished = await Task.WhenAny(readyTask, Task.Delay(100))
                             .ConfigureAwait(false);
+                        if (finished != readyTask)
+                        {
+                            return;
+                        }
+
+                        string readyState = await readyTask.ConfigureAwait(false);
                         if (string.Equals(readyState, "interactive", StringComparison.Ordinal)
                             || string.Equals(readyState, "complete", StringComparison.Ordinal))
                         {
