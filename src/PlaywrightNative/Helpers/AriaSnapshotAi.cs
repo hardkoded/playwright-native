@@ -1977,55 +1977,63 @@ namespace PlaywrightNative.Helpers
         private static async Task<string> PrefixForAsync(IPage page, IFrame frame)
         {
             State state = GetState(page);
+            await state.Gate.WaitAsync().ConfigureAwait(false);
             try
             {
-                string existing = await frame.EvaluateAsync<string>(ReadPrefixFunction).ConfigureAwait(false);
-                if (existing != null)
+                try
                 {
-                    return existing;
+                    string existing = await frame.EvaluateAsync<string>(ReadPrefixFunction).ConfigureAwait(false);
+                    if (existing != null)
+                    {
+                        return existing;
+                    }
                 }
-            }
-            catch (PlaywrightException)
-            {
-            }
-            catch (TimeoutException)
-            {
-                if (frame.ParentFrame != null)
+                catch (PlaywrightException)
                 {
-                    return string.Empty;
                 }
-            }
-
-            // Cross-document navigation clears window.__pwAriaFramePrefix; the next
-            // main-frame assign must mint fN so refs re-number (upstream
-            // "should re-number refs across navigations…"). First assign stays "".
-            // Only flip UsedEmptyMainPrefix after a successful write — EnsurePrefixes
-            // RaceOrDefault can abandon mid-call; marking earlier let a retry mint
-            // f1 on the first snapshot (ShouldShowVisibleChildren → f1e1 vs e1).
-            string prefix;
-            if (frame.ParentFrame == null && !state.UsedEmptyMainPrefix)
-            {
-                prefix = string.Empty;
-            }
-            else
-            {
-                state.NextFrameId++;
-                prefix = "f" + state.NextFrameId.ToString(CultureInfo.InvariantCulture);
-            }
-
-            try
-            {
-                await frame.EvaluateAsync<object>(WritePrefixFunction, prefix).ConfigureAwait(false);
-                if (prefix.Length == 0)
+                catch (TimeoutException)
                 {
-                    state.UsedEmptyMainPrefix = true;
+                    if (frame.ParentFrame != null)
+                    {
+                        return string.Empty;
+                    }
                 }
-            }
-            catch (PlaywrightException)
-            {
-            }
 
-            return prefix;
+                // Cross-document navigation clears window.__pwAriaFramePrefix; the next
+                // main-frame assign must mint fN so refs re-number (upstream
+                // "should re-number refs across navigations…"). First assign stays "".
+                // Serialize under Gate so EnsurePrefixes RaceOrDefault and Capture cannot
+                // both observe UsedEmptyMainPrefix false then one mint "" while the other
+                // mints f1 (ShouldOmitRedundantNameWhenAContributingWrapperIsCollapsed).
+                string prefix;
+                if (frame.ParentFrame == null && !state.UsedEmptyMainPrefix)
+                {
+                    prefix = string.Empty;
+                }
+                else
+                {
+                    state.NextFrameId++;
+                    prefix = "f" + state.NextFrameId.ToString(CultureInfo.InvariantCulture);
+                }
+
+                try
+                {
+                    await frame.EvaluateAsync<object>(WritePrefixFunction, prefix).ConfigureAwait(false);
+                    if (prefix.Length == 0)
+                    {
+                        state.UsedEmptyMainPrefix = true;
+                    }
+                }
+                catch (PlaywrightException)
+                {
+                }
+
+                return prefix;
+            }
+            finally
+            {
+                state.Gate.Release();
+            }
         }
 
         private static async Task<IElementHandle> FindInFrameAsync(IFrame frame, string ariaRef)
@@ -2079,6 +2087,8 @@ namespace PlaywrightNative.Helpers
 
         private sealed class State
         {
+            internal SemaphoreSlim Gate { get; } = new SemaphoreSlim(1, 1);
+
             internal int NextFrameId { get; set; }
 
             internal bool UsedEmptyMainPrefix { get; set; }
