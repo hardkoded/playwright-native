@@ -337,23 +337,24 @@ namespace PlaywrightNative
                 string temp = null;
                 try
                 {
-                    // Stage outside the public directory, then rename in. Directory
-                    // polls (LaunchArtifactsDir) must never observe a mid-copy file
-                    // that Windows still locks for ReadAllText. Copy with
-                    // FileShare.ReadWrite so Chromium can still hold the pending
-                    // artifact; dest is exclusive so File.ReadAllText can open it.
+                    // Copy with ReadWrite share from Chromium's pending artifact into
+                    // a private temp file. Wait until FileShare.Read works there, then
+                    // Move into artifactsDir so directory polls / ReadAllText never see
+                    // a locked public path (Windows CI HonorArtifactsDir).
                     temp = Path.Combine(
                         Path.GetTempPath(),
                         "pw-promote-" + Guid.NewGuid().ToString("N"));
                     CopyUnlocked(source, temp);
-                    File.Move(temp, dest, overwrite: true);
-                    temp = null;
-                    if (!WaitUntilReadable(dest))
+                    if (!WaitUntilReadable(temp))
                     {
-                        TryDeleteFile(dest);
+                        TryDeleteFile(temp);
+                        temp = null;
                         System.Threading.Thread.Sleep(20);
                         continue;
                     }
+
+                    File.Move(temp, dest, overwrite: true);
+                    temp = null;
 
                     if (!string.IsNullOrEmpty(_suggestedFilename)
                         && !string.Equals(destName, _suggestedFilename, StringComparison.OrdinalIgnoreCase))
@@ -367,11 +368,15 @@ namespace PlaywrightNative
                         try
                         {
                             CopyUnlocked(source, namedTemp);
-                            File.Move(namedTemp, named, overwrite: true);
-                            namedTemp = null;
-                            if (!WaitUntilReadable(named))
+                            if (!WaitUntilReadable(namedTemp))
                             {
-                                TryDeleteFile(named);
+                                TryDeleteFile(namedTemp);
+                                namedTemp = null;
+                            }
+                            else
+                            {
+                                File.Move(namedTemp, named, overwrite: true);
+                                namedTemp = null;
                             }
                         }
                         finally
