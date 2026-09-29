@@ -3449,7 +3449,13 @@ namespace PlaywrightNative.WebKit
 
                     if (waitTcs.Task.IsCompletedSuccessfully && !sameDocumentHash)
                     {
-                        if (_pendingNavigationCommitted)
+                        // blank/file→blank: OnLoadEventFired can clear
+                        // _pendingNavigationCommitted after load waiters complete
+                        // while Playwright.navigate stays wedged. Waiting on
+                        // sendTask then races the NUnit 30s budget
+                        // (ConsoleMessagesFilterTests.SinceNavigationFilterShouldWork
+                        // on macOS CI). Same leave-without-send as seed exhaust.
+                        if (_pendingNavigationCommitted || blankOrFileToBlank)
                         {
                             if (sendTask.IsCompleted && !IsHarRedirectSendSuperseded(sendTask))
                             {
@@ -6630,11 +6636,14 @@ namespace PlaywrightNative.WebKit
                         // Cap each probe: inline prompt()/alert() blocks Runtime.evaluate
                         // for the full command timeout and deadlocks click wait-after
                         // (DialogEventShouldWorkWithInlineScriptTag on Linux WebKit).
+                        // Observe the in-flight evaluate when the race wins — do not
+                        // leave an unobserved Runtime.evaluate fault on the popup.
                         Task<string> readyTask = context.EvaluateAsync<string>("document.readyState");
                         Task finished = await Task.WhenAny(readyTask, Task.Delay(100))
                             .ConfigureAwait(false);
                         if (finished != readyTask)
                         {
+                            ObserveLifecycleReadyTask(readyTask);
                             return;
                         }
 
