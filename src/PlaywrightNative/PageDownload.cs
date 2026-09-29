@@ -231,8 +231,30 @@ namespace PlaywrightNative
 
         internal void MarkCompleted()
         {
-            PromoteCompletedFile();
+            // Signal completion before promote so the CDP event thread never
+            // blocks on Windows file locks / AV holds (wedged later Fill/Focus
+            // timeouts on winhl2 after HonorArtifactsDir).
             _finishedTcs.TrySetResult(null);
+            if (string.IsNullOrEmpty(_publicDownloadsDirectory)
+                || string.IsNullOrEmpty(_downloadsDirectory)
+                || string.Equals(_publicDownloadsDirectory, _downloadsDirectory, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            _ = Task.Run(() =>
+            {
+                try
+                {
+                    PromoteCompletedFile();
+                }
+                catch (IOException)
+                {
+                }
+                catch (UnauthorizedAccessException)
+                {
+                }
+            });
         }
 
         internal void MarkFailed(string error)
