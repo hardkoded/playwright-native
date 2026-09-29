@@ -3536,10 +3536,13 @@ namespace PlaywrightNative.WebKit
                     // in-flight document swap and surfaces "Execution context was
                     // destroyed" on the next evaluate (macOS CI regression on tip
                     // 495d8c0). Seed uses a non-blocking context lookup instead.
+                    // Track on blankWedgeSeedTask so finally can bound-await it (same as
+                    // the wedge-probe path) instead of fire-and-forget orphans.
                     if (PopupOpenedHelper.IsBlankUrl(url))
                     {
                         int seedGeneration = Interlocked.Increment(ref _lifecycleSeedGeneration);
-                        _ = SeedLifecycleFromReadyStateAfterDataNavigationAsync(seedGeneration);
+                        blankWedgeSeedTask = SeedLifecycleFromReadyStateAfterDataNavigationAsync(
+                            seedGeneration);
                     }
 
                     Task lifecycle = await Task.WhenAny(waitTcs.Task, timeoutTask).ConfigureAwait(false);
@@ -10441,11 +10444,24 @@ namespace PlaywrightNative.WebKit
         {
             try
             {
+                // Wall-clock settle (~1.2s) so blank→blank GoTo reaches exhaust well
+                // under the navigation / NUnit 30s budget. The prior 40×(250ms+2s)
+                // orphan-and-retry loop could sit ~90s before exhaust, hanging
+                // EmulateMediaLightMatches (and AddStyleTag after blank GoTo) on
+                // Darwin under suite load.
+                DateTime deadlineUtc = DateTime.UtcNow.AddMilliseconds(1_200);
+                Task<string> readyTask = null;
                 for (int attempt = 0; attempt < 40; attempt++)
                 {
                     if (Volatile.Read(ref _lifecycleSeedGeneration) != seedGeneration)
                     {
                         return;
+                    }
+
+                    int remainingMs = (int)(deadlineUtc - DateTime.UtcNow).TotalMilliseconds;
+                    if (remainingMs <= 0)
+                    {
+                        break;
                     }
 
                     // Non-blocking context lookup — WaitForMainExecutionContextAsync
@@ -10454,7 +10470,7 @@ namespace PlaywrightNative.WebKit
                     if (!TryGetFrameContext(_frameManager.MainFrame, out WKExecutionContext seedContext)
                         || seedContext == null)
                     {
-                        await Task.Delay(25).ConfigureAwait(false);
+                        await Task.Delay(Math.Min(25, remainingMs)).ConfigureAwait(false);
                         continue;
                     }
 
@@ -10463,39 +10479,51 @@ namespace PlaywrightNative.WebKit
                     // another: orphaned Runtime.evaluate calls wedge the target session
                     // so the following AddStyleTag / handle evaluate hangs until the
                     // NUnit budget (ShouldReturnStyleElementHandle on mac shard2 after
-                    // blank→blank GoTo). Await or observe the same task before retrying.
+                    // blank→blank GoTo). Keep one readyTask for the whole seed.
                     string readyState;
                     try
                     {
-                        Task<string> readyTask = seedContext.EvaluateAsync<string>("document.readyState");
-                        Task readyRace = await Task.WhenAny(readyTask, Task.Delay(250))
-                            .ConfigureAwait(false);
-                        if (readyRace != readyTask)
+                        if (readyTask == null)
                         {
-                            Task observed = await Task.WhenAny(readyTask, Task.Delay(2_000))
+                            readyTask = seedContext.EvaluateAsync<string>("document.readyState");
+                        }
+                        else if (readyTask.IsFaulted)
+                        {
+                            _ = readyTask.Exception;
+                            readyTask = seedContext.EvaluateAsync<string>("document.readyState");
+                        }
+                        else if (readyTask.IsCanceled)
+                        {
+                            readyTask = seedContext.EvaluateAsync<string>("document.readyState");
+                        }
+
+                        if (!readyTask.IsCompleted)
+                        {
+                            int waitMs = Math.Min(250, Math.Max(1, remainingMs));
+                            Task readyRace = await Task.WhenAny(readyTask, Task.Delay(waitMs))
                                 .ConfigureAwait(false);
-                            if (observed != readyTask)
+                            if (readyRace != readyTask)
                             {
-                                _ = readyTask.ContinueWith(
-                                    static t => _ = t.Exception,
-                                    CancellationToken.None,
-                                    TaskContinuationOptions.OnlyOnFaulted,
-                                    TaskScheduler.Default);
-                                await Task.Delay(25).ConfigureAwait(false);
+                                // Same task still pending — retry until wall-clock
+                                // deadline, then fall through to exhaust (do not orphan
+                                // and start another Runtime.evaluate).
                                 continue;
                             }
                         }
 
                         readyState = await readyTask.ConfigureAwait(false);
+                        readyTask = null;
                     }
                     catch (PlaywrightException)
                     {
-                        await Task.Delay(25).ConfigureAwait(false);
+                        readyTask = null;
+                        await Task.Delay(Math.Min(25, Math.Max(1, remainingMs))).ConfigureAwait(false);
                         continue;
                     }
                     catch (TimeoutException)
                     {
-                        await Task.Delay(25).ConfigureAwait(false);
+                        readyTask = null;
+                        await Task.Delay(Math.Min(25, Math.Max(1, remainingMs))).ConfigureAwait(false);
                         continue;
                     }
 
@@ -10611,6 +10639,19 @@ namespace PlaywrightNative.WebKit
                     }
 
                     await Task.Delay(25).ConfigureAwait(false);
+                }
+
+                // Observe any still-pending readyState evaluate so it cannot
+                // fault unobserved after we fall through to exhaust. Do not
+                // await it here — CommandTimeoutMs is 20s and would again blow
+                // the NUnit budget; exhaust must run on the wall-clock deadline.
+                if (readyTask != null && !readyTask.IsCompleted)
+                {
+                    _ = readyTask.ContinueWith(
+                        static t => _ = t.Exception,
+                        CancellationToken.None,
+                        TaskContinuationOptions.OnlyOnFaulted,
+                        TaskScheduler.Default);
                 }
 
                 // blank destination / data:: if readyState polling never saw a usable
