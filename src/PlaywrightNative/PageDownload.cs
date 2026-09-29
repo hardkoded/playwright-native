@@ -317,11 +317,13 @@ namespace PlaywrightNative
                 {
                     // Stage outside the public directory, then rename in. Directory
                     // polls (LaunchArtifactsDir) must never observe a mid-copy file
-                    // that Windows still locks for ReadAllText.
+                    // that Windows still locks for ReadAllText. Copy with
+                    // FileShare.ReadWrite so Chromium can still hold the pending
+                    // artifact; dest is exclusive so File.ReadAllText can open it.
                     temp = Path.Combine(
                         Path.GetTempPath(),
                         "pw-promote-" + Guid.NewGuid().ToString("N"));
-                    File.Copy(source, temp, overwrite: true);
+                    CopyUnlocked(source, temp);
                     File.Move(temp, dest, overwrite: true);
                     temp = null;
                     if (!WaitUntilReadable(dest))
@@ -342,7 +344,7 @@ namespace PlaywrightNative
                             "pw-promote-" + Guid.NewGuid().ToString("N"));
                         try
                         {
-                            File.Copy(source, namedTemp, overwrite: true);
+                            CopyUnlocked(source, namedTemp);
                             File.Move(namedTemp, named, overwrite: true);
                             namedTemp = null;
                             if (!WaitUntilReadable(named))
@@ -376,6 +378,22 @@ namespace PlaywrightNative
                         TryDeleteFile(temp);
                     }
                 }
+            }
+
+            static void CopyUnlocked(string from, string to)
+            {
+                using FileStream src = new FileStream(
+                    from,
+                    FileMode.Open,
+                    FileAccess.Read,
+                    FileShare.ReadWrite);
+                using FileStream dst = new FileStream(
+                    to,
+                    FileMode.Create,
+                    FileAccess.Write,
+                    FileShare.None);
+                src.CopyTo(dst);
+                dst.Flush(flushToDisk: true);
             }
         }
 
@@ -518,14 +536,16 @@ namespace PlaywrightNative
         }
 
         /// <summary>
-        /// Waits until <paramref name="path"/> can be opened for read on Windows
-        /// (Chromium / AV may briefly hold the promoted artifact).
+        /// Waits until <paramref name="path"/> can be opened with
+        /// <see cref="FileShare.Read"/> on Windows (Chromium / AV may still hold
+        /// a writer lock; <c>File.ReadAllText</c> uses this share and fails with
+        /// IOException until it is released).
         /// </summary>
         /// <param name="path">Promoted download path.</param>
         /// <returns><see langword="true"/> when the file is readable.</returns>
         private bool WaitUntilReadable(string path)
         {
-            for (int attempt = 0; attempt < 50; attempt++)
+            for (int attempt = 0; attempt < 100; attempt++)
             {
                 try
                 {
@@ -533,7 +553,7 @@ namespace PlaywrightNative
                         path,
                         FileMode.Open,
                         FileAccess.Read,
-                        FileShare.ReadWrite);
+                        FileShare.Read);
                     if (stream.Length > 0)
                     {
                         return true;
