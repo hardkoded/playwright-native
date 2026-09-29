@@ -604,7 +604,21 @@ namespace PlaywrightNative.Chromium
         {
             EnsureNotDisposed();
             string frameId = await _page.DescribeNodeContentFrameIdAsync(Context.Session, ObjectId).ConfigureAwait(false);
-            return _page.ResolvePublicFrameById(frameId);
+            if (string.IsNullOrEmpty(frameId))
+            {
+                return null;
+            }
+
+            IFrame frame = _page.ResolvePublicFrameById(frameId);
+            if (frame != null)
+            {
+                return frame;
+            }
+
+            // DOM.describeNode can report frameId before Page.frameAttached registers
+            // the child (data: iframe + FrameLocator body for locator handlers). Brief
+            // poll so the first handler checkpoint does not treat the overlay as gone.
+            return await _page.WaitForFrameByIdAsync(frameId, 250).ConfigureAwait(false);
         }
 
         /// <summary>

@@ -2634,6 +2634,43 @@ namespace PlaywrightNative.Chromium
         }
 
         /// <summary>
+        /// Polls until <paramref name="frameId"/> is registered in the frame manager,
+        /// or <paramref name="timeoutMs"/> elapses. Mirrors WebKit's
+        /// <c>WaitForFrameByIdAsync</c> — CDP <c>DOM.describeNode</c> can report
+        /// <c>frameId</c> a beat before <c>Page.frameAttached</c> registers the child
+        /// (locator-handler iframe overlays on Windows headful).
+        /// </summary>
+        /// <param name="frameId">The protocol frame id.</param>
+        /// <param name="timeoutMs">Maximum wait in milliseconds.</param>
+        /// <returns>The public frame, or <see langword="null"/> when still unknown.</returns>
+        internal async Task<IFrame> WaitForFrameByIdAsync(string frameId, int timeoutMs)
+        {
+            if (string.IsNullOrEmpty(frameId))
+            {
+                return null;
+            }
+
+            IFrame existing = ResolvePublicFrameById(frameId);
+            if (existing != null || timeoutMs <= 0)
+            {
+                return existing;
+            }
+
+            System.Diagnostics.Stopwatch sw = System.Diagnostics.Stopwatch.StartNew();
+            while (sw.ElapsedMilliseconds < timeoutMs)
+            {
+                await Task.Delay(20).ConfigureAwait(false);
+                IFrame frame = ResolvePublicFrameById(frameId);
+                if (frame != null)
+                {
+                    return frame;
+                }
+            }
+
+            return ResolvePublicFrameById(frameId);
+        }
+
+        /// <summary>
         /// Unwraps a public element handle produced by this page.
         /// </summary>
         /// <param name="handle">A public element handle.</param>
