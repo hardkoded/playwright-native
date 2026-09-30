@@ -235,6 +235,15 @@ namespace PlaywrightNative.Helpers
             {
                 ffmpeg.Dispose();
             }
+
+            // A page can receive one screencast sample then lose the encode under
+            // Windows suite load (pipe stall / kill-on-timeout). Empty recordings
+            // already fall back to WriteWhiteVideoAsync; do the same when the
+            // live encode left no usable .webm (ShouldCloseFfmpegEvenIfThereWereNoFrames).
+            if (!File.Exists(_path) || new FileInfo(_path).Length == 0)
+            {
+                await WriteWhiteVideoAsync().ConfigureAwait(false);
+            }
         }
 
         private Process EnsureFfmpeg()
