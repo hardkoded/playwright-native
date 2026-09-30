@@ -4272,7 +4272,16 @@ namespace PlaywrightNative.Chromium
                     parameters["quality"] = options.Quality.Value;
                 }
 
-                if (options.Clip != null)
+                bool largeClip = options.Clip != null
+                    && (options.Clip.Width >= 4_000 || options.Clip.Height >= 4_000);
+
+                // Full-page shots near the PNG dimension ceiling (32767) OOM the
+                // Windows headful target when CDP is also given an explicit clip
+                // of that size. Prefer captureBeyondViewport alone + speed mode
+                // (ShouldThrowIfScreenshotSizeIsTooLarge TargetClosedException).
+                bool omitHugeFullPageClip = options.FullPage && largeClip;
+
+                if (options.Clip != null && !omitHugeFullPageClip)
                 {
                     parameters["clip"] = new
                     {
@@ -4282,14 +4291,11 @@ namespace PlaywrightNative.Chromium
                         height = options.Clip.Height,
                         scale = options.Clip.Scale > 0 ? options.Clip.Scale : 1.0,
                     };
+                }
 
-                    // At the Chromium PNG dimension ceiling, prefer speed over
-                    // quality so Windows headless does not OOM/crash the target
-                    // (ShouldThrowIfScreenshotSizeIsTooLarge TargetClosedException).
-                    if (options.Clip.Width >= 4_000 || options.Clip.Height >= 4_000)
-                    {
-                        parameters["optimizeForSpeed"] = true;
-                    }
+                if (largeClip || omitHugeFullPageClip)
+                {
+                    parameters["optimizeForSpeed"] = true;
                 }
 
                 if (options.OmitBackground && options.Format != "jpeg")
