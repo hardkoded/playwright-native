@@ -1114,6 +1114,20 @@ namespace PlaywrightNative.WebKit
                 WKPage page;
                 try
                 {
+                    // Bound the pageProxyCreated handoff. A lost event leaves NewPage
+                    // waiting forever and burns the NUnit 30s budget under concurrent
+                    // multi-page create (ShouldNotLeakListenersDuringNavigationOf20Pages).
+                    Task handoff = await Task.WhenAny(tcs.Task, Task.Delay(15_000))
+                        .ConfigureAwait(false);
+                    if (handoff != tcs.Task)
+                    {
+                        _pendingPageCreations.TryRemove(pageProxyId, out _);
+                        throw new TimeoutException(
+                            "WebKit Playwright.pageProxyCreated for pageProxyId '"
+                            + pageProxyId
+                            + "' did not arrive within 15000ms.");
+                    }
+
                     page = await tcs.Task.ConfigureAwait(false);
                 }
                 catch

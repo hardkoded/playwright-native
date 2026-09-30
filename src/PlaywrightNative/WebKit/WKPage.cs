@@ -620,7 +620,7 @@ namespace PlaywrightNative.WebKit
                 // Wait for _closedTcs (completed after Close) once close has begun.
                 if (_closed)
                 {
-                    await _closedTcs.Task.ConfigureAwait(false);
+                    await AwaitClosedOrForceAsync().ConfigureAwait(false);
                     return;
                 }
 
@@ -659,7 +659,7 @@ namespace PlaywrightNative.WebKit
                         DidClose();
                     }
 
-                    await _closedTcs.Task.ConfigureAwait(false);
+                    await AwaitClosedOrForceAsync().ConfigureAwait(false);
                     return;
                 }
 
@@ -682,7 +682,11 @@ namespace PlaywrightNative.WebKit
                     _ = targetClose.Exception;
                 }
 
-                await _closedTcs.Task.ConfigureAwait(false);
+                // closePage / Target.close already settled. Darwin under concurrent
+                // multi-page close can drop or delay Playwright.pageProxyDestroyed, so
+                // an unbounded _closedTcs wait eats the NUnit 30s budget
+                // (ShouldNotLeakListenersDuringNavigationOf20Pages on macOS CI).
+                await AwaitClosedOrForceAsync().ConfigureAwait(false);
             }).ConfigureAwait(false);
         }
 
@@ -3556,8 +3560,19 @@ namespace PlaywrightNative.WebKit
                     // data: must seed here too — commit-path seeding alone races past
                     // waiter arming (QuerySelectorShouldReturnNullForNoMatch hung the
                     // full NUnit 30s budget on macOS CI when GoTo(data:) never completed).
+                    // Committed HTTP destinations (EmptyPage under concurrent GoTo) can
+                    // also miss loadEventFired on Darwin — seed only after commit so we
+                    // never complete Load against the previous about:blank document.
+                    bool seedCommittedHttp;
+                    lock (_navigationLock)
+                    {
+                        seedCommittedHttp = _pendingNavigationCommitted
+                            && _pendingLoadTcs != null;
+                    }
+
                     if (PopupOpenedHelper.IsBlankUrl(url)
-                        || url.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+                        || url.StartsWith("data:", StringComparison.OrdinalIgnoreCase)
+                        || seedCommittedHttp)
                     {
                         blankWedgeSeedTask = StartOwnedLifecycleSeedAsync();
                     }
@@ -10561,6 +10576,33 @@ namespace PlaywrightNative.WebKit
             return seed;
         }
 
+        /// <summary>
+        /// Waits briefly for <see cref="DidClose"/> after close commands ACK, then
+        /// force-completes local cleanup if <c>pageProxyDestroyed</c> never arrives.
+        /// </summary>
+        /// <returns>A task that completes when the page is closed locally.</returns>
+        private async Task AwaitClosedOrForceAsync()
+        {
+            if (_closedTcs.Task.IsCompleted)
+            {
+                return;
+            }
+
+            Task closed = await Task.WhenAny(_closedTcs.Task, Task.Delay(3_000)).ConfigureAwait(false);
+            if (closed == _closedTcs.Task)
+            {
+                await _closedTcs.Task.ConfigureAwait(false);
+                return;
+            }
+
+            if (!_closedTcs.Task.IsCompleted)
+            {
+                DidClose();
+            }
+
+            await _closedTcs.Task.ConfigureAwait(false);
+        }
+
         private void StartOrReuseLifecycleSeed()
         {
             Task existing = Volatile.Read(ref _lifecycleSeedTask);
@@ -10721,6 +10763,7 @@ namespace PlaywrightNative.WebKit
                     // (QuerySelectorShouldReturnNullForNoMatch on macOS CI).
                     string url = _mainFrameUrl;
                     bool allowBlankSeed;
+                    bool allowCommittedHttpSeed;
                     bool pendingBlankFromBlankOrFile;
                     bool pendingDataFromBlankOrFile;
                     lock (_navigationLock)
@@ -10738,11 +10781,22 @@ namespace PlaywrightNative.WebKit
                         pendingDataFromBlankOrFile = pendingData && startBlankOrFile;
                         allowBlankSeed = pendingBlank
                             && PopupOpenedHelper.IsBlankUrl(url);
+
+                        // Committed destination matching the pending GoTo URL — load
+                        // waiters may still be open when Darwin drops loadEventFired
+                        // under concurrent multi-page navigation.
+                        string pending = NavigationTimeout.WithoutHash(_pendingNavigationUrl);
+                        string current = NavigationTimeout.WithoutHash(url);
+                        allowCommittedHttpSeed = _pendingLoadTcs != null
+                            && _pendingNavigationCommitted
+                            && !string.IsNullOrEmpty(pending)
+                            && string.Equals(current, pending, StringComparison.Ordinal);
                     }
 
                     if (string.IsNullOrEmpty(url)
                         || (!url.StartsWith("data:", StringComparison.OrdinalIgnoreCase)
                             && !allowBlankSeed
+                            && !allowCommittedHttpSeed
                             && !pendingBlankFromBlankOrFile
                             && !pendingDataFromBlankOrFile))
                     {
@@ -10750,6 +10804,7 @@ namespace PlaywrightNative.WebKit
                     }
 
                     if (!allowBlankSeed
+                        && !allowCommittedHttpSeed
                         && !url.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
                     {
                         // Pending about:blank / data: but document URL not updated yet —
