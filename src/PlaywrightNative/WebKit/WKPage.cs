@@ -3453,13 +3453,15 @@ namespace PlaywrightNative.WebKit
 
                     if (waitTcs.Task.IsCompletedSuccessfully && !sameDocumentHash)
                     {
-                        // blank/file→blank: OnLoadEventFired can clear
-                        // _pendingNavigationCommitted after load waiters complete
-                        // while Playwright.navigate stays wedged. Waiting on
-                        // sendTask then races the NUnit 30s budget
+                        // OnLoadEventFired can clear _pendingNavigationCommitted after
+                        // load waiters complete while Playwright.navigate stays wedged.
+                        // Waiting on sendTask then races the NUnit 30s budget
                         // (ConsoleMessagesFilterTests.SinceNavigationFilterShouldWork
-                        // on macOS CI). Same leave-without-send as seed exhaust.
-                        if (_pendingNavigationCommitted || blankOrFileToBlank)
+                        // on macOS CI; ShouldNotLeakListenersDuringNavigationOf20Pages
+                        // for concurrent http EmptyPage). Leave when commit already
+                        // completed too — blankOrFileToBlank alone missed http.
+                        bool commitDone = commitTcs.Task.IsCompletedSuccessfully;
+                        if (_pendingNavigationCommitted || blankOrFileToBlank || commitDone)
                         {
                             if (sendTask.IsCompleted && !IsHarRedirectSendSuperseded(sendTask))
                             {
@@ -3479,7 +3481,14 @@ namespace PlaywrightNative.WebKit
                                 timeoutMs);
                         }
 
-                        continue;
+                        if (waitCommit == commitTcs.Task || commitTcs.Task.IsCompletedSuccessfully)
+                        {
+                            // Next iteration takes leave-without-send via commitDone.
+                            continue;
+                        }
+
+                        // sendTask settled while commit is still open — fall through
+                        // to sendTask handling instead of spinning on WhenAny.
                     }
 
                     if (!sendTask.IsCompleted)
