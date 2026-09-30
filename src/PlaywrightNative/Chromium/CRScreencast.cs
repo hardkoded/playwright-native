@@ -129,11 +129,19 @@ namespace PlaywrightNative.Chromium
         public async Task StopAsync()
         {
             ThrowIfClosed();
-            if (!TryMarkStopped(out Func<ScreencastFrame, Task> _, out ScreencastVideoWriter video))
+            lock (_gate)
             {
-                return;
+                if (!_started)
+                {
+                    return;
+                }
             }
 
+            // Detach + stop CDP first so no new frames enqueue, then drain the
+            // deliver chain while _started is still true. Clearing _started /
+            // _video before the drain dropped in-flight JPEG writes and left
+            // only the empty-recording white WebM (StartDisposeStopsRecording
+            // on Windows headed CI after screenshot pause/resume).
             _page.CrPage.Session.MessageReceived -= OnMessage;
             try
             {
@@ -145,6 +153,19 @@ namespace PlaywrightNative.Chromium
             }
             catch (PlaywrightException)
             {
+            }
+
+            Task deliverChain;
+            lock (_gate)
+            {
+                deliverChain = _deliverChain;
+            }
+
+            await deliverChain.ConfigureAwait(false);
+
+            if (!TryMarkStopped(out Func<ScreencastFrame, Task> _, out ScreencastVideoWriter video))
+            {
+                return;
             }
 
             if (video != null)
