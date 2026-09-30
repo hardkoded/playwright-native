@@ -2242,7 +2242,6 @@ namespace PlaywrightNative.Helpers
             {
                 while (true)
                 {
-                    timing.MarkStart();
                     List<KeyValuePair<string, string>> requestHeaders = SnapshotRequestHeaders(current);
                     byte[] requestBody = await SnapshotRequestBodyAsync(current).ConfigureAwait(false);
                     if (!HasHeader(requestHeaders, "content-length") && requestBody != null)
@@ -2258,6 +2257,12 @@ namespace PlaywrightNative.Helpers
                     HttpResponseMessage response;
                     try
                     {
+                        // Start timing immediately before SendAsync — snapshotting the
+                        // request body must not inflate ResponseEnd past the 10s
+                        // AssertTiming budget under Windows suite load
+                        // (ContextApiRequestShouldReportResourceTiming).
+                        timing.MarkStart();
+
                         // Buffer the full response in one shot. ResponseHeadersRead + a
                         // later ReadAsByteArrayAsync races HeaderCaptureStream disposal on
                         // some CI hosts and surfaces as HttpIOException ResponseEnded.

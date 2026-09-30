@@ -139,11 +139,17 @@ namespace PlaywrightNative.Helpers
             };
             try
             {
-                if (string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase))
+                // Prefer IPv4 loopback for localhost / 127.0.0.1 / ::1. SocketsHttpHandler
+                // may pass a resolved DnsEndPoint host ("::1") instead of "localhost";
+                // connecting to IPv6-first when the test server only binds IPv4 can stall
+                // under Windows suite load and inflate APIRequest ResponseEnd past 10s
+                // (ContextApiRequestShouldReportResourceTiming).
+                if (IsLoopbackHost(host))
                 {
                     try
                     {
-                        await socket.ConnectAsync(IPAddress.Loopback, port, cancellationToken).ConfigureAwait(false);
+                        await socket.ConnectAsync(IPAddress.Loopback, port, cancellationToken)
+                            .ConfigureAwait(false);
                     }
                     catch (SocketException)
                     {
@@ -152,7 +158,8 @@ namespace PlaywrightNative.Helpers
                         {
                             NoDelay = true,
                         };
-                        await socket.ConnectAsync(IPAddress.IPv6Loopback, port, cancellationToken).ConfigureAwait(false);
+                        await socket.ConnectAsync(IPAddress.IPv6Loopback, port, cancellationToken)
+                            .ConfigureAwait(false);
                     }
                 }
                 else
@@ -367,6 +374,24 @@ namespace PlaywrightNative.Helpers
             }
 
             return -1;
+        }
+
+        private static bool IsLoopbackHost(string host)
+        {
+            if (string.IsNullOrEmpty(host))
+            {
+                return false;
+            }
+
+            if (string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(host, "127.0.0.1", StringComparison.Ordinal)
+                || string.Equals(host, "::1", StringComparison.Ordinal)
+                || string.Equals(host, "[::1]", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            return IPAddress.TryParse(host, out IPAddress address) && IPAddress.IsLoopback(address);
         }
 
         private static bool IsSocks(Uri proxyUri)

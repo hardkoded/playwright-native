@@ -215,7 +215,10 @@ namespace PlaywrightNative.Helpers
 
                 // Bound the wait: a misbehaving ffmpeg build that hangs instead of
                 // exiting once stalled an entire CI shard for the rest of its budget.
-                if (!await Task.Run(() => ffmpeg.WaitForExit(15_000)).ConfigureAwait(false))
+                // 5s: Windows headful suite load can burn the full ContextVideoTests
+                // 30s NUnit budget when WaitForExit(15s) + WriteWhiteVideo stack
+                // (OptionsBagShouldRecordVideo / ShouldSaveVideoAs / ShouldDeleteVideo).
+                if (!await Task.Run(() => ffmpeg.WaitForExit(5_000)).ConfigureAwait(false))
                 {
                     try
                     {
@@ -228,7 +231,15 @@ namespace PlaywrightNative.Helpers
 
                 if (stderrTask != null)
                 {
-                    await stderrTask.ConfigureAwait(false);
+                    try
+                    {
+                        await stderrTask
+                            .WaitAsync(TimeSpan.FromMilliseconds(500))
+                            .ConfigureAwait(false);
+                    }
+                    catch (TimeoutException)
+                    {
+                    }
                 }
             }
             finally
