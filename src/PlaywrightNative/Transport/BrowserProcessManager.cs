@@ -20,9 +20,15 @@ namespace PlaywrightNative.Transport
     /// </summary>
     internal class BrowserProcessManager : IDisposable
     {
+        private static readonly string[] DevToolsActivePortLineSeparators = { "\r\n", "\n" };
+
         private static int _processCount;
 
         private readonly string _tempUserDataDir;
+
+        // Profile dir used to poll Chromium's DevToolsActivePort when stderr never
+        // emits "DevTools listening on ..." (common for system Chrome on Windows).
+        private readonly string _devtoolsUserDataDir;
         private readonly int _timeout;
         private readonly Func<Task> _gracefulCloseCallback;
         private readonly Func<string, string> _endpointExtractor;
@@ -105,6 +111,7 @@ namespace PlaywrightNative.Transport
 
             string finalExecutable = executablePath;
             List<string> argList = args == null ? new List<string>() : new List<string>(args);
+            _devtoolsUserDataDir = tempUserDataDir ?? TryGetUserDataDir(argList);
 
             bool redirectStdio = transportMode == TransportMode.PipeStdio;
 
@@ -351,14 +358,167 @@ namespace PlaywrightNative.Transport
         /// <returns>The WebSocket endpoint string if found; otherwise <c>null</c>.</returns>
         private static string DefaultEndpointExtractor(string line)
         {
-            // Chromium: "DevTools listening on ws://..."
-            Match match = Regex.Match(line, "^DevTools listening on (ws:\\/\\/.*)");
+            if (string.IsNullOrEmpty(line))
+            {
+                return null;
+            }
+
+            // Official waitForReadyState: /DevTools listening on (.*)/ — do not
+            // require start-of-line; Windows Chrome may prefix the banner.
+            Match match = Regex.Match(line, "DevTools listening on (ws://\\S+)");
             if (match.Success)
             {
-                return match.Groups[1].Value;
+                return match.Groups[1].Value.TrimEnd('\r');
             }
 
             return null;
+        }
+
+        private static string TryGetUserDataDir(IReadOnlyList<string> args)
+        {
+            if (args == null)
+            {
+                return null;
+            }
+
+            for (int i = 0; i < args.Count; i++)
+            {
+                string arg = args[i];
+                if (string.IsNullOrEmpty(arg))
+                {
+                    continue;
+                }
+
+                if (arg.StartsWith("--user-data-dir=", StringComparison.Ordinal))
+                {
+                    string value = arg.Substring("--user-data-dir=".Length);
+                    return string.IsNullOrEmpty(value) ? null : value;
+                }
+
+                if (string.Equals(arg, "--user-data-dir", StringComparison.Ordinal)
+                    && i + 1 < args.Count
+                    && !string.IsNullOrEmpty(args[i + 1]))
+                {
+                    return args[i + 1];
+                }
+            }
+
+            return null;
+        }
+
+        private static void TryDeleteStaleDevToolsActivePort(string userDataDir)
+        {
+            if (string.IsNullOrEmpty(userDataDir))
+            {
+                return;
+            }
+
+            string portFile = Path.Combine(userDataDir, "DevToolsActivePort");
+            try
+            {
+                if (File.Exists(portFile))
+                {
+                    File.Delete(portFile);
+                }
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+
+        /// <summary>
+        /// Reads Chromium's <c>DevToolsActivePort</c> (port + browser path) into a
+        /// WebSocket debugger URL. Returns <c>null</c> until both lines are present.
+        /// </summary>
+        /// <param name="portFile">Absolute path to <c>DevToolsActivePort</c>.</param>
+        /// <returns>A <c>ws://127.0.0.1:port/devtools/browser/...</c> URL, or <c>null</c>.</returns>
+        private static string TryReadDevToolsActivePortEndpoint(string portFile)
+        {
+            if (string.IsNullOrEmpty(portFile) || !File.Exists(portFile))
+            {
+                return null;
+            }
+
+            try
+            {
+                // Chromium keeps DevToolsActivePort open with a write lock on
+                // Windows; share + retry across rewrite races (ConnectOverCdpTests).
+                string text;
+                using (FileStream stream = new FileStream(
+                    portFile,
+                    FileMode.Open,
+                    FileAccess.Read,
+                    FileShare.ReadWrite | FileShare.Delete))
+                using (StreamReader reader = new StreamReader(stream))
+                {
+                    text = reader.ReadToEnd();
+                }
+
+                if (string.IsNullOrEmpty(text))
+                {
+                    return null;
+                }
+
+                string[] lines = text.Split(DevToolsActivePortLineSeparators, StringSplitOptions.None);
+                if (lines.Length < 2
+                    || !int.TryParse(lines[0].Trim(), out int port)
+                    || port <= 0)
+                {
+                    return null;
+                }
+
+                string path = lines[1].Trim();
+                if (string.IsNullOrEmpty(path) || path[0] != '/')
+                {
+                    return null;
+                }
+
+                return "ws://127.0.0.1:" + port.ToString(System.Globalization.CultureInfo.InvariantCulture) + path;
+            }
+            catch (IOException)
+            {
+                return null;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return null;
+            }
+        }
+
+        private static async Task PollDevToolsActivePortAsync(
+            BrowserProcessManager manager,
+            CancellationToken cancellationToken)
+        {
+            if (manager == null
+                || string.IsNullOrEmpty(manager._devtoolsUserDataDir)
+                || manager._transportMode != TransportMode.WebSocket)
+            {
+                return;
+            }
+
+            string portFile = Path.Combine(manager._devtoolsUserDataDir, "DevToolsActivePort");
+            while (!cancellationToken.IsCancellationRequested
+                && !manager._startCompletionSource.Task.IsCompleted)
+            {
+                string endpoint = TryReadDevToolsActivePortEndpoint(portFile);
+                if (endpoint != null)
+                {
+                    manager._startCompletionSource.TrySetResult(endpoint);
+                    return;
+                }
+
+                try
+                {
+                    await Task.Delay(50, cancellationToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    return;
+                }
+            }
         }
 
         private static string JoinProcessArguments(IReadOnlyList<string> args)
@@ -784,6 +944,10 @@ namespace PlaywrightNative.Transport
                     CancellationTokenSource cts = null;
                     try
                     {
+                        // Drop a stale DevToolsActivePort so a prior crash cannot
+                        // complete StartAsync before the new browser is ready.
+                        TryDeleteStaleDevToolsActivePort(p._devtoolsUserDataDir);
+
                         p.StartProcess();
 
                         // Start stderr async read immediately so a fast profile-lock
@@ -807,6 +971,13 @@ namespace PlaywrightNative.Transport
                                 FailStartup(detail);
                             });
                         }
+
+                        // Windows system Chrome often never prints the DevTools
+                        // banner on stderr; poll DevToolsActivePort in parallel.
+                        CancellationToken pollToken = cts == null
+                            ? CancellationToken.None
+                            : cts.Token;
+                        _ = PollDevToolsActivePortAsync(p, pollToken);
 
                         // PipeStdio (Firefox): the ready banner is written on stdout, then
                         // the same stream becomes the Juggler protocol pipe. Consume the
