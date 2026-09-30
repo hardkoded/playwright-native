@@ -84,17 +84,36 @@ namespace PlaywrightNative.Chromium
         internal bool IsDragging => _dragState.HasValue;
 
         /// <summary>
-        /// Records the last mouse-down point and latches whether HTML5 drag
-        /// intercept is needed for this press.
+        /// Records the last mouse-down point before <c>mousePressed</c> is sent.
         /// </summary>
         /// <param name="x">Down x.</param>
         /// <param name="y">Down y.</param>
-        /// <returns>A task that completes when the down has been recorded.</returns>
-        internal async Task NoteMouseDownAsync(double x, double y)
+        internal void BeginMouseDown(double x, double y)
         {
             _lastDownX = x;
             _lastDownY = y;
             _hasLastDown = true;
+
+            // Fail closed until CompleteMouseDownAsync finishes: a held move that
+            // races the probe must not enable setInterceptDrags by accident.
+            _skipInterceptThisPress = true;
+        }
+
+        /// <summary>
+        /// Latches whether HTML5 drag intercept is needed for this press.
+        /// Call after <c>mousePressed</c> so text-selection caret placement is
+        /// not delayed by CDP hit-tests under headful suite load
+        /// (<c>ShouldSelectTheTextWithMouse</c>).
+        /// </summary>
+        /// <param name="x">Down x.</param>
+        /// <param name="y">Down y.</param>
+        /// <returns>A task that completes when the latch is updated.</returns>
+        internal async Task CompleteMouseDownAsync(double x, double y)
+        {
+            if (!_hasLastDown)
+            {
+                return;
+            }
 
             // Skip HTML5 intercept when the press is text selection (textarea/
             // input/contenteditable) OR the document has no [draggable=true].
@@ -104,15 +123,6 @@ namespace PlaywrightNative.Chromium
             bool textSelect = await IsTextSelectGestureAsync(x, y).ConfigureAwait(false);
             bool hasDraggable = !textSelect && await DocumentHasDraggableAsync().ConfigureAwait(false);
             _skipInterceptThisPress = textSelect || !hasDraggable;
-
-            // Let the compositor apply the pointer at the press point before
-            // mousePressed when we are not about to HTML5-drag (text selection
-            // / plain held moves). Double-rAF matches the test's own Rafraf
-            // settle without injecting extra mousemove events.
-            if (_skipInterceptThisPress)
-            {
-                await SettleFramesAsync().ConfigureAwait(false);
-            }
         }
 
         /// <summary>
@@ -304,40 +314,6 @@ namespace PlaywrightNative.Chromium
             _dragState = null;
             _hasLastDown = false;
             _skipInterceptThisPress = false;
-        }
-
-        private async Task SettleFramesAsync()
-        {
-            try
-            {
-                Frame main = _page.FrameManager.MainFrame;
-                if (main == null)
-                {
-                    return;
-                }
-
-                CRExecutionContext context = await _page.GetUtilityWorldAsync(main)
-                    .WaitAsync(TimeSpan.FromMilliseconds(500))
-                    .ConfigureAwait(false);
-                if (context == null)
-                {
-                    return;
-                }
-
-                await context.EvaluateAsync<object>(
-                        "new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => r(true))))")
-                    .WaitAsync(TimeSpan.FromMilliseconds(500))
-                    .ConfigureAwait(false);
-            }
-            catch (PlaywrightException)
-            {
-            }
-            catch (TimeoutException)
-            {
-            }
-            catch (OperationCanceledException)
-            {
-            }
         }
 
         private async Task<bool> DocumentHasDraggableAsync()

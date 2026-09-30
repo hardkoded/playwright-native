@@ -73,7 +73,11 @@ namespace PlaywrightNative.Chromium
                 return;
             }
 
-            await _dragManager.NoteMouseDownAsync(x, y).ConfigureAwait(false);
+            // Record the press point before mousePressed so a following held move
+            // sees _hasLastDown, but do not await text/drag probes yet — delaying
+            // mousePressed after mouseMoved under headful suite load lands the
+            // caret mid-textarea (ShouldSelectTheTextWithMouse).
+            _dragManager.BeginMouseDown(x, y);
             int buttonsMask = buttons.ToCdpMask();
 
             await _session.SendAsync("Input.dispatchMouseEvent", new
@@ -87,6 +91,10 @@ namespace PlaywrightNative.Chromium
                 clickCount,
                 force = buttonsMask > 0 ? 0.5 : 0.0,
             }).ConfigureAwait(false);
+
+            // Latch skip-intercept for subsequent held moves after the press
+            // has already established the caret / selection anchor.
+            await _dragManager.CompleteMouseDownAsync(x, y).ConfigureAwait(false);
         }
 
         /// <summary>
