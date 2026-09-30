@@ -1681,10 +1681,11 @@ namespace PlaywrightNative.Helpers
                     // 400ms was enough for the TLS1.2 hang fixture but too tight for
                     // successful client-cert handshakes under Windows suite load
                     // (BrowserShouldHandleTlsRenegotiationWithClientCertificates →
-                    // ERR_PROXY_CONNECTION_FAILED). 650ms + ForceClose still paints
-                    // the MITM error page before Chromium closes the SOCKS tunnel
-                    // while giving matching-cert GoTo enough time on winhf shards.
-                    const int handshakeBudgetMs = 650;
+                    // ERR_PROXY_CONNECTION_FAILED). Windows needs 650ms + ForceClose
+                    // so matching-cert GoTo still completes on winhf shards; Linux
+                    // Chromium closes the SOCKS tunnel sooner, so stay at 550ms
+                    // (BrowserShouldNotHangOnTlsErrorsDuringTls12Handshake on hlub).
+                    int handshakeBudgetMs = OperatingSystem.IsWindows() ? 650 : 550;
                     using CancellationTokenSource handshakeCts =
                         CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
                     handshakeCts.CancelAfter(TimeSpan.FromMilliseconds(handshakeBudgetMs));
@@ -1892,23 +1893,25 @@ namespace PlaywrightNative.Helpers
 #pragma warning disable CA5359
                 options.RemoteCertificateValidationCallback = (_, _, _, _) => true;
 #pragma warning restore CA5359
-                // 600ms: Windows headful suite load can stall AuthenticateAsServer
-                // past 400ms while Chromium still holds the SOCKS tunnel
+                // Windows headful can stall AuthenticateAsServer past 400ms while
+                // Chromium still holds the SOCKS tunnel; Linux closes sooner — keep
+                // the tighter budget so the hang fixture still paints
                 // (BrowserShouldNotHangOnTlsErrorsDuringTls12Handshake).
+                int errorPageBudgetMs = OperatingSystem.IsWindows() ? 600 : 400;
                 await tls.AuthenticateAsServerAsync(options, _cts.Token)
-                    .WaitAsync(TimeSpan.FromMilliseconds(600), _cts.Token)
+                    .WaitAsync(TimeSpan.FromMilliseconds(errorPageBudgetMs), _cts.Token)
                     .ConfigureAwait(false);
 
                 if (tls.NegotiatedApplicationProtocol.Equals(SslApplicationProtocol.Http2))
                 {
                     await WriteHttp2ErrorAsync(tls, body, _cts.Token)
-                        .WaitAsync(TimeSpan.FromMilliseconds(600), _cts.Token)
+                        .WaitAsync(TimeSpan.FromMilliseconds(errorPageBudgetMs), _cts.Token)
                         .ConfigureAwait(false);
                 }
                 else
                 {
                     await WriteHttp11ErrorAsync(tls, body, _cts.Token)
-                        .WaitAsync(TimeSpan.FromMilliseconds(600), _cts.Token)
+                        .WaitAsync(TimeSpan.FromMilliseconds(errorPageBudgetMs), _cts.Token)
                         .ConfigureAwait(false);
                 }
 
