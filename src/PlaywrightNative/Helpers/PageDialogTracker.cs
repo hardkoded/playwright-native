@@ -49,8 +49,8 @@ namespace PlaywrightNative.Helpers
         /// Windows Chromium under suite load needs more than 1ms —
         /// CDP can deliver <c>javascriptDialogOpening</c> on a background
         /// thread before the test arms <c>WaitForDialogAsync</c>
-        /// (<c>ShouldBeAbleToCaptureAlert</c>). A 150ms deferral covers
-        /// evaluate-first races on winhl shards.
+        /// (<c>ShouldBeAbleToCaptureAlert</c>). A 250ms deferral covers
+        /// evaluate-first races on winhf shards under long suite load.
         /// </summary>
         /// <param name="emitAndMaybeDismiss">
         /// Captures listeners, raises <c>Dialog</c>, then auto-dismisses when
@@ -187,11 +187,11 @@ namespace PlaywrightNative.Helpers
             {
                 await Task.Yield();
 
-                // 150ms: Windows Chromium suite load can deliver the dialog CDP
+                // 250ms: Windows Chromium suite load can deliver the dialog CDP
                 // event well before WaitForDialogAsync / WaitForPopupAsync arm
                 // when evaluate is started first (ShouldBeAbleToCaptureAlert).
-                // 50ms still auto-dismissed under winhl shard load.
-                await Task.Delay(150).ConfigureAwait(false);
+                // 150ms still auto-dismissed under winhf shard load.
+                await Task.Delay(250).ConfigureAwait(false);
                 emitAndMaybeDismiss();
             }
 #pragma warning disable RCS1075
@@ -213,19 +213,29 @@ namespace PlaywrightNative.Helpers
                 _inner = inner ?? throw new ArgumentNullException(nameof(inner));
                 _tracker = tracker ?? throw new ArgumentNullException(nameof(tracker));
                 _emitClosed = emitClosed ?? throw new ArgumentNullException(nameof(emitClosed));
-
-                // Official DialogDispatcher: page is omitted until reportAsNew
-                // (javascript: dialogs open during initialization).
-                IPage page = inner.Page;
-                if (page is IHasClientInitializedPage initialized && !initialized.IsClientInitialized)
-                {
-                    page = null;
-                }
-
-                Page = page;
             }
 
-            public IPage Page { get; }
+            /// <summary>
+            /// Official DialogDispatcher: page is omitted until reportAsNew
+            /// (<c>javascript:</c> dialogs open during initialization). Re-check
+            /// on each read so a blank popup that commits <c>about:blank</c>
+            /// after <c>javascriptDialogOpening</c> still exposes
+            /// <c>dialog.Page</c> for CaptureAlert without freezing null from
+            /// the open-time snapshot.
+            /// </summary>
+            public IPage Page
+            {
+                get
+                {
+                    IPage page = _inner.Page;
+                    if (page is IHasClientInitializedPage initialized && !initialized.IsClientInitialized)
+                    {
+                        return null;
+                    }
+
+                    return page;
+                }
+            }
 
             public string DefaultValue => _inner.DefaultValue;
 

@@ -17,6 +17,7 @@
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using PlaywrightNative;
 
 namespace PlaywrightNative.Helpers
 {
@@ -199,6 +200,10 @@ namespace PlaywrightNative.Helpers
                         {
                             // evaluate-first CaptureAlert can emit Popup /
                             // ReportPopupAsNew before WaitForPopupAsync subscribes.
+                            // Blank + alert may EmitWhenReady after NoteDialogOpened
+                            // unblocks init while HasCommittedNonInitialNavigation
+                            // is still false (frameNavigated races the dialog), so
+                            // IsClientInitialized alone misses the replay.
                             List<IPage> ready = new();
                             if (page.Context == null)
                             {
@@ -212,8 +217,29 @@ namespace PlaywrightNative.Helpers
                                     continue;
                                 }
 
-                                if (candidate is not IHasClientInitializedPage init
-                                    || !init.IsClientInitialized)
+                                bool clientReady = candidate is IHasClientInitializedPage init
+                                    && init.IsClientInitialized;
+
+                                // Blank + alert: NoteDialogOpened completes init before
+                                // about:blank sets HasCommittedNonInitialNavigation, so
+                                // EmitWhenReady can raise Popup while IsClientInitialized
+                                // is still false. Replay when init finished, opener is
+                                // set, and a dialog is open (or was — Prefer open dialog;
+                                // also accept blank URL after init so auto-dismiss races
+                                // still resolve WaitForPopup).
+                                bool blankPopupReadyForReplay = false;
+                                if (!clientReady && candidate is Page crCandidate
+                                    && crCandidate.CrPage.Opener != null
+                                    && crCandidate.CrPage.InitializedTask.IsCompleted)
+                                {
+                                    bool hasOpenDialog = candidate is IHasPageExtras extras
+                                        && extras.TryGetOpenDialog() != null;
+                                    bool blankUrl = PopupOpenedHelper.IsBlankUrl(
+                                        crCandidate.CrPage.MainFrame?.Url);
+                                    blankPopupReadyForReplay = hasOpenDialog || blankUrl;
+                                }
+
+                                if (!clientReady && !blankPopupReadyForReplay)
                                 {
                                     continue;
                                 }

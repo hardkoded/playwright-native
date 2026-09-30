@@ -466,7 +466,8 @@ namespace PlaywrightNative.Helpers
                     && !await IsLazyIframeRefAsync(frame, ariaRef).ConfigureAwait(false))
                 {
                     if (line.Contains("[active]", StringComparison.Ordinal)
-                        || SoleChildFrameOrNull(frame) != null)
+                        || SoleChildFrameOrNull(frame) != null
+                        || SoleDirectChildFrameOrNull(frame) != null)
                     {
                         childYaml = await CaptureActiveDataIframeYamlAsync(
                             page,
@@ -481,6 +482,21 @@ namespace PlaywrightNative.Helpers
                             page,
                             frame,
                             ariaRef,
+                            depth,
+                            boxes,
+                            lineDepth + 1).ConfigureAwait(false);
+                    }
+
+                    // Nested framesets parent the leaf under an inner frameset, so
+                    // descendant SoleChild is null while a direct ChildFrame still
+                    // needs FrameLocator stitch
+                    // (ShouldStitchNestedFramesetDocuments under Windows suite load).
+                    if (string.IsNullOrEmpty(childYaml)
+                        && SoleDirectChildFrameOrNull(frame) != null)
+                    {
+                        childYaml = await CaptureActiveDataIframeYamlAsync(
+                            page,
+                            frame,
                             depth,
                             boxes,
                             lineDepth + 1).ConfigureAwait(false);
@@ -754,6 +770,9 @@ namespace PlaywrightNative.Helpers
                         .ConfigureAwait(false);
                 }
 
+                // 3500ms: nested frameset stitch (outer → inner → leaf) needs more
+                // than a single iframe under Windows suite load
+                // (ShouldStitchNestedFramesetDocuments).
                 return await StitchAsync(
                     page,
                     child,
@@ -761,7 +780,7 @@ namespace PlaywrightNative.Helpers
                     depth,
                     boxes,
                     Stopwatch.StartNew(),
-                    1_500,
+                    3_500,
                     startDepth).ConfigureAwait(false);
             }
             catch (PlaywrightException)
@@ -1649,6 +1668,33 @@ namespace PlaywrightNative.Helpers
             {
                 IFrame child = descendants[i];
                 if (child == null || ReferenceEquals(child, frame) || child.IsDetached)
+                {
+                    continue;
+                }
+
+                childCount++;
+                only = child;
+            }
+
+            return childCount == 1 ? only : null;
+        }
+
+        /// <summary>
+        /// Direct <see cref="IFrame.ChildFrames"/> sole child — nested framesets
+        /// have multiple descendants but one direct child document.
+        /// </summary>
+        private static IFrame SoleDirectChildFrameOrNull(IFrame frame)
+        {
+            if (frame == null || frame.IsDetached || frame.ChildFrames == null)
+            {
+                return null;
+            }
+
+            int childCount = 0;
+            IFrame only = null;
+            foreach (IFrame child in frame.ChildFrames)
+            {
+                if (child == null || child.IsDetached)
                 {
                     continue;
                 }

@@ -1681,9 +1681,10 @@ namespace PlaywrightNative.Helpers
                     // 400ms was enough for the TLS1.2 hang fixture but too tight for
                     // successful client-cert handshakes under Windows suite load
                     // (BrowserShouldHandleTlsRenegotiationWithClientCertificates →
-                    // ERR_PROXY_CONNECTION_FAILED). 550ms + ForceClose still paints
-                    // the MITM error page before Chromium closes the SOCKS tunnel.
-                    const int handshakeBudgetMs = 550;
+                    // ERR_PROXY_CONNECTION_FAILED). 650ms + ForceClose still paints
+                    // the MITM error page before Chromium closes the SOCKS tunnel
+                    // while giving matching-cert GoTo enough time on winhf shards.
+                    const int handshakeBudgetMs = 650;
                     using CancellationTokenSource handshakeCts =
                         CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
                     handshakeCts.CancelAfter(TimeSpan.FromMilliseconds(handshakeBudgetMs));
@@ -1891,20 +1892,23 @@ namespace PlaywrightNative.Helpers
 #pragma warning disable CA5359
                 options.RemoteCertificateValidationCallback = (_, _, _, _) => true;
 #pragma warning restore CA5359
+                // 600ms: Windows headful suite load can stall AuthenticateAsServer
+                // past 400ms while Chromium still holds the SOCKS tunnel
+                // (BrowserShouldNotHangOnTlsErrorsDuringTls12Handshake).
                 await tls.AuthenticateAsServerAsync(options, _cts.Token)
-                    .WaitAsync(TimeSpan.FromMilliseconds(400), _cts.Token)
+                    .WaitAsync(TimeSpan.FromMilliseconds(600), _cts.Token)
                     .ConfigureAwait(false);
 
                 if (tls.NegotiatedApplicationProtocol.Equals(SslApplicationProtocol.Http2))
                 {
                     await WriteHttp2ErrorAsync(tls, body, _cts.Token)
-                        .WaitAsync(TimeSpan.FromMilliseconds(400), _cts.Token)
+                        .WaitAsync(TimeSpan.FromMilliseconds(600), _cts.Token)
                         .ConfigureAwait(false);
                 }
                 else
                 {
                     await WriteHttp11ErrorAsync(tls, body, _cts.Token)
-                        .WaitAsync(TimeSpan.FromMilliseconds(400), _cts.Token)
+                        .WaitAsync(TimeSpan.FromMilliseconds(600), _cts.Token)
                         .ConfigureAwait(false);
                 }
 
