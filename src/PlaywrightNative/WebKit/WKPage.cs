@@ -3458,10 +3458,25 @@ namespace PlaywrightNative.WebKit
                         // Waiting on sendTask then races the NUnit 30s budget
                         // (ConsoleMessagesFilterTests.SinceNavigationFilterShouldWork
                         // on macOS CI; ShouldNotLeakListenersDuringNavigationOf20Pages
-                        // for concurrent http EmptyPage). Leave when commit already
-                        // completed too — blankOrFileToBlank alone missed http.
+                        // for concurrent http EmptyPage).
+                        //
+                        // Leave on commitDone only for cross-document navigations.
+                        // Same-URL reload/GoTo can CompletePendingIfUrlReached against
+                        // the old document (commit TCS completes without a new load),
+                        // which regressed init-script dispose + credentials reload on
+                        // tip 4cb2a47 macOS CI.
                         bool commitDone = commitTcs.Task.IsCompletedSuccessfully;
-                        if (_pendingNavigationCommitted || blankOrFileToBlank || commitDone)
+                        bool crossDocument = !string.Equals(
+                            NavigationTimeout.WithoutHash(previousUrl),
+                            NavigationTimeout.WithoutHash(url),
+                            StringComparison.Ordinal);
+
+                        // blankOrFileToBlank: Darwin wedge leave (includes blank→blank).
+                        // crossDocument + commit/pending: http EmptyPage concurrent GoTo.
+                        // Never leave on same-URL solely because CompletePendingIfUrlReached
+                        // stamped commit against the old document.
+                        if (blankOrFileToBlank
+                            || (crossDocument && (_pendingNavigationCommitted || commitDone)))
                         {
                             if (sendTask.IsCompleted && !IsHarRedirectSendSuperseded(sendTask))
                             {
@@ -3471,24 +3486,45 @@ namespace PlaywrightNative.WebKit
                             break;
                         }
 
-                        Task waitCommit = await Task.WhenAny(sendTask, commitTcs.Task, timeoutTask).ConfigureAwait(false);
-                        if (waitCommit == timeoutTask)
+                        if (commitDone && !crossDocument)
                         {
-                            throw NavigationTimeout.Exceeded(
-                                "page.goto",
-                                url,
-                                NavigationTimeout.WaitUntilName(waitUntil),
-                                timeoutMs);
-                        }
+                            // Same-URL: do not spin on an already-completed commit TCS.
+                            // Require the navigate RPC (or timeout) before leaving.
+                            Task waitSend = await Task.WhenAny(sendTask, timeoutTask).ConfigureAwait(false);
+                            if (waitSend == timeoutTask)
+                            {
+                                throw NavigationTimeout.Exceeded(
+                                    "page.goto",
+                                    url,
+                                    NavigationTimeout.WaitUntilName(waitUntil),
+                                    timeoutMs);
+                            }
 
-                        if (waitCommit == commitTcs.Task || commitTcs.Task.IsCompletedSuccessfully)
+                            // Fall through to sendTask handling.
+                        }
+                        else
                         {
-                            // Next iteration takes leave-without-send via commitDone.
-                            continue;
-                        }
+                            Task waitCommit = await Task.WhenAny(sendTask, commitTcs.Task, timeoutTask)
+                                .ConfigureAwait(false);
+                            if (waitCommit == timeoutTask)
+                            {
+                                throw NavigationTimeout.Exceeded(
+                                    "page.goto",
+                                    url,
+                                    NavigationTimeout.WaitUntilName(waitUntil),
+                                    timeoutMs);
+                            }
 
-                        // sendTask settled while commit is still open — fall through
-                        // to sendTask handling instead of spinning on WhenAny.
+                            if (waitCommit == commitTcs.Task || commitTcs.Task.IsCompletedSuccessfully)
+                            {
+                                // Next iteration: cross-document commitDone leave, or
+                                // same-URL send wait above.
+                                continue;
+                            }
+
+                            // sendTask settled while commit is still open — fall through
+                            // to sendTask handling instead of spinning on WhenAny.
+                        }
                     }
 
                     if (!sendTask.IsCompleted)
@@ -3569,14 +3605,20 @@ namespace PlaywrightNative.WebKit
                     // data: must seed here too — commit-path seeding alone races past
                     // waiter arming (QuerySelectorShouldReturnNullForNoMatch hung the
                     // full NUnit 30s budget on macOS CI when GoTo(data:) never completed).
-                    // Committed HTTP destinations (EmptyPage under concurrent GoTo) can
-                    // also miss loadEventFired on Darwin — seed only after commit so we
-                    // never complete Load against the previous about:blank document.
+                    // Committed cross-document HTTP (EmptyPage under concurrent GoTo)
+                    // can miss loadEventFired on Darwin — seed only after commit and
+                    // only when the start URL differs so same-URL reload cannot seed
+                    // from the old document.readyState (init-script dispose / credentials
+                    // reload regressions on tip 4cb2a47).
                     bool seedCommittedHttp;
                     lock (_navigationLock)
                     {
+                        string start = NavigationTimeout.WithoutHash(_navigationStartUrl);
+                        string pending = NavigationTimeout.WithoutHash(_pendingNavigationUrl);
                         seedCommittedHttp = _pendingNavigationCommitted
-                            && _pendingLoadTcs != null;
+                            && _pendingLoadTcs != null
+                            && !string.IsNullOrEmpty(pending)
+                            && !string.Equals(start, pending, StringComparison.Ordinal);
                     }
 
                     if (PopupOpenedHelper.IsBlankUrl(url)
@@ -10791,15 +10833,18 @@ namespace PlaywrightNative.WebKit
                         allowBlankSeed = pendingBlank
                             && PopupOpenedHelper.IsBlankUrl(url);
 
-                        // Committed destination matching the pending GoTo URL — load
-                        // waiters may still be open when Darwin drops loadEventFired
-                        // under concurrent multi-page navigation.
+                        // Committed cross-document destination matching the pending
+                        // GoTo URL — load waiters may still be open when Darwin drops
+                        // loadEventFired under concurrent multi-page navigation.
+                        // Same-URL reload must not seed from the still-showing document.
                         string pending = NavigationTimeout.WithoutHash(_pendingNavigationUrl);
                         string current = NavigationTimeout.WithoutHash(url);
+                        string start = NavigationTimeout.WithoutHash(_navigationStartUrl);
                         allowCommittedHttpSeed = _pendingLoadTcs != null
                             && _pendingNavigationCommitted
                             && !string.IsNullOrEmpty(pending)
-                            && string.Equals(current, pending, StringComparison.Ordinal);
+                            && string.Equals(current, pending, StringComparison.Ordinal)
+                            && !string.Equals(start, pending, StringComparison.Ordinal);
                     }
 
                     if (string.IsNullOrEmpty(url)
