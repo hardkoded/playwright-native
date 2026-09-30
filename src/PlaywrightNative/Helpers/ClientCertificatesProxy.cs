@@ -1204,12 +1204,21 @@ namespace PlaywrightNative.Helpers
                 return ClientCertificateHelper.RewriteTlsMessage(new OperationCanceledException());
             }
 
+            // Under Chromium headful suite load, ForceClose can take hundreds of ms
+            // to surface the RemoteCertificateValidation AuthenticationException
+            // (self-signed HTTP/2 origins). 150ms often fell through to a generic
+            // disconnect page, and Expect then waited the full 30s for
+            // "self-signed certificate" (BrowserShouldReturnTargetConnectionErrorsWhenUsingHttp2).
             try
             {
                 Task finished = await Task.WhenAny(
                     handshakeTask,
-                    Task.Delay(150)).ConfigureAwait(false);
+                    Task.Delay(750)).ConfigureAwait(false);
                 if (finished == handshakeTask)
+                {
+                    await handshakeTask.ConfigureAwait(false);
+                }
+                else if (handshakeTask.IsCompleted)
                 {
                     await handshakeTask.ConfigureAwait(false);
                 }
@@ -1227,6 +1236,54 @@ namespace PlaywrightNative.Helpers
             }
             catch (OperationCanceledException)
             {
+            }
+
+            // One more short drain: SslStream sometimes faults just after WhenAny
+            // picks the delay task under HTTP/2 ALPN.
+            if (!handshakeTask.IsCompleted)
+            {
+                try
+                {
+                    await handshakeTask.WaitAsync(TimeSpan.FromMilliseconds(250)).ConfigureAwait(false);
+                }
+                catch (AuthenticationException ex)
+                {
+                    return ClientCertificateHelper.RewriteTlsMessage(ex);
+                }
+                catch (IOException ex)
+                {
+                    return ClientCertificateHelper.RewriteTlsMessage(ex);
+                }
+                catch (TimeoutException)
+                {
+                }
+                catch (ObjectDisposedException)
+                {
+                }
+                catch (OperationCanceledException)
+                {
+                }
+            }
+            else
+            {
+                try
+                {
+                    await handshakeTask.ConfigureAwait(false);
+                }
+                catch (AuthenticationException ex)
+                {
+                    return ClientCertificateHelper.RewriteTlsMessage(ex);
+                }
+                catch (IOException ex)
+                {
+                    return ClientCertificateHelper.RewriteTlsMessage(ex);
+                }
+                catch (ObjectDisposedException)
+                {
+                }
+                catch (OperationCanceledException)
+                {
+                }
             }
 
             return ClientCertificateHelper.RewriteTlsMessage(new OperationCanceledException());

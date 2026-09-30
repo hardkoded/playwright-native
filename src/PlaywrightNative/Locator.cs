@@ -775,71 +775,84 @@ namespace PlaywrightNative
             => FillAsync(string.Empty, noWaitAfter, timeout, force, scroll);
 
         /// <inheritdoc/>
-        public async Task<IReadOnlyCollection<string>> SelectOptionAsync(
+        public Task<IReadOnlyCollection<string>> SelectOptionAsync(
             IEnumerable<string> values,
             bool? noWaitAfter = default,
             float? timeout = default,
             bool? force = default)
-        {
-            IElementHandle handle = await WaitForHandleAsync(timeout, "locator.selectOption").ConfigureAwait(false);
-            return await handle.SelectOptionAsync(values, noWaitAfter, timeout, force).ConfigureAwait(false);
-        }
+            => SelectOptionAction.RunOnSelectorAsync(
+                ResolveSelectHandleAsync,
+                ToString(),
+                h => h.SelectOptionAsync(values, noWaitAfter, timeout, force),
+                timeout,
+                "locator.selectOption");
 
         /// <inheritdoc/>
-        public async Task<IReadOnlyCollection<string>> SelectOptionAsync(
+        public Task<IReadOnlyCollection<string>> SelectOptionAsync(
             string values,
             bool? noWaitAfter = default,
             float? timeout = default,
             bool? force = default)
-        {
-            IElementHandle handle = await WaitForHandleAsync(timeout, "locator.selectOption").ConfigureAwait(false);
-            return await handle.SelectOptionAsync(values, noWaitAfter, timeout, force).ConfigureAwait(false);
-        }
+            => SelectOptionAction.RunOnSelectorAsync(
+                ResolveSelectHandleAsync,
+                ToString(),
+                h => h.SelectOptionAsync(values, noWaitAfter, timeout, force),
+                timeout,
+                "locator.selectOption");
 
         /// <inheritdoc/>
-        public async Task<IReadOnlyCollection<string>> SelectOptionAsync(
+        public Task<IReadOnlyCollection<string>> SelectOptionAsync(
             IEnumerable<SelectOptionValue> values,
             bool? noWaitAfter = default,
             float? timeout = default,
             bool? force = default,
             ActionScroll scroll = default)
-        {
-            IElementHandle handle = await WaitForHandleAsync(timeout, "locator.selectOption").ConfigureAwait(false);
-            return await handle.SelectOptionAsync(values, noWaitAfter, timeout, force, scroll).ConfigureAwait(false);
-        }
+            => SelectOptionAction.RunOnSelectorAsync(
+                ResolveSelectHandleAsync,
+                ToString(),
+                h => h.SelectOptionAsync(values, noWaitAfter, timeout, force, scroll),
+                timeout,
+                "locator.selectOption",
+                scroll);
 
         /// <inheritdoc/>
-        public async Task<IReadOnlyCollection<string>> SelectOptionAsync(
+        public Task<IReadOnlyCollection<string>> SelectOptionAsync(
             IElementHandle values,
             bool? noWaitAfter = default,
             float? timeout = default,
             bool? force = default)
-        {
-            IElementHandle handle = await WaitForHandleAsync(timeout, "locator.selectOption").ConfigureAwait(false);
-            return await handle.SelectOptionAsync(values, noWaitAfter, timeout, force).ConfigureAwait(false);
-        }
+            => SelectOptionAction.RunOnSelectorAsync(
+                ResolveSelectHandleAsync,
+                ToString(),
+                h => h.SelectOptionAsync(values, noWaitAfter, timeout, force),
+                timeout,
+                "locator.selectOption");
 
         /// <inheritdoc/>
-        public async Task<IReadOnlyCollection<string>> SelectOptionAsync(
+        public Task<IReadOnlyCollection<string>> SelectOptionAsync(
             IEnumerable<IElementHandle> values,
             bool? noWaitAfter = default,
             float? timeout = default,
             bool? force = default)
-        {
-            IElementHandle handle = await WaitForHandleAsync(timeout, "locator.selectOption").ConfigureAwait(false);
-            return await handle.SelectOptionAsync(values, noWaitAfter, timeout, force).ConfigureAwait(false);
-        }
+            => SelectOptionAction.RunOnSelectorAsync(
+                ResolveSelectHandleAsync,
+                ToString(),
+                h => h.SelectOptionAsync(values, noWaitAfter, timeout, force),
+                timeout,
+                "locator.selectOption");
 
         /// <inheritdoc/>
-        public async Task<IReadOnlyCollection<string>> SelectOptionAsync(
+        public Task<IReadOnlyCollection<string>> SelectOptionAsync(
             SelectOptionValue values,
             bool? noWaitAfter = default,
             float? timeout = default,
             bool? force = default)
-        {
-            IElementHandle handle = await WaitForHandleAsync(timeout, "locator.selectOption").ConfigureAwait(false);
-            return await handle.SelectOptionAsync(values, noWaitAfter, timeout, force).ConfigureAwait(false);
-        }
+            => SelectOptionAction.RunOnSelectorAsync(
+                ResolveSelectHandleAsync,
+                ToString(),
+                h => h.SelectOptionAsync(values, noWaitAfter, timeout, force),
+                timeout,
+                "locator.selectOption");
 
         /// <inheritdoc/>
         public Task<IReadOnlyCollection<string>> SelectOptionAsync(params string[] values)
@@ -2305,6 +2318,13 @@ namespace PlaywrightNative
             string originalId = await original.EvaluateAsync<string>(TagIdFunction).ConfigureAwait(false);
             string matchId = await matches[0].EvaluateAsync<string>(TagIdFunction).ConfigureAwait(false);
             return string.Equals(originalId, matchId, StringComparison.Ordinal);
+        }
+
+        private async Task<IElementHandle> ResolveSelectHandleAsync(string selector)
+        {
+            _ = selector;
+            await LocatorHandlers.RunAsync(Page, timeout: null).ConfigureAwait(false);
+            return await ResolveOneOrNullAsync().ConfigureAwait(false);
         }
 
         private async Task<IElementHandle> WaitForHandleAsync(float? timeout, string apiName, bool skipHandlers = false)

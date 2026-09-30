@@ -266,43 +266,43 @@ namespace PlaywrightNative.Chromium
 
         /// <inheritdoc/>
         public Task<IReadOnlyCollection<string>> SelectOptionAsync(string selector, IEnumerable<SelectOptionValue> values, bool? noWaitAfter = default, float? timeout = default, bool? force = default, ActionScroll scroll = default, bool? strict = default)
-            => ElementQuery.WaitQueryAsync(sel => QueryActionAsync(sel, strict), selector, h => h.SelectOptionAsync(values, noWaitAfter, timeout, force, scroll), timeout, "frame.selectOption", scroll);
+            => SelectOptionAction.RunOnSelectorAsync(sel => QueryActionAsync(sel, strict), selector, h => h.SelectOptionAsync(values, noWaitAfter, timeout, force, scroll), timeout, "frame.selectOption", scroll);
 
         /// <inheritdoc/>
         public Task<IReadOnlyCollection<string>> SelectOptionAsync(string selector, string values, bool? noWaitAfter = default, float? timeout = default, bool? force = default, bool? strict = default)
-            => ElementQuery.WaitQueryAsync(sel => QueryActionAsync(sel, strict), selector, h => h.SelectOptionAsync(values, noWaitAfter, timeout, force), timeout, "frame.selectOption", ActionScroll.Undefined);
+            => SelectOptionAction.RunOnSelectorAsync(sel => QueryActionAsync(sel, strict), selector, h => h.SelectOptionAsync(values, noWaitAfter, timeout, force), timeout, "frame.selectOption", ActionScroll.Undefined);
 
         /// <inheritdoc/>
         public Task<IReadOnlyCollection<string>> SelectOptionAsync(string selector, IEnumerable<string> values, bool? noWaitAfter = default, float? timeout = default, bool? strict = default, bool? force = default)
-            => ElementQuery.WaitQueryAsync(sel => QueryActionAsync(sel, strict), selector, h => h.SelectOptionAsync(values, noWaitAfter, timeout, force), timeout, "frame.selectOption", ActionScroll.Undefined);
+            => SelectOptionAction.RunOnSelectorAsync(sel => QueryActionAsync(sel, strict), selector, h => h.SelectOptionAsync(values, noWaitAfter, timeout, force), timeout, "frame.selectOption", ActionScroll.Undefined);
 
         /// <inheritdoc/>
         public Task<IReadOnlyCollection<string>> SelectOptionAsync(string selector, bool? noWaitAfter = default, float? timeout = default, bool? strict = default, bool? force = default)
-            => ElementQuery.WaitQueryAsync(sel => QueryActionAsync(sel, strict), selector, h => h.SelectOptionAsync(Array.Empty<string>(), noWaitAfter, timeout, force), timeout, "frame.selectOption", ActionScroll.Undefined);
+            => SelectOptionAction.RunOnSelectorAsync(sel => QueryActionAsync(sel, strict), selector, h => h.SelectOptionAsync(Array.Empty<string>(), noWaitAfter, timeout, force), timeout, "frame.selectOption", ActionScroll.Undefined);
 
         /// <inheritdoc/>
         public Task<IReadOnlyCollection<string>> SelectOptionAsync(string selector, IElementHandle values, bool? noWaitAfter = default, float? timeout = default, bool? strict = default, bool? force = default)
-            => ElementQuery.WaitQueryAsync(sel => QueryActionAsync(sel, strict), selector, h => h.SelectOptionAsync(values, noWaitAfter, timeout, force), timeout, "frame.selectOption", ActionScroll.Undefined);
+            => SelectOptionAction.RunOnSelectorAsync(sel => QueryActionAsync(sel, strict), selector, h => h.SelectOptionAsync(values, noWaitAfter, timeout, force), timeout, "frame.selectOption", ActionScroll.Undefined);
 
         /// <inheritdoc/>
         public Task<IReadOnlyCollection<string>> SelectOptionAsync(string selector, IEnumerable<IElementHandle> values, bool? noWaitAfter = default, float? timeout = default, bool? strict = default, bool? force = default)
-            => ElementQuery.WaitQueryAsync(sel => QueryActionAsync(sel, strict), selector, h => h.SelectOptionAsync(values, noWaitAfter, timeout, force), timeout, "frame.selectOption", ActionScroll.Undefined);
+            => SelectOptionAction.RunOnSelectorAsync(sel => QueryActionAsync(sel, strict), selector, h => h.SelectOptionAsync(values, noWaitAfter, timeout, force), timeout, "frame.selectOption", ActionScroll.Undefined);
 
         /// <inheritdoc/>
         public Task<IReadOnlyCollection<string>> SelectOptionAsync(string selector, SelectOptionValue values, bool? noWaitAfter = default, float? timeout = default, bool? strict = default, bool? force = default)
-            => ElementQuery.WaitQueryAsync(sel => QueryActionAsync(sel, strict), selector, h => h.SelectOptionAsync(values, noWaitAfter, timeout, force), timeout, "frame.selectOption", ActionScroll.Undefined);
+            => SelectOptionAction.RunOnSelectorAsync(sel => QueryActionAsync(sel, strict), selector, h => h.SelectOptionAsync(values, noWaitAfter, timeout, force), timeout, "frame.selectOption", ActionScroll.Undefined);
 
         /// <inheritdoc/>
         public Task<IReadOnlyCollection<string>> SelectOptionAsync(string selector, params string[] values)
-            => CompatCollections.AsCollectionAsync(ElementQuery.WaitQueryAsync(QueryActionAsync, selector, h => h.SelectOptionAsync(values), null, "frame.selectOption", ActionScroll.Undefined));
+            => CompatCollections.AsCollectionAsync(SelectOptionAction.RunOnSelectorAsync(QueryActionAsync, selector, h => h.SelectOptionAsync(values), null, "frame.selectOption", ActionScroll.Undefined));
 
         /// <inheritdoc/>
         public Task<IReadOnlyCollection<string>> SelectOptionAsync(string selector, params SelectOptionValue[] values)
-            => CompatCollections.AsCollectionAsync(ElementQuery.WaitQueryAsync(QueryActionAsync, selector, h => h.SelectOptionAsync(values), null, "frame.selectOption", ActionScroll.Undefined));
+            => CompatCollections.AsCollectionAsync(SelectOptionAction.RunOnSelectorAsync(QueryActionAsync, selector, h => h.SelectOptionAsync(values), null, "frame.selectOption", ActionScroll.Undefined));
 
         /// <inheritdoc/>
         public Task<IReadOnlyCollection<string>> SelectOptionAsync(string selector, params IElementHandle[] values)
-            => CompatCollections.AsCollectionAsync(ElementQuery.WaitQueryAsync(QueryActionAsync, selector, h => h.SelectOptionAsync(values), null, "frame.selectOption", ActionScroll.Undefined));
+            => CompatCollections.AsCollectionAsync(SelectOptionAction.RunOnSelectorAsync(QueryActionAsync, selector, h => h.SelectOptionAsync(values), null, "frame.selectOption", ActionScroll.Undefined));
 
         /// <inheritdoc/>
         public Task SetContentAsync(string html, float? timeout = default, WaitUntilState waitUntil = default)
