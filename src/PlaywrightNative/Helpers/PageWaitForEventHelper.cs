@@ -393,17 +393,11 @@ namespace PlaywrightNative.Helpers
             Func<T, bool> matches,
             float? timeout)
         {
-            int consoleBaseline = 0;
-            try
-            {
-                IReadOnlyList<IConsoleMessage> existing =
-                    await page.ConsoleMessagesAsync().ConfigureAwait(false);
-                consoleBaseline = existing?.Count ?? 0;
-            }
-            catch (Exception)
-            {
-                consoleBaseline = 0;
-            }
+            // Sync snapshot only — awaiting a completed ConsoleMessagesAsync Task
+            // can still post a ConfigureAwait(false) continuation after evaluate's
+            // console.log arrives, raising the baseline past the raced message
+            // (ShouldNotEmitAfterWithoutBefore under Windows suite load).
+            int consoleBaseline = SyncConsoleMessageCount(page);
 
             Task<T> consoleWait = WaitTypedAsync<T, IConsoleMessage>(
                 page,
@@ -411,13 +405,12 @@ namespace PlaywrightNative.Helpers
                 h => page.Console -= h,
                 matches,
                 timeout,
-                existingAfterSubscribe: async () =>
+                existingAfterSubscribe: () =>
                 {
-                    IReadOnlyList<IConsoleMessage> messages =
-                        await page.ConsoleMessagesAsync().ConfigureAwait(false);
+                    IReadOnlyList<IConsoleMessage> messages = SyncConsoleMessages(page);
                     if (messages == null || messages.Count <= consoleBaseline)
                     {
-                        return Array.Empty<T>();
+                        return Task.FromResult<IReadOnlyList<T>>(Array.Empty<T>());
                     }
 
                     for (int i = consoleBaseline; i < messages.Count; i++)
@@ -425,11 +418,12 @@ namespace PlaywrightNative.Helpers
                         IConsoleMessage msg = messages[i];
                         if (msg != null && matches((T)(object)msg))
                         {
-                            return new T[] { (T)(object)msg };
+                            return Task.FromResult<IReadOnlyList<T>>(
+                                new T[] { (T)(object)msg });
                         }
                     }
 
-                    return Array.Empty<T>();
+                    return Task.FromResult<IReadOnlyList<T>>(Array.Empty<T>());
                 });
             return await ActionTrace.RunAsync(
                 page.Context,
@@ -437,6 +431,41 @@ namespace PlaywrightNative.Helpers
                 "Page",
                 "waitForEvent",
                 () => consoleWait).ConfigureAwait(false);
+        }
+
+        private static int SyncConsoleMessageCount(IPage page)
+        {
+            IReadOnlyList<IConsoleMessage> existing = SyncConsoleMessages(page);
+            return existing?.Count ?? 0;
+        }
+
+        private static IReadOnlyList<IConsoleMessage> SyncConsoleMessages(IPage page)
+        {
+            if (page == null)
+            {
+                return Array.Empty<IConsoleMessage>();
+            }
+
+            try
+            {
+                // Chromium/WebKit ConsoleMessagesAsync is Task.FromResult — read
+                // synchronously so we never post a continuation after a raced log.
+                Task<IReadOnlyList<IConsoleMessage>> task = page.ConsoleMessagesAsync();
+                if (task.IsCompletedSuccessfully)
+                {
+#pragma warning disable VSTHRD002 // Safe: only accessed after IsCompletedSuccessfully.
+                    return task.Result ?? Array.Empty<IConsoleMessage>();
+#pragma warning restore VSTHRD002
+                }
+
+                return Array.Empty<IConsoleMessage>();
+            }
+#pragma warning disable RCS1075
+            catch (Exception)
+#pragma warning restore RCS1075
+            {
+                return Array.Empty<IConsoleMessage>();
+            }
         }
 
         private static async Task<T> WaitTypedAsync<T, TEvent>(

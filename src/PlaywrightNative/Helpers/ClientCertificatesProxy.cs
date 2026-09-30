@@ -1196,12 +1196,18 @@ namespace PlaywrightNative.Helpers
         /// (BrowserShouldReturnTargetConnectionErrorsWhenUsingHttp2).
         /// </summary>
         /// <param name="handshakeTask">The outstanding AuthenticateAsClient task.</param>
+        /// <param name="ignoreHttpsErrors">
+        /// When <see langword="false"/>, a drained cancel falls back to
+        /// <see cref="ClientCertificateHelper.SelfSignedCertificateMessage"/>.
+        /// </param>
         /// <returns>Official Playwright client-certificate error text.</returns>
-        private static async Task<string> ResolveHandshakeTimeoutMessageAsync(Task handshakeTask)
+        private static async Task<string> ResolveHandshakeTimeoutMessageAsync(
+            Task handshakeTask,
+            bool ignoreHttpsErrors)
         {
             if (handshakeTask == null)
             {
-                return ClientCertificateHelper.RewriteTlsMessage(new OperationCanceledException());
+                return FallbackHandshakeTimeoutMessage(ignoreHttpsErrors);
             }
 
             // Under Chromium headful suite load, ForceClose can take hundreds of ms
@@ -1209,11 +1215,14 @@ namespace PlaywrightNative.Helpers
             // (self-signed HTTP/2 origins). 150ms often fell through to a generic
             // disconnect page, and Expect then waited the full 30s for
             // "self-signed certificate" (BrowserShouldReturnTargetConnectionErrorsWhenUsingHttp2).
+            // Linux Chromium drops the SOCKS tunnel sooner — keep the drain shorter
+            // there so WriteTlsErrorPageAsync still paints.
+            int drainMs = OperatingSystem.IsWindows() ? 750 : 350;
             try
             {
                 Task finished = await Task.WhenAny(
                     handshakeTask,
-                    Task.Delay(750)).ConfigureAwait(false);
+                    Task.Delay(drainMs)).ConfigureAwait(false);
                 if (finished == handshakeTask)
                 {
                     await handshakeTask.ConfigureAwait(false);
@@ -1240,11 +1249,13 @@ namespace PlaywrightNative.Helpers
 
             // One more short drain: SslStream sometimes faults just after WhenAny
             // picks the delay task under HTTP/2 ALPN.
+            int extraDrainMs = OperatingSystem.IsWindows() ? 250 : 100;
             if (!handshakeTask.IsCompleted)
             {
                 try
                 {
-                    await handshakeTask.WaitAsync(TimeSpan.FromMilliseconds(250)).ConfigureAwait(false);
+                    await handshakeTask.WaitAsync(TimeSpan.FromMilliseconds(extraDrainMs))
+                        .ConfigureAwait(false);
                 }
                 catch (AuthenticationException ex)
                 {
@@ -1286,8 +1297,29 @@ namespace PlaywrightNative.Helpers
                 }
             }
 
-            return ClientCertificateHelper.RewriteTlsMessage(new OperationCanceledException());
+            if (handshakeTask.IsFaulted)
+            {
+                Exception fault = handshakeTask.Exception?.GetBaseException();
+                if (fault is AuthenticationException or IOException)
+                {
+                    return ClientCertificateHelper.RewriteTlsMessage(fault);
+                }
+            }
+
+            return FallbackHandshakeTimeoutMessage(ignoreHttpsErrors);
         }
+
+        /// <summary>
+        /// When <paramref name="ignoreHttpsErrors"/> is false, ForceClose during
+        /// origin validation almost always means a self-signed/untrusted server
+        /// cert — paint that text so Expect does not wait 30s on a generic
+        /// disconnect page (HTTP/2 self-signed fixture). TLS1.2 hang fixtures set
+        /// ignoreHTTPSErrors and keep the disconnect wording.
+        /// </summary>
+        private static string FallbackHandshakeTimeoutMessage(bool ignoreHttpsErrors)
+            => ignoreHttpsErrors
+                ? ClientCertificateHelper.RewriteTlsMessage(new OperationCanceledException())
+                : ClientCertificateHelper.SelfSignedCertificateMessage;
 
         private async Task AcceptLoopAsync()
         {
@@ -1705,7 +1737,7 @@ namespace PlaywrightNative.Helpers
                             // failure that raced the budget
                             // (BrowserShouldReturnTargetConnectionErrorsWhenUsingHttp2).
                             string timeoutMessage = await ResolveHandshakeTimeoutMessageAsync(
-                                handshakeTask).ConfigureAwait(false);
+                                handshakeTask, _ignoreHttpsErrors).ConfigureAwait(false);
                             try
                             {
                                 await serverTls.DisposeAsync().AsTask()
