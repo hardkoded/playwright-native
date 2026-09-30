@@ -556,6 +556,106 @@ namespace PlaywrightNative.Chromium
         }
 
         /// <summary>
+        /// Attaches to dedicated-worker targets that autoAttach created but whose
+        /// <c>Target.attachedToTarget</c> event was never delivered (suite-load
+        /// drop). Without this, PlzDedicatedWorker stays paused and
+        /// RequestFinished for the main script never fires.
+        /// </summary>
+        /// <returns>A task that completes when adoption attempts finish.</returns>
+        internal async Task AdoptOrphanWorkersAsync()
+        {
+            JsonElement? response;
+            try
+            {
+                response = await _connection.RootSession.SendAsync("Target.getTargets").ConfigureAwait(false);
+            }
+            catch (PlaywrightException)
+            {
+                return;
+            }
+
+            if (!response.HasValue
+                || !response.Value.TryGetProperty("targetInfos", out JsonElement infos)
+                || infos.ValueKind != JsonValueKind.Array)
+            {
+                return;
+            }
+
+            foreach (JsonElement info in infos.EnumerateArray())
+            {
+                string type = info.TryGetProperty("type", out JsonElement typeEl)
+                    ? typeEl.GetString()
+                    : string.Empty;
+                if (!string.Equals(type, "worker", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                string targetId = info.TryGetProperty("targetId", out JsonElement idEl)
+                    ? idEl.GetString()
+                    : string.Empty;
+                string url = info.TryGetProperty("url", out JsonElement urlEl)
+                    ? urlEl.GetString()
+                    : string.Empty;
+                string parentFrameId = info.TryGetProperty("parentFrameId", out JsonElement parentEl)
+                    ? parentEl.GetString()
+                    : string.Empty;
+                if (string.IsNullOrEmpty(targetId))
+                {
+                    continue;
+                }
+
+                CRPage owner = FindPageForOopif(frameId: null, parentFrameId);
+                if (owner == null)
+                {
+                    foreach (CRPage page in _crPages.Values)
+                    {
+                        owner = page;
+                        break;
+                    }
+                }
+
+                // Nested workers can share the same script URL as their parent;
+                // only skip when this CDP targetId is already tracked.
+                if (owner == null || owner.HasWorkerTarget(targetId))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    CRSession session = await AttachToTargetAsync(targetId)
+                        .WaitAsync(TimeSpan.FromSeconds(2))
+                        .ConfigureAwait(false);
+                    owner.AttachChildWorker(session, session.SessionId, info);
+                }
+                catch (TimeoutException)
+                {
+                }
+                catch (PlaywrightException)
+                {
+                    // Already attached (autoAttach) but attachedToTarget was dropped:
+                    // do not detach — that races a healthy in-flight attach. Resume
+                    // so PlzDedicatedWorker can finish the main script on the page
+                    // session's Network.requestWillBeSent request.
+                    try
+                    {
+                        await _connection.RootSession.SendAsync(
+                            "Target.sendMessageToTarget",
+                            new
+                            {
+                                targetId,
+                                message = "{\"id\":1,\"method\":\"Runtime.runIfWaitingForDebugger\"}",
+                            }).ConfigureAwait(false);
+                    }
+                    catch (PlaywrightException)
+                    {
+                    }
+                }
+            }
+        }
+
+        /// <summary>
         /// Attaches a flattened CDP session to the browser target.
         /// </summary>
         /// <returns>The child session for browser-level CDP commands.</returns>
@@ -710,6 +810,33 @@ namespace PlaywrightNative.Chromium
             return null;
         }
 
+        private async Task AttachWorkerWhenPageReadyAsync(
+            CRSession workerSession,
+            string sessionId,
+            JsonElement targetInfo,
+            string parentFrameId)
+        {
+            for (int i = 0; i < 40; i++)
+            {
+                await Task.Delay(25).ConfigureAwait(false);
+                CRPage owner = FindPageForOopif(frameId: null, parentFrameId);
+                if (owner != null)
+                {
+                    owner.AttachChildWorker(workerSession, sessionId, targetInfo);
+                    return;
+                }
+            }
+
+            // Last resort: never leave waitForDebuggerOnStart stuck forever.
+            try
+            {
+                await workerSession.SendAsync("Runtime.runIfWaitingForDebugger").ConfigureAwait(false);
+            }
+            catch (PlaywrightException)
+            {
+            }
+        }
+
         private void OnAttachedToTarget(JsonElement? parameters)
         {
             if (!parameters.HasValue)
@@ -780,18 +907,39 @@ namespace PlaywrightNative.Chromium
                 return;
             }
 
+            // Dedicated workers: under suite load page-session Target.attachedToTarget
+            // can be missed while browser-level autoAttach still sees the worker.
+            // Leaving it paused here dropped RequestFinished for worker.js in an
+            // iframe (ShouldResolveWorkerScriptAllHeadersInIframe). Route to the
+            // owning page so Network.enable + resume run (AttachChildWorker is
+            // idempotent via _workers.TryAdd).
+            if (string.Equals(type, "worker", StringComparison.Ordinal))
+            {
+                CRSession workerSession = _connection.RootSession.CreateChildSession(sessionId);
+                string parentFrameId = targetInfo.TryGetProperty("parentFrameId", out JsonElement workerParentEl)
+                    ? workerParentEl.GetString()
+                    : string.Empty;
+                CRPage owner = FindPageForOopif(frameId: null, parentFrameId);
+                if (owner != null)
+                {
+                    owner.AttachChildWorker(workerSession, sessionId, targetInfo);
+                }
+                else
+                {
+                    // Iframe frames can lag FrameManager registration under load.
+                    _ = AttachWorkerWhenPageReadyAsync(workerSession, sessionId, targetInfo, parentFrameId);
+                }
+
+                return;
+            }
+
             // We only create pages for page targets. Other types (shared_worker,
             // browser, ...) still need a session so waitForDebuggerOnStart
-            // does not leave them paused. Dedicated workers stay paused until
-            // the page FrameSession runs Runtime.enable (official order).
+            // does not leave them paused.
             if (type != "page")
             {
                 CRSession other = _connection.RootSession.CreateChildSession(sessionId);
-                if (!string.Equals(type, "worker", StringComparison.Ordinal))
-                {
-                    _ = other.SendAsync("Runtime.runIfWaitingForDebugger");
-                }
-
+                _ = other.SendAsync("Runtime.runIfWaitingForDebugger");
                 return;
             }
 

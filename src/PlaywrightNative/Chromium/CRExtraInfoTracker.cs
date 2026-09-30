@@ -239,11 +239,12 @@ namespace PlaywrightNative.Chromium
             // ExtraInfo and loadingFinished travel on different CDP channels.
             // For iframe/nested worker scripts Chromium may set hasExtraInfo
             // without ever delivering responseReceivedExtraInfo (playwright#39948).
-            // Mirror SealRequestHeaders: allow channel skew, then seal provisional.
-            // Immediate seal raced ExtraInfo under Windows suite load and locked
-            // comma-joined Network.responseReceived headers into HeadersArray
-            // (ShouldReportAllHeaders). Prefer a deferred seal; ApplyExtraHeaders
-            // can still upgrade after a provisional seal.
+            // Seal provisional headers immediately so AllHeadersAsync cannot hang
+            // if the deferred ExtraInfo continuation is thread-pool starved under
+            // suite load (ShouldResolveWorkerScriptAllHeadersInIframe).
+            // WaitForRawHeadersAsync still waits briefly for ExtraInfo and prefers
+            // those pairs; ApplyExtraHeaders upgrades after a provisional seal.
+            hop.Response.EnsureRawResponseHeaders();
             CRResponse pending = hop.Response;
             _ = DeferredSealResponseHeadersAsync(requestId, list, hop, pending);
         }

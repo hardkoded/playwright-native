@@ -611,7 +611,23 @@ namespace PlaywrightNative.Chromium
         /// Waits until extra-info (or provisional) request headers are available.
         /// </summary>
         /// <returns>The raw header list.</returns>
-        internal Task<IReadOnlyList<NameValueEntry>> WaitForRawHeadersAsync() => _rawHeaders.Task;
+        internal async Task<IReadOnlyList<NameValueEntry>> WaitForRawHeadersAsync()
+        {
+            // requestWillBeSent omits Accept* until ExtraInfo; give that event a
+            // short window. If the deferred seal from loadingFinished is starved
+            // on the thread pool, self-heal with provisional headers so
+            // AllHeadersAsync cannot hang (worker script headers in iframe).
+            if (!_rawHeaders.Task.IsCompleted)
+            {
+                await Task.WhenAny(_rawHeaders.Task, Task.Delay(750)).ConfigureAwait(false);
+                if (!_rawHeaders.Task.IsCompleted)
+                {
+                    EnsureRawRequestHeaders();
+                }
+            }
+
+            return await _rawHeaders.Task.ConfigureAwait(false);
+        }
 
         /// <summary>
         /// Promotes a Fetch-paired request to document navigation when

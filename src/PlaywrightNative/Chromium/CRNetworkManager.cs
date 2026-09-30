@@ -236,6 +236,52 @@ namespace PlaywrightNative.Chromium
         }
 
         /// <summary>
+        /// Completes in-flight requests for <paramref name="url"/> that already have
+        /// a response but never received <c>Network.loadingFinished</c> (PlzDedicatedWorker
+        /// session race). No-op when the URL is empty or the request already finished.
+        /// </summary>
+        /// <param name="url">The worker main-script URL.</param>
+        internal void FinishInflightRequestByUrl(string url)
+        {
+            if (string.IsNullOrEmpty(url))
+            {
+                return;
+            }
+
+            List<CRRequest> pending = new();
+            foreach (CRRequest candidate in _requestsById.Values)
+            {
+                if (candidate != null
+                    && !candidate.Finished
+                    && candidate.Response != null
+                    && string.Equals(candidate.Url, url, StringComparison.Ordinal))
+                {
+                    pending.Add(candidate);
+                }
+            }
+
+            for (int i = 0; i < pending.Count; i++)
+            {
+                CRRequest request = pending[i];
+                if (request.Finished)
+                {
+                    continue;
+                }
+
+                _requestsById.TryRemove(request.RequestId, out _);
+                if (!string.IsNullOrEmpty(request.ProtocolRequestId))
+                {
+                    ForgetRawRequest(request.ProtocolRequestId, request);
+                }
+
+                request.Finished = true;
+                RaiseRequestFinished(request);
+                request.Frame?.OnInflightRequestFinished(request.RequestId);
+                _extraInfo.Finished(ExtraInfoId(request));
+            }
+        }
+
+        /// <summary>
         /// Finds an in-flight or recent navigation request by CDP loader id and/or URL.
         /// Used when <c>Page.navigate</c> returns <c>ERR_ABORTED</c> before
         /// <c>Network.responseReceived</c> lands in the goto capture handler.
@@ -1334,6 +1380,7 @@ namespace PlaywrightNative.Chromium
             _page.NoteFrameNavigateRequest(frame, url, loaderId, isNavigationRequest || request.TracksDocumentNavigation);
 
             RaiseRequestCreated(request);
+            _page.ScheduleOrphanWorkerAdoption();
             frame?.OnInflightRequestStarted(
                 requestId,
                 NetworkIdleRules.IsExcluded(request.Url, request.ResourceType),

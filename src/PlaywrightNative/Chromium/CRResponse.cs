@@ -308,6 +308,21 @@ namespace PlaywrightNative.Chromium
                 return _rawHeadersFromExtraInfo;
             }
 
+            // Deferred ExtraInfo seals use thread-pool continuations after
+            // loadingFinished. Under suite load those can starve while
+            // AllHeadersAsync awaits _rawHeaders forever
+            // (ShouldResolveWorkerScriptAllHeadersInIframe). Self-heal with
+            // provisional headers once the ExtraInfo window has elapsed.
+            if (!_rawHeaders.Task.IsCompleted)
+            {
+                if (ExpectsExtraInfo)
+                {
+                    SetExpectsExtraInfo(false);
+                }
+
+                EnsureRawResponseHeaders();
+            }
+
             return await _rawHeaders.Task.ConfigureAwait(false);
         }
 
