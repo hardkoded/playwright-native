@@ -203,8 +203,8 @@ namespace PlaywrightNative.Helpers
                     // whole expect/action loop; treat a timed-out probe as not
                     // visible so we skip the handler instead of blocking forever.
                     // Frame-scoped overlays (data: iframe body) can lag ContentFrame
-                    // under Windows headful suite load — briefly retry before skip
-                    // so ShouldWorkWhenOwnerFrameDetaches still removes the iframe.
+                    // under Windows suite load — retry before skip so
+                    // ShouldWorkWhenOwnerFrameDetaches still removes the iframe.
                     bool visible = await IsAnyVisibleAsync(
                             entry.Locator,
                             queryMs,
@@ -213,7 +213,7 @@ namespace PlaywrightNative.Helpers
                     if (!visible && IsFrameScopedLocator(entry.Locator))
                     {
                         Stopwatch attachSw = Stopwatch.StartNew();
-                        while (!visible && attachSw.ElapsedMilliseconds < 1_500)
+                        while (!visible && attachSw.ElapsedMilliseconds < 3_000)
                         {
                             await Task.Delay(50).ConfigureAwait(false);
                             queryMs = RemainingQueryMs(timeoutMs, sw);

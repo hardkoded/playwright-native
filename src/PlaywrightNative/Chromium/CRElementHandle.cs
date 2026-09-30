@@ -604,11 +604,11 @@ namespace PlaywrightNative.Chromium
         {
             EnsureNotDisposed();
 
-            // data: iframes under Windows headful suite load can lag both
+            // data: iframes under Windows suite load can lag both
             // DOM.describeNode frameId and Page.frameAttached. Poll both so
             // FrameLocator body locator-handler checkpoints still see the overlay
             // (ShouldWorkWhenOwnerFrameDetaches).
-            const int attachPollMs = 1_500;
+            const int attachPollMs = 3_000;
             string frameId = await _page.DescribeNodeContentFrameIdAsync(Context.Session, ObjectId)
                 .ConfigureAwait(false);
             if (string.IsNullOrEmpty(frameId))

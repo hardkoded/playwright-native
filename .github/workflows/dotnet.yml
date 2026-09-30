@@ -34,8 +34,13 @@ jobs:
       matrix:
         include:
           # Chromium — full coverage on Linux + Windows, headless + headful.
-          - { os: ubuntu-latest,  browser: chromium, mode: headless }
-          - { os: ubuntu-latest,  browser: chromium, mode: headful  }
+          # Linux headless now finishes the full suite at ~2h and aborts on
+          # TestSessionTimeout with 0 failures; 2-way class shards restore
+          # headroom (same filter step as Windows / macOS WebKit).
+          - { os: ubuntu-latest,  browser: chromium, mode: headless, shardIndex: 1, shardTotal: 2 }
+          - { os: ubuntu-latest,  browser: chromium, mode: headless, shardIndex: 2, shardTotal: 2 }
+          - { os: ubuntu-latest,  browser: chromium, mode: headful,  shardIndex: 1, shardTotal: 2 }
+          - { os: ubuntu-latest,  browser: chromium, mode: headful,  shardIndex: 2, shardTotal: 2 }
           # Windows runs much slower per-test than Linux and never reaches
           # the end of the suite before the org's CI timeout kills the job
           # (observed: ~40% done at the ~2h cutoff). Split into shards by
@@ -253,7 +258,7 @@ jobs:
       env:
         PRODUCT: CHROMIUM
       run: |
-        dotnet test ./src/PlaywrightNative.Tests/PlaywrightNative.Tests.csproj --no-build -c Release -f net10.0 -s src/PlaywrightNative.Tests/test.runsettings
+        dotnet test ./src/PlaywrightNative.Tests/PlaywrightNative.Tests.csproj --no-build -c Release -f net10.0 -s src/PlaywrightNative.Tests/test.runsettings ${TEST_FILTER:+--filter "$TEST_FILTER"}
     - name: Test (Chromium, Linux headful)
       if: ${{ matrix.browser == 'chromium' && matrix.os == 'ubuntu-latest' && matrix.mode == 'headful' }}
       env:
@@ -261,7 +266,7 @@ jobs:
         HEADLESS: "false"
       run: |
         xvfb-run --auto-servernum --server-args="-screen 0 1280x960x24" -- \
-          dotnet test ./src/PlaywrightNative.Tests/PlaywrightNative.Tests.csproj --no-build -c Release -f net10.0 -s src/PlaywrightNative.Tests/test.runsettings
+          dotnet test ./src/PlaywrightNative.Tests/PlaywrightNative.Tests.csproj --no-build -c Release -f net10.0 -s src/PlaywrightNative.Tests/test.runsettings ${TEST_FILTER:+--filter "$TEST_FILTER"}
     - name: Test (Chromium, Windows)
       if: ${{ matrix.browser == 'chromium' && matrix.os == 'windows-latest' }}
       shell: bash
