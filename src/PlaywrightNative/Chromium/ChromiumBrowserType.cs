@@ -83,7 +83,11 @@ namespace PlaywrightNative.Chromium
             // BlockOriginHeaderModificationOnRedirect: Chrome 149+ rejects
             // re-applying Origin on intercepted redirects (issue 41690), which
             // breaks route.Continue through cross-origin 307 form posts.
-            "--disable-features=ThirdPartyStoragePartitioning,LocalNetworkAccessChecks,HttpsUpgrades,BlockOriginHeaderModificationOnRedirect",
+            // AutoDeElevate / NetworkTimeServiceQuerying / AimEnabled /
+            // OptimizationHints: match upstream chromiumSwitches so system
+            // Chrome on Windows does not wedge during Channel launch (startup
+            // network / UI work that Playwright's Chromium build skips).
+            "--disable-features=ThirdPartyStoragePartitioning,LocalNetworkAccessChecks,HttpsUpgrades,BlockOriginHeaderModificationOnRedirect,AutoDeElevate,NetworkTimeServiceQuerying,AimEnabled,OptimizationHints",
 
             // Locale handshake proxy must see localhost WebSocket upgrades.
             // Chromium otherwise bypasses loopback (Chrome < 151 ignores locale on WS).
@@ -332,7 +336,26 @@ namespace PlaywrightNative.Chromium
                 transport = await WebSocketTransport.ConnectAsync(endpoint, timeout: timeout).ConfigureAwait(false);
                 connection = new CRConnection(transport, loggerFactory);
 
-                CRBrowser browser = await CRBrowser.ConnectAsync(connection, transport, processManager, loggerFactory, persistent, headless: headless).ConfigureAwait(false);
+                // Bound ConnectAsync the same way ConnectOverCDPAsync does —
+                // leftover about:blank close / NewPage init must not outlive
+                // the launch timeout (Channel Chrome on Windows).
+                Task<CRBrowser> connectTask = CRBrowser.ConnectAsync(
+                    connection,
+                    transport,
+                    processManager,
+                    loggerFactory,
+                    persistent,
+                    headless: headless);
+                int connectTimeoutMs = timeout > 0 ? timeout : 30_000;
+                Task finished = await Task.WhenAny(connectTask, Task.Delay(connectTimeoutMs)).ConfigureAwait(false);
+                if (finished != connectTask)
+                {
+                    throw new TimeoutException(
+                        "Timed out after " + connectTimeoutMs.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                        + " ms while connecting to the browser!");
+                }
+
+                CRBrowser browser = await connectTask.ConfigureAwait(false);
 
                 // Ownership of processManager, connection, and transport has been
                 // transferred to the CRBrowser instance. Null out locals so the

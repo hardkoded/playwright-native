@@ -305,8 +305,24 @@ namespace PlaywrightNative.Chromium
             {
                 try
                 {
-                    await page.ClosePageAsync(runBeforeUnload: false).ConfigureAwait(false);
-                    await Task.WhenAny(page.ClosedTask, Task.Delay(2000)).ConfigureAwait(false);
+                    // Do not call ClosePageAsync here — it awaits ClosedTask with no
+                    // budget, so the 2s WhenAny below never ran and Channel Chrome
+                    // launch hung the full NUnit 30s (LaunchShouldUseChromeChannel
+                    // on Windows). Fire Target.closeTarget, then bound the wait.
+                    if (!page.ClosedTask.IsCompleted)
+                    {
+                        try
+                        {
+                            await Connection.RootSession
+                                .SendAsync("Target.closeTarget", new { targetId = page.TargetId })
+                                .ConfigureAwait(false);
+                        }
+                        catch (PlaywrightException)
+                        {
+                        }
+
+                        await Task.WhenAny(page.ClosedTask, Task.Delay(2000)).ConfigureAwait(false);
+                    }
                 }
                 catch (Exception ex)
                 {
