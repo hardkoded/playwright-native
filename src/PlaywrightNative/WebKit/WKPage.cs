@@ -117,6 +117,11 @@ namespace PlaywrightNative.WebKit
         private WKNetworkManager _provisionalNetworkManager;
         private string _mainFrameId;
         private string _mainFrameUrl = "about:blank";
+
+        // Bumped only from OnFrameNavigated for the main frame so leave-without-send
+        // cannot complete a cross-document GoTo that never committed (stale child
+        // frames left attached — ShouldSupportFramesets on Linux WebKit CI).
+        private int _mainFrameNavigationEpoch;
         private int _lifecycleSeedGeneration;
         private Task _lifecycleSeedTask = Task.CompletedTask;
         private TaskCompletionSource<bool> _pendingLoadTcs;
@@ -3251,6 +3256,7 @@ namespace PlaywrightNative.WebKit
             TaskCompletionSource<bool> loadTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
             TaskCompletionSource<bool> domTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
             TaskCompletionSource<bool> commitTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            int mainCommitEpochAtStart = Volatile.Read(ref _mainFrameNavigationEpoch);
             string previousUrl;
             bool sameDocumentHash;
             TaskCompletionSource<bool> interruptedLoad = null;
@@ -3470,13 +3476,18 @@ namespace PlaywrightNative.WebKit
                             NavigationTimeout.WithoutHash(previousUrl),
                             NavigationTimeout.WithoutHash(url),
                             StringComparison.Ordinal);
+                        bool sawMainFrameCommit = Volatile.Read(ref _mainFrameNavigationEpoch)
+                            != mainCommitEpochAtStart;
 
                         // blankOrFileToBlank: Darwin wedge leave (includes blank→blank).
-                        // crossDocument + commit/pending: http EmptyPage concurrent GoTo.
-                        // Never leave on same-URL solely because CompletePendingIfUrlReached
-                        // stamped commit against the old document.
+                        // crossDocument + real main-frame commit: http EmptyPage concurrent
+                        // GoTo after frameNavigated cleared child frames. Do not leave on
+                        // CompletePendingIfUrlReached alone — that skipped FrameDetached for
+                        // frameset→EmptyPage (ShouldSupportFramesets on Linux WebKit CI).
                         if (blankOrFileToBlank
-                            || (crossDocument && (_pendingNavigationCommitted || commitDone)))
+                            || (crossDocument
+                                && sawMainFrameCommit
+                                && (_pendingNavigationCommitted || commitDone)))
                         {
                             if (sendTask.IsCompleted && !IsHarRedirectSendSuperseded(sendTask))
                             {
@@ -3486,10 +3497,12 @@ namespace PlaywrightNative.WebKit
                             break;
                         }
 
-                        if (commitDone && !crossDocument)
+                        if ((commitDone && !crossDocument)
+                            || (crossDocument && !sawMainFrameCommit))
                         {
-                            // Same-URL: do not spin on an already-completed commit TCS.
-                            // Require the navigate RPC (or timeout) before leaving.
+                            // Same-URL, or cross-document without a real frameNavigated:
+                            // do not spin on commit TCS / leave-without-send. Wait for
+                            // the navigate RPC (or a late main-frame commit) instead.
                             Task waitSend = await Task.WhenAny(sendTask, timeoutTask).ConfigureAwait(false);
                             if (waitSend == timeoutTask)
                             {
@@ -3498,6 +3511,11 @@ namespace PlaywrightNative.WebKit
                                     url,
                                     NavigationTimeout.WaitUntilName(waitUntil),
                                     timeoutMs);
+                            }
+
+                            if (Volatile.Read(ref _mainFrameNavigationEpoch) != mainCommitEpochAtStart)
+                            {
+                                continue;
                             }
 
                             // Fall through to sendTask handling.
@@ -3517,8 +3535,7 @@ namespace PlaywrightNative.WebKit
 
                             if (waitCommit == commitTcs.Task || commitTcs.Task.IsCompletedSuccessfully)
                             {
-                                // Next iteration: cross-document commitDone leave, or
-                                // same-URL send wait above.
+                                // Next iteration: leave once sawMainFrameCommit, or send wait.
                                 continue;
                             }
 
@@ -3618,7 +3635,8 @@ namespace PlaywrightNative.WebKit
                         seedCommittedHttp = _pendingNavigationCommitted
                             && _pendingLoadTcs != null
                             && !string.IsNullOrEmpty(pending)
-                            && !string.Equals(start, pending, StringComparison.Ordinal);
+                            && !string.Equals(start, pending, StringComparison.Ordinal)
+                            && Volatile.Read(ref _mainFrameNavigationEpoch) != mainCommitEpochAtStart;
                     }
 
                     if (PopupOpenedHelper.IsBlankUrl(url)
@@ -10460,6 +10478,7 @@ namespace PlaywrightNative.WebKit
             {
                 _mainFrameId = _frameManager.MainFrame.FrameId;
                 _mainFrameUrl = _frameManager.MainFrame.Url;
+                Interlocked.Increment(ref _mainFrameNavigationEpoch);
                 if (!string.IsNullOrEmpty(_mainFrameUrl)
                     && !_mainFrameUrl.StartsWith("javascript:", StringComparison.OrdinalIgnoreCase))
                 {
