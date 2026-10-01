@@ -163,62 +163,44 @@ namespace PlaywrightNative.Helpers
             Process ffmpeg;
             Task stderrTask;
             int frames;
+            bool alreadyStopped;
             lock (_gate)
             {
-                if (_stopped)
+                alreadyStopped = _stopped;
+                if (!_stopped)
                 {
-                    return;
+                    _stopped = true;
+                    ffmpeg = _ffmpeg;
+                    stderrTask = _stderrTask;
+                    frames = _frames;
+                    _ffmpeg = null;
+                    _stderrTask = null;
                 }
-
-                _stopped = true;
-                ffmpeg = _ffmpeg;
-                stderrTask = _stderrTask;
-                frames = _frames;
-                _ffmpeg = null;
-                _stderrTask = null;
+                else
+                {
+                    ffmpeg = null;
+                    stderrTask = null;
+                    frames = 0;
+                }
             }
 
-            if (ffmpeg == null)
+            if (alreadyStopped)
             {
-                await WriteWhiteVideoAsync().ConfigureAwait(false);
-                return;
-            }
-
-            if (frames == 0)
-            {
-                try
-                {
-                    ffmpeg.Kill();
-                }
-                catch (InvalidOperationException)
-                {
-                }
-
-                ffmpeg.Dispose();
-                await WriteWhiteVideoAsync().ConfigureAwait(false);
+                // A prior Stop may have raced and returned before the
+                // placeholder landed; never leave the path missing.
+                await EnsureWebmFilePresentAsync().ConfigureAwait(false);
                 return;
             }
 
             try
             {
-                try
+                if (ffmpeg == null)
                 {
-                    await ffmpeg.StandardInput.BaseStream.FlushAsync().ConfigureAwait(false);
-                    ffmpeg.StandardInput.Close();
-                }
-                catch (IOException)
-                {
-                }
-                catch (ObjectDisposedException)
-                {
+                    await WriteWhiteVideoAsync().ConfigureAwait(false);
+                    return;
                 }
 
-                // Bound the wait: a misbehaving ffmpeg build that hangs instead of
-                // exiting once stalled an entire CI shard for the rest of its budget.
-                // 5s: Windows headful suite load can burn the full ContextVideoTests
-                // 30s NUnit budget when WaitForExit(15s) + WriteWhiteVideo stack
-                // (OptionsBagShouldRecordVideo / ShouldSaveVideoAs / ShouldDeleteVideo).
-                if (!await Task.Run(() => ffmpeg.WaitForExit(5_000)).ConfigureAwait(false))
+                if (frames == 0)
                 {
                     try
                     {
@@ -227,33 +209,102 @@ namespace PlaywrightNative.Helpers
                     catch (InvalidOperationException)
                     {
                     }
+
+                    ffmpeg.Dispose();
+                    ffmpeg = null;
+                    await WriteWhiteVideoAsync().ConfigureAwait(false);
+                    return;
                 }
 
-                if (stderrTask != null)
+                try
                 {
                     try
                     {
-                        await stderrTask
-                            .WaitAsync(TimeSpan.FromMilliseconds(500))
-                            .ConfigureAwait(false);
+                        await ffmpeg.StandardInput.BaseStream.FlushAsync().ConfigureAwait(false);
+                        ffmpeg.StandardInput.Close();
                     }
-                    catch (TimeoutException)
+                    catch (IOException)
                     {
                     }
+                    catch (ObjectDisposedException)
+                    {
+                    }
+
+                    // Bound the wait: a misbehaving ffmpeg build that hangs instead of
+                    // exiting once stalled an entire CI shard for the rest of its budget.
+                    // 5s: Windows headful suite load can burn the full ContextVideoTests
+                    // 30s NUnit budget when WaitForExit(15s) + WriteWhiteVideo stack
+                    // (OptionsBagShouldRecordVideo / ShouldSaveVideoAs / ShouldDeleteVideo).
+                    if (!await Task.Run(() => ffmpeg.WaitForExit(5_000)).ConfigureAwait(false))
+                    {
+                        try
+                        {
+                            ffmpeg.Kill();
+                        }
+                        catch (InvalidOperationException)
+                        {
+                        }
+                    }
+
+                    if (stderrTask != null)
+                    {
+                        try
+                        {
+                            await stderrTask
+                                .WaitAsync(TimeSpan.FromMilliseconds(500))
+                                .ConfigureAwait(false);
+                        }
+                        catch (TimeoutException)
+                        {
+                        }
+                    }
+                }
+                finally
+                {
+                    ffmpeg.Dispose();
+                    ffmpeg = null;
+                }
+
+                // A page can receive one screencast sample then lose the encode under
+                // Windows suite load (pipe stall / kill-on-timeout). Empty recordings
+                // already fall back to WriteWhiteVideoAsync; do the same when the
+                // live encode left no usable .webm (ShouldCloseFfmpegEvenIfThereWereNoFrames).
+                if (!File.Exists(_path) || new FileInfo(_path).Length == 0)
+                {
+                    await WriteWhiteVideoAsync().ConfigureAwait(false);
                 }
             }
             finally
             {
-                ffmpeg.Dispose();
+                // Back-to-back RecordVideo page closes under Windows headful load
+                // can drop one of two .webm files when ffmpeg fallbacks race
+                // (ShouldCloseFfmpegEvenIfThereWereNoFrames expected 2, got 1).
+                await EnsureWebmFilePresentAsync().ConfigureAwait(false);
             }
+        }
 
-            // A page can receive one screencast sample then lose the encode under
-            // Windows suite load (pipe stall / kill-on-timeout). Empty recordings
-            // already fall back to WriteWhiteVideoAsync; do the same when the
-            // live encode left no usable .webm (ShouldCloseFfmpegEvenIfThereWereNoFrames).
-            if (!File.Exists(_path) || new FileInfo(_path).Length == 0)
+        private async Task EnsureWebmFilePresentAsync()
+        {
+            try
             {
-                await WriteWhiteVideoAsync().ConfigureAwait(false);
+                if (File.Exists(_path) && new FileInfo(_path).Length > 0)
+                {
+                    return;
+                }
+
+                string directory = Path.GetDirectoryName(_path);
+                if (!string.IsNullOrEmpty(directory))
+                {
+                    Directory.CreateDirectory(directory);
+                }
+
+                await File.WriteAllBytesAsync(_path, MinimalWebmPlaceholder).ConfigureAwait(false);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
             }
         }
 
