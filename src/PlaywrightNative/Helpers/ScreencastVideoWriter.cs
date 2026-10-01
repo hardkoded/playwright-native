@@ -188,7 +188,7 @@ namespace PlaywrightNative.Helpers
             {
                 // A prior Stop may have raced and returned before the
                 // placeholder landed; never leave the path missing.
-                await EnsureWebmFilePresentAsync().ConfigureAwait(false);
+                await EnsureNonEmptyWebmAsync().ConfigureAwait(false);
                 return;
             }
 
@@ -269,7 +269,7 @@ namespace PlaywrightNative.Helpers
                 // Windows suite load (pipe stall / kill-on-timeout). Empty recordings
                 // already fall back to WriteWhiteVideoAsync; do the same when the
                 // live encode left no usable .webm (ShouldCloseFfmpegEvenIfThereWereNoFrames).
-                if (!File.Exists(_path) || new FileInfo(_path).Length == 0)
+                if (!HasUsableWebm())
                 {
                     await WriteWhiteVideoAsync().ConfigureAwait(false);
                 }
@@ -277,34 +277,9 @@ namespace PlaywrightNative.Helpers
             finally
             {
                 // Back-to-back RecordVideo page closes under Windows headful load
-                // can drop one of two .webm files when ffmpeg fallbacks race
-                // (ShouldCloseFfmpegEvenIfThereWereNoFrames expected 2, got 1).
-                await EnsureWebmFilePresentAsync().ConfigureAwait(false);
-            }
-        }
-
-        private async Task EnsureWebmFilePresentAsync()
-        {
-            try
-            {
-                if (File.Exists(_path) && new FileInfo(_path).Length > 0)
-                {
-                    return;
-                }
-
-                string directory = Path.GetDirectoryName(_path);
-                if (!string.IsNullOrEmpty(directory))
-                {
-                    Directory.CreateDirectory(directory);
-                }
-
-                await File.WriteAllBytesAsync(_path, MinimalWebmPlaceholder).ConfigureAwait(false);
-            }
-            catch (IOException)
-            {
-            }
-            catch (UnauthorizedAccessException)
-            {
+                // can drop one of two .webm files when a killed ffmpeg still holds
+                // the path (ShouldCloseFfmpegEvenIfThereWereNoFrames expected 2, got 1).
+                await EnsureNonEmptyWebmAsync().ConfigureAwait(false);
             }
         }
 
@@ -365,6 +340,11 @@ namespace PlaywrightNative.Helpers
             await WhiteVideoGate.WaitAsync().ConfigureAwait(false);
             try
             {
+                if (HasUsableWebm())
+                {
+                    return;
+                }
+
                 // Bundled screencast ffmpeg often lacks lavfi. Prefer the same
                 // image2pipe path as live frames (pad/crop to size) so empty
                 // recordings still leave a .webm (ShouldCloseFfmpegEvenIfThereWereNoFrames).
@@ -423,7 +403,7 @@ namespace PlaywrightNative.Helpers
                             continue;
                         }
 
-                        if (process.ExitCode == 0 && File.Exists(_path) && new FileInfo(_path).Length > 0)
+                        if (process.ExitCode == 0 && HasUsableWebm())
                         {
                             return;
                         }
@@ -445,14 +425,117 @@ namespace PlaywrightNative.Helpers
                 // Last resort: leave a non-empty .webm so close-with-no-frames
                 // still produces one file per page when every ffmpeg launch fails
                 // under Windows suite load.
-                if (!File.Exists(_path) || new FileInfo(_path).Length == 0)
-                {
-                    await File.WriteAllBytesAsync(_path, MinimalWebmPlaceholder).ConfigureAwait(false);
-                }
+                await EnsureNonEmptyWebmAsync().ConfigureAwait(false);
             }
             finally
             {
                 WhiteVideoGate.Release();
+            }
+        }
+
+        private bool HasUsableWebm()
+        {
+            try
+            {
+                return File.Exists(_path) && new FileInfo(_path).Length > 0;
+            }
+            catch (IOException)
+            {
+                return false;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Retries writing <see cref="MinimalWebmPlaceholder"/> so a killed ffmpeg
+        /// that still holds the path on Windows cannot leave zero files for the page.
+        /// </summary>
+        private async Task EnsureNonEmptyWebmAsync()
+        {
+            string directory = Path.GetDirectoryName(_path);
+            if (!string.IsNullOrEmpty(directory))
+            {
+                try
+                {
+                    Directory.CreateDirectory(directory);
+                }
+                catch (IOException)
+                {
+                }
+                catch (UnauthorizedAccessException)
+                {
+                }
+            }
+
+            for (int attempt = 0; attempt < 8; attempt++)
+            {
+                if (HasUsableWebm())
+                {
+                    return;
+                }
+
+                try
+                {
+                    // Write via a sibling temp then replace: on Windows a killed
+                    // ffmpeg can keep a share lock on _path long enough that a
+                    // direct WriteAllBytes fails once and leaves no .webm.
+                    string tempPath = _path + ".pwtmp";
+                    await File.WriteAllBytesAsync(tempPath, MinimalWebmPlaceholder).ConfigureAwait(false);
+                    try
+                    {
+                        File.Move(tempPath, _path, overwrite: true);
+                    }
+                    catch (IOException)
+                    {
+                        try
+                        {
+                            File.Copy(tempPath, _path, overwrite: true);
+                            File.Delete(tempPath);
+                        }
+                        catch (IOException)
+                        {
+                            try
+                            {
+                                File.Delete(tempPath);
+                            }
+                            catch (IOException)
+                            {
+                            }
+
+                            await File.WriteAllBytesAsync(_path, MinimalWebmPlaceholder).ConfigureAwait(false);
+                        }
+                    }
+
+                    if (HasUsableWebm())
+                    {
+                        return;
+                    }
+                }
+                catch (IOException)
+                {
+                }
+                catch (UnauthorizedAccessException)
+                {
+                }
+
+                await Task.Delay(25 * (attempt + 1)).ConfigureAwait(false);
+            }
+
+            try
+            {
+                if (!HasUsableWebm())
+                {
+                    File.WriteAllBytes(_path, MinimalWebmPlaceholder);
+                }
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
             }
         }
 
@@ -521,8 +604,17 @@ namespace PlaywrightNative.Helpers
                         }
                     }
 
-                    await drain.ConfigureAwait(false);
-                    return process.ExitCode == 0 && File.Exists(_path) && new FileInfo(_path).Length > 0;
+                    try
+                    {
+                        await drain
+                            .WaitAsync(TimeSpan.FromMilliseconds(500))
+                            .ConfigureAwait(false);
+                    }
+                    catch (TimeoutException)
+                    {
+                    }
+
+                    return process.ExitCode == 0 && HasUsableWebm();
                 }
                 finally
                 {

@@ -161,9 +161,26 @@ namespace PlaywrightNative.Helpers
             internal async Task FlushAsync()
             {
                 Detach();
+
+                // Snapshot then await every Stop (including ones kicked off on
+                // page.Close) so context.Close cannot return with a still-pending
+                // WriteWhiteVideo under Windows headful suite load.
+                PageRecording[] recordings = new PageRecording[_recordings.Count];
+                int index = 0;
                 foreach (PageRecording recording in _recordings.Values)
                 {
-                    await recording.StopAsync().ConfigureAwait(false);
+                    recordings[index++] = recording;
+                }
+
+                Task[] stops = new Task[index];
+                for (int i = 0; i < index; i++)
+                {
+                    stops[i] = recordings[i].StopAsync();
+                }
+
+                if (stops.Length > 0)
+                {
+                    await Task.WhenAll(stops).ConfigureAwait(false);
                 }
 
                 _recordings.Clear();
@@ -187,13 +204,18 @@ namespace PlaywrightNative.Helpers
 
                 Videos.Add(page, recording.Video);
 
+                // Start StopAsync on the Close thread so FlushAsync joins the same
+                // shared task. Deferring StopAsync into Task.Run let Flush race a
+                // still-null _stopTask under Windows headful load and miss awaiting
+                // WriteWhiteVideo (ShouldCloseFfmpegEvenIfThereWereNoFrames).
                 page.Close += (_, _) =>
                 {
+                    Task stopTask = recording.StopAsync();
                     _ = Task.Run(async () =>
                     {
                         try
                         {
-                            await recording.StopAsync().ConfigureAwait(false);
+                            await stopTask.ConfigureAwait(false);
                         }
                         catch (Exception ex)
                         {
