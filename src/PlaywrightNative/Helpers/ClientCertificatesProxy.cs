@@ -1210,6 +1210,15 @@ namespace PlaywrightNative.Helpers
                 return FallbackHandshakeTimeoutMessage(ignoreHttpsErrors);
             }
 
+            // TLS hang fixtures use IgnoreHTTPSErrors and need the disconnect
+            // error page painted before Chromium drops the SOCKS tunnel. Waiting
+            // for handshake unwind under Linux suite load let GoTo sit until the
+            // NUnit 30s budget (BrowserShouldNotHangOnTlsErrorsDuringTls12Handshake).
+            if (ignoreHttpsErrors)
+            {
+                return FallbackHandshakeTimeoutMessage(ignoreHttpsErrors: true);
+            }
+
             // Under Chromium headful suite load, ForceClose can take hundreds of ms
             // to surface the RemoteCertificateValidation AuthenticationException
             // (self-signed HTTP/2 origins). 150ms often fell through to a generic

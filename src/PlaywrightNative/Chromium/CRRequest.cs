@@ -613,13 +613,26 @@ namespace PlaywrightNative.Chromium
         /// <returns>The raw header list.</returns>
         internal async Task<IReadOnlyList<NameValueEntry>> WaitForRawHeadersAsync()
         {
-            // requestWillBeSent omits Accept* until ExtraInfo; give that event a
-            // short window. If the deferred seal from loadingFinished is starved
-            // on the thread pool, self-heal with provisional headers so
-            // AllHeadersAsync cannot hang (worker script headers in iframe).
+            // requestWillBeSent omits Accept* until ExtraInfo. Early AllHeaders
+            // callers (ShouldNotReturnAllHeadersUntilTheyAreAvailable) must wait
+            // for that event — a fixed 750ms seal returned the short provisional
+            // list under Windows suite load when ExtraInfo lagged.
+            // Prefer ExtraInfo / finished / response, then a short grace, then
+            // provisional so worker scripts that never get ExtraInfo still resolve.
             if (!_rawHeaders.Task.IsCompleted)
             {
-                await Task.WhenAny(_rawHeaders.Task, Task.Delay(750)).ConfigureAwait(false);
+                await Task.WhenAny(
+                        _rawHeaders.Task,
+                        _finished.Task,
+                        _responseReady.Task,
+                        Task.Delay(5_000))
+                    .ConfigureAwait(false);
+
+                if (!_rawHeaders.Task.IsCompleted)
+                {
+                    await Task.WhenAny(_rawHeaders.Task, Task.Delay(750)).ConfigureAwait(false);
+                }
+
                 if (!_rawHeaders.Task.IsCompleted)
                 {
                     EnsureRawRequestHeaders();
