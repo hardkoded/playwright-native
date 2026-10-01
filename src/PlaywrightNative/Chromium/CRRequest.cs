@@ -617,14 +617,16 @@ namespace PlaywrightNative.Chromium
             // callers (ShouldNotReturnAllHeadersUntilTheyAreAvailable) must wait
             // for that event — a fixed 750ms seal returned the short provisional
             // list under Windows suite load when ExtraInfo lagged.
-            // Prefer ExtraInfo / finished / response, then a short grace, then
+            // Prefer ExtraInfo or loadingFinished, then a short grace, then
             // provisional so worker scripts that never get ExtraInfo still resolve.
+            // Do not wake on responseReady alone — response headers arrive while
+            // the body still streams (ShouldNotReturnAllHeadersUntilTheyAreAvailable
+            // holds the body open for 3s) and would recreate the short-list seal.
             if (!_rawHeaders.Task.IsCompleted)
             {
                 await Task.WhenAny(
                         _rawHeaders.Task,
                         _finished.Task,
-                        _responseReady.Task,
                         Task.Delay(5_000))
                     .ConfigureAwait(false);
 

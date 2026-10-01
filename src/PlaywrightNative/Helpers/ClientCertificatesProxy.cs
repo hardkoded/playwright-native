@@ -1741,12 +1741,18 @@ namespace PlaywrightNative.Helpers
                         {
                             ForceCloseTcpClient(originClient);
 
-                            // Prefer AuthenticationException (self-signed) over a
-                            // generic cancel when ForceClose unblocks a validation
-                            // failure that raced the budget
-                            // (BrowserShouldReturnTargetConnectionErrorsWhenUsingHttp2).
-                            string timeoutMessage = await ResolveHandshakeTimeoutMessageAsync(
-                                handshakeTask, _ignoreHttpsErrors).ConfigureAwait(false);
+                            // Paint before origin SslStream dispose / handshake drain
+                            // so Linux Chromium still has a live SOCKS tunnel
+                            // (BrowserShouldNotHangOnTlsErrorsDuringTls12Handshake).
+                            // Hang fixtures use IgnoreHTTPSErrors → disconnect text.
+                            // HTTP/2 self-signed (!ignoreHttpsErrors) still drains for
+                            // AuthenticationException wording.
+                            string timeoutMessage = _ignoreHttpsErrors
+                                ? FallbackHandshakeTimeoutMessage(ignoreHttpsErrors: true)
+                                : await ResolveHandshakeTimeoutMessageAsync(
+                                    handshakeTask, ignoreHttpsErrors: false).ConfigureAwait(false);
+                            await WriteTlsErrorPageAsync(browserPrefixed, offered, timeoutMessage)
+                                .ConfigureAwait(false);
                             try
                             {
                                 await serverTls.DisposeAsync().AsTask()
@@ -1764,8 +1770,6 @@ namespace PlaywrightNative.Helpers
                             }
 
                             serverTls = null;
-                            await WriteTlsErrorPageAsync(browserPrefixed, offered, timeoutMessage)
-                                .ConfigureAwait(false);
                             await HalfCloseAfterErrorPageAsync(browserClient).ConfigureAwait(false);
                             try
                             {
