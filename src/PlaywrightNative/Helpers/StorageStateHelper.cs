@@ -487,9 +487,12 @@ namespace PlaywrightNative.Helpers
             try
             {
                 probe = await context.NewPageAsync().ConfigureAwait(false);
-                await probe.RouteAsync("**/*", route =>
+
+                // Await fulfill so GoTo cannot race a fire-and-forget handler and
+                // hang until the default 30s navigation timeout (seen on Windows headful).
+                await probe.RouteAsync("**/*", async route =>
                 {
-                    _ = route.FulfillAsync(new() { Body = "<html></html>" });
+                    await route.FulfillAsync(new() { Body = "<html></html>" }).ConfigureAwait(false);
                 }).ConfigureAwait(false);
 
                 foreach (string origin in originsToSave)
@@ -612,9 +615,12 @@ namespace PlaywrightNative.Helpers
             try
             {
                 page = await context.NewPageAsync().ConfigureAwait(false);
-                await page.RouteAsync("**/*", route =>
+
+                // Await fulfill so GoTo cannot race a fire-and-forget handler and
+                // hang until the default 30s navigation timeout (seen on Windows headful).
+                await page.RouteAsync("**/*", async route =>
                 {
-                    _ = route.FulfillAsync(new() { Body = "<html></html>" });
+                    await route.FulfillAsync(new() { Body = "<html></html>" }).ConfigureAwait(false);
                 }).ConfigureAwait(false);
 
                 foreach (StorageStateOrigin origin in origins)
