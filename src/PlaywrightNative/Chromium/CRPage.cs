@@ -3037,45 +3037,6 @@ namespace PlaywrightNative.Chromium
             // survives from the prior about:blank document until FrameNavigated
             // clears it, and would make GoTo return while querySelector still
             // sees a blank DOM (PressAsyncDispatchesKey / FillAsyncSetsInputValue).
-            // After lifecycle is ready, give Page.frameAttached a short window when the
-            // document already contains iframes but ChildFrames is still empty under load.
-            async Task WaitForChildFramesAttachedLocalAsync(Frame targetFrame)
-            {
-                if (targetFrame == null || targetFrame.IsDetached || targetFrame.ChildFrames.Count > 0)
-                {
-                    return;
-                }
-
-                int expected = 0;
-                try
-                {
-                    expected = await EvaluateFunctionInFrameAsync<int>(
-                            targetFrame,
-                            @"() => document.querySelectorAll('iframe, frame').length")
-                        .WaitAsync(TimeSpan.FromMilliseconds(250))
-                        .ConfigureAwait(false);
-                }
-                catch (TimeoutException)
-                {
-                    return;
-                }
-                catch (PlaywrightException)
-                {
-                    return;
-                }
-
-                if (expected <= 0)
-                {
-                    return;
-                }
-
-                System.Diagnostics.Stopwatch clock = System.Diagnostics.Stopwatch.StartNew();
-                while (clock.ElapsedMilliseconds < 750 && targetFrame.ChildFrames.Count < expected)
-                {
-                    await Task.Delay(15).ConfigureAwait(false);
-                }
-            }
-
             async Task<bool> TryConfirmDataDocumentReadyAsync(Frame targetFrame, string targetUrl)
             {
                 if (targetFrame == null || string.IsNullOrEmpty(targetUrl)
@@ -3498,7 +3459,6 @@ namespace PlaywrightNative.Chromium
                     EnsurePromisedLifecycleRecorded();
                     ensureLifecycleOnExit = true;
                     frame.Url = NavigationTimeout.PreserveUserInfo(url, frame.Url);
-                    await WaitForChildFramesAttachedLocalAsync(frame).ConfigureAwait(false);
                     return;
                 }
 
@@ -3615,7 +3575,6 @@ namespace PlaywrightNative.Chromium
 
                 ensureLifecycleOnExit = true;
                 frame.Url = NavigationTimeout.PreserveUserInfo(url, frame.Url);
-                await WaitForChildFramesAttachedLocalAsync(frame).ConfigureAwait(false);
             }
             finally
             {
