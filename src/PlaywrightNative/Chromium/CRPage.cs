@@ -55,7 +55,10 @@ namespace PlaywrightNative.Chromium
         private readonly ConcurrentDictionary<string, byte> _evaluateCallbackNames = new(StringComparer.Ordinal);
         private readonly ConcurrentDictionary<string, Func<CRJSHandle, Task<object>>> _handleBindings = new(StringComparer.Ordinal);
         private readonly ConcurrentDictionary<string, CRWorker> _workers = new(StringComparer.Ordinal);
-        private readonly ConcurrentDictionary<string, byte> _workerTargetIds = new(StringComparer.Ordinal);
+        // CDP targetId → sessionId. Page and browser autoAttach can each create a
+        // session for the same dedicated worker; keying by targetId prevents a
+        // duplicate ghost entry that survives navigation when only one session detaches.
+        private readonly ConcurrentDictionary<string, string> _workerTargetIds = new(StringComparer.Ordinal);
         private readonly ConcurrentDictionary<string, CRSession> _oopifSessions = new(StringComparer.Ordinal);
         private readonly ConcurrentDictionary<string, string> _oopifParents = new(StringComparer.Ordinal);
         private readonly ConcurrentDictionary<string, byte> _oopifSwappedIn = new(StringComparer.Ordinal);
@@ -72,6 +75,7 @@ namespace PlaywrightNative.Chromium
         private readonly List<InFlightFrameNavigate> _inflightFrameNavigates = new();
         private readonly object _inflightFrameNavigateGate = new();
         private int _orphanWorkerAdoptScheduled;
+        private int _orphanWorkerAdoptEpoch;
         private string _userAgentOverride;
         private string _acceptLanguageOverride;
         private bool _userAgentIsMobile;
@@ -1171,10 +1175,43 @@ namespace PlaywrightNative.Chromium
         /// </summary>
         internal void CloseAllWorkers()
         {
-            foreach (CRWorker worker in _workers.Values)
+            // Cancel in-flight orphan adoption so a late getTargets attach cannot
+            // resurrect workers after the document that owned them is gone.
+            Interlocked.Increment(ref _orphanWorkerAdoptEpoch);
+            Interlocked.Exchange(ref _orphanWorkerAdoptScheduled, 0);
+
+            // Snapshot first: RemoveWorker mutates _workers and must not race
+            // concurrent Target.detachedFromTarget / nested-worker attach.
+            CRWorker[] closing = _workers.Values.ToArray();
+            foreach (CRWorker worker in closing)
             {
                 RemoveWorker(worker.SessionId);
             }
+        }
+
+        /// <summary>
+        /// Removes a dedicated worker tracked by CDP session id (browser-level
+        /// <c>Target.detachedFromTarget</c> when page-session detach was missed).
+        /// </summary>
+        /// <param name="sessionId">Flattened CDP session id.</param>
+        /// <returns><see langword="true"/> when a worker was removed.</returns>
+        internal bool TryRemoveWorkerSession(string sessionId)
+            => RemoveWorker(sessionId);
+
+        /// <summary>
+        /// Removes a dedicated worker tracked by CDP target id.
+        /// </summary>
+        /// <param name="targetId">Worker target id.</param>
+        /// <returns><see langword="true"/> when a worker was removed.</returns>
+        internal bool TryRemoveWorkerTarget(string targetId)
+        {
+            if (string.IsNullOrEmpty(targetId)
+                || !_workerTargetIds.TryGetValue(targetId, out string sessionId))
+            {
+                return false;
+            }
+
+            return RemoveWorker(sessionId);
         }
 
         /// <summary>
@@ -1405,18 +1442,16 @@ namespace PlaywrightNative.Chromium
             string parentFrameId = targetInfo.TryGetProperty("parentFrameId", out JsonElement parentFrameEl)
                 ? parentFrameEl.GetString()
                 : string.Empty;
-            CRWorker worker = new(child, sessionId, url);
-            if (!_workers.TryAdd(sessionId, worker))
-            {
-                return;
-            }
-
             string workerTargetId = targetInfo.TryGetProperty("targetId", out JsonElement workerTargetEl)
                 ? workerTargetEl.GetString()
                 : string.Empty;
-            if (!string.IsNullOrEmpty(workerTargetId))
+            CRWorker worker = new(child, sessionId, url);
+            if (!TryTrackWorker(worker, sessionId, workerTargetId))
             {
-                _workerTargetIds.TryAdd(workerTargetId, 0);
+                // Duplicate page/browser autoAttach session for the same target —
+                // resume so PlzDedicatedWorker is not left paused.
+                _ = child.SendAsync("Runtime.runIfWaitingForDebugger");
+                return;
             }
 
             string owner = !string.IsNullOrEmpty(ownerTargetId) ? ownerTargetId : parentFrameId;
@@ -5923,14 +5958,11 @@ namespace PlaywrightNative.Chromium
                 ? urlEl.GetString()
                 : string.Empty;
             CRWorker worker = new(child, sessionId, url);
-            if (!_workers.TryAdd(sessionId, worker))
+            if (!TryTrackWorker(worker, sessionId, targetId))
             {
+                // Duplicate page/browser autoAttach session for the same target.
+                _ = child.SendAsync("Runtime.runIfWaitingForDebugger");
                 return;
-            }
-
-            if (!string.IsNullOrEmpty(targetId))
-            {
-                _workerTargetIds.TryAdd(targetId, 0);
             }
 
             worker.ExceptionThrown += (_, error) => PageError?.Invoke(this, error);
@@ -5966,6 +5998,7 @@ namespace PlaywrightNative.Chromium
 
         private async Task AdoptOrphanWorkersDelayedAsync()
         {
+            int epoch = Volatile.Read(ref _orphanWorkerAdoptEpoch);
             try
             {
                 // Nested workers are created after the first main-script request;
@@ -5973,6 +6006,11 @@ namespace PlaywrightNative.Chromium
                 for (int i = 0; i < 8; i++)
                 {
                     await Task.Delay(250).ConfigureAwait(false);
+                    if (Volatile.Read(ref _orphanWorkerAdoptEpoch) != epoch)
+                    {
+                        return;
+                    }
+
                     await _browser.AdoptOrphanWorkersAsync().ConfigureAwait(false);
                 }
             }
@@ -5981,8 +6019,29 @@ namespace PlaywrightNative.Chromium
             }
             finally
             {
-                System.Threading.Interlocked.Exchange(ref _orphanWorkerAdoptScheduled, 0);
+                Interlocked.Exchange(ref _orphanWorkerAdoptScheduled, 0);
             }
+        }
+
+        private bool TryTrackWorker(CRWorker worker, string sessionId, string targetId)
+        {
+            if (!string.IsNullOrEmpty(targetId)
+                && !_workerTargetIds.TryAdd(targetId, sessionId))
+            {
+                return false;
+            }
+
+            if (!_workers.TryAdd(sessionId, worker))
+            {
+                if (!string.IsNullOrEmpty(targetId))
+                {
+                    _workerTargetIds.TryRemove(targetId, out _);
+                }
+
+                return false;
+            }
+
+            return true;
         }
 
         private async Task AttachWorkerAndReportAsync(CRWorker worker, string parentFrameId, Task networkTask = null)
@@ -6199,6 +6258,14 @@ namespace PlaywrightNative.Chromium
             if (string.IsNullOrEmpty(sessionId) || !_workers.TryRemove(sessionId, out CRWorker worker))
             {
                 return false;
+            }
+
+            foreach (KeyValuePair<string, string> pair in _workerTargetIds)
+            {
+                if (string.Equals(pair.Value, sessionId, StringComparison.Ordinal))
+                {
+                    _workerTargetIds.TryRemove(pair.Key, out _);
+                }
             }
 
             foreach (ConcurrentDictionary<string, byte> owned in _oopifOwnedWorkers.Values)
@@ -6611,6 +6678,11 @@ namespace PlaywrightNative.Chromium
                 if (navigated != null && navigated.ParentFrame == null
                     && !string.Equals(navigated.DocumentId, previousDocumentId, StringComparison.Ordinal))
                 {
+                    // Dedicated workers die with the replaced document. Do not wait
+                    // for Target.detachedFromTarget alone: under Windows suite load
+                    // that event can lag past GoToAsync, leaving Page.Workers non-empty
+                    // (WorkersParityTests.PageWorkers).
+                    CloseAllWorkers();
                     RestoreOopifFrames();
                     EraseEvaluateCallbacks();
                     if (!string.IsNullOrEmpty(url)

@@ -1194,6 +1194,32 @@ namespace PlaywrightNative.Chromium
                 return;
             }
 
+            // Dedicated workers attached via browser-level autoAttach (or orphan
+            // adoption) receive Target.detachedFromTarget on the root session.
+            // Dispose alone left CRPage._workers holding a ghost ChromiumWorker
+            // after cross-document navigation (WorkersParityTests.PageWorkers).
+            if (!string.IsNullOrEmpty(sessionId))
+            {
+                foreach (CRPage page in _crPages.Values)
+                {
+                    if (page.TryRemoveWorkerSession(sessionId))
+                    {
+                        return;
+                    }
+                }
+            }
+
+            if (!string.IsNullOrEmpty(targetId))
+            {
+                foreach (CRPage page in _crPages.Values)
+                {
+                    if (page.TryRemoveWorkerTarget(targetId))
+                    {
+                        return;
+                    }
+                }
+            }
+
             if (!string.IsNullOrEmpty(sessionId)
                 && _connection.Sessions.TryGetValue(sessionId, out CRSession extra)
                 && extra != _connection.RootSession)
