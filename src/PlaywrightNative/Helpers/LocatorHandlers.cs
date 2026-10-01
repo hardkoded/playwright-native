@@ -197,7 +197,8 @@ namespace PlaywrightNative.Helpers
                         continue;
                     }
 
-                    int queryMs = RemainingQueryMs(timeoutMs, sw);
+                    bool frameScoped = IsFrameScopedLocator(entry.Locator);
+                    int queryMs = FrameAwareQueryMs(timeoutMs, sw, frameScoped);
 
                     // Unbounded ElementHandles during navigation can hang the
                     // whole expect/action loop; treat a timed-out probe as not
@@ -205,18 +206,23 @@ namespace PlaywrightNative.Helpers
                     // Frame-scoped overlays (data: iframe body) can lag ContentFrame
                     // under Windows suite load — retry before skip so
                     // ShouldWorkWhenOwnerFrameDetaches still removes the iframe.
+                    // Probe WaitAsync must stay >= ContentFrame's shared attach
+                    // budget or the handler is skipped while the iframe remains.
                     bool visible = await IsAnyVisibleAsync(
                             entry.Locator,
                             queryMs,
                             assumeVisibleOnTimeout: false)
                         .ConfigureAwait(false);
-                    if (!visible && IsFrameScopedLocator(entry.Locator))
+                    if (!visible && frameScoped)
                     {
                         Stopwatch attachSw = Stopwatch.StartNew();
-                        while (!visible && attachSw.ElapsedMilliseconds < 3_000)
+                        int attachBudgetMs = timeoutMs == Timeout.Infinite
+                            ? 10_000
+                            : Math.Max(5_000, Math.Min(15_000, timeoutMs - (int)sw.ElapsedMilliseconds));
+                        while (!visible && attachSw.ElapsedMilliseconds < attachBudgetMs)
                         {
                             await Task.Delay(50).ConfigureAwait(false);
-                            queryMs = RemainingQueryMs(timeoutMs, sw);
+                            queryMs = FrameAwareQueryMs(timeoutMs, sw, frameScoped: true);
                             if (queryMs <= 0 && timeoutMs != Timeout.Infinite)
                             {
                                 break;
@@ -269,6 +275,27 @@ namespace PlaywrightNative.Helpers
             }
 
             return Math.Max(50, Math.Min(5_000, timeoutMs - (int)sw.ElapsedMilliseconds));
+        }
+
+        /// <summary>
+        /// Visibility probe budget. Frame-scoped overlays need longer than the
+        /// default 5s so <c>ContentFrame</c> attach (up to 5s) fits inside
+        /// <see cref="Task.WaitAsync(TimeSpan)"/>.
+        /// </summary>
+        private static int FrameAwareQueryMs(int timeoutMs, Stopwatch sw, bool frameScoped)
+        {
+            if (!frameScoped)
+            {
+                return RemainingQueryMs(timeoutMs, sw);
+            }
+
+            const int frameQueryCapMs = 10_000;
+            if (timeoutMs == Timeout.Infinite)
+            {
+                return frameQueryCapMs;
+            }
+
+            return Math.Max(50, Math.Min(frameQueryCapMs, timeoutMs - (int)sw.ElapsedMilliseconds));
         }
 
         private static async Task<bool> IsAnyVisibleAsync(

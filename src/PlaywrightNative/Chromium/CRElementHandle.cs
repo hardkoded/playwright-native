@@ -605,18 +605,21 @@ namespace PlaywrightNative.Chromium
             EnsureNotDisposed();
 
             // data: iframes under Windows suite load can lag both
-            // DOM.describeNode frameId and Page.frameAttached. Poll both so
-            // FrameLocator body locator-handler checkpoints still see the overlay
-            // (ShouldWorkWhenOwnerFrameDetaches).
-            const int attachPollMs = 3_000;
+            // DOM.describeNode frameId and Page.frameAttached. Share one attach
+            // budget across both polls so ContentFrame cannot exceed the
+            // locator-handler visibility WaitAsync cap (previously 3s+3s > 5s
+            // caused ShouldWorkWhenOwnerFrameDetaches to skip the overlay).
+            const int attachPollMs = 5_000;
+            System.Diagnostics.Stopwatch attachSw = System.Diagnostics.Stopwatch.StartNew();
             string frameId = await _page.DescribeNodeContentFrameIdAsync(Context.Session, ObjectId)
                 .ConfigureAwait(false);
             if (string.IsNullOrEmpty(frameId))
             {
+                int describeBudget = Math.Max(0, attachPollMs - (int)attachSw.ElapsedMilliseconds);
                 frameId = await _page.WaitForDescribeNodeContentFrameIdAsync(
                         Context.Session,
                         ObjectId,
-                        attachPollMs)
+                        describeBudget)
                     .ConfigureAwait(false);
             }
 
@@ -631,7 +634,8 @@ namespace PlaywrightNative.Chromium
                 return frame;
             }
 
-            return await _page.WaitForFrameByIdAsync(frameId, attachPollMs).ConfigureAwait(false);
+            int frameBudget = Math.Max(0, attachPollMs - (int)attachSw.ElapsedMilliseconds);
+            return await _page.WaitForFrameByIdAsync(frameId, frameBudget).ConfigureAwait(false);
         }
 
         /// <summary>
