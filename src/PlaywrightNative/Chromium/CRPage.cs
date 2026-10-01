@@ -3238,10 +3238,18 @@ namespace PlaywrightNative.Chromium
                 }
 
                 // Same-document (hash) navigations have no loaderId. Complete
-                // once the frame URL has been updated.
+                // once the frame URL has been updated to the requested target
+                // (ShouldWorkWithAnchorNavigation).
                 if (string.IsNullOrEmpty(expectedDocumentId))
                 {
-                    lifecycleTcs.TrySetResult(true);
+                    if (string.Equals(
+                        NavigationTimeout.WithoutUserInfo(frame.Url),
+                        NavigationTimeout.WithoutUserInfo(url),
+                        StringComparison.Ordinal))
+                    {
+                        lifecycleTcs.TrySetResult(true);
+                    }
+
                     return;
                 }
 
@@ -3515,10 +3523,16 @@ namespace PlaywrightNative.Chromium
                     // Load may already be recorded while sawTargetLifecycle was cleared
                     // by a mid-navigate FrameNavigated (expectedDocumentId still null).
                     // Do not await a pulse that will never arrive.
+                    //
+                    // Same-document / hash navigations report a null loaderId while
+                    // LifecycleEvents still list the prior load — require urlMatches
+                    // so we do not resolve before navigatedWithinDocument updates
+                    // frame.Url (ShouldWorkWithAnchorNavigation).
                     if (!lifecycleTcs.Task.IsCompleted
                         && frame.LifecycleEvents.Contains(targetLifecycleEvent)
                         && !staleBlankLifecycle
-                        && (expectedDocumentId == null || frame.DocumentId == expectedDocumentId))
+                        && (expectedDocumentId == null || frame.DocumentId == expectedDocumentId)
+                        && (!string.IsNullOrEmpty(expectedDocumentId) || urlMatches))
                     {
                         lifecycleTcs.TrySetResult(true);
                     }
