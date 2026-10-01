@@ -3383,8 +3383,7 @@ namespace PlaywrightNative.Chromium
                     throw new PlaywrightException("frame was detached");
                 }
 
-                // Fast-path: lifecycle may have fired during navigate (sawTargetLifecycle)
-                // or already be present in LifecycleEvents after subscribe.
+                // Fast-path: lifecycle may have fired during navigate (sawTargetLifecycle).
                 // networkidle is special: a premature idle during Page.navigate can be
                 // revoked when page scripts start fetches — require it currently present
                 // (ShouldWaitForNetworkidleToSucceedNavigation).
@@ -3392,11 +3391,17 @@ namespace PlaywrightNative.Chromium
                 // sawTargetLifecycle is cleared on each new-document FrameNavigated so a
                 // load that was wiped by a later commit cannot satisfy this check alone
                 // (GoToShouldClearLifecycleOnNewNavigation).
+                //
+                // Do NOT treat LifecycleEvents.Contains(load|DOMContentLoaded) as ready
+                // for a new-document GoTo: about:blank still lists those events until
+                // FrameNavigated clears them, while Page.navigate may already have
+                // advanced DocumentId. That raced ShouldProperlyWaitForLoad on Windows
+                // headless (GoTo returned after the classic script, before module/load).
                 bool networkIdle = string.Equals(targetLifecycleEvent, "networkidle", StringComparison.Ordinal);
                 bool lifecycleReady =
                     (networkIdle
                         ? frame.LifecycleEvents.Contains(targetLifecycleEvent)
-                        : (sawTargetLifecycle || frame.LifecycleEvents.Contains(targetLifecycleEvent))) &&
+                        : sawTargetLifecycle) &&
                     (expectedDocumentId == null || frame.DocumentId == expectedDocumentId) &&
                     (string.IsNullOrEmpty(expectedDocumentId)
                         ? string.Equals(

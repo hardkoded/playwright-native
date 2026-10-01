@@ -296,9 +296,9 @@ namespace PlaywrightNative.Chromium
         internal async Task CloseAutomaticLaunchPagesAsync()
         {
             // Auto-attach delivers leftover about:blank asynchronously after
-            // Target.setAutoAttach. Give it a brief window so we actually close
-            // the startup page instead of racing past an empty _crPages.
-            for (int i = 0; i < 40 && _crPages.IsEmpty; i++)
+            // Target.setAutoAttach. Brief wait so we close the startup page
+            // instead of racing past an empty _crPages.
+            for (int i = 0; i < 20 && _crPages.IsEmpty; i++)
             {
                 await Task.Delay(25).ConfigureAwait(false);
             }
@@ -322,26 +322,9 @@ namespace PlaywrightNative.Chromium
                     // headful suite load can leave Target.closeTarget unanswered
                     // when the leftover page is still mid-InitializeAsync /
                     // waitForDebuggerOnStart (LaunchShouldUseChromeChannel NUnit
-                    // 30s hang on hfub2). Prefer a short initialize wait so the
-                    // target is resumed before close.
+                    // 30s hang on hfub2).
                     if (!page.ClosedTask.IsCompleted)
                     {
-                        if (!page.InitializedTask.IsCompleted)
-                        {
-                            // Unstick waitForDebuggerOnStart so closeTarget can
-                            // complete; InitializeAsync is fire-and-forget and may
-                            // still be awaiting Page/Runtime enable under load.
-                            try
-                            {
-                                _ = page.Session.SendAsync("Runtime.runIfWaitingForDebugger");
-                            }
-                            catch (PlaywrightException)
-                            {
-                            }
-
-                            await Task.WhenAny(page.InitializedTask, Task.Delay(2000)).ConfigureAwait(false);
-                        }
-
                         try
                         {
                             Task closeSend = Connection.RootSession
