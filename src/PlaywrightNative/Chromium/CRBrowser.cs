@@ -295,6 +295,14 @@ namespace PlaywrightNative.Chromium
         /// <returns>A <see cref="Task"/> that completes when leftover pages are closed.</returns>
         internal async Task CloseAutomaticLaunchPagesAsync()
         {
+            // Auto-attach delivers leftover about:blank asynchronously after
+            // Target.setAutoAttach. Give it a brief window so we actually close
+            // the startup page instead of racing past an empty _crPages.
+            for (int i = 0; i < 40 && _crPages.IsEmpty; i++)
+            {
+                await Task.Delay(25).ConfigureAwait(false);
+            }
+
             List<CRPage> pages = new List<CRPage>();
             foreach (CRPage page in _crPages.Values)
             {
@@ -309,13 +317,40 @@ namespace PlaywrightNative.Chromium
                     // budget, so the 2s WhenAny below never ran and Channel Chrome
                     // launch hung the full NUnit 30s (LaunchShouldUseChromeChannel
                     // on Windows). Fire Target.closeTarget, then bound the wait.
+                    //
+                    // Also bound SendAsync itself: system Chrome under Ubuntu
+                    // headful suite load can leave Target.closeTarget unanswered
+                    // when the leftover page is still mid-InitializeAsync /
+                    // waitForDebuggerOnStart (LaunchShouldUseChromeChannel NUnit
+                    // 30s hang on hfub2). Prefer a short initialize wait so the
+                    // target is resumed before close.
                     if (!page.ClosedTask.IsCompleted)
                     {
+                        if (!page.InitializedTask.IsCompleted)
+                        {
+                            // Unstick waitForDebuggerOnStart so closeTarget can
+                            // complete; InitializeAsync is fire-and-forget and may
+                            // still be awaiting Page/Runtime enable under load.
+                            try
+                            {
+                                _ = page.Session.SendAsync("Runtime.runIfWaitingForDebugger");
+                            }
+                            catch (PlaywrightException)
+                            {
+                            }
+
+                            await Task.WhenAny(page.InitializedTask, Task.Delay(2000)).ConfigureAwait(false);
+                        }
+
                         try
                         {
-                            await Connection.RootSession
-                                .SendAsync("Target.closeTarget", new { targetId = page.TargetId })
-                                .ConfigureAwait(false);
+                            Task closeSend = Connection.RootSession
+                                .SendAsync("Target.closeTarget", new { targetId = page.TargetId });
+                            await Task.WhenAny(closeSend, Task.Delay(1000)).ConfigureAwait(false);
+                            if (closeSend.IsFaulted)
+                            {
+                                _ = closeSend.Exception;
+                            }
                         }
                         catch (PlaywrightException)
                         {
