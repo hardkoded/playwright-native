@@ -3383,32 +3383,31 @@ namespace PlaywrightNative.Chromium
                     throw new PlaywrightException("frame was detached");
                 }
 
-                // Fast-path: lifecycle may have fired during navigate (sawTargetLifecycle).
+                // Fast-path: lifecycle may have fired during navigate (sawTargetLifecycle)
+                // or already be present after FrameNavigated + load.
                 // networkidle is special: a premature idle during Page.navigate can be
                 // revoked when page scripts start fetches — require it currently present
                 // (ShouldWaitForNetworkidleToSucceedNavigation).
                 //
                 // sawTargetLifecycle is cleared on each new-document FrameNavigated so a
                 // load that was wiped by a later commit cannot satisfy this check alone
-                // (GoToShouldClearLifecycleOnNewNavigation).
-                //
-                // Do NOT treat LifecycleEvents.Contains(load|DOMContentLoaded) as ready
-                // for a new-document GoTo: about:blank still lists those events until
-                // FrameNavigated clears them, while Page.navigate may already have
-                // advanced DocumentId. That raced ShouldProperlyWaitForLoad on Windows
-                // headless (GoTo returned after the classic script, before module/load).
+                // (GoToShouldClearLifecycleOnNewNavigation). After that clear, CDP may
+                // have already delivered load for the new document — trust
+                // LifecycleEvents only when frame.Url already matches the target so a
+                // stale about:blank load cannot race DocumentId from Page.navigate
+                // (ShouldProperlyWaitForLoad on Windows headless).
                 bool networkIdle = string.Equals(targetLifecycleEvent, "networkidle", StringComparison.Ordinal);
+                bool urlMatches = string.Equals(
+                    NavigationTimeout.WithoutUserInfo(frame.Url),
+                    NavigationTimeout.WithoutUserInfo(url),
+                    StringComparison.Ordinal);
+                bool lifecycleInEvents = frame.LifecycleEvents.Contains(targetLifecycleEvent);
                 bool lifecycleReady =
                     (networkIdle
-                        ? frame.LifecycleEvents.Contains(targetLifecycleEvent)
-                        : sawTargetLifecycle) &&
+                        ? lifecycleInEvents
+                        : (sawTargetLifecycle || (lifecycleInEvents && urlMatches))) &&
                     (expectedDocumentId == null || frame.DocumentId == expectedDocumentId) &&
-                    (string.IsNullOrEmpty(expectedDocumentId)
-                        ? string.Equals(
-                            NavigationTimeout.WithoutUserInfo(frame.Url),
-                            NavigationTimeout.WithoutUserInfo(url),
-                            StringComparison.Ordinal)
-                        : true);
+                    (string.IsNullOrEmpty(expectedDocumentId) ? urlMatches : true);
 
                 // Same-document navigations (including about:blank -> about:blank with a
                 // null loaderId) resolve once navigate returns, but only once frame.Url

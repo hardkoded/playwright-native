@@ -211,6 +211,15 @@ namespace PlaywrightNative
             lock (_inflightLock)
             {
                 _lifecycleEvents.Add(name);
+
+                // ClearLifecycleEvents may omit the idle timer when no document
+                // request was kept. Start the quiet period once load lands and the
+                // network is already empty so networkidle stays ~500ms after load.
+                if (string.Equals(name, "load", StringComparison.Ordinal)
+                    && _inflightRequestIds.Count == 0)
+                {
+                    StartNetworkIdleTimerLocked();
+                }
             }
 
             LifecycleChanged?.Invoke(name);
@@ -248,10 +257,12 @@ namespace PlaywrightNative
                 {
                     _inflightRequestIds.Add(keep);
                 }
-                else
-                {
-                    StartNetworkIdleTimerLocked();
-                }
+
+                // When the document request already finished before commit, do not
+                // start the quiet-period timer here. GoTo's data: evaluate path can
+                // take longer than 500ms before replaying load, and a timer started
+                // on clear would emit networkidle before load (ShouldTimeoutWaitingForLoad).
+                // OnLifecycleEvent("load") / OnInflightRequestFinished restart it.
             }
 
             RootFrame().RecalculateNetworkIdle(allowRemove: this);

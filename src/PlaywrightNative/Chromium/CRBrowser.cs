@@ -295,10 +295,16 @@ namespace PlaywrightNative.Chromium
         /// <returns>A <see cref="Task"/> that completes when leftover pages are closed.</returns>
         internal async Task CloseAutomaticLaunchPagesAsync()
         {
+            // Keep the whole leftover-close path inside a short budget so Channel
+            // Chrome under suite load cannot burn the NUnit / ConnectAsync 30s
+            // (LaunchShouldUseChromeChannel on Windows / Ubuntu headful).
+            System.Diagnostics.Stopwatch budget = System.Diagnostics.Stopwatch.StartNew();
+            const int budgetMs = 2_500;
+
             // Auto-attach delivers leftover about:blank asynchronously after
             // Target.setAutoAttach. Brief wait so we close the startup page
             // instead of racing past an empty _crPages.
-            for (int i = 0; i < 20 && _crPages.IsEmpty; i++)
+            for (int i = 0; i < 20 && _crPages.IsEmpty && budget.ElapsedMilliseconds < budgetMs; i++)
             {
                 await Task.Delay(25).ConfigureAwait(false);
             }
@@ -311,12 +317,17 @@ namespace PlaywrightNative.Chromium
 
             foreach (CRPage page in pages)
             {
+                if (budget.ElapsedMilliseconds >= budgetMs)
+                {
+                    break;
+                }
+
                 try
                 {
                     // Do not call ClosePageAsync here — it awaits ClosedTask with no
-                    // budget, so the 2s WhenAny below never ran and Channel Chrome
-                    // launch hung the full NUnit 30s (LaunchShouldUseChromeChannel
-                    // on Windows). Fire Target.closeTarget, then bound the wait.
+                    // budget, so Channel Chrome launch hung the full NUnit 30s
+                    // (LaunchShouldUseChromeChannel on Windows). Fire
+                    // Target.closeTarget, then bound the wait.
                     //
                     // Also bound SendAsync itself: system Chrome under Ubuntu
                     // headful suite load can leave Target.closeTarget unanswered
@@ -325,11 +336,37 @@ namespace PlaywrightNative.Chromium
                     // 30s hang on hfub2).
                     if (!page.ClosedTask.IsCompleted)
                     {
+                        if (!page.InitializedTask.IsCompleted)
+                        {
+                            // Unstick waitForDebuggerOnStart so closeTarget can
+                            // complete; InitializeAsync is fire-and-forget and may
+                            // still be awaiting Page/Runtime enable under load.
+                            try
+                            {
+                                _ = page.Session.SendAsync("Runtime.runIfWaitingForDebugger");
+                            }
+                            catch (PlaywrightException)
+                            {
+                            }
+
+                            int initWaitMs = (int)Math.Max(0, Math.Min(500, budgetMs - budget.ElapsedMilliseconds));
+                            if (initWaitMs > 0)
+                            {
+                                await Task.WhenAny(page.InitializedTask, Task.Delay(initWaitMs))
+                                    .ConfigureAwait(false);
+                            }
+                        }
+
                         try
                         {
+                            int closeWaitMs = (int)Math.Max(0, Math.Min(750, budgetMs - budget.ElapsedMilliseconds));
                             Task closeSend = Connection.RootSession
                                 .SendAsync("Target.closeTarget", new { targetId = page.TargetId });
-                            await Task.WhenAny(closeSend, Task.Delay(1000)).ConfigureAwait(false);
+                            if (closeWaitMs > 0)
+                            {
+                                await Task.WhenAny(closeSend, Task.Delay(closeWaitMs)).ConfigureAwait(false);
+                            }
+
                             if (closeSend.IsFaulted)
                             {
                                 _ = closeSend.Exception;
@@ -339,7 +376,12 @@ namespace PlaywrightNative.Chromium
                         {
                         }
 
-                        await Task.WhenAny(page.ClosedTask, Task.Delay(2000)).ConfigureAwait(false);
+                        int closedWaitMs = (int)Math.Max(0, Math.Min(750, budgetMs - budget.ElapsedMilliseconds));
+                        if (closedWaitMs > 0 && !page.ClosedTask.IsCompleted)
+                        {
+                            await Task.WhenAny(page.ClosedTask, Task.Delay(closedWaitMs))
+                                .ConfigureAwait(false);
+                        }
                     }
                 }
                 catch (Exception ex)
