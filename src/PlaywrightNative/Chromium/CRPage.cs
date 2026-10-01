@@ -55,6 +55,7 @@ namespace PlaywrightNative.Chromium
         private readonly ConcurrentDictionary<string, byte> _evaluateCallbackNames = new(StringComparer.Ordinal);
         private readonly ConcurrentDictionary<string, Func<CRJSHandle, Task<object>>> _handleBindings = new(StringComparer.Ordinal);
         private readonly ConcurrentDictionary<string, CRWorker> _workers = new(StringComparer.Ordinal);
+
         // CDP targetId → sessionId. Page and browser autoAttach can each create a
         // session for the same dedicated worker; keying by targetId prevents a
         // duplicate ghost entry that survives navigation when only one session detaches.
