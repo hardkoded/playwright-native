@@ -3392,20 +3392,23 @@ namespace PlaywrightNative.Chromium
                 // sawTargetLifecycle is cleared on each new-document FrameNavigated so a
                 // load that was wiped by a later commit cannot satisfy this check alone
                 // (GoToShouldClearLifecycleOnNewNavigation). After that clear, CDP may
-                // have already delivered load for the new document — trust
-                // LifecycleEvents only when frame.Url already matches the target so a
-                // stale about:blank load cannot race DocumentId from Page.navigate
-                // (ShouldProperlyWaitForLoad on Windows headless).
+                // already have delivered load — trust LifecycleEvents unless frame.Url
+                // is still about:blank while the target is not (stale blank load racing
+                // DocumentId from Page.navigate / ShouldProperlyWaitForLoad). Exact
+                // urlMatches is too strict for data: URLs (Chromium normalizes) and
+                // left GoTo awaiting a lifecycleTcs that never re-fires
+                // (ShouldClearRecordedPageErrors / Clock tests on Windows headful).
                 bool networkIdle = string.Equals(targetLifecycleEvent, "networkidle", StringComparison.Ordinal);
                 bool urlMatches = string.Equals(
                     NavigationTimeout.WithoutUserInfo(frame.Url),
                     NavigationTimeout.WithoutUserInfo(url),
                     StringComparison.Ordinal);
                 bool lifecycleInEvents = frame.LifecycleEvents.Contains(targetLifecycleEvent);
+                bool staleBlankLifecycle = IsBlankNavigationUrl(frame.Url) && !IsBlankNavigationUrl(url);
                 bool lifecycleReady =
                     (networkIdle
                         ? lifecycleInEvents
-                        : (sawTargetLifecycle || (lifecycleInEvents && urlMatches))) &&
+                        : (sawTargetLifecycle || (lifecycleInEvents && !staleBlankLifecycle))) &&
                     (expectedDocumentId == null || frame.DocumentId == expectedDocumentId) &&
                     (string.IsNullOrEmpty(expectedDocumentId) ? urlMatches : true);
 
@@ -3509,6 +3512,17 @@ namespace PlaywrightNative.Chromium
                 }
                 else
                 {
+                    // Load may already be recorded while sawTargetLifecycle was cleared
+                    // by a mid-navigate FrameNavigated (expectedDocumentId still null).
+                    // Do not await a pulse that will never arrive.
+                    if (!lifecycleTcs.Task.IsCompleted
+                        && frame.LifecycleEvents.Contains(targetLifecycleEvent)
+                        && !staleBlankLifecycle
+                        && (expectedDocumentId == null || frame.DocumentId == expectedDocumentId))
+                    {
+                        lifecycleTcs.TrySetResult(true);
+                    }
+
                     await lifecycleTcs.Task.ConfigureAwait(false);
                     EnsurePromisedLifecycleRecorded();
                 }
