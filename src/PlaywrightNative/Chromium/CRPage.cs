@@ -1295,11 +1295,11 @@ namespace PlaywrightNative.Chromium
                 return;
             }
 
-            if (!string.IsNullOrEmpty(parentFrameId) && _frameManager.FrameById(parentFrameId) == null)
-            {
-                return;
-            }
-
+            // Do not drop attaches when parentFrameId is momentarily missing from
+            // FrameManager (main FrameId remap / cross-process race under Windows
+            // suite load). FrameAttachedToTarget falls back to MainFrame — the same
+            // as OOPIF stitching — so ChildFrames is not left empty after GoTo
+            // (ShouldAllowCrossFrameElementHandles).
             if (!string.IsNullOrEmpty(parentFrameId))
             {
                 _frameManager.FrameAttachedToTarget(frameId, parentFrameId);

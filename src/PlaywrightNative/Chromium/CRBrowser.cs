@@ -896,15 +896,36 @@ namespace PlaywrightNative.Chromium
             JsonElement targetInfo,
             string parentFrameId)
         {
+            string workerTargetId = targetInfo.TryGetProperty("targetId", out JsonElement workerTargetEl)
+                ? workerTargetEl.GetString()
+                : string.Empty;
+
             for (int i = 0; i < 40; i++)
             {
                 await Task.Delay(25).ConfigureAwait(false);
                 CRPage owner = FindPageForOopif(frameId: null, parentFrameId);
-                if (owner != null)
+                if (owner == null)
                 {
-                    owner.AttachChildWorker(workerSession, sessionId, targetInfo);
+                    continue;
+                }
+
+                // Navigation may have closed this worker while we waited for the
+                // owning page — do not resurrect it into Page.Workers.
+                if (owner.IsWorkerTargetDiscarded(workerTargetId) || owner.HasWorkerTarget(workerTargetId))
+                {
+                    try
+                    {
+                        await workerSession.SendAsync("Runtime.runIfWaitingForDebugger").ConfigureAwait(false);
+                    }
+                    catch (PlaywrightException)
+                    {
+                    }
+
                     return;
                 }
+
+                owner.AttachChildWorker(workerSession, sessionId, targetInfo);
+                return;
             }
 
             // Last resort: never leave waitForDebuggerOnStart stuck forever.

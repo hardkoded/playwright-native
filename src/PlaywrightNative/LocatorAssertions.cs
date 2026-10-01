@@ -463,28 +463,23 @@ namespace PlaywrightNative
             string preview = null;
             int resolved = 0;
 
+            // Mirror ToBeAttached/ToBeVisible: first probe uses a 5s budget so a
+            // short expect timeout still observes the current DOM under suite load
+            // (ToBeEnabledFailed missing "locator resolved to").
+            bool oneShotPending = true;
+
             while (true)
             {
                 await LocatorHandlers.RunAsync(_locator.Page, timeoutMs, sw).ConfigureAwait(false);
                 IReadOnlyList<IElementHandle> all;
                 try
                 {
-                    int remainingMs = timeoutMs == Timeout.Infinite
-                        ? 5_000
-                        : Math.Max(50, Math.Min(5_000, timeoutMs - (int)sw.ElapsedMilliseconds));
+                    int remainingMs = ExpectElementHandlesBudgetMs(timeoutMs, sw, ref oneShotPending);
                     all = await ElementHandlesOrEmptyAsync(remainingMs).ConfigureAwait(false);
                 }
                 catch (TimeoutException)
                 {
-                    if (timeoutMs != Timeout.Infinite && sw.ElapsedMilliseconds >= timeoutMs)
-                    {
-                        all = Array.Empty<IElementHandle>();
-                    }
-                    else
-                    {
-                        await Task.Delay(50).ConfigureAwait(false);
-                        continue;
-                    }
+                    all = Array.Empty<IElementHandle>();
                 }
 
                 if (all.Count > 1)
@@ -525,35 +520,6 @@ namespace PlaywrightNative
 
                 if (timeoutMs != Timeout.Infinite && sw.ElapsedMilliseconds >= timeoutMs)
                 {
-                    // Under suite load ElementHandlesAsync can time out for the whole
-                    // expect window even though the node is present (ToBeEnabledFailed).
-                    // One last short probe so the error includes "locator resolved to".
-                    if (resolved == 0)
-                    {
-                        try
-                        {
-                            IReadOnlyList<IElementHandle> last =
-                                await ElementHandlesOrEmptyAsync(250).ConfigureAwait(false);
-                            if (last.Count == 1)
-                            {
-                                resolved = 1;
-                                try
-                                {
-                                    preview = await last[0]
-                                        .EvaluateAsync<string>(ElementStateScript.PreviewNodeFunction)
-                                        .ConfigureAwait(false);
-                                }
-                                catch (PlaywrightException)
-                                {
-                                    preview = "element";
-                                }
-                            }
-                        }
-                        catch (TimeoutException)
-                        {
-                        }
-                    }
-
                     StringBuilder log = new StringBuilder();
                     log.Append(ApiName("toBeEnabled"));
                     log.Append(": Timeout ");
