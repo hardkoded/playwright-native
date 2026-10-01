@@ -525,6 +525,35 @@ namespace PlaywrightNative
 
                 if (timeoutMs != Timeout.Infinite && sw.ElapsedMilliseconds >= timeoutMs)
                 {
+                    // Under suite load ElementHandlesAsync can time out for the whole
+                    // expect window even though the node is present (ToBeEnabledFailed).
+                    // One last short probe so the error includes "locator resolved to".
+                    if (resolved == 0)
+                    {
+                        try
+                        {
+                            IReadOnlyList<IElementHandle> last =
+                                await ElementHandlesOrEmptyAsync(250).ConfigureAwait(false);
+                            if (last.Count == 1)
+                            {
+                                resolved = 1;
+                                try
+                                {
+                                    preview = await last[0]
+                                        .EvaluateAsync<string>(ElementStateScript.PreviewNodeFunction)
+                                        .ConfigureAwait(false);
+                                }
+                                catch (PlaywrightException)
+                                {
+                                    preview = "element";
+                                }
+                            }
+                        }
+                        catch (TimeoutException)
+                        {
+                        }
+                    }
+
                     StringBuilder log = new StringBuilder();
                     log.Append(ApiName("toBeEnabled"));
                     log.Append(": Timeout ");

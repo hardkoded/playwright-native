@@ -60,6 +60,11 @@ namespace PlaywrightNative.Chromium
         // session for the same dedicated worker; keying by targetId prevents a
         // duplicate ghost entry that survives navigation when only one session detaches.
         private readonly ConcurrentDictionary<string, string> _workerTargetIds = new(StringComparer.Ordinal);
+
+        // Target ids closed by CloseAllWorkers / document replacement. Late browser
+        // autoAttach or AdoptOrphanWorkersAsync must not resurrect them into
+        // Page.Workers after GoTo (WorkersParityTests.ShouldClearUponNavigation).
+        private readonly ConcurrentDictionary<string, byte> _discardedWorkerTargetIds = new(StringComparer.Ordinal);
         private readonly ConcurrentDictionary<string, CRSession> _oopifSessions = new(StringComparer.Ordinal);
         private readonly ConcurrentDictionary<string, string> _oopifParents = new(StringComparer.Ordinal);
         private readonly ConcurrentDictionary<string, byte> _oopifSwappedIn = new(StringComparer.Ordinal);
@@ -1186,6 +1191,14 @@ namespace PlaywrightNative.Chromium
             CRWorker[] closing = _workers.Values.ToArray();
             foreach (CRWorker worker in closing)
             {
+                foreach (KeyValuePair<string, string> pair in _workerTargetIds)
+                {
+                    if (string.Equals(pair.Value, worker.SessionId, StringComparison.Ordinal))
+                    {
+                        _discardedWorkerTargetIds.TryAdd(pair.Key, 0);
+                    }
+                }
+
                 RemoveWorker(worker.SessionId);
             }
         }
@@ -1506,6 +1519,14 @@ namespace PlaywrightNative.Chromium
         /// <returns><see langword="true"/> when the target is tracked.</returns>
         internal bool HasWorkerTarget(string targetId)
             => !string.IsNullOrEmpty(targetId) && _workerTargetIds.ContainsKey(targetId);
+
+        /// <summary>
+        /// Returns whether <paramref name="targetId"/> was closed with the prior document.
+        /// </summary>
+        /// <param name="targetId">CDP worker target id.</param>
+        /// <returns><see langword="true"/> when the target must not be re-tracked.</returns>
+        internal bool IsWorkerTargetDiscarded(string targetId)
+            => !string.IsNullOrEmpty(targetId) && _discardedWorkerTargetIds.ContainsKey(targetId);
 
         /// <summary>
         /// Coalesced recovery when <c>Target.attachedToTarget</c> for a worker was dropped.
@@ -3016,6 +3037,45 @@ namespace PlaywrightNative.Chromium
             // survives from the prior about:blank document until FrameNavigated
             // clears it, and would make GoTo return while querySelector still
             // sees a blank DOM (PressAsyncDispatchesKey / FillAsyncSetsInputValue).
+            // After lifecycle is ready, give Page.frameAttached a short window when the
+            // document already contains iframes but ChildFrames is still empty under load.
+            async Task WaitForChildFramesAttachedLocalAsync(Frame targetFrame)
+            {
+                if (targetFrame == null || targetFrame.IsDetached || targetFrame.ChildFrames.Count > 0)
+                {
+                    return;
+                }
+
+                int expected = 0;
+                try
+                {
+                    expected = await EvaluateFunctionInFrameAsync<int>(
+                            targetFrame,
+                            @"() => document.querySelectorAll('iframe, frame').length")
+                        .WaitAsync(TimeSpan.FromMilliseconds(250))
+                        .ConfigureAwait(false);
+                }
+                catch (TimeoutException)
+                {
+                    return;
+                }
+                catch (PlaywrightException)
+                {
+                    return;
+                }
+
+                if (expected <= 0)
+                {
+                    return;
+                }
+
+                System.Diagnostics.Stopwatch clock = System.Diagnostics.Stopwatch.StartNew();
+                while (clock.ElapsedMilliseconds < 750 && targetFrame.ChildFrames.Count < expected)
+                {
+                    await Task.Delay(15).ConfigureAwait(false);
+                }
+            }
+
             async Task<bool> TryConfirmDataDocumentReadyAsync(Frame targetFrame, string targetUrl)
             {
                 if (targetFrame == null || string.IsNullOrEmpty(targetUrl)
@@ -3413,10 +3473,14 @@ namespace PlaywrightNative.Chromium
                     StringComparison.Ordinal);
                 bool lifecycleInEvents = frame.LifecycleEvents.Contains(targetLifecycleEvent);
                 bool staleBlankLifecycle = IsBlankNavigationUrl(frame.Url) && !IsBlankNavigationUrl(url);
+
+                // sawTargetLifecycle must also reject a stale about:blank load — otherwise
+                // GoTo can resolve before FrameNavigated/frameAttached under suite load
+                // (ShouldAllowCrossFrameElementHandles FirstChild null).
                 bool lifecycleReady =
                     (networkIdle
                         ? lifecycleInEvents
-                        : (sawTargetLifecycle || (lifecycleInEvents && !staleBlankLifecycle))) &&
+                        : ((sawTargetLifecycle || lifecycleInEvents) && !staleBlankLifecycle)) &&
                     (expectedDocumentId == null || frame.DocumentId == expectedDocumentId) &&
                     (string.IsNullOrEmpty(expectedDocumentId) ? urlMatches : true);
 
@@ -3434,6 +3498,7 @@ namespace PlaywrightNative.Chromium
                     EnsurePromisedLifecycleRecorded();
                     ensureLifecycleOnExit = true;
                     frame.Url = NavigationTimeout.PreserveUserInfo(url, frame.Url);
+                    await WaitForChildFramesAttachedLocalAsync(frame).ConfigureAwait(false);
                     return;
                 }
 
@@ -3528,11 +3593,18 @@ namespace PlaywrightNative.Chromium
                     // LifecycleEvents still list the prior load — require urlMatches
                     // so we do not resolve before navigatedWithinDocument updates
                     // frame.Url (ShouldWorkWithAnchorNavigation).
+                    // Recompute stale blank against the current frame.Url — the flag
+                    // captured before waiting can stay true after FrameNavigated.
+                    bool staleBlankNow = IsBlankNavigationUrl(frame.Url) && !IsBlankNavigationUrl(url);
+                    bool urlMatchesNow = string.Equals(
+                        NavigationTimeout.WithoutUserInfo(frame.Url),
+                        NavigationTimeout.WithoutUserInfo(url),
+                        StringComparison.Ordinal);
                     if (!lifecycleTcs.Task.IsCompleted
                         && frame.LifecycleEvents.Contains(targetLifecycleEvent)
-                        && !staleBlankLifecycle
+                        && !staleBlankNow
                         && (expectedDocumentId == null || frame.DocumentId == expectedDocumentId)
-                        && (!string.IsNullOrEmpty(expectedDocumentId) || urlMatches))
+                        && (!string.IsNullOrEmpty(expectedDocumentId) || urlMatchesNow))
                     {
                         lifecycleTcs.TrySetResult(true);
                     }
@@ -3543,6 +3615,7 @@ namespace PlaywrightNative.Chromium
 
                 ensureLifecycleOnExit = true;
                 frame.Url = NavigationTimeout.PreserveUserInfo(url, frame.Url);
+                await WaitForChildFramesAttachedLocalAsync(frame).ConfigureAwait(false);
             }
             finally
             {
@@ -6058,6 +6131,11 @@ namespace PlaywrightNative.Chromium
 
         private bool TryTrackWorker(CRWorker worker, string sessionId, string targetId)
         {
+            if (!string.IsNullOrEmpty(targetId) && _discardedWorkerTargetIds.ContainsKey(targetId))
+            {
+                return false;
+            }
+
             if (!string.IsNullOrEmpty(targetId)
                 && !_workerTargetIds.TryAdd(targetId, sessionId))
             {
@@ -6076,6 +6154,11 @@ namespace PlaywrightNative.Chromium
 
             return true;
         }
+
+        private bool IsWorkerStillTracked(CRWorker worker)
+            => worker != null
+                && !string.IsNullOrEmpty(worker.SessionId)
+                && _workers.ContainsKey(worker.SessionId);
 
         private async Task AttachWorkerAndReportAsync(CRWorker worker, string parentFrameId, Task networkTask = null)
         {
@@ -6105,6 +6188,27 @@ namespace PlaywrightNative.Chromium
                         isWorker: true,
                         parentFrameId);
                     await Task.WhenAny(enableTask, Task.Delay(2_000)).ConfigureAwait(false);
+                }
+
+                // CloseAllWorkers may have run while Network.enable was in flight.
+                // Do not re-emit Worker or schedule orphan adoption for a document
+                // that already replaced this worker.
+                if (!IsWorkerStillTracked(worker))
+                {
+                    try
+                    {
+                        await worker.ResumeDebuggerAsync()
+                            .WaitAsync(TimeSpan.FromMilliseconds(500))
+                            .ConfigureAwait(false);
+                    }
+                    catch (PlaywrightException)
+                    {
+                    }
+                    catch (TimeoutException)
+                    {
+                    }
+
+                    return;
                 }
 
                 try
@@ -6145,6 +6249,24 @@ namespace PlaywrightNative.Chromium
                     worker.MarkScriptLoadedImmediately();
                 }
 
+                if (!IsWorkerStillTracked(worker))
+                {
+                    try
+                    {
+                        await worker.ResumeDebuggerAsync()
+                            .WaitAsync(TimeSpan.FromMilliseconds(500))
+                            .ConfigureAwait(false);
+                    }
+                    catch (PlaywrightException)
+                    {
+                    }
+                    catch (TimeoutException)
+                    {
+                    }
+
+                    return;
+                }
+
                 // Official adds the worker before resume so page.console listeners
                 // are attached before the worker script runs.
                 WorkerCreated?.Invoke(this, worker);
@@ -6169,6 +6291,24 @@ namespace PlaywrightNative.Chromium
             }
             catch (PlaywrightException)
             {
+                if (!IsWorkerStillTracked(worker))
+                {
+                    try
+                    {
+                        await worker.ResumeDebuggerAsync()
+                            .WaitAsync(TimeSpan.FromMilliseconds(500))
+                            .ConfigureAwait(false);
+                    }
+                    catch (PlaywrightException)
+                    {
+                    }
+                    catch (TimeoutException)
+                    {
+                    }
+
+                    return;
+                }
+
                 // The worker may close before domains are enabled.
                 WorkerCreated?.Invoke(this, worker);
                 ScheduleOrphanWorkerAdoption();

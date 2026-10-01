@@ -198,11 +198,15 @@ namespace PlaywrightNative.Chromium
                 // Don't hang AllHeadersAsync waiting for a response that will never arrive.
                 // When the page closes mid-flight, propagate the target-closed error even if
                 // provisional/raw headers already resolved (official page-close.spec.ts).
+                // Bound the wait: under Windows suite load a sealed provisional request
+                // can miss both responseReady and finished signals after GoTo already
+                // returned (RequestAllHeadersShouldIncludeHost 30s NUnit timeout).
                 Task responseTask = _crRequest.WaitForResponseAsync();
                 Task finishedTask = _crRequest.WaitUntilFinishedAsync();
-                if (!responseTask.IsCompleted)
+                if (!responseTask.IsCompleted && !finishedTask.IsCompleted)
                 {
-                    await Task.WhenAny(responseTask, finishedTask).ConfigureAwait(false);
+                    await Task.WhenAny(responseTask, finishedTask, Task.Delay(5_000))
+                        .ConfigureAwait(false);
                 }
 
                 if (responseTask.IsFaulted)

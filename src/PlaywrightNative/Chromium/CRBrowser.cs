@@ -692,8 +692,12 @@ namespace PlaywrightNative.Chromium
                 }
 
                 // Nested workers can share the same script URL as their parent;
-                // only skip when this CDP targetId is already tracked.
-                if (owner == null || owner.HasWorkerTarget(targetId))
+                // only skip when this CDP targetId is already tracked. Also skip
+                // targets closed by a document replacement — getTargets can still
+                // list a dying worker briefly after CloseAllWorkers.
+                if (owner == null
+                    || owner.HasWorkerTarget(targetId)
+                    || owner.IsWorkerTargetDiscarded(targetId))
                 {
                     continue;
                 }
@@ -995,7 +999,16 @@ namespace PlaywrightNative.Chromium
                 string parentFrameId = targetInfo.TryGetProperty("parentFrameId", out JsonElement workerParentEl)
                     ? workerParentEl.GetString()
                     : string.Empty;
+                string workerTargetId = targetInfo.TryGetProperty("targetId", out JsonElement workerTargetEl)
+                    ? workerTargetEl.GetString()
+                    : string.Empty;
                 CRPage owner = FindPageForOopif(frameId: null, parentFrameId);
+                if (owner != null && owner.IsWorkerTargetDiscarded(workerTargetId))
+                {
+                    _ = workerSession.SendAsync("Runtime.runIfWaitingForDebugger");
+                    return;
+                }
+
                 if (owner != null)
                 {
                     owner.AttachChildWorker(workerSession, sessionId, targetInfo);
