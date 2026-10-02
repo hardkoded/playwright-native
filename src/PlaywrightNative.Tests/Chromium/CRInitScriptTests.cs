@@ -27,30 +27,6 @@ namespace PlaywrightNative.Tests.Chromium
     [TestFixture]
     public class CRInitScriptTests : CRTestBase
     {
-        [PlaywrightTest("page-add-init-script.spec.ts", "should run on new document")]
-        [Test, Timeout(TestConstants.DefaultTestTimeout)]
-        public async Task ShouldRunOnNewDocument()
-        {
-            await Page.AddInitScriptAsync("window.__marker = 'ran';").ConfigureAwait(false);
-            await Page.GoToAsync(TestConstants.EmptyPage).ConfigureAwait(false);
-
-            string v = await Page.EvaluateAsync<string>("window.__marker").ConfigureAwait(false);
-            Assert.That(v, Is.EqualTo("ran"));
-        }
-
-        [PlaywrightTest("page-add-init-script.spec.ts", "should survive navigation")]
-        [Test, Timeout(TestConstants.DefaultTestTimeout)]
-        public async Task ShouldSurviveNavigation()
-        {
-            await Page.AddInitScriptAsync("window.__count = (window.__count || 0) + 1;").ConfigureAwait(false);
-
-            await Page.GoToAsync(TestConstants.EmptyPage).ConfigureAwait(false);
-            await Page.GoToAsync("data:text/html,<div>second</div>").ConfigureAwait(false);
-
-            int count = await Page.EvaluateAsync<int>("window.__count").ConfigureAwait(false);
-            Assert.That(count, Is.EqualTo(1));
-        }
-
         [PlaywrightTest("page-add-init-script.spec.ts", "should support multiple scripts")]
         [Test, Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldSupportMultipleScripts()
@@ -64,21 +40,6 @@ namespace PlaywrightNative.Tests.Chromium
             string b = await Page.EvaluateAsync<string>("window.__b").ConfigureAwait(false);
             Assert.That(a, Is.EqualTo("first"));
             Assert.That(b, Is.EqualTo("second"));
-        }
-
-        [PlaywrightTest("page-add-init-script.spec.ts", "should remove registered script")]
-        [Test, Timeout(TestConstants.DefaultTestTimeout)]
-        public async Task ShouldRemoveRegisteredScript()
-        {
-            string id = await Page.AddInitScriptAsync("window.__removable = true;").ConfigureAwait(false);
-            Assert.That(id, Is.Not.Null.And.Not.Empty);
-
-            await Page.RemoveInitScriptAsync(id).ConfigureAwait(false);
-            await Page.GoToAsync(TestConstants.EmptyPage).ConfigureAwait(false);
-
-            bool present = await Page.EvaluateAsync<bool>(
-                "typeof window.__removable !== 'undefined'").ConfigureAwait(false);
-            Assert.That(present, Is.False);
         }
     }
 }

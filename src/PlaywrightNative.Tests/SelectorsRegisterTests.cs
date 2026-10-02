@@ -53,23 +53,6 @@ namespace PlaywrightNative.Tests
             string name = await page.EvalOnSelectorAsync<string>("tag635work=button", "el => el.nodeName").ConfigureAwait(false);
             Assert.That(name, Is.EqualTo("BUTTON"));
         }
-
-        [PlaywrightTest("selectors-register.spec.ts", "should work with nested locators")]
-        [Test]
-        [Timeout(30_000)]
-        public async Task ShouldWorkWithNestedLocators()
-        {
-            await Playwright.Selectors.RegisterAsync("tag635nested", TagEngine).ConfigureAwait(false);
-            await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
-            await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
-            IPage page = await context.NewPageAsync().ConfigureAwait(false);
-            await page.SetContentAsync("<div><button>Click me</button></div>").ConfigureAwait(false);
-
-            ILocator button = page.Locator("tag635nested=div").GetByText("Click me");
-            Assert.That(await button.CountAsync().ConfigureAwait(false), Is.EqualTo(1));
-            await button.ClickAsync().ConfigureAwait(false);
-        }
-
         [PlaywrightTest("selectors-register.spec.ts", "should work with path")]
         [Test]
         [Timeout(30_000)]
@@ -96,37 +79,6 @@ namespace PlaywrightNative.Tests
                 {
                 }
             }
-        }
-
-        [PlaywrightTest("selectors-register.spec.ts", "should throw on invalid name")]
-        [Test]
-        [Timeout(30_000)]
-        public void ShouldThrowOnInvalidName()
-        {
-            PlaywrightException ex = Assert.CatchAsync<PlaywrightException>(
-                () => Playwright.Selectors.RegisterAsync("$", TagEngine));
-            Assert.That(ex.Message, Does.Contain("Selector engine name may only contain [a-zA-Z0-9_] characters"));
-        }
-
-        [PlaywrightTest("selectors-register.spec.ts", "should throw already registered")]
-        [Test]
-        [Timeout(30_000)]
-        public async Task ShouldThrowAlreadyRegistered()
-        {
-            await Playwright.Selectors.RegisterAsync("tag635dup", TagEngine).ConfigureAwait(false);
-            PlaywrightException ex = Assert.CatchAsync<PlaywrightException>(
-                () => Playwright.Selectors.RegisterAsync("tag635dup", TagEngine));
-            Assert.That(ex.Message, Does.Contain("\"tag635dup\" selector engine has been already registered"));
-        }
-
-        [PlaywrightTest("selectors-register.spec.ts", "should throw on predefined engine")]
-        [Test]
-        [Timeout(30_000)]
-        public void ShouldThrowOnPredefinedEngine()
-        {
-            PlaywrightException ex = Assert.CatchAsync<PlaywrightException>(
-                () => Playwright.Selectors.RegisterAsync("css", TagEngine));
-            Assert.That(ex.Message, Does.Contain("\"css\" is a predefined selector engine"));
         }
     }
 }

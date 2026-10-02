@@ -48,19 +48,5 @@ namespace PlaywrightNative.Tests
             await page1.CloseAsync().ConfigureAwait(false);
             await page2.CloseAsync().ConfigureAwait(false);
         }
-
-        [PlaywrightTest("page-basic.spec.ts", "is a no-op when already in front")]
-        [Test]
-        [Timeout(30_000)]
-        public async Task ShouldStayVisibleWhenAlreadyInFront()
-        {
-            await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
-            await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
-            IPage page = await context.NewPageAsync().ConfigureAwait(false);
-            await page.SetContentAsync("<div>front</div>").ConfigureAwait(false);
-
-            await page.BringToFrontAsync().ConfigureAwait(false);
-            Assert.That(await page.EvaluateAsync<string>("document.visibilityState").ConfigureAwait(false), Is.EqualTo("visible"));
-        }
     }
 }

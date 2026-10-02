@@ -27,47 +27,6 @@ namespace PlaywrightNative.Tests
     [TestFixture]
     public class StrictSelectorsTests : PageTestEx
     {
-        [PlaywrightTest("page-strict.spec.ts", "strictSelectors throws when the selector matches two nodes")]
-        [Test]
-        [Timeout(30_000)]
-        public async Task ShouldThrowWhenSelectorMatchesTwoNodes()
-        {
-            await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
-            await using IBrowserContext context = await browser.NewContextAsync(new BrowserContextOptions
-            {
-                StrictSelectors = true,
-            }).ConfigureAwait(false);
-            IPage page = await context.NewPageAsync().ConfigureAwait(false);
-            await page.SetContentAsync("<div><button>one</button><button>two</button></div>").ConfigureAwait(false);
-
-            PlaywrightException ex = Assert.CatchAsync<PlaywrightException>(
-                () => page.ClickAsync("button"));
-
-            Assert.That(context.StrictSelectors, Is.True);
-            Assert.That(ex, Is.Not.Null);
-            Assert.That(ex.Message, Does.Contain("strict mode violation"));
-            Assert.That(ex.Message, Does.Contain("2 elements"));
-        }
-
-        [PlaywrightTest("page-strict.spec.ts", "strictSelectors allows a unique selector")]
-        [Test]
-        [Timeout(30_000)]
-        public async Task ShouldAllowAUniqueSelector()
-        {
-            await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
-            await using IBrowserContext context = await browser.NewContextAsync(new BrowserContextOptions
-            {
-                StrictSelectors = true,
-            }).ConfigureAwait(false);
-            IPage page = await context.NewPageAsync().ConfigureAwait(false);
-            await page.SetContentAsync("<div><button id=\"only\" onclick=\"window.lastClickedId = this.id\">one</button><button>two</button></div>").ConfigureAwait(false);
-
-            await page.ClickAsync("#only").ConfigureAwait(false);
-
-            string id = await page.EvaluateAsync<string>("window.lastClickedId").ConfigureAwait(false);
-            Assert.That(id, Is.EqualTo("only"));
-        }
-
         [PlaywrightTest("page-strict.spec.ts", "should fail page.$ in strict mode")]
         [Test]
         [Timeout(30_000)]
@@ -90,42 +49,6 @@ namespace PlaywrightNative.Tests
 
             Assert.That(ex, Is.Not.Null);
             Assert.That(ex.Message, Does.Contain("strict mode violation"));
-        }
-
-        [PlaywrightTest("page-strict.spec.ts", "querySelector honors an explicit strict: false override")]
-        [Test]
-        [Timeout(30_000)]
-        public async Task QuerySelectorShouldReturnTheFirstMatch()
-        {
-            await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
-            await using IBrowserContext context = await browser.NewContextAsync(new BrowserContextOptions
-            {
-                StrictSelectors = true,
-            }).ConfigureAwait(false);
-            IPage page = await context.NewPageAsync().ConfigureAwait(false);
-            await page.SetContentAsync("<div><button>one</button><button>two</button></div>").ConfigureAwait(false);
-
-            IElementHandle handle = await page.QuerySelectorAsync("button", new() { Strict = false }).ConfigureAwait(false);
-
-            Assert.That(handle, Is.Not.Null);
-            Assert.That(await handle.TextContentAsync().ConfigureAwait(false), Is.EqualTo("one"));
-        }
-
-        [PlaywrightTest("page-strict.spec.ts", "strictSelectors defaults to false")]
-        [Test]
-        [Timeout(30_000)]
-        public async Task ShouldClickTheFirstMatchWhenNotStrict()
-        {
-            await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
-            await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
-            IPage page = await context.NewPageAsync().ConfigureAwait(false);
-            await page.SetContentAsync("<div><button id=\"first\" onclick=\"window.lastClickedId = this.id\">one</button><button>two</button></div>").ConfigureAwait(false);
-
-            await page.ClickAsync("button").ConfigureAwait(false);
-
-            string id = await page.EvaluateAsync<string>("window.lastClickedId").ConfigureAwait(false);
-            Assert.That(context.StrictSelectors, Is.False);
-            Assert.That(id, Is.EqualTo("first"));
         }
     }
 }

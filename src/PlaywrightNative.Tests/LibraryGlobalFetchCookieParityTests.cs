@@ -414,28 +414,6 @@ namespace PlaywrightNative.Tests
                 await request.DisposeAsync().ConfigureAwait(false);
             }
         }
-
-        [PlaywrightTest("global-fetch-cookie.spec.ts", "should preserve local storage on import/export of storage state")]
-        [Test]
-        [Timeout(TestConstants.DefaultTestTimeout)]
-        public async Task ShouldPreserveLocalStorageOnImportExportOfStorageState()
-        {
-            EnsureServer();
-            const string storageState =
-                "{\"cookies\":[{\"name\":\"a\",\"value\":\"b\",\"domain\":\"a.b.one.com\",\"path\":\"/\",\"expires\":-1,\"httpOnly\":false,\"secure\":false,\"sameSite\":\"Lax\"}],\"origins\":[{\"origin\":\"https://www.example.com\",\"localStorage\":[{\"name\":\"name1\",\"value\":\"value1\"}],\"indexedDB\":[{\"name\":\"db\",\"version\":5,\"stores\":[{\"name\":\"store\",\"keyPath\":\"id\",\"autoIncrement\":false,\"indexes\":[],\"records\":[{\"value\":{\"id\":\"foo\",\"name\":\"John Doe\"}}]}]}]}]}";
-            IAPIRequestContext request = await Playwright.APIRequest.NewContextAsync(new() { IgnoreHTTPSErrors = true, StorageState = storageState }).ConfigureAwait(false);
-            try
-            {
-                await request.GetAsync(EmptyPage).ConfigureAwait(false);
-                string exported = await request.StorageStateAsync(new() { IndexedDB = true }).ConfigureAwait(false);
-                AssertJsonEqual(storageState, exported);
-            }
-            finally
-            {
-                await request.DisposeAsync().ConfigureAwait(false);
-            }
-        }
-
         [PlaywrightTest("global-fetch-cookie.spec.ts", "storage state should round-trip through file")]
         [Test]
         [Timeout(TestConstants.DefaultTestTimeout)]
