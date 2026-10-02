@@ -6119,90 +6119,16 @@ namespace PlaywrightNative.Chromium
                 && !string.IsNullOrEmpty(worker.SessionId)
                 && _workers.ContainsKey(worker.SessionId);
 
-        private async Task AttachWorkerAndReportAsync(CRWorker worker, string parentFrameId, Task networkTask = null)
+        private Task AttachWorkerAndReportAsync(CRWorker worker, string parentFrameId, Task networkTask = null)
         {
             try
             {
-                // Network.enable was already sent from OnAttachedToTarget /
-                // AttachChildWorker with the session listener registered.
-                // Bound the ack: under suite load a stalled Network.enable must
-                // not leave PlzDedicatedWorker paused forever (RequestFinished
-                // never fires → ShouldResolveWorkerScriptAllHeadersInIframe).
-                // Official resumes without awaiting the enable ack.
-                if (networkTask != null)
-                {
-                    // Prefer waiting for Network.enable before resume so
-                    // loadingFinished is not dropped; still bound so a stalled
-                    // ack cannot leave the worker paused forever.
-                    await Task.WhenAny(networkTask, Task.Delay(2_000)).ConfigureAwait(false);
-                }
-                else
-                {
-                    Frame ownerFrame = !string.IsNullOrEmpty(parentFrameId)
-                        ? _frameManager.FrameById(parentFrameId)
-                        : null;
-                    Task enableTask = _networkManager.AddWorkerSessionAsync(
-                        worker.Session,
-                        ownerFrame ?? MainFrame,
-                        isWorker: true,
-                        parentFrameId);
-                    await Task.WhenAny(enableTask, Task.Delay(2_000)).ConfigureAwait(false);
-                }
-
-                // CloseAllWorkers may have run while Network.enable was in flight.
-                // Do not re-emit Worker or schedule orphan adoption for a document
-                // that already replaced this worker.
-                if (!IsWorkerStillTracked(worker))
-                {
-                    try
-                    {
-                        await worker.ResumeDebuggerAsync()
-                            .WaitAsync(TimeSpan.FromMilliseconds(500))
-                            .ConfigureAwait(false);
-                    }
-                    catch (PlaywrightException)
-                    {
-                    }
-                    catch (TimeoutException)
-                    {
-                    }
-
-                    return;
-                }
-
-                try
-                {
-                    // Bound Runtime.enable: a stalled ack must not delay resume.
-                    await worker.EnableRuntimeAsync().WaitAsync(TimeSpan.FromMilliseconds(500)).ConfigureAwait(false);
-                }
-                catch (PlaywrightException)
-                {
-                    // Official session._sendMayFail('Runtime.enable').
-                }
-                catch (TimeoutException)
-                {
-                }
-
-                try
-                {
-                    await worker.Session.SendAsync(
-                        "Target.setAutoAttach",
-                        new { autoAttach = true, waitForDebuggerOnStart = true, flatten = true })
-                        .WaitAsync(TimeSpan.FromMilliseconds(500))
-                        .ConfigureAwait(false);
-                }
-                catch (PlaywrightException)
-                {
-                    // Nested-worker auto-attach is best-effort on older Chrome.
-                }
-                catch (TimeoutException)
-                {
-                }
-
-                // Official: below Chromium 143 there is no Inspector.workerScriptLoaded
-                // event, so evaluate() only ever waited on the execution context.
-                // From 143 on, CRWorker's own message handler resolves once both
-                // the context exists and this event has fired.
+                // Match official crPage._onAttachedToTarget worker path:
+                // addWorker → Runtime.enable (mayFail) → network addSession (async)
+                // → runIfWaitingForDebugger (mayFail) → setAutoAttach (mayFail).
+                // Awaiting Network.enable / Runtime.enable before resume left
+                // PlzDedicatedWorker paused under Windows suite load (console /
+                // offline worker evaluates hung until the 30s NUnit budget).
                 if (ChromiumMajorVersion() < 143)
                 {
                     worker.MarkScriptLoadedImmediately();
@@ -6210,38 +6136,36 @@ namespace PlaywrightNative.Chromium
 
                 if (!IsWorkerStillTracked(worker))
                 {
-                    try
-                    {
-                        await worker.ResumeDebuggerAsync()
-                            .WaitAsync(TimeSpan.FromMilliseconds(500))
-                            .ConfigureAwait(false);
-                    }
-                    catch (PlaywrightException)
-                    {
-                    }
-                    catch (TimeoutException)
-                    {
-                    }
-
-                    return;
+                    _ = ResumeWorkerBestEffortAsync(worker);
+                    return Task.CompletedTask;
                 }
 
-                // Official adds the worker before resume so page.console listeners
-                // are attached before the worker script runs.
+                // Official adds the worker before enable/resume so page.console
+                // listeners are attached before the worker script runs.
                 WorkerCreated?.Invoke(this, worker);
                 ScheduleOrphanWorkerAdoption();
 
-                // Do not await resume forever — a stalled CDP ack under suite load
-                // left PlzDedicatedWorker paused (no RequestFinished for worker.js).
-                try
+                if (networkTask == null)
                 {
-                    await worker.ResumeDebuggerAsync()
-                        .WaitAsync(TimeSpan.FromMilliseconds(500))
-                        .ConfigureAwait(false);
+                    Frame ownerFrame = !string.IsNullOrEmpty(parentFrameId)
+                        ? _frameManager.FrameById(parentFrameId)
+                        : null;
+                    networkTask = _networkManager.AddWorkerSessionAsync(
+                        worker.Session,
+                        ownerFrame ?? MainFrame,
+                        isWorker: true,
+                        parentFrameId);
                 }
-                catch (TimeoutException)
-                {
-                }
+
+                // Observe network enable without blocking resume (official .catch).
+                _ = ObserveWorkerNetworkEnableAsync(networkTask);
+
+                // Official session._sendMayFail — do not await enable/resume/autoAttach.
+                _ = worker.EnableRuntimeAsync();
+                _ = worker.Session.SendAsync(
+                    "Target.setAutoAttach",
+                    new { autoAttach = true, waitForDebuggerOnStart = true, flatten = true });
+                _ = ResumeWorkerBestEffortAsync(worker);
 
                 // PlzDedicatedWorker may deliver loadingFinished on the worker
                 // session before Network.enable is observed; if that event is
@@ -6252,39 +6176,49 @@ namespace PlaywrightNative.Chromium
             {
                 if (!IsWorkerStillTracked(worker))
                 {
-                    try
-                    {
-                        await worker.ResumeDebuggerAsync()
-                            .WaitAsync(TimeSpan.FromMilliseconds(500))
-                            .ConfigureAwait(false);
-                    }
-                    catch (PlaywrightException)
-                    {
-                    }
-                    catch (TimeoutException)
-                    {
-                    }
-
-                    return;
+                    _ = ResumeWorkerBestEffortAsync(worker);
+                    return Task.CompletedTask;
                 }
 
                 // The worker may close before domains are enabled.
                 WorkerCreated?.Invoke(this, worker);
                 ScheduleOrphanWorkerAdoption();
-                try
-                {
-                    await worker.ResumeDebuggerAsync()
-                        .WaitAsync(TimeSpan.FromMilliseconds(500))
-                        .ConfigureAwait(false);
-                }
-                catch (PlaywrightException)
-                {
-                }
-                catch (TimeoutException)
-                {
-                }
-
+                _ = ResumeWorkerBestEffortAsync(worker);
                 ScheduleFinishWorkerMainResource(worker.Url);
+            }
+
+            return Task.CompletedTask;
+        }
+
+        private async Task ObserveWorkerNetworkEnableAsync(Task networkTask)
+        {
+            if (networkTask == null)
+            {
+                return;
+            }
+
+            try
+            {
+                await networkTask.ConfigureAwait(false);
+            }
+            catch (PlaywrightException)
+            {
+            }
+        }
+
+        private async Task ResumeWorkerBestEffortAsync(CRWorker worker)
+        {
+            if (worker == null)
+            {
+                return;
+            }
+
+            try
+            {
+                await worker.ResumeDebuggerAsync().ConfigureAwait(false);
+            }
+            catch (PlaywrightException)
+            {
             }
         }
 
