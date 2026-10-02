@@ -399,6 +399,17 @@ namespace PlaywrightNative.Helpers
             // (ShouldNotEmitAfterWithoutBefore under Windows suite load).
             int consoleBaseline = SyncConsoleMessageCount(page);
 
+            // evaluate() stamps its console count at TryBeginAction; if that
+            // console.log landed before this wait took its baseline, pull the
+            // replay floor back to the open evaluate so we do not hang 30s.
+            OfficialTraceSession session = OfficialTraceSession.Active(page.Context);
+            if (session != null
+                && session.TryGetOpenEvaluateConsoleBaseline(out int evaluateBaseline)
+                && evaluateBaseline < consoleBaseline)
+            {
+                consoleBaseline = evaluateBaseline;
+            }
+
             Task<T> consoleWait = WaitTypedAsync<T, IConsoleMessage>(
                 page,
                 h => page.Console += h,

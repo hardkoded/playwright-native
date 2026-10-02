@@ -669,56 +669,68 @@ namespace PlaywrightNative
         public Task<JsonElement?> EvaluateAsync(string expression, object arg = default)
         {
             ThrowIfClosed();
-            return ActionTrace.EvaluateUserAsync(_context, () =>
-            {
-                if (EvaluateHandleArg.TryPrepareHandleCall(expression, arg, out string handleFn, out object[] handleArgs))
+            int consoleBaseline = _consoleLog.CountSinceNavigation;
+            return ActionTrace.EvaluateUserAsync(
+                _context,
+                () =>
                 {
-                    return EvaluatePreparedAsync<JsonElement?>(handleFn, handleArgs);
-                }
+                    if (EvaluateHandleArg.TryPrepareHandleCall(expression, arg, out string handleFn, out object[] handleArgs))
+                    {
+                        return EvaluatePreparedAsync<JsonElement?>(handleFn, handleArgs);
+                    }
 
-                string toEval = arg == null
-                    ? EvaluateWithArg.InvokeIfFunction(expression)
-                    : EvaluateWithArg.Wrap(expression, arg);
-                return EvaluateSerializedAsync<JsonElement?>(toEval);
-            });
+                    string toEval = arg == null
+                        ? EvaluateWithArg.InvokeIfFunction(expression)
+                        : EvaluateWithArg.Wrap(expression, arg);
+                    return EvaluateSerializedAsync<JsonElement?>(toEval);
+                },
+                consoleBaseline);
         }
 
         /// <inheritdoc/>
         public Task<T> EvaluateAsync<T>(string expression, object arg = default)
         {
             ThrowIfClosed();
-            return ActionTrace.EvaluateUserAsync(_context, () =>
-            {
-                if (EvaluateHandleArg.TryPrepareHandleCall(expression, arg, out string handleFn, out object[] handleArgs))
+            int consoleBaseline = _consoleLog.CountSinceNavigation;
+            return ActionTrace.EvaluateUserAsync(
+                _context,
+                () =>
                 {
-                    return EvaluatePreparedAsync<T>(handleFn, handleArgs);
-                }
+                    if (EvaluateHandleArg.TryPrepareHandleCall(expression, arg, out string handleFn, out object[] handleArgs))
+                    {
+                        return EvaluatePreparedAsync<T>(handleFn, handleArgs);
+                    }
 
-                string toEval = arg == null
-                    ? EvaluateWithArg.InvokeIfFunction(expression)
-                    : EvaluateWithArg.Wrap(expression, arg);
-                return EvaluateSerializedAsync<T>(toEval);
-            });
+                    string toEval = arg == null
+                        ? EvaluateWithArg.InvokeIfFunction(expression)
+                        : EvaluateWithArg.Wrap(expression, arg);
+                    return EvaluateSerializedAsync<T>(toEval);
+                },
+                consoleBaseline);
         }
 
         /// <inheritdoc/>
         public Task<IJSHandle> EvaluateHandleAsync(string expression, object arg = default)
         {
-            return ActionTrace.EvaluateHandleUserAsync(_context, async () =>
-            {
-                if (EvaluateHandleArg.TryPrepareHandleCall(expression, arg, out string handleFn, out object[] handleArgs))
+            int consoleBaseline = _consoleLog.CountSinceNavigation;
+            return ActionTrace.EvaluateHandleUserAsync(
+                _context,
+                async () =>
                 {
-                    object[] args = EvaluateHandleArg.AsCallFunctionArguments(handleArgs);
-                    CRJSHandle bound = await _crPage
-                        .EvaluateFunctionHandleInternalAsync(handleFn, args)
-                        .ConfigureAwait(false);
-                    return WrapJSHandle(bound);
-                }
+                    if (EvaluateHandleArg.TryPrepareHandleCall(expression, arg, out string handleFn, out object[] handleArgs))
+                    {
+                        object[] args = EvaluateHandleArg.AsCallFunctionArguments(handleArgs);
+                        CRJSHandle bound = await _crPage
+                            .EvaluateFunctionHandleInternalAsync(handleFn, args)
+                            .ConfigureAwait(false);
+                        return WrapJSHandle(bound);
+                    }
 
-                string toEval = arg == null ? EvaluateWithArg.InvokeIfFunction(expression) : EvaluateWithArg.Wrap(expression, arg);
-                CRJSHandle handle = await _crPage.EvaluateHandleInternalAsync(toEval).ConfigureAwait(false);
-                return WrapJSHandle(handle);
-            });
+                    string toEval = arg == null ? EvaluateWithArg.InvokeIfFunction(expression) : EvaluateWithArg.Wrap(expression, arg);
+                    CRJSHandle handle = await _crPage.EvaluateHandleInternalAsync(toEval).ConfigureAwait(false);
+                    return WrapJSHandle(handle);
+                },
+                consoleBaseline);
         }
 
         /// <inheritdoc/>

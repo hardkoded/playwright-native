@@ -41,6 +41,7 @@ namespace PlaywrightNative.Helpers
         private readonly Dictionary<string, byte[]> _networkResources = new();
         private readonly HashSet<string> _chunkCallIds = new(StringComparer.Ordinal);
         private readonly Dictionary<string, string> _callMethods = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, int> _openEvaluateConsoleBaselines = new(StringComparer.Ordinal);
         private readonly Stack<string> _openGroups = new();
         private readonly List<string> _consoleLines = new();
         private readonly List<string> _wsLines = new();
@@ -173,6 +174,7 @@ namespace PlaywrightNative.Helpers
                 _resources.Clear();
                 _chunkCallIds.Clear();
                 _callMethods.Clear();
+                _openEvaluateConsoleBaselines.Clear();
                 _consoleLines.Clear();
                 _wsLines.Clear();
                 _stacks.Clear();
@@ -292,6 +294,64 @@ namespace PlaywrightNative.Helpers
         }
 
         /// <summary>
+        /// Records the page console-message count at evaluate start so
+        /// <c>waitForEvent('console')</c> can replay logs that raced into the
+        /// buffer before the waiter subscribed (Windows suite load).
+        /// </summary>
+        /// <param name="callId">Call id from <see cref="TryBeginAction"/>.</param>
+        /// <param name="consoleBaseline">
+        /// <c>page.consoleMessages()</c> count when evaluate began.
+        /// </param>
+        internal void NoteEvaluateConsoleBaseline(string callId, int consoleBaseline)
+        {
+            if (string.IsNullOrEmpty(callId))
+            {
+                return;
+            }
+
+            lock (_gate)
+            {
+                if (!_recording)
+                {
+                    return;
+                }
+
+                _openEvaluateConsoleBaselines[callId] = consoleBaseline < 0 ? 0 : consoleBaseline;
+            }
+        }
+
+        /// <summary>
+        /// Lowest console baseline among in-flight evaluate calls, if any.
+        /// </summary>
+        /// <param name="baseline">The earliest open evaluate console baseline.</param>
+        /// <returns>
+        /// <see langword="true"/> when at least one evaluate is open.
+        /// </returns>
+        internal bool TryGetOpenEvaluateConsoleBaseline(out int baseline)
+        {
+            lock (_gate)
+            {
+                if (_openEvaluateConsoleBaselines.Count == 0)
+                {
+                    baseline = 0;
+                    return false;
+                }
+
+                int min = int.MaxValue;
+                foreach (int value in _openEvaluateConsoleBaselines.Values)
+                {
+                    if (value < min)
+                    {
+                        min = value;
+                    }
+                }
+
+                baseline = min == int.MaxValue ? 0 : min;
+                return true;
+            }
+        }
+
+        /// <summary>
         /// Completes an action started with <see cref="TryBeginAction"/>.
         /// </summary>
         internal async Task ContinueActionAsync(string callId, Func<Task> body, object result = null)
@@ -351,6 +411,7 @@ namespace PlaywrightNative.Helpers
             {
                 lock (_gate)
                 {
+                    _openEvaluateConsoleBaselines.Remove(callId);
                     if (_recording && _chunkCallIds.Contains(callId))
                     {
                         var after = new Dictionary<string, object>
@@ -838,6 +899,7 @@ namespace PlaywrightNative.Helpers
                     _resources.Clear();
                     _chunkCallIds.Clear();
                     _callMethods.Clear();
+                    _openEvaluateConsoleBaselines.Clear();
                     _wsLines.Clear();
                     _stacks.Clear();
                     if (!keepRecording)

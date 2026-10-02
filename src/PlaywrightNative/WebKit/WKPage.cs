@@ -802,120 +802,134 @@ namespace PlaywrightNative.WebKit
         public Task<T> EvaluateAsync<T>(string expression, object arg = null)
         {
             ThrowIfClosed();
-            return ActionTrace.EvaluateUserAsync(Context, () =>
-            {
-                // Primitive EvaluateHandle results are ImmediateJSHandle (no objectId).
-                // WebKit rejects {value}/{unserializableValue} on callFunctionOn with
-                // executionContextId — inline via the handle-tree revive path instead.
-                if (arg is ImmediateJSHandle)
+            int consoleBaseline = _consoleLog.CountSinceNavigation;
+            return ActionTrace.EvaluateUserAsync(
+                Context,
+                () =>
                 {
-                    EvaluateWithArg.ThrowIfDisposedHandle(arg);
-                    if (EvaluateHandleArg.TryPrepareHandleCall(expression, arg, out string immFn, out object[] immArgs))
+                    // Primitive EvaluateHandle results are ImmediateJSHandle (no objectId).
+                    // WebKit rejects {value}/{unserializableValue} on callFunctionOn with
+                    // executionContextId — inline via the handle-tree revive path instead.
+                    if (arg is ImmediateJSHandle)
                     {
-                        return EvaluatePreparedAsync<T>(immFn, immArgs);
+                        EvaluateWithArg.ThrowIfDisposedHandle(arg);
+                        if (EvaluateHandleArg.TryPrepareHandleCall(expression, arg, out string immFn, out object[] immArgs))
+                        {
+                            return EvaluatePreparedAsync<T>(immFn, immArgs);
+                        }
                     }
-                }
 
-                // Bare remote handles must use callFunctionOn with only objectId arguments.
-                // WebKit rejects mixed value/objectId lists used by the nested-handle tree path.
-                if (arg is IJSHandle)
-                {
-                    EvaluateWithArg.ThrowIfDisposedHandle(arg);
-                    return EvaluateFunctionSerializedAsync<T>(EvaluateWithArg.AsFunction(expression), arg);
-                }
+                    // Bare remote handles must use callFunctionOn with only objectId arguments.
+                    // WebKit rejects mixed value/objectId lists used by the nested-handle tree path.
+                    if (arg is IJSHandle)
+                    {
+                        EvaluateWithArg.ThrowIfDisposedHandle(arg);
+                        return EvaluateFunctionSerializedAsync<T>(EvaluateWithArg.AsFunction(expression), arg);
+                    }
 
-                if (EvaluateHandleArg.TryPrepareHandleCall(expression, arg, out string handleFn, out object[] handleArgs))
-                {
-                    return EvaluatePreparedAsync<T>(handleFn, handleArgs);
-                }
+                    if (EvaluateHandleArg.TryPrepareHandleCall(expression, arg, out string handleFn, out object[] handleArgs))
+                    {
+                        return EvaluatePreparedAsync<T>(handleFn, handleArgs);
+                    }
 
-                string toEval = arg == null
-                    ? EvaluateWithArg.InvokeIfFunction(expression)
-                    : EvaluateWithArg.Wrap(expression, arg);
-                return EvaluateSerializedAsync<T>(toEval);
-            });
+                    string toEval = arg == null
+                        ? EvaluateWithArg.InvokeIfFunction(expression)
+                        : EvaluateWithArg.Wrap(expression, arg);
+                    return EvaluateSerializedAsync<T>(toEval);
+                },
+                consoleBaseline);
         }
 
         /// <inheritdoc/>
         public Task<JsonElement?> EvaluateAsync(string expression, object arg = null)
         {
             ThrowIfClosed();
-            return ActionTrace.EvaluateUserAsync(Context, () =>
-            {
-                if (arg is ImmediateJSHandle)
+            int consoleBaseline = _consoleLog.CountSinceNavigation;
+            return ActionTrace.EvaluateUserAsync(
+                Context,
+                () =>
                 {
-                    EvaluateWithArg.ThrowIfDisposedHandle(arg);
-                    if (EvaluateHandleArg.TryPrepareHandleCall(expression, arg, out string immFn, out object[] immArgs))
+                    if (arg is ImmediateJSHandle)
                     {
-                        return EvaluatePreparedAsync<JsonElement?>(immFn, immArgs);
+                        EvaluateWithArg.ThrowIfDisposedHandle(arg);
+                        if (EvaluateHandleArg.TryPrepareHandleCall(expression, arg, out string immFn, out object[] immArgs))
+                        {
+                            return EvaluatePreparedAsync<JsonElement?>(immFn, immArgs);
+                        }
                     }
-                }
 
-                if (arg is IJSHandle)
-                {
-                    EvaluateWithArg.ThrowIfDisposedHandle(arg);
-                    return EvaluateFunctionSerializedAsync<JsonElement?>(EvaluateWithArg.AsFunction(expression), arg);
-                }
+                    if (arg is IJSHandle)
+                    {
+                        EvaluateWithArg.ThrowIfDisposedHandle(arg);
+                        return EvaluateFunctionSerializedAsync<JsonElement?>(EvaluateWithArg.AsFunction(expression), arg);
+                    }
 
-                if (EvaluateHandleArg.TryPrepareHandleCall(expression, arg, out string handleFn, out object[] handleArgs))
-                {
-                    return EvaluatePreparedAsync<JsonElement?>(handleFn, handleArgs);
-                }
+                    if (EvaluateHandleArg.TryPrepareHandleCall(expression, arg, out string handleFn, out object[] handleArgs))
+                    {
+                        return EvaluatePreparedAsync<JsonElement?>(handleFn, handleArgs);
+                    }
 
-                string toEval = arg == null
-                    ? EvaluateWithArg.InvokeIfFunction(expression)
-                    : EvaluateWithArg.Wrap(expression, arg);
-                return EvaluateSerializedAsync<JsonElement?>(toEval);
-            });
+                    string toEval = arg == null
+                        ? EvaluateWithArg.InvokeIfFunction(expression)
+                        : EvaluateWithArg.Wrap(expression, arg);
+                    return EvaluateSerializedAsync<JsonElement?>(toEval);
+                },
+                consoleBaseline);
         }
 
         /// <inheritdoc/>
         public Task<IJSHandle> EvaluateHandleAsync(string expression, object arg = null)
-            => ActionTrace.EvaluateHandleUserAsync(Context, async () =>
-            {
-                WKExecutionContext context = RequireExecutionContext();
-                if (arg is WKJSHandle handleArg)
+        {
+            int consoleBaseline = _consoleLog.CountSinceNavigation;
+            return ActionTrace.EvaluateHandleUserAsync(
+                Context,
+                async () =>
                 {
-                    EvaluateWithArg.ThrowIfDisposedHandle(handleArg);
-                    string objectId = await context.ResolveHandleObjectIdAsync(handleArg).ConfigureAwait(false);
-                    JsonElement? direct = await context
-                        .EvaluateHandleOnHandleAsync(objectId, EvaluateWithArg.AsFunction(expression))
-                        .ConfigureAwait(false);
-                    return WrapRemoteObject(context, direct);
-                }
-
-                // Immediate (value-only) handles: revive via the JSON tree path.
-                if (arg is ImmediateJSHandle)
-                {
-                    EvaluateWithArg.ThrowIfDisposedHandle(arg);
-                    if (EvaluateHandleArg.TryPrepareHandleCall(expression, arg, out string immFn, out object[] immArgs))
+                    WKExecutionContext context = RequireExecutionContext();
+                    if (arg is WKJSHandle handleArg)
                     {
-                        await StashAdoptedHandlesAsync(context, immArgs).ConfigureAwait(false);
-                        JsonElement? immBound = await context
-                            .EvaluateHandleAsync(EvaluateHandleArg.PreparedExpression(immFn, immArgs))
+                        EvaluateWithArg.ThrowIfDisposedHandle(handleArg);
+                        string objectId = await context.ResolveHandleObjectIdAsync(handleArg).ConfigureAwait(false);
+                        JsonElement? direct = await context
+                            .EvaluateHandleOnHandleAsync(objectId, EvaluateWithArg.AsFunction(expression))
                             .ConfigureAwait(false);
-                        return WrapRemoteObject(context, immBound);
+                        return WrapRemoteObject(context, direct);
                     }
-                }
 
-                if (arg is IJSHandle)
-                {
-                    throw new PlaywrightException(DispatchEventScript.DifferentContextMessage);
-                }
+                    // Immediate (value-only) handles: revive via the JSON tree path.
+                    if (arg is ImmediateJSHandle)
+                    {
+                        EvaluateWithArg.ThrowIfDisposedHandle(arg);
+                        if (EvaluateHandleArg.TryPrepareHandleCall(expression, arg, out string immFn, out object[] immArgs))
+                        {
+                            await StashAdoptedHandlesAsync(context, immArgs).ConfigureAwait(false);
+                            JsonElement? immBound = await context
+                                .EvaluateHandleAsync(EvaluateHandleArg.PreparedExpression(immFn, immArgs))
+                                .ConfigureAwait(false);
+                            return WrapRemoteObject(context, immBound);
+                        }
+                    }
 
-                if (EvaluateHandleArg.TryPrepareHandleCall(expression, arg, out string handleFn, out object[] handleArgs))
-                {
-                    await StashAdoptedHandlesAsync(context, handleArgs).ConfigureAwait(false);
-                    JsonElement? bound = await context
-                        .EvaluateHandleAsync(EvaluateHandleArg.PreparedExpression(handleFn, handleArgs))
-                        .ConfigureAwait(false);
-                    return WrapRemoteObject(context, bound);
-                }
+                    if (arg is IJSHandle)
+                    {
+                        throw new PlaywrightException(DispatchEventScript.DifferentContextMessage);
+                    }
 
-                string toEval = arg == null ? EvaluateWithArg.InvokeIfFunction(expression) : EvaluateWithArg.Wrap(expression, arg);
-                JsonElement? handleValue = await context.EvaluateHandleAsync(toEval).ConfigureAwait(false);
-                return WrapRemoteObject(context, handleValue);
-            });
+                    if (EvaluateHandleArg.TryPrepareHandleCall(expression, arg, out string handleFn, out object[] handleArgs))
+                    {
+                        await StashAdoptedHandlesAsync(context, handleArgs).ConfigureAwait(false);
+                        JsonElement? bound = await context
+                            .EvaluateHandleAsync(EvaluateHandleArg.PreparedExpression(handleFn, handleArgs))
+                            .ConfigureAwait(false);
+                        return WrapRemoteObject(context, bound);
+                    }
+
+                    string toEval = arg == null ? EvaluateWithArg.InvokeIfFunction(expression) : EvaluateWithArg.Wrap(expression, arg);
+                    JsonElement? handleValue = await context.EvaluateHandleAsync(toEval).ConfigureAwait(false);
+                    return WrapRemoteObject(context, handleValue);
+                },
+                consoleBaseline);
+        }
 
         /// <inheritdoc/>
         public Task ExposeBindingAsync(string name, Action callback, bool? handle = default)

@@ -72,7 +72,7 @@ namespace PlaywrightNative.Helpers
             return RunInsideAsync(() => session.ContinueActionAsync(callId, body, result));
         }
 
-        internal static Task<T> EvaluateUserAsync<T>(IBrowserContext context, Func<Task<T>> body)
+        internal static Task<T> EvaluateUserAsync<T>(IBrowserContext context, Func<Task<T>> body, int consoleMessageCount = 0)
         {
             if (body == null)
             {
@@ -91,10 +91,11 @@ namespace PlaywrightNative.Helpers
                 return body();
             }
 
+            session.NoteEvaluateConsoleBaseline(callId, consoleMessageCount);
             return RunInsideAsync(() => session.ContinueActionAsync(callId, body, null));
         }
 
-        internal static Task<T> EvaluateHandleUserAsync<T>(IBrowserContext context, Func<Task<T>> body)
+        internal static Task<T> EvaluateHandleUserAsync<T>(IBrowserContext context, Func<Task<T>> body, int consoleMessageCount = 0)
         {
             if (body == null)
             {
@@ -113,6 +114,7 @@ namespace PlaywrightNative.Helpers
                 return body();
             }
 
+            session.NoteEvaluateConsoleBaseline(callId, consoleMessageCount);
             return RunInsideAsync(() => session.ContinueActionAsync(callId, body, null));
         }
 

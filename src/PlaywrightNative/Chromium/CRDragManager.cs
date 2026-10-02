@@ -123,6 +123,15 @@ namespace PlaywrightNative.Chromium
             bool textSelect = await IsTextSelectGestureAsync(x, y).ConfigureAwait(false);
             bool hasDraggable = !textSelect && await DocumentHasDraggableAsync().ConfigureAwait(false);
             _skipInterceptThisPress = textSelect || !hasDraggable;
+
+            // After mousePressed, let the caret / scroll position commit before
+            // the held move starts selecting. Without this, headful suite load
+            // can leave the textarea scrolled so (x+2,y+2) anchors near the end
+            // ("t goes." instead of the full value).
+            if (_skipInterceptThisPress)
+            {
+                await SettleFramesAsync().ConfigureAwait(false);
+            }
         }
 
         /// <summary>
@@ -203,11 +212,11 @@ namespace PlaywrightNative.Chromium
                 return;
             }
 
-            // No [draggable=true] in the document: skip setInterceptDrags so
-            // textarea selection is not corrupted under headful suite load.
-            // Keep a single mouseMoved (no auto-steps) — multi-step breaks
-            // event-list parity for non-drag held moves.
-            if (_hasLastDown && _skipInterceptThisPress)
+            // No [draggable=true] / text select / no recorded down: skip
+            // setInterceptDrags so textarea selection is not corrupted under
+            // headful suite load. Keep a single mouseMoved (no auto-steps) —
+            // multi-step breaks event-list parity for non-drag held moves.
+            if (!_hasLastDown || _skipInterceptThisPress)
             {
                 await moveCallback().ConfigureAwait(false);
                 return;
@@ -314,6 +323,40 @@ namespace PlaywrightNative.Chromium
             _dragState = null;
             _hasLastDown = false;
             _skipInterceptThisPress = false;
+        }
+
+        private async Task SettleFramesAsync()
+        {
+            try
+            {
+                Frame main = _page.FrameManager.MainFrame;
+                if (main == null)
+                {
+                    return;
+                }
+
+                CRExecutionContext context = await _page.GetUtilityWorldAsync(main)
+                    .WaitAsync(TimeSpan.FromMilliseconds(500))
+                    .ConfigureAwait(false);
+                if (context == null)
+                {
+                    return;
+                }
+
+                await context.EvaluateAsync<object>(
+                        "new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => r(true))))")
+                    .WaitAsync(TimeSpan.FromMilliseconds(500))
+                    .ConfigureAwait(false);
+            }
+            catch (PlaywrightException)
+            {
+            }
+            catch (TimeoutException)
+            {
+            }
+            catch (OperationCanceledException)
+            {
+            }
         }
 
         private async Task<bool> DocumentHasDraggableAsync()
