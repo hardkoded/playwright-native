@@ -302,7 +302,7 @@ namespace PlaywrightNative.Helpers
             // Prefer builtins.setTimeout(0) (macrotask) over queueMicrotask.
             // Darwin WIP may flush microtasks before completing Runtime.evaluate,
             // so a microtask that awaits embedder.setTimeout deadlocks inside the
-            // same evaluate (ClockInstallOptionsTests 30s hangs on mac shard2).
+            // same evaluate (clock install/pause hangs on macOS WebKit).
             string kickoff =
                 "(() => {" +
                 "  const __pwK = " + markerJson + ";" +
@@ -339,9 +339,9 @@ namespace PlaywrightNative.Helpers
             // Give Darwin WebKit time to drain the kickoff builtins.setTimeout(0)
             // macrotask before Runtime.evaluate polls. Under suite load, a tight
             // poll loop starves embedder timers so runFor/pauseAt never finish
-            // (RunForShouldAcceptMinuteSecondString 30s hang on macOS WebKit,
-            // which then leaves a wedged MiniBrowser and cascades into later
-            // Launch/GoTo/Click timeouts on the same shard).
+            // (page-clock runFor hangs on macOS WebKit, which then leaves a
+            // wedged MiniBrowser and cascades into later Launch/GoTo/Click
+            // timeouts on the same shard).
             await Task.Delay(200).ConfigureAwait(false);
 
             int pollDelayMs = 150;
@@ -349,7 +349,7 @@ namespace PlaywrightNative.Helpers
             // Cap well under typical NUnit 30s budgets so a wedged Darwin session
             // surfaces "clock: timed out…" instead of an empty-stack abort that
             // cascades into later GoTo hangs on the same shard
-            // (TimeStringShouldFreezeDateNow on macOS WebKit).
+            // (page-clock install/pause on macOS WebKit).
             while (sw.ElapsedMilliseconds < 12_000)
             {
                 string status = await evaluateStringAsync(poll).ConfigureAwait(false);

@@ -10604,7 +10604,7 @@ namespace PlaywrightNative.WebKit
                     // Reuse an in-flight NavigateAsync-owned seed. Starting another
                     // bumps _lifecycleSeedGeneration and aborts the peer mid-
                     // Runtime.evaluate, orphaning WIP commands that wedge Clock /
-                    // later GoTo (TimeStringShouldFreezeDateNow on mac shard2).
+                    // later GoTo (page-clock install/pause on mac shard2).
                     StartOrReuseLifecycleSeed();
                 }
                 else

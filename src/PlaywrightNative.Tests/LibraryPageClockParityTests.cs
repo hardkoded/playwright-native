@@ -28,9 +28,8 @@ using PlaywrightNative.TestServer;
 namespace PlaywrightNative.Tests
 {
     /// <summary>
-    /// Official <c>library/page-clock.spec.ts</c> parity. Do not edit leftover
-    /// <c>ClockTests</c> or <c>ClockInstallOptionsTests</c>.
-    /// Official skip when <c>PW_CLOCK</c> is set.
+    /// Official <c>library/page-clock.spec.ts</c> parity (playwright-dotnet
+    /// <c>PageClockTests</c>). Official skip when <c>PW_CLOCK</c> is set.
     /// </summary>
     [TestFixture]
     [NonParallelizable]
