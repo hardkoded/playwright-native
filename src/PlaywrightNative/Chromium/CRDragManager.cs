@@ -16,6 +16,7 @@
  */
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Microsoft.Playwright;
@@ -123,15 +124,6 @@ namespace PlaywrightNative.Chromium
             bool textSelect = await IsTextSelectGestureAsync(x, y).ConfigureAwait(false);
             bool hasDraggable = !textSelect && await DocumentHasDraggableAsync().ConfigureAwait(false);
             _skipInterceptThisPress = textSelect || !hasDraggable;
-
-            // After mousePressed, let the caret / scroll position commit before
-            // the held move starts selecting. Without this, headful suite load
-            // can leave the textarea scrolled so (x+2,y+2) anchors near the end
-            // ("t goes." instead of the full value).
-            if (_skipInterceptThisPress)
-            {
-                await SettleFramesAsync().ConfigureAwait(false);
-            }
         }
 
         /// <summary>
@@ -325,7 +317,15 @@ namespace PlaywrightNative.Chromium
             _skipInterceptThisPress = false;
         }
 
-        private async Task SettleFramesAsync()
+        /// <summary>
+        /// If the element under <paramref name="x"/>/<paramref name="y"/> is a
+        /// text field, reset its scroll origin so a following
+        /// <c>mousePressed</c> anchors at the start of the value.
+        /// </summary>
+        /// <param name="x">Pointer x.</param>
+        /// <param name="y">Pointer y.</param>
+        /// <returns>A task that completes when the flush finishes or is skipped.</returns>
+        internal async Task EnsureTextFieldScrollOriginAsync(double x, double y)
         {
             try
             {
@@ -336,16 +336,21 @@ namespace PlaywrightNative.Chromium
                 }
 
                 CRExecutionContext context = await _page.GetUtilityWorldAsync(main)
-                    .WaitAsync(TimeSpan.FromMilliseconds(500))
+                    .WaitAsync(TimeSpan.FromMilliseconds(250))
                     .ConfigureAwait(false);
                 if (context == null)
                 {
                     return;
                 }
 
-                await context.EvaluateAsync<object>(
-                        "new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => r(true))))")
-                    .WaitAsync(TimeSpan.FromMilliseconds(500))
+                string script =
+                    "(() => { const el = document.elementFromPoint("
+                    + x.ToString(CultureInfo.InvariantCulture)
+                    + ", "
+                    + y.ToString(CultureInfo.InvariantCulture)
+                    + "); if (!el) return; const tag = el.tagName; if (tag === 'TEXTAREA' || tag === 'INPUT' || el.isContentEditable) { el.scrollTop = 0; el.scrollLeft = 0; } })()";
+                await context.EvaluateAsync<object>(script)
+                    .WaitAsync(TimeSpan.FromMilliseconds(250))
                     .ConfigureAwait(false);
             }
             catch (PlaywrightException)

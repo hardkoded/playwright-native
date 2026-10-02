@@ -670,24 +670,37 @@ namespace PlaywrightNative.Tests
         private static async Task<int> CountOopifsAsync(IBrowser browser)
         {
             ICDPSession browserSession = await browser.NewBrowserCDPSessionAsync().ConfigureAwait(false);
-            List<JsonElement> oopifs = new List<JsonElement>();
-            browserSession.Event("Target.targetCreated").OnEvent += (_, parameters) =>
+            try
             {
-                if (!parameters.HasValue)
+                // Node's single-threaded CDP delivers targetCreated for existing
+                // targets during setDiscoverTargets before await resumes. Our
+                // session can detach before those events are observed under
+                // Windows suite load — prefer Target.getTargets (same iframe
+                // filter) so ShouldLoadOopifIframesWithSubresourcesAndRoute
+                // does not see 0.
+                await browserSession.SendAsync("Target.setDiscoverTargets", new { discover = true }).ConfigureAwait(false);
+                JsonElement? result = await browserSession.SendAsync("Target.getTargets").ConfigureAwait(false);
+                int count = 0;
+                if (result.HasValue
+                    && result.Value.TryGetProperty("targetInfos", out JsonElement infos)
+                    && infos.ValueKind == JsonValueKind.Array)
                 {
-                    return;
+                    foreach (JsonElement info in infos.EnumerateArray())
+                    {
+                        if (info.TryGetProperty("type", out JsonElement type)
+                            && type.GetString() == "iframe")
+                        {
+                            count++;
+                        }
+                    }
                 }
 
-                if (parameters.Value.TryGetProperty("targetInfo", out JsonElement targetInfo)
-                    && targetInfo.TryGetProperty("type", out JsonElement type)
-                    && type.GetString() == "iframe")
-                {
-                    oopifs.Add(targetInfo);
-                }
-            };
-            await browserSession.SendAsync("Target.setDiscoverTargets", new { discover = true }).ConfigureAwait(false);
-            await browserSession.DetachAsync().ConfigureAwait(false);
-            return oopifs.Count;
+                return count;
+            }
+            finally
+            {
+                await browserSession.DetachAsync().ConfigureAwait(false);
+            }
         }
 
         private static async Task PollBoundingBoxAsync(IElementHandle handle, float x, float y, float width, float height)

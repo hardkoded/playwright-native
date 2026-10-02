@@ -78,6 +78,13 @@ namespace PlaywrightNative.Chromium
             // mousePressed after mouseMoved under headful suite load lands the
             // caret mid-textarea (ShouldSelectTheTextWithMouse).
             _dragManager.BeginMouseDown(x, y);
+
+            // Typing long text scrolls the textarea to the bottom. The test sets
+            // scrollTop=0, but under headful suite load that can still race the
+            // press so (x+2,y+2) anchors near the end ("t goes." / empty select).
+            // Flush scroll origin at the pointer before mousePressed.
+            await _dragManager.EnsureTextFieldScrollOriginAsync(x, y).ConfigureAwait(false);
+
             int buttonsMask = buttons.ToCdpMask();
 
             await _session.SendAsync("Input.dispatchMouseEvent", new
