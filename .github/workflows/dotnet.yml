@@ -67,31 +67,7 @@ jobs:
           - { os: ubuntu-latest,  browser: webkit,   mode: headless }
     steps:
     - uses: actions/checkout@v4
-    # builds.dotnet.microsoft.com occasionally fails to serve the Windows SDK
-    # zip (transient CDN / network). Retry a few times before failing the job.
     - name: Setup .NET
-      id: setup-dotnet-1
-      continue-on-error: true
-      uses: actions/setup-dotnet@v4
-      with:
-        dotnet-version: ${{ env.DOTNET_VERSION }}
-    - name: Wait before Setup .NET retry
-      if: steps.setup-dotnet-1.outcome == 'failure'
-      shell: bash
-      run: sleep 20
-    - name: Setup .NET (retry 2)
-      id: setup-dotnet-2
-      if: steps.setup-dotnet-1.outcome == 'failure'
-      continue-on-error: true
-      uses: actions/setup-dotnet@v4
-      with:
-        dotnet-version: ${{ env.DOTNET_VERSION }}
-    - name: Wait before Setup .NET final retry
-      if: steps.setup-dotnet-1.outcome == 'failure' && steps.setup-dotnet-2.outcome == 'failure'
-      shell: bash
-      run: sleep 40
-    - name: Setup .NET (retry 3)
-      if: steps.setup-dotnet-1.outcome == 'failure' && steps.setup-dotnet-2.outcome == 'failure'
       uses: actions/setup-dotnet@v4
       with:
         dotnet-version: ${{ env.DOTNET_VERSION }}
@@ -229,27 +205,11 @@ jobs:
         # POSIX path (e.g. "/ListFullyQualifiedTests") into a bogus Windows
         # path before exec'ing a native tool. Disable that for this step.
         MSYS_NO_PATHCONV: "1"
+        SHARD_INDEX: ${{ matrix.shardIndex }}
+        SHARD_TOTAL: ${{ matrix.shardTotal }}
       run: |
-        # List every test's fully-qualified name straight from the built
-        # assembly (dotnet test --list-tests only prints the bare method
-        # name, which collides across classes and isn't safe to filter on).
-        # $RUNNER_TEMP (not /tmp) so the path is already OS-native on Windows.
-        all_tests="$RUNNER_TEMP/all_tests.txt"
-        dotnet vstest src/PlaywrightNative.Tests/bin/Release/net10.0/PlaywrightNative.Tests.dll \
-          /ListFullyQualifiedTests "/ListTestsTargetPath:$all_tests"
-        # Drop the trailing ".MethodName" (and any TestCase "(...)" suffix)
-        # to get one entry per test class, then assign classes to shards by
-        # position in a stable sort -- deterministic across the shardTotal
-        # jobs of a single run without the shards needing to coordinate.
-        all_classes="$RUNNER_TEMP/all_classes.txt"
-        sed -E 's/\.[A-Za-z0-9_]+(\([^)]*\))?$//' "$all_tests" | sort -u > "$all_classes"
-        echo "Discovered $(wc -l < "$all_classes") test classes"
-        shard_classes="$RUNNER_TEMP/shard_classes.txt"
-        awk -v shard="${{ matrix.shardIndex }}" -v total="${{ matrix.shardTotal }}" \
-          'NR % total == (shard - 1) { print }' "$all_classes" > "$shard_classes"
-        echo "Shard ${{ matrix.shardIndex }}/${{ matrix.shardTotal }}: $(wc -l < "$shard_classes") classes"
-        filter=$(awk '{ printf "%sFullyQualifiedName~%s.", (NR > 1 ? "|" : ""), $0 }' "$shard_classes")
-        echo "TEST_FILTER=$filter" >> "$GITHUB_ENV"
+        chmod +x ./.github/workflows/compute-test-shard-filter.sh
+        ./.github/workflows/compute-test-shard-filter.sh
     - name: Disable AppArmor (Linux)
       if: matrix.os == 'ubuntu-latest'
       run: echo 0 | sudo tee /proc/sys/kernel/apparmor_restrict_unprivileged_userns || true
