@@ -566,17 +566,12 @@ namespace PlaywrightNative.Chromium
                 throw new PlaywrightException("CDP sessions require a Chromium page.");
             }
 
-            CRSession session = await _crCtx.Browser.AttachToTargetAsync(instance.CrPage.TargetId).ConfigureAwait(false);
-            try
-            {
-                await session.SendAsync("Runtime.runIfWaitingForDebugger").ConfigureAwait(false);
-            }
-            catch (PlaywrightException)
-            {
-                // Session is already running.
-            }
-
-            CRCDPSession cdp = new CRCDPSession(session, _crCtx.Browser.Connection.RootSession);
+            // Official newCDPSession attaches via _clientRootSession (browser
+            // target), not the autoAttach root that uses waitForDebuggerOnStart.
+            (CRSession session, CRSession browserSession) = await _crCtx.Browser
+                .AttachUserSessionToTargetAsync(instance.CrPage.TargetId)
+                .ConfigureAwait(false);
+            CRCDPSession cdp = new CRCDPSession(session, browserSession);
             instance.CrPage.Closed += (_, _) => cdp.NotifyTargetClosed();
             return cdp;
         }
@@ -601,17 +596,10 @@ namespace PlaywrightNative.Chromium
                 && frame.Page is Page instance
                 && instance.CrPage.TryGetOopifTargetId(crFrame.Frame.FrameId, out string targetId))
             {
-                CRSession session = await _crCtx.Browser.AttachToTargetAsync(targetId).ConfigureAwait(false);
-                try
-                {
-                    await session.SendAsync("Runtime.runIfWaitingForDebugger").ConfigureAwait(false);
-                }
-                catch (PlaywrightException)
-                {
-                    // Session is already running.
-                }
-
-                CRCDPSession cdp = new CRCDPSession(session, _crCtx.Browser.Connection.RootSession);
+                (CRSession session, CRSession browserSession) = await _crCtx.Browser
+                    .AttachUserSessionToTargetAsync(targetId)
+                    .ConfigureAwait(false);
+                CRCDPSession cdp = new CRCDPSession(session, browserSession);
                 instance.CrPage.Closed += (_, _) => cdp.NotifyTargetClosed();
                 return cdp;
             }

@@ -181,7 +181,7 @@ namespace PlaywrightNative.Transport
 
                     if (!token.IsCancellationRequested)
                     {
-                        ProcessBuffer(buffer, read);
+                        await ProcessBufferAsync(buffer, read).ConfigureAwait(false);
                     }
                 }
             }
@@ -196,7 +196,19 @@ namespace PlaywrightNative.Transport
             }
         }
 
-        private void ProcessBuffer(byte[] buffer, int length)
+        /// <summary>
+        /// Parses null-delimited CDP messages and dispatches each one with a
+        /// yield between deliveries. Official <c>pipeTransport._dispatch</c>
+        /// uses <c>setImmediate</c> per message so await continuations (e.g.
+        /// <c>page.goto</c> resolving on <c>Page.loadEventFired</c>) can run
+        /// before later events from the same read — notably
+        /// <c>Network.requestWillBeSent</c> for <c>/favicon.ico</c> on a user
+        /// CDP session (<c>session.spec.ts</c> "should send events").
+        /// </summary>
+        /// <param name="buffer">Bytes read from the pipe.</param>
+        /// <param name="length">Valid length in <paramref name="buffer"/>.</param>
+        /// <returns>A task that completes when every full message is dispatched.</returns>
+        private async Task ProcessBufferAsync(byte[] buffer, int length)
         {
             int start = 0;
 
@@ -217,7 +229,15 @@ namespace PlaywrightNative.Transport
                         _pendingBytes.Clear();
 
                         ProtocolResponse response = JsonSerializer.Deserialize<ProtocolResponse>(json);
-                        OnMessage?.Invoke(response);
+                        Action<ProtocolResponse> handler = OnMessage;
+                        if (handler != null)
+                        {
+                            handler.Invoke(response);
+
+                            // Match upstream setImmediate: let TCS continuations
+                            // scheduled by this message run before the next event.
+                            await Task.Yield();
+                        }
                     }
 
                     start = i + 1;

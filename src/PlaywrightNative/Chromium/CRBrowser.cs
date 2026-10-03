@@ -49,6 +49,7 @@ namespace PlaywrightNative.Chromium
         private bool _closed;
         private bool _noDefaults;
         private bool _adoptingExistingTargets;
+        private Task<CRSession> _clientRootSessionTask;
 
         private CRBrowser(CRConnection connection, IConnectionTransport transport, string version, string userAgent, BrowserProcessManager processManager, ILoggerFactory loggerFactory)
         {
@@ -629,6 +630,37 @@ namespace PlaywrightNative.Chromium
             }).ConfigureAwait(false);
 
             return SessionFromAttachResponse(response, "Target.attachToTarget");
+        }
+
+        /// <summary>
+        /// Official <c>_clientRootSession</c>: long-lived browser-target session
+        /// used as the parent for user <c>newCDPSession</c> attaches.
+        /// </summary>
+        /// <returns>The browser-target CDP session.</returns>
+        internal Task<CRSession> GetClientRootSessionAsync()
+        {
+            _clientRootSessionTask ??= AttachToBrowserTargetAsync();
+            return _clientRootSessionTask;
+        }
+
+        /// <summary>
+        /// Attaches a user CDP session to <paramref name="targetId"/> via the
+        /// client root session (official <c>CDPSession.attachToTarget</c>), not
+        /// the autoAttach + <c>waitForDebuggerOnStart</c> connection root.
+        /// </summary>
+        /// <param name="targetId">Page or OOPIF target id.</param>
+        /// <returns>The new child session and the browser session used to attach.</returns>
+        internal async Task<(CRSession Session, CRSession BrowserSession)> AttachUserSessionToTargetAsync(string targetId)
+        {
+            CRSession browserSession = await GetClientRootSessionAsync().ConfigureAwait(false);
+            JsonElement? response = await browserSession.SendAsync("Target.attachToTarget", new
+            {
+                targetId,
+                flatten = true,
+            }).ConfigureAwait(false);
+
+            CRSession session = SessionFromAttachResponse(response, "Target.attachToTarget");
+            return (session, browserSession);
         }
 
         /// <summary>
