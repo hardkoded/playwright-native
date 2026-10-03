@@ -103,7 +103,28 @@ namespace PlaywrightNative.Helpers
 
             // Do not start ffmpeg here. Attach must always register IVideo;
             // a missing/broken ffmpeg must not leave page.Video null.
-            return new ScreencastVideoWriter(path, width, height);
+            //
+            // Write a stub .webm immediately so two RecordVideo pages closed
+            // before any frame still leave files for
+            // ShouldCloseFfmpegEvenIfThereWereNoFrames (Windows can drop one
+            // encode when ffmpeg image2pipe writers race).
+            ScreencastVideoWriter writer = new ScreencastVideoWriter(path, width, height);
+            writer.WritePlaceholder();
+            return writer;
+        }
+
+        internal void WritePlaceholder()
+        {
+            try
+            {
+                File.WriteAllBytes(_path, MinimalWebmPlaceholder);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
         }
 
         /// <summary>

@@ -3587,7 +3587,13 @@ namespace PlaywrightNative.Chromium
                     // Network.requestWillBeSent (/favicon.ico) reach a user CDP
                     // session before page.goto returns (session.spec.ts should
                     // send events expects exactly one event for EmptyPage).
-                    _ = SyncChildFramesFromTreeAsync();
+                    //
+                    // Task.Run so SendAsync is not started on the CDP receive
+                    // thread. An already-completed lifecycle TCS continues
+                    // inline there; getFrameTree then waits for a reply the
+                    // same thread must read (HAR abort fetch / CSS screencast
+                    // 30-60s hangs on Windows headful).
+                    _ = Task.Run(SyncChildFramesFromTreeAsync);
                 }
             }
             finally
@@ -7347,6 +7353,11 @@ namespace PlaywrightNative.Chromium
         /// <returns>A task that completes when the tree has been applied.</returns>
         private async Task SyncChildFramesFromTreeAsync()
         {
+            if (ClosedForBindings())
+            {
+                return;
+            }
+
             JsonElement? response;
             try
             {
@@ -7359,6 +7370,10 @@ namespace PlaywrightNative.Chromium
                 return;
             }
             catch (TimeoutException)
+            {
+                return;
+            }
+            catch (ObjectDisposedException)
             {
                 return;
             }
