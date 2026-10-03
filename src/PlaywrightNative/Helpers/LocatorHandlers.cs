@@ -20,6 +20,7 @@ using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -135,6 +136,27 @@ namespace PlaywrightNative.Helpers
             => RunAsync(page, timeout: null);
 
         /// <summary>
+        /// Runs visible overlay handlers before an action, using the remaining
+        /// budget from <paramref name="timeoutMs"/> and <paramref name="sw"/>.
+        /// </summary>
+        /// <param name="page">The page performing the action.</param>
+        /// <param name="timeoutMs">Resolved timeout in milliseconds, or <see cref="Timeout.Infinite"/>.</param>
+        /// <param name="sw">Stopwatch started when the action/expect began.</param>
+        /// <returns>A task that completes when handlers have run.</returns>
+        internal static Task RunAsync(IPage page, int timeoutMs, Stopwatch sw)
+        {
+            if (sw == null)
+            {
+                throw new ArgumentNullException(nameof(sw));
+            }
+
+            float? remaining = timeoutMs == Timeout.Infinite
+                ? (float?)0
+                : Math.Max(1, timeoutMs - (int)sw.ElapsedMilliseconds);
+            return RunAsync(page, remaining);
+        }
+
+        /// <summary>
         /// Runs visible overlay handlers before an action, using
         /// <paramref name="timeout"/> when waiting for the overlay to hide.
         /// </summary>
@@ -159,6 +181,8 @@ namespace PlaywrightNative.Helpers
             registry.Running = true;
             try
             {
+                int timeoutMs = TimeoutSettings.TimeoutMs(timeout);
+                Stopwatch sw = Stopwatch.StartNew();
                 List<Entry> snapshot = new List<Entry>(registry.Entries);
                 foreach (Entry entry in snapshot)
                 {
@@ -173,7 +197,46 @@ namespace PlaywrightNative.Helpers
                         continue;
                     }
 
-                    if (!await IsAnyVisibleAsync(entry.Locator).ConfigureAwait(false))
+                    bool frameScoped = IsFrameScopedLocator(entry.Locator);
+                    int queryMs = FrameAwareQueryMs(timeoutMs, sw, frameScoped);
+
+                    // Unbounded ElementHandles during navigation can hang the
+                    // whole expect/action loop; treat a timed-out probe as not
+                    // visible so we skip the handler instead of blocking forever.
+                    // Frame-scoped overlays (data: iframe body) can lag ContentFrame
+                    // under Windows suite load — retry before skip so
+                    // ShouldWorkWhenOwnerFrameDetaches still removes the iframe.
+                    // Probe WaitAsync must stay >= ContentFrame's shared attach
+                    // budget or the handler is skipped while the iframe remains.
+                    bool visible = await IsAnyVisibleAsync(
+                            entry.Locator,
+                            queryMs,
+                            assumeVisibleOnTimeout: false)
+                        .ConfigureAwait(false);
+                    if (!visible && frameScoped)
+                    {
+                        Stopwatch attachSw = Stopwatch.StartNew();
+                        int attachBudgetMs = timeoutMs == Timeout.Infinite
+                            ? 10_000
+                            : Math.Max(5_000, Math.Min(15_000, timeoutMs - (int)sw.ElapsedMilliseconds));
+                        while (!visible && attachSw.ElapsedMilliseconds < attachBudgetMs)
+                        {
+                            await Task.Delay(50).ConfigureAwait(false);
+                            queryMs = FrameAwareQueryMs(timeoutMs, sw, frameScoped: true);
+                            if (queryMs <= 0 && timeoutMs != Timeout.Infinite)
+                            {
+                                break;
+                            }
+
+                            visible = await IsAnyVisibleAsync(
+                                    entry.Locator,
+                                    queryMs,
+                                    assumeVisibleOnTimeout: false)
+                                .ConfigureAwait(false);
+                        }
+                    }
+
+                    if (!visible)
                     {
                         continue;
                     }
@@ -191,7 +254,10 @@ namespace PlaywrightNative.Helpers
 
                     if (!entry.NoWaitAfter)
                     {
-                        await WaitHiddenAsync(entry.Locator, timeout).ConfigureAwait(false);
+                        float? remaining = timeoutMs == Timeout.Infinite
+                            ? (float?)0
+                            : Math.Max(1, timeoutMs - (int)sw.ElapsedMilliseconds);
+                        await WaitHiddenAsync(entry.Locator, remaining).ConfigureAwait(false);
                     }
                 }
             }
@@ -201,18 +267,68 @@ namespace PlaywrightNative.Helpers
             }
         }
 
-        private static async Task<bool> IsAnyVisibleAsync(ILocator locator)
+        private static int RemainingQueryMs(int timeoutMs, Stopwatch sw)
+        {
+            if (timeoutMs == Timeout.Infinite)
+            {
+                return 5_000;
+            }
+
+            return Math.Max(50, Math.Min(5_000, timeoutMs - (int)sw.ElapsedMilliseconds));
+        }
+
+        /// <summary>
+        /// Visibility probe budget. Frame-scoped overlays need longer than the
+        /// default 5s so <c>ContentFrame</c> attach (up to 5s) fits inside
+        /// <see cref="Task.WaitAsync(TimeSpan)"/>.
+        /// </summary>
+        private static int FrameAwareQueryMs(int timeoutMs, Stopwatch sw, bool frameScoped)
+        {
+            if (!frameScoped)
+            {
+                return RemainingQueryMs(timeoutMs, sw);
+            }
+
+            const int frameQueryCapMs = 10_000;
+            if (timeoutMs == Timeout.Infinite)
+            {
+                return frameQueryCapMs;
+            }
+
+            return Math.Max(50, Math.Min(frameQueryCapMs, timeoutMs - (int)sw.ElapsedMilliseconds));
+        }
+
+        private static async Task<bool> IsAnyVisibleAsync(
+            ILocator locator,
+            int queryTimeoutMs,
+            bool assumeVisibleOnTimeout,
+            bool treatDetachedAsHidden = false)
         {
             IReadOnlyList<IElementHandle> handles;
             try
             {
-                handles = await locator.ElementHandlesAsync().ConfigureAwait(false);
+                handles = await locator.ElementHandlesAsync()
+                    .WaitAsync(TimeSpan.FromMilliseconds(Math.Max(50, queryTimeoutMs)))
+                    .ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException ex) when (ClosedTarget.IsClosed(ex))
+            catch (TimeoutException)
+            {
+                return assumeVisibleOnTimeout;
+            }
+            catch (PlaywrightException ex) when (
+                treatDetachedAsHidden
+                && (ClosedTarget.IsClosed(ex)
+                    || DestroyedContext.IsDestroyedContext(ex)
+                    || IsFrameDetachedMessage(ex)))
+            {
+                // Overlay owner frame was removed (ShouldWorkWhenOwnerFrameDetaches).
+                return false;
+            }
+            catch (PlaywrightException ex) when (ClosedTarget.IsClosed(ex))
             {
                 throw;
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 return false;
             }
@@ -221,16 +337,34 @@ namespace PlaywrightNative.Helpers
             {
                 try
                 {
-                    if (await handle.IsVisibleAsync().ConfigureAwait(false))
+                    bool visible = await handle.IsVisibleAsync()
+                        .WaitAsync(TimeSpan.FromMilliseconds(Math.Max(50, Math.Min(2_000, queryTimeoutMs))))
+                        .ConfigureAwait(false);
+                    if (visible)
                     {
                         return true;
                     }
                 }
-                catch (PlaywrightNativeException ex) when (ClosedTarget.IsClosed(ex))
+                catch (TimeoutException)
+                {
+                    if (assumeVisibleOnTimeout)
+                    {
+                        return true;
+                    }
+                }
+                catch (PlaywrightException ex) when (
+                    treatDetachedAsHidden
+                    && (ClosedTarget.IsClosed(ex)
+                        || DestroyedContext.IsDestroyedContext(ex)
+                        || IsFrameDetachedMessage(ex)))
+                {
+                    return false;
+                }
+                catch (PlaywrightException ex) when (ClosedTarget.IsClosed(ex))
                 {
                     throw;
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
             }
@@ -238,16 +372,62 @@ namespace PlaywrightNative.Helpers
             return false;
         }
 
+        private static bool IsFrameDetachedMessage(Exception ex)
+        {
+            string message = ex?.Message ?? string.Empty;
+            return message.Contains("Frame was detached", StringComparison.OrdinalIgnoreCase)
+                || message.Contains("frame was detached", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool IsFrameScopedLocator(ILocator locator)
+        {
+            // Prefer the concrete frame-scope bit when available; otherwise fall
+            // back to the official enter-frame / any-frame control tokens in the
+            // locator's printed selector chain.
+            if (locator is Locator concrete)
+            {
+                return concrete.HasFrameScope();
+            }
+
+            string text = locator?.ToString() ?? string.Empty;
+            return FrameSelector.ContainsControl(text)
+                || text.Contains("iframe", StringComparison.OrdinalIgnoreCase)
+                || text.Contains("frameLocator", StringComparison.OrdinalIgnoreCase);
+        }
+
         private static async Task WaitHiddenAsync(ILocator locator, float? timeout)
         {
             int timeoutMs = TimeoutSettings.TimeoutMs(timeout);
             Stopwatch sw = Stopwatch.StartNew();
-            while (await IsAnyVisibleAsync(locator).ConfigureAwait(false))
+
+            // Frame-scoped overlays (iframe body) can hang ElementHandles after the
+            // handler removes the iframe — treat resolve timeouts as hidden
+            // (ShouldWorkWhenOwnerFrameDetaches). Main-frame overlays must keep
+            // waiting on probe timeouts so ShouldWaitForHiddenByDefault2 still sees
+            // a single handler invocation and the official hide timeout message.
+            bool frameScoped = IsFrameScopedLocator(locator);
+            bool assumeVisibleOnTimeout = !frameScoped;
+
+            while (true)
             {
+                // Check the wall clock before each probe so a hung visibility
+                // query cannot prevent the handler hide timeout from firing.
                 if (timeoutMs != Timeout.Infinite && sw.ElapsedMilliseconds >= timeoutMs)
                 {
                     throw new TimeoutException(
                         "locator handler has finished, waiting for " + locator + " to be hidden");
+                }
+
+                int queryMs = RemainingQueryMs(timeoutMs, sw);
+
+                bool visible = await IsAnyVisibleAsync(
+                    locator,
+                    queryMs,
+                    assumeVisibleOnTimeout,
+                    treatDetachedAsHidden: true).ConfigureAwait(false);
+                if (!visible)
+                {
+                    return;
                 }
 
                 await Task.Delay(50).ConfigureAwait(false);

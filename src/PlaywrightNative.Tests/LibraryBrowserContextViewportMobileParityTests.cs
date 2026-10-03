@@ -18,6 +18,7 @@ using System;
 using System.Globalization;
 using System.Text.Json;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 using PlaywrightNative.TestServer;
@@ -366,7 +367,7 @@ namespace PlaywrightNative.Tests
             await page.Mouse.MoveAsync(50, 60).ConfigureAwait(false);
             if (TestConstants.IsWebKit)
             {
-                PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+                PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                     () => page.Mouse.WheelAsync(0, 100));
                 Assert.That(error, Is.Not.Null);
                 Assert.That(error.Message, Does.Contain("Mouse wheel is not supported in mobile WebKit"));

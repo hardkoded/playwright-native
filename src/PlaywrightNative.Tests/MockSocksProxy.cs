@@ -134,6 +134,47 @@ namespace PlaywrightNative.Tests
                     }
 
                     await stream.WriteAsync(SocksResponse).ConfigureAwait(false);
+                    await stream.FlushAsync().ConfigureAwait(false);
+
+                    // Graceful FIN so Chromium on Windows does not see
+                    // Winsock RST (net::ERR_CONNECTION_RESET) when unread
+                    // request bytes remain. Upstream Node mock ends the
+                    // socket with sendSocketEnd() after the HTML payload.
+                    try
+                    {
+                        client.Client.Shutdown(SocketShutdown.Send);
+                    }
+                    catch (SocketException)
+                    {
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                    }
+
+                    try
+                    {
+                        using CancellationTokenSource drainCts =
+                            new CancellationTokenSource(TimeSpan.FromMilliseconds(250));
+                        byte[] sink = new byte[256];
+                        while (true)
+                        {
+                            int drained = await stream.ReadAsync(sink.AsMemory(0, sink.Length), drainCts.Token)
+                                .ConfigureAwait(false);
+                            if (drained == 0)
+                            {
+                                break;
+                            }
+                        }
+                    }
+                    catch (IOException)
+                    {
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                    }
+                    catch (OperationCanceledException)
+                    {
+                    }
                 }
             }
             catch (IOException)

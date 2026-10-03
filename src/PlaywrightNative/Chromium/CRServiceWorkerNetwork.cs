@@ -19,6 +19,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Text.Json;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using PlaywrightNative.Helpers;
 
 namespace PlaywrightNative.Chromium
@@ -92,9 +93,13 @@ namespace PlaywrightNative.Chromium
                 await _session.SendAsync("Network.enable").ConfigureAwait(false);
                 await ApplyEmulationAsync().ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
-                Dispose();
+                // Allow AdoptExisting / a later Prepare to retry StartAsync.
+                // Do not Dispose() here: that permanently sets _disposed and
+                // leaves a dead entry in ChromiumBrowserContext's map.
+                _session.MessageReceived -= OnMessage;
+                _started = false;
             }
         }
 
@@ -118,6 +123,25 @@ namespace PlaywrightNative.Chromium
             }
 
             return UpdateInterceptionAsync();
+        }
+
+        private static bool IsReportableUrl(string url)
+        {
+            if (string.IsNullOrEmpty(url))
+            {
+                return false;
+            }
+
+            // Match page-level NetworkRequestEvents / upstream frames.ts: favicon
+            // housekeeping is not exposed on BrowserContext.request. Windows Chromium
+            // may fetch /favicon.ico through a controlling service worker.
+            if (NetworkRequestEvents.IsFaviconUrl(url))
+            {
+                return false;
+            }
+
+            return url.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+                || url.StartsWith("https://", StringComparison.OrdinalIgnoreCase);
         }
 
         private static string GetString(JsonElement element, string name)
@@ -175,7 +199,7 @@ namespace PlaywrightNative.Chromium
                     await _session.SendAsync("Network.setExtraHTTPHeaders", new { headers = _extraHeaders }).ConfigureAwait(false);
                 }
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
         }
@@ -212,7 +236,7 @@ namespace PlaywrightNative.Chromium
                     _fetchEnabled = false;
                 }
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
         }
@@ -241,7 +265,7 @@ namespace PlaywrightNative.Chromium
 
         private CRRequest CreateRequest(string requestId, JsonElement requestPayload, string type)
         {
-            return new CRRequest(
+            CRRequest request = new CRRequest(
                 requestId,
                 GetString(requestPayload, "url"),
                 GetString(requestPayload, "method"),
@@ -254,6 +278,11 @@ namespace PlaywrightNative.Chromium
             {
                 ServiceWorker = _serviceWorker,
             };
+
+            // Service-worker sessions do not emit requestWillBeSentExtraInfo.
+            // Complete raw-header waiters with provisional headers so AllHeadersAsync resolves.
+            request.EnsureRawRequestHeaders();
+            return request;
         }
 
         private void OnRequestWillBeSent(JsonElement? parameters)
@@ -284,7 +313,10 @@ namespace PlaywrightNative.Chromium
 
             CRRequest request = CreateRequest(requestId, requestPayload, GetString(payload, "type"));
             _requests[requestId] = request;
-            Request?.Invoke(this, request);
+            if (IsReportableUrl(request.Url))
+            {
+                Request?.Invoke(this, request);
+            }
         }
 
         private void OnFetchRequestPaused(JsonElement? parameters)
@@ -316,7 +348,10 @@ namespace PlaywrightNative.Chromium
                 }
 
                 _requests[networkId] = request;
-                Request?.Invoke(this, request);
+                if (IsReportableUrl(request.Url))
+                {
+                    Request?.Invoke(this, request);
+                }
             }
 
             List<CRRouteEntry> matches = new();
@@ -337,6 +372,14 @@ namespace PlaywrightNative.Chromium
             {
                 try
                 {
+                    // Abort favicon like page Fetch interception (upstream frames.ts)
+                    // so Windows Chromium housekeeping does not hit user routes.
+                    if (NetworkRequestEvents.IsFaviconUrl(request.Url))
+                    {
+                        await route.AbortAsync("Failed").ConfigureAwait(false);
+                        return;
+                    }
+
                     if (matches.Count == 0)
                     {
                         await route.ContinueAsync().ConfigureAwait(false);
@@ -350,14 +393,14 @@ namespace PlaywrightNative.Chromium
 
                     EmitSyntheticResponseIfNeeded(request);
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                     try
                     {
                         await route.ContinueAsync().ConfigureAwait(false);
                         EmitSyntheticResponseIfNeeded(request);
                     }
-                    catch (PlaywrightNativeException)
+                    catch (PlaywrightException)
                     {
                     }
                 }
@@ -383,6 +426,13 @@ namespace PlaywrightNative.Chromium
                 headers,
                 fromServiceWorker: false,
                 httpVersion: "http/1.1");
+            request.Response = response;
+            response.EnsureRawResponseHeaders();
+            if (!IsReportableUrl(request.Url))
+            {
+                return;
+            }
+
             Response?.Invoke(this, response);
             request.Finished = true;
             request.MarkFinished();
@@ -413,7 +463,10 @@ namespace PlaywrightNative.Chromium
 
                 request = CreateRequest(requestId, willBeSentRequest, GetString(willBeSent, "type"));
                 _requests[requestId] = request;
-                Request?.Invoke(this, request);
+                if (IsReportableUrl(request.Url))
+                {
+                    Request?.Invoke(this, request);
+                }
             }
 
             if (!payload.TryGetProperty("response", out JsonElement responsePayload))
@@ -433,7 +486,14 @@ namespace PlaywrightNative.Chromium
                 ResponseNetworkInfo.ParseFromServiceWorker(responsePayload),
                 ResponseNetworkInfo.ParseHttpVersion(responsePayload));
 
-            Response?.Invoke(this, response);
+            request.Response = response;
+
+            // Service-worker sessions do not emit responseReceivedExtraInfo.
+            response.EnsureRawResponseHeaders();
+            if (IsReportableUrl(request.Url))
+            {
+                Response?.Invoke(this, response);
+            }
         }
 
         private void OnLoadingFinished(JsonElement? parameters)
@@ -446,7 +506,10 @@ namespace PlaywrightNative.Chromium
 
             request.Finished = true;
             request.MarkFinished();
-            RequestFinished?.Invoke(this, request);
+            if (IsReportableUrl(request.Url))
+            {
+                RequestFinished?.Invoke(this, request);
+            }
         }
 
         private void OnLoadingFailed(JsonElement? parameters)
@@ -465,7 +528,10 @@ namespace PlaywrightNative.Chromium
             request.FailureText = GetString(parameters.Value, "errorText") ?? "net::ERR_FAILED";
             request.Finished = true;
             request.MarkFinished();
-            RequestFailed?.Invoke(this, request);
+            if (IsReportableUrl(request.Url))
+            {
+                RequestFailed?.Invoke(this, request);
+            }
         }
     }
 }

@@ -16,6 +16,7 @@
  */
 using System;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -64,11 +65,79 @@ namespace PlaywrightNative.Helpers
             IElementHandle targetHandle = await page.WaitForSelectorAsync(target, state, timeout, strict).ConfigureAwait(false);
             if (sourceHandle == null || targetHandle == null)
             {
-                throw new PlaywrightNativeException($"Could not resolve drag selectors '{source}' -> '{target}'");
+                throw new PlaywrightException($"Could not resolve drag selectors '{source}' -> '{target}'");
             }
 
             await RunHandlesAsync(
                 page,
+                sourceHandle,
+                targetHandle,
+                sourcePosition,
+                targetPosition,
+                trial,
+                steps,
+                scroll).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Drags within <paramref name="frame"/> using that frame's selectors and the owning page mouse.
+        /// </summary>
+        /// <param name="frame">The frame that owns the selectors.</param>
+        /// <param name="source">Source selector.</param>
+        /// <param name="target">Target selector.</param>
+        /// <param name="sourcePosition">Optional offset inside the source box.</param>
+        /// <param name="targetPosition">Optional offset inside the target box.</param>
+        /// <param name="force">When <see langword="true"/>, wait for attach only (skip visibility).</param>
+        /// <param name="timeout">Selector wait timeout.</param>
+        /// <param name="trial">When <see langword="true"/>, skip the mouse drag.</param>
+        /// <param name="steps">Intermediate mouse-move segments. Defaults to 1.</param>
+        /// <param name="scroll">When <see cref="ActionScroll.None"/>, skip scrolling into view.</param>
+        /// <param name="strict">When set, both selectors honor official frame.dragAndDrop({ strict }).</param>
+        /// <returns>A task that completes when the mouse up has been sent.</returns>
+        internal static async Task RunAsync(
+            IFrame frame,
+            string source,
+            string target,
+            Position sourcePosition,
+            Position targetPosition,
+            bool? force,
+            float? timeout,
+            bool? trial = default,
+            int? steps = default,
+            ActionScroll scroll = default,
+            bool? strict = default)
+        {
+            if (frame == null)
+            {
+                throw new ArgumentNullException(nameof(frame));
+            }
+
+            WaitForSelectorState state = force == true
+                ? WaitForSelectorState.Attached
+                : WaitForSelectorState.Visible;
+            IElementHandle sourceHandle = await frame.WaitForSelectorAsync(
+                source,
+                new FrameWaitForSelectorOptions
+                {
+                    State = state,
+                    Timeout = timeout,
+                    Strict = strict,
+                }).ConfigureAwait(false);
+            IElementHandle targetHandle = await frame.WaitForSelectorAsync(
+                target,
+                new FrameWaitForSelectorOptions
+                {
+                    State = state,
+                    Timeout = timeout,
+                    Strict = strict,
+                }).ConfigureAwait(false);
+            if (sourceHandle == null || targetHandle == null)
+            {
+                throw new PlaywrightException($"Could not resolve drag selectors '{source}' -> '{target}'");
+            }
+
+            await RunHandlesAsync(
+                frame.Page,
                 sourceHandle,
                 targetHandle,
                 sourcePosition,
@@ -121,17 +190,25 @@ namespace PlaywrightNative.Helpers
                 return;
             }
 
+            // Match official dragTo: bring the source into view, press, then bring the
+            // target into view before releasing. Scrolling both first can push the
+            // source out of a nested scroller so mousedown never hits it.
             if (scroll != ActionScroll.None)
             {
                 await ScrollIfNeededAsync(sourceHandle).ConfigureAwait(false);
-                await ScrollIfNeededAsync(targetHandle).ConfigureAwait(false);
             }
 
             (float sx, float sy) = await PointAsync(sourceHandle, sourcePosition).ConfigureAwait(false);
-            (float tx, float ty) = await PointAsync(targetHandle, targetPosition).ConfigureAwait(false);
             int moveSteps = steps ?? 1;
             await page.Mouse.MoveAsync(sx, sy).ConfigureAwait(false);
             await page.Mouse.DownAsync().ConfigureAwait(false);
+
+            if (scroll != ActionScroll.None)
+            {
+                await ScrollIfNeededAsync(targetHandle).ConfigureAwait(false);
+            }
+
+            (float tx, float ty) = await PointAsync(targetHandle, targetPosition).ConfigureAwait(false);
             await page.Mouse.MoveAsync(tx, ty, steps: moveSteps).ConfigureAwait(false);
             await page.Mouse.UpAsync().ConfigureAwait(false);
         }
@@ -144,7 +221,7 @@ namespace PlaywrightNative.Helpers
             ElementHandleBoundingBoxResult box = await handle.BoundingBoxAsync().ConfigureAwait(false);
             if (box == null)
             {
-                throw new PlaywrightNativeException("Element is not visible");
+                throw new PlaywrightException("Element is not visible");
             }
 
             float x = box.X + (position != null ? position.X : box.Width / 2f);

@@ -29,5 +29,14 @@ namespace PlaywrightNative.Helpers
                 UnrouteBehavior.Default => MicrosoftPlaywright.UnrouteBehavior.Default,
                 _ => MicrosoftPlaywright.UnrouteBehavior.Default,
             };
+
+        internal static UnrouteBehavior FromOfficial(MicrosoftPlaywright.UnrouteBehavior? behavior)
+            => behavior switch
+            {
+                MicrosoftPlaywright.UnrouteBehavior.Wait => UnrouteBehavior.Wait,
+                MicrosoftPlaywright.UnrouteBehavior.IgnoreErrors => UnrouteBehavior.IgnoreErrors,
+                MicrosoftPlaywright.UnrouteBehavior.Default => UnrouteBehavior.Default,
+                _ => UnrouteBehavior.Default,
+            };
     }
 }

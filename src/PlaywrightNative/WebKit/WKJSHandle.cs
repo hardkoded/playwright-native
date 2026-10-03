@@ -19,6 +19,7 @@ using System;
 using System.Collections.Generic;
 using System.Text.Json;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using PlaywrightNative.Helpers;
 
 namespace PlaywrightNative.WebKit
@@ -29,7 +30,7 @@ namespace PlaywrightNative.WebKit
     /// a specialized subclass (<see cref="WKElementHandle"/>) is used when the remote object
     /// is a DOM node (<c>subtype == "node"</c>). Disposed via <c>Runtime.releaseObject</c>.
     /// </summary>
-    internal partial class WKJSHandle : IJSHandle
+    internal partial class WKJSHandle : IJSHandle, IHasDisposedState
     {
         private readonly WKExecutionContext _context;
         private readonly string _objectId;
@@ -58,6 +59,9 @@ namespace PlaywrightNative.WebKit
         /// <inheritdoc/>
         public virtual IElementHandle AsElement() => null;
 
+        /// <inheritdoc/>
+        bool IHasDisposedState.IsDisposed => _disposed;
+
         /// <summary>Gets the WIP remote object identifier for this handle.</summary>
         internal string ObjectId => _objectId;
 
@@ -77,15 +81,22 @@ namespace PlaywrightNative.WebKit
         protected WKExecutionContext Context => _context;
 
         /// <inheritdoc/>
-        public async ValueTask DisposeAsync()
+        /// <remarks>
+        /// Upstream <c>JSHandle.dispose</c> fire-and-forgets <c>Runtime.releaseObject</c>.
+        /// Awaiting it hangs while a JavaScript dialog is open (the page is paused),
+        /// which blocked click timeouts from surfacing in
+        /// <c>should not hang for clicks that open dialogs</c>.
+        /// </remarks>
+        public ValueTask DisposeAsync()
         {
             if (_disposed)
             {
-                return;
+                return default;
             }
 
             _disposed = true;
-            await _context.ReleaseHandleAsync(_objectId).ConfigureAwait(false);
+            _ = _context.ReleaseHandleAsync(_objectId);
+            return default;
         }
 
         /// <inheritdoc/>
@@ -128,7 +139,7 @@ namespace PlaywrightNative.WebKit
             {
                 names = await EvaluateAsync<string[]>(JsonValueHelper.EnumerablePropertyNamesFunction).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 return result;
             }
@@ -207,7 +218,7 @@ namespace PlaywrightNative.WebKit
         {
             if (_disposed)
             {
-                throw new PlaywrightNativeException(EvaluateSerialization.DisposedHandleMessage);
+                throw new PlaywrightException(EvaluateSerialization.DisposedHandleMessage);
             }
         }
 

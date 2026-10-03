@@ -20,6 +20,7 @@ using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -775,16 +776,61 @@ namespace PlaywrightNative.Helpers
         /// this after <see cref="EnqueueDispatchAsync"/>; <c>_seq</c> drops duplicates
         /// when a binding return already applied the payload.
         /// </summary>
-        internal static Task EvaluateDispatchAsync(IPage page, Dictionary<string, object> request)
+        /// <param name="page">Owning page.</param>
+        /// <param name="request">Dispatch payload.</param>
+        /// <param name="preferredFrame">Creating frame when known (iframe sockets).</param>
+        /// <returns>A task that completes when evaluate has been kicked off.</returns>
+        internal static async Task EvaluateDispatchAsync(
+            IPage page,
+            Dictionary<string, object> request,
+            IFrame preferredFrame = null)
         {
             if (page == null || request == null)
             {
-                return Task.CompletedTask;
+                return;
             }
 
             string json = JsonSerializer.Serialize(request);
             string script = "try{if(typeof globalThis.__pwWebSocketDispatch==='function')globalThis.__pwWebSocketDispatch(" + json + ")}catch(e){}";
-            return EvaluateWithoutAwaitingPromiseAsync(page, script);
+
+            // Fire into every known context first so a hung frame.Evaluate cannot
+            // block iframe sendToPage (ShouldEmitCloseUponFrameDetach).
+            await EvaluateWithoutAwaitingPromiseAsync(page, script).ConfigureAwait(false);
+
+            // Prefer the creating frame so iframe-owned sockets receive sendToPage
+            // even when the main-world evaluate races ahead of child contexts.
+            // If the preferred evaluate exceeds the budget, keep it in flight and
+            // also blast every child — a TimeoutException-only path dropped
+            // sendToPage under WebKit Linux suite load
+            // (ShouldEmitCloseUponFrameDetach).
+            if (preferredFrame != null && !preferredFrame.IsDetached)
+            {
+                Task preferredTask = EvaluateOnFrameAsync(preferredFrame, script);
+                try
+                {
+                    await preferredTask.WaitAsync(TimeSpan.FromMilliseconds(500))
+                        .ConfigureAwait(false);
+                    return;
+                }
+                catch (TimeoutException)
+                {
+                }
+            }
+
+            foreach (IFrame frame in page.Frames)
+            {
+                if (frame == null || frame.IsDetached || frame.ParentFrame == null)
+                {
+                    continue;
+                }
+
+                if (preferredFrame != null && ReferenceEquals(frame, preferredFrame))
+                {
+                    continue;
+                }
+
+                _ = EvaluateOnFrameAsync(frame, script);
+            }
         }
 
         private static Task EvaluateWithoutAwaitingPromiseAsync(IPage page, string script)
@@ -821,7 +867,7 @@ namespace PlaywrightNative.Helpers
             {
                 await frame.EvaluateAsync(script).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
             catch (ObjectDisposedException)
@@ -869,7 +915,7 @@ namespace PlaywrightNative.Helpers
             {
                 await EnsurePageTaggedAsync(page).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
         }
@@ -902,7 +948,7 @@ namespace PlaywrightNative.Helpers
                 {
                     await page.EvaluateAsync(assign).ConfigureAwait(false);
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
             }
@@ -912,7 +958,7 @@ namespace PlaywrightNative.Helpers
             {
                 await page.EvaluateAsync(WebSocketRouteScript.Injector).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
 
@@ -927,7 +973,7 @@ namespace PlaywrightNative.Helpers
                 {
                     await frame.EvaluateAsync(WebSocketRouteScript.Injector).ConfigureAwait(false);
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
             }
@@ -949,7 +995,7 @@ namespace PlaywrightNative.Helpers
             {
                 await frame.EvaluateAsync(WebSocketRouteScript.Injector).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
         }
@@ -977,7 +1023,7 @@ namespace PlaywrightNative.Helpers
             {
                 await page.EvaluateAsync(WebSocketRouteScript.Injector).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
             }
         }
@@ -1150,6 +1196,13 @@ namespace PlaywrightNative.Helpers
             try
             {
                 await route.WaitUntilPageReadyAsync().ConfigureAwait(false);
+                if (!route.CreatedInMainFrame)
+                {
+                    // Resolve the creating iframe before ConnectToServer/Send so
+                    // the first dispatch already prefers the child world.
+                    await route.ResolveFrameAsync().ConfigureAwait(false);
+                }
+
                 Task task = handler(route);
                 if (task != null)
                 {

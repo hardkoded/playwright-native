@@ -88,17 +88,30 @@ namespace PlaywrightNative.Helpers
         {
             lock (_gate)
             {
+                // WebKit often emits Network.responseReceived with status 0 for a
+                // rejected WebSocket upgrade. That is not a real HTTP status — keep
+                // Status unset until a positive code arrives (e.g. 403 Forbidden).
+                if (status <= 0)
+                {
+                    if (!string.IsNullOrEmpty(statusText) && string.IsNullOrEmpty(StatusText))
+                    {
+                        StatusText = statusText;
+                    }
+
+                    if (headers != null && _responseHeaders.Count == 0)
+                    {
+                        AddHeaders(_responseHeaders, headers);
+                    }
+
+                    return;
+                }
+
                 if (!overwrite && Status >= 0)
                 {
-                    if (Status != 404 || status <= 0 || status == 404)
+                    if (Status != 404 || status == 404)
                     {
                         return;
                     }
-                }
-
-                if (status <= 0 && Status > 0)
-                {
-                    return;
                 }
 
                 Status = status;

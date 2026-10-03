@@ -18,6 +18,7 @@ using System;
 using System.Collections.Generic;
 using System.Text.Json;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using PlaywrightNative.Helpers;
 
 namespace PlaywrightNative
@@ -68,15 +69,15 @@ namespace PlaywrightNative
 
         /// <inheritdoc/>
         public Task<JsonElement?> EvaluateAsync(string expression, object arg = null)
-            => throw new PlaywrightNativeException("Immediate handles do not support evaluation.");
+            => throw new PlaywrightException("Immediate handles do not support evaluation.");
 
         /// <inheritdoc/>
         public Task<T> EvaluateAsync<T>(string expression, object arg = default)
-            => throw new PlaywrightNativeException("Immediate handles do not support evaluation.");
+            => throw new PlaywrightException("Immediate handles do not support evaluation.");
 
         /// <inheritdoc/>
         public Task<IJSHandle> EvaluateHandleAsync(string expression, object arg = default)
-            => throw new PlaywrightNativeException("Immediate handles do not support evaluation.");
+            => throw new PlaywrightException("Immediate handles do not support evaluation.");
 
         /// <inheritdoc/>
         public Task<Dictionary<string, IJSHandle>> GetPropertiesAsync()

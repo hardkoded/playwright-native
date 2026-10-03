@@ -19,6 +19,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Text.Json;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 using PlaywrightNative.TestServer;
@@ -149,7 +150,7 @@ namespace PlaywrightNative.Tests
         [Timeout(TestConstants.DefaultTestTimeout)]
         public void ShouldThrowWithoutTheExposeFunctionsOption()
         {
-            PlaywrightNativeException ex = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException ex = Assert.CatchAsync<PlaywrightException>(
                 () => Page.EvaluateAsync("({ cb }) => cb()", new { cb = (Action)(() => { }) }));
             Assert.That(ex, Is.Not.Null);
             Assert.That(ex.Message, Does.Match(@"Attempting to serialize unexpected value at position ""cb"": \(\) => \{\}"));

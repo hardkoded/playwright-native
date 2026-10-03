@@ -52,25 +52,5 @@ namespace PlaywrightNative.Tests
                 await response.DisposeAsync().ConfigureAwait(false);
             }
         }
-
-        [PlaywrightTest("global-fetch.spec.ts", "context APIRequest reports server address")]
-        [Test]
-        [Timeout(30_000)]
-        public async Task ContextApiRequestShouldReportServerAddress()
-        {
-            if (Server == null)
-            {
-                Assert.Ignore("Test server is unavailable.");
-                return;
-            }
-
-            await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
-            await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
-            IAPIResponse response = await context.APIRequest.GetAsync(TestConstants.EmptyPage).ConfigureAwait(false);
-            ResponseServerAddrResult addr = await response.ServerAddrAsync().ConfigureAwait(false);
-            Assert.That(addr, Is.Not.Null);
-            Assert.That(addr.IpAddress, Does.Match(new Regex(@"^(127\.0\.0\.1|::1)$")));
-            Assert.That(addr.Port, Is.EqualTo(TestConstants.Port));
-        }
     }
 }

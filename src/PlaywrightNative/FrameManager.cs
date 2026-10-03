@@ -40,7 +40,10 @@ namespace PlaywrightNative
         /// <param name="mainFrameId">The frame ID for the main frame (usually the target ID).</param>
         public FrameManager(string mainFrameId)
         {
-            MainFrame = new Frame(mainFrameId, parentFrame: null, url: "about:blank");
+            // Seed as "" (Chromium/WebKit initial empty document). Seeding
+            // "about:blank" makes IsInitialEmptyDocumentUrl false and can mark
+            // the first non-initial navigation complete before the real URL commits.
+            MainFrame = new Frame(mainFrameId, parentFrame: null, url: string.Empty);
             _frames.TryAdd(mainFrameId, MainFrame);
         }
 
@@ -141,6 +144,10 @@ namespace PlaywrightNative
             {
                 frame.ExecutionContext = pending;
             }
+
+            // New children are not networkidle yet — clear a premature parent
+            // networkidle so waiters (SetContent/networkidle) keep waiting.
+            MainFrame.RecalculateNetworkIdle();
 
             FrameAttached?.Invoke(frame);
         }

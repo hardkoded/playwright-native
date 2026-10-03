@@ -34,13 +34,13 @@ namespace PlaywrightNative
         [System.Runtime.CompilerServices.OverloadResolutionPriority(1)]
         public static Task HighlightAsync(this ILocator locator, System.Collections.Generic.IReadOnlyDictionary<string, string> style, float? timeout = default)
             => locator is Locator sharp
-                ? sharp.HighlightAsync(style, timeout)
+                ? sharp.HighlightInternalAsync(timeout, HighlightStyle.ToCss(style))
                 : locator.HighlightAsync(new LocatorHighlightOptions());
 
         /// <summary>Legacy highlight with style named parameter.</summary>
         [System.Runtime.CompilerServices.OverloadResolutionPriority(1)]
         public static Task HighlightAsync(this ILocator locator, float? timeout = default, string style = default)
-            => RequireLocator(locator).HighlightAsync(timeout, style);
+            => RequireLocator(locator).HighlightInternalAsync(timeout, style);
 
         /// <summary>Legacy wait-for-function returning a handle.</summary>
         [System.Runtime.CompilerServices.OverloadResolutionPriority(2)]
@@ -84,7 +84,7 @@ namespace PlaywrightNative
         /// <summary>Legacy highlight with style string.</summary>
         [System.Runtime.CompilerServices.OverloadResolutionPriority(1)]
         public static Task HighlightAsync(this ILocator locator, string style = default)
-            => RequireLocator(locator).HighlightAsync(style);
+            => RequireLocator(locator).HighlightInternalAsync(timeout: default, style: style);
 
         /// <summary>Legacy <c>has</c> filter.</summary>
         public static ILocator Has(this ILocator locator, ILocator has)
@@ -217,11 +217,11 @@ namespace PlaywrightNative
         /// <summary>Legacy evaluate with exposeFunctions.</summary>
         /// <typeparam name="T">Result type.</typeparam>
         public static Task<T> EvaluateExposingFunctionsAsync<T>(this ILocator locator, string expression, object arg = default)
-            => EvaluateCallbacks.EvaluateTargetAsync<T>(locator, expression, arg, exposeFunctions: true);
+            => EvaluateCallbacks.EvaluateOnLocatorAsync<T>(locator, expression, arg, exposeFunctions: true, timeout: null);
 
         /// <summary>Legacy evaluate handle with exposeFunctions.</summary>
         public static Task<IJSHandle> EvaluateHandleExposingFunctionsAsync(this ILocator locator, string expression, object arg = default)
-            => EvaluateCallbacks.EvaluateHandleTargetAsync(locator, expression, arg, exposeFunctions: true);
+            => EvaluateCallbacks.EvaluateHandleOnLocatorAsync(locator, expression, arg, exposeFunctions: true, timeout: null);
 
         /// <summary>Legacy set-checked with expanded parameters.</summary>
         public static Task SetCheckedAsync(

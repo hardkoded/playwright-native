@@ -92,13 +92,23 @@ namespace PlaywrightNative.Helpers
   const valueRoles = {listitem:1,paragraph:1,group:1,region:1,cell:1,row:1};
 
   const tagName = (e) => (e && e.tagName) ? String(e.tagName).toUpperCase() : '';
+  const isUnloadedLazyFrame = (e) => {
+    const t = tagName(e);
+    return (t === 'IFRAME' || t === 'FRAME') && String(e.getAttribute('loading') || '').toLowerCase() === 'lazy';
+  };
   const styleOf = (e, pseudo) => {
+    // getComputedStyle on an unloaded loading=lazy iframe wedges Darwin
+    // for the whole command timeout (ReturnEmptySnapshotWhenIframeIsNotLoaded).
+    if (isUnloadedLazyFrame(e)) return null;
     try { return e.ownerDocument.defaultView.getComputedStyle(e, pseudo || null); } catch (err) { return null; }
   };
   const hiddenForAria = (e) => {
     if (!e || e.nodeType !== 1) return true;
     const t = tagName(e);
     if (t === 'STYLE' || t === 'SCRIPT' || t === 'NOSCRIPT' || t === 'TEMPLATE' || t === 'HEAD' || t === 'META' || t === 'LINK') return true;
+    // checkVisibility / getComputedStyle on an unloaded lazy iframe wedges
+    // Darwin WebKit for the whole command timeout (empty iframe snapshot).
+    if (isUnloadedLazyFrame(e)) return false;
     if (t !== 'SLOT' && typeof e.checkVisibility === 'function') {
       try { if (!e.checkVisibility()) return true; } catch (err) {}
     } else if (t !== 'SLOT') {
@@ -123,6 +133,7 @@ namespace PlaywrightNative.Helpers
   };
   const isElementVisible = (e) => {
     if (!e || e.nodeType !== 1) return false;
+    if (isUnloadedLazyFrame(e)) return !!(e.isConnected);
     const st = styleOf(e);
     if (!st) return true;
     if (typeof e.checkVisibility === 'function') {
@@ -133,6 +144,7 @@ namespace PlaywrightNative.Helpers
     return r.width > 0 && r.height > 0;
   };
   const computeBox = (e) => {
+    if (isUnloadedLazyFrame(e)) return { visible: true, inline: false };
     const st = styleOf(e);
     const r = e.getBoundingClientRect();
     return { visible: !!(r.width > 0 && r.height > 0 && (!st || st.visibility !== 'hidden')), inline: !!(st && st.display === 'inline') };
@@ -300,7 +312,14 @@ namespace PlaywrightNative.Helpers
   };
 
   const win = (root && root.ownerDocument && root.ownerDocument.defaultView) || null;
-  if (win && typeof win.__pwAriaLastRef !== 'number') win.__pwAriaLastRef = 0;
+  // Refs number the elements of one document. document.write and navigation
+  // both install a fresh documentElement while keeping the window, so key the
+  // counter on it instead of letting it drift across setContent calls.
+  const docRoot = (root && root.ownerDocument && root.ownerDocument.documentElement) || null;
+  if (win && (typeof win.__pwAriaLastRef !== 'number' || win.__pwAriaRefRoot !== docRoot)) {
+    win.__pwAriaRefRoot = docRoot;
+    win.__pwAriaLastRef = 0;
+  }
   const assignRef = (ariaNode) => {
     if (!ariaNode.box.visible || !ariaNode.receivesPointerEvents) return;
     const element = ariaNode.el;
@@ -318,7 +337,8 @@ namespace PlaywrightNative.Helpers
     const t = tagName(element);
     const active = !!(element.ownerDocument.activeElement === element && element.ownerDocument.hasFocus());
     if (t === 'IFRAME' || t === 'FRAME') {
-      const node = { role: 'iframe', name: '', children: [], props: {}, el: element, box: computeBox(element), receivesPointerEvents: true, active: active };
+      const lazy = isUnloadedLazyFrame(element);
+      const node = { role: 'iframe', name: '', children: [], props: {}, el: element, box: lazy ? { visible: true, inline: false } : computeBox(element), receivesPointerEvents: true, active: active };
       assignRef(node);
       return node;
     }
@@ -388,6 +408,7 @@ namespace PlaywrightNative.Helpers
   };
 
   const process = (ariaNode, element, owns, parentVisible) => {
+    if (isUnloadedLazyFrame(element)) return;
     const display = (styleOf(element) || {}).display || 'inline';
     const block = (display !== 'inline' || element.nodeName === 'BR') ? ' ' : '';
     if (block) ariaNode.children.push(block);
@@ -568,7 +589,7 @@ namespace PlaywrightNative.Helpers
     if (node.active) key += ' [active]';
     if (node.ref) key += ' [ref=' + node.ref + ']';
     if (renderCursor && node.ref && hasPointerCursor(node)) key += ' [cursor=pointer]';
-    if (renderBoxes && node.el) {
+    if (renderBoxes && node.el && !isUnloadedLazyFrame(node.el)) {
       const r = node.el.getBoundingClientRect();
       key += ' [box=' + Math.round(r.x) + ',' + Math.round(r.y) + ',' + Math.round(r.width) + ',' + Math.round(r.height) + ']';
     }
@@ -630,7 +651,7 @@ namespace PlaywrightNative.Helpers
       out.ref = node.ref;
       if (renderCursor && hasPointerCursor(node)) out.cursor = 'pointer';
     }
-    if (renderBoxes && node.el) {
+    if (renderBoxes && node.el && !isUnloadedLazyFrame(node.el)) {
       const r = node.el.getBoundingClientRect();
       out.box = { x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.width), height: Math.round(r.height) };
     }

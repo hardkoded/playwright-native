@@ -21,6 +21,7 @@ using System.Collections.Generic;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using PlaywrightNative.Helpers;
 
 namespace PlaywrightNative.Chromium
@@ -342,7 +343,7 @@ namespace PlaywrightNative.Chromium
 
             if (string.IsNullOrEmpty(targetId))
             {
-                throw new PlaywrightNativeException("Target.createTarget did not return a targetId.");
+                throw new PlaywrightException("Target.createTarget did not return a targetId.");
             }
 
             // Register TCS BEFORE checking earlyPages to avoid a race where AddPage
@@ -410,9 +411,127 @@ namespace PlaywrightNative.Chromium
                     browserContextId = _browserContextId,
                 }).ConfigureAwait(false);
 
-            return Helpers.ContextCookies.FilterByUrls(
-                Helpers.ContextCookies.FromProtocol(result),
-                urls);
+            IReadOnlyList<BrowserContextCookiesResult> cookies = Helpers.ContextCookies.FromProtocol(result);
+
+            // Chromium Storage.getCookies can briefly hold a stale empty-name
+            // cookie value after document.cookie = '=…' under headful suite load.
+            // Prefer the live document.cookie unnamed value so a Cookies→AddCookies
+            // roundtrip (ShouldAllowUnnamedCookies) does not resurrect the stale value.
+            if (cookies.Count > 0)
+            {
+                bool hasUnnamed = false;
+                for (int i = 0; i < cookies.Count; i++)
+                {
+                    if (cookies[i] != null && string.IsNullOrEmpty(cookies[i].Name))
+                    {
+                        hasUnnamed = true;
+                        break;
+                    }
+                }
+
+                if (hasUnnamed)
+                {
+                    Dictionary<string, string> liveUnnamedByHost =
+                        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                    foreach (CRPage page in Pages)
+                    {
+                        if (page?.PublicPage == null || page.PublicPage.IsClosed)
+                        {
+                            continue;
+                        }
+
+                        string pageUrl = page.PublicPage.Url;
+                        if (string.IsNullOrEmpty(pageUrl)
+                            || !Uri.TryCreate(pageUrl, UriKind.Absolute, out Uri pageUri)
+                            || string.IsNullOrEmpty(pageUri.Host))
+                        {
+                            continue;
+                        }
+
+                        try
+                        {
+                            string live = await page.PublicPage.EvaluateAsync<string>("document.cookie")
+                                .ConfigureAwait(false);
+                            string unnamed = ExtractUnnamedCookieValue(live);
+                            if (!string.IsNullOrEmpty(unnamed))
+                            {
+                                liveUnnamedByHost[pageUri.Host] = unnamed;
+                            }
+                        }
+                        catch (PlaywrightException)
+                        {
+                        }
+                    }
+
+                    if (liveUnnamedByHost.Count > 0)
+                    {
+                        List<BrowserContextCookiesResult> reconciled =
+                            new List<BrowserContextCookiesResult>(cookies.Count);
+                        for (int i = 0; i < cookies.Count; i++)
+                        {
+                            BrowserContextCookiesResult cookie = cookies[i];
+                            if (cookie == null
+                                || !string.IsNullOrEmpty(cookie.Name)
+                                || string.IsNullOrEmpty(cookie.Domain))
+                            {
+                                reconciled.Add(cookie);
+                                continue;
+                            }
+
+                            string host = cookie.Domain.TrimStart('.');
+                            if (liveUnnamedByHost.TryGetValue(host, out string liveValue)
+                                && !string.Equals(liveValue, cookie.Value, StringComparison.Ordinal))
+                            {
+                                reconciled.Add(new BrowserContextCookiesResult
+                                {
+                                    Name = cookie.Name,
+                                    Value = liveValue,
+                                    Domain = cookie.Domain,
+                                    Path = cookie.Path,
+                                    Expires = cookie.Expires,
+                                    HttpOnly = cookie.HttpOnly,
+                                    Secure = cookie.Secure,
+                                    SameSite = cookie.SameSite,
+                                    PartitionKey = cookie.PartitionKey,
+                                });
+                            }
+                            else
+                            {
+                                reconciled.Add(cookie);
+                            }
+                        }
+
+                        cookies = reconciled;
+                    }
+                }
+            }
+
+            return Helpers.ContextCookies.FilterByUrls(cookies, urls);
+
+            static string ExtractUnnamedCookieValue(string documentCookie)
+            {
+                if (string.IsNullOrEmpty(documentCookie))
+                {
+                    return null;
+                }
+
+                string[] parts = documentCookie.Split(';');
+                for (int i = 0; i < parts.Length; i++)
+                {
+                    string part = parts[i].Trim();
+                    if (part.Length == 0)
+                    {
+                        continue;
+                    }
+
+                    if (part.IndexOf('=', StringComparison.Ordinal) < 0)
+                    {
+                        return part;
+                    }
+                }
+
+                return null;
+            }
         }
 
         /// <summary>
@@ -446,7 +565,7 @@ namespace PlaywrightNative.Chromium
                     Helpers.ContextPermissionMapper.ToChromium(permissions),
                     origin).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException) when (ContainsLocalNetworkAccess(permissions))
+            catch (PlaywrightException) when (ContainsLocalNetworkAccess(permissions))
             {
                 await SendGrantPermissionsAsync(
                     Helpers.ContextPermissionMapper.ToChromium(permissions, localNetworkFallback: true),

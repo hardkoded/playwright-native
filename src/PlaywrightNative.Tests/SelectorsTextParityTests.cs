@@ -18,6 +18,7 @@ using System;
 using System.Globalization;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 using PlaywrightNative.TestServer;
@@ -138,10 +139,10 @@ namespace PlaywrightNative.Tests
             Assert.That(await page.EvalOnSelectorAsync<string>("text='", "e => e.outerHTML").ConfigureAwait(false), Is.EqualTo("<div>'</div>"));
             Assert.That(await page.EvalOnSelectorAsync<string>("\"x\"", "e => e.outerHTML").ConfigureAwait(false), Is.EqualTo("<div>x</div>"));
             Assert.That(await page.EvalOnSelectorAsync<string>("'x'", "e => e.outerHTML").ConfigureAwait(false), Is.EqualTo("<div>x</div>"));
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(() => page.QuerySelectorAsync("\""));
-            Assert.That(error, Is.InstanceOf<PlaywrightNativeException>());
-            error = Assert.CatchAsync<PlaywrightNativeException>(() => page.QuerySelectorAsync("'"));
-            Assert.That(error, Is.InstanceOf<PlaywrightNativeException>());
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(() => page.QuerySelectorAsync("\""));
+            Assert.That(error, Is.InstanceOf<PlaywrightException>());
+            error = Assert.CatchAsync<PlaywrightException>(() => page.QuerySelectorAsync("'"));
+            Assert.That(error, Is.InstanceOf<PlaywrightException>());
 
             await page.SetContentAsync("<div> ' </div><div> \" </div>").ConfigureAwait(false);
             Assert.That(await page.EvalOnSelectorAsync<string>("text=\"", "e => e.outerHTML").ConfigureAwait(false), Is.EqualTo("<div> \" </div>"));
@@ -216,9 +217,9 @@ namespace PlaywrightNative.Tests
             Assert.That(await page.EvalOnSelectorAsync<string>(":text-matches(\"Y\", \"i\")", "e => e.outerHTML").ConfigureAwait(false), Is.EqualTo("<div>yo</div>"));
             Assert.That(await page.QuerySelectorAsync(":text-matches(\"^y$\")").ConfigureAwait(false), Is.Null);
 
-            PlaywrightNativeException error1 = Assert.CatchAsync<PlaywrightNativeException>(() => page.QuerySelectorAsync(":text(\"foo\", \"bar\")"));
+            PlaywrightException error1 = Assert.CatchAsync<PlaywrightException>(() => page.QuerySelectorAsync(":text(\"foo\", \"bar\")"));
             Assert.That(error1.Message, Does.Contain("\"text\" engine expects a single string"));
-            PlaywrightNativeException error2 = Assert.CatchAsync<PlaywrightNativeException>(() => page.QuerySelectorAsync(":text(foo > bar)"));
+            PlaywrightException error2 = Assert.CatchAsync<PlaywrightException>(() => page.QuerySelectorAsync(":text(foo > bar)"));
             Assert.That(error2.Message, Does.Contain("\"text\" engine expects a single string"));
         }
 
@@ -389,9 +390,9 @@ namespace PlaywrightNative.Tests
             Assert.That(await page.EvalOnSelectorAsync<string>("div:has-text(\"hello\\a wo\\\"r>>ld\")", "e => e.id").ConfigureAwait(false), Is.EqualTo("me"));
             Assert.That(await page.Locator("div", new() { HasText = "hello\nwo\"r>>ld" }).GetAttributeAsync("id").ConfigureAwait(false), Is.EqualTo("me"));
 
-            PlaywrightNativeException error1 = Assert.CatchAsync<PlaywrightNativeException>(() => page.QuerySelectorAsync(":has-text(\"foo\", \"bar\")"));
+            PlaywrightException error1 = Assert.CatchAsync<PlaywrightException>(() => page.QuerySelectorAsync(":has-text(\"foo\", \"bar\")"));
             Assert.That(error1.Message, Does.Contain("\"has-text\" engine expects a single string"));
-            PlaywrightNativeException error2 = Assert.CatchAsync<PlaywrightNativeException>(() => page.QuerySelectorAsync(":has-text(foo > bar)"));
+            PlaywrightException error2 = Assert.CatchAsync<PlaywrightException>(() => page.QuerySelectorAsync(":has-text(foo > bar)"));
             Assert.That(error2.Message, Does.Contain("\"has-text\" engine expects a single string"));
         }
 

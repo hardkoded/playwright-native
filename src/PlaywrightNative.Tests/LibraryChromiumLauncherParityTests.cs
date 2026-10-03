@@ -17,6 +17,7 @@
 using System.Collections.Generic;
 using System.Text.Json;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 
@@ -47,7 +48,7 @@ namespace PlaywrightNative.Tests
         [Timeout(TestConstants.DefaultTestTimeout)]
         public void ShouldThrowWithRemoteDebuggingPipeArgument()
         {
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => BrowserLauncher.LaunchAsync(new BrowserTypeLaunchOptions
                 {
                     Args = new[] { "--remote-debugging-pipe" },

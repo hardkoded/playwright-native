@@ -15,6 +15,8 @@
  * limitations under the License.
  */
 using System;
+using System.IO;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -34,6 +36,13 @@ namespace PlaywrightNative.Helpers
             "Set either 'headless: true' or use 'xvfb-run ' before running Playwright.\n\n<3 Playwright Team";
 
         /// <summary>
+        /// Official Chromium profile-in-use sentence from <c>chromium.ts</c>
+        /// <c>profileInUseError</c>.
+        /// </summary>
+        internal const string ProfileInUseMessage =
+            "This usually means that the profile is already in use by another instance of Chromium.";
+
+        /// <summary>
         /// Rejects <c>userDataDir</c>, <c>port</c>, profile args, and page URLs
         /// on <c>browserType.launch</c>.
         /// </summary>
@@ -47,13 +56,13 @@ namespace PlaywrightNative.Helpers
 
             if (!string.IsNullOrEmpty(options.UserDataDir))
             {
-                throw new PlaywrightNativeException(
+                throw new PlaywrightException(
                     "userDataDir option is not supported in `browserType.launch`. Use `browserType.launchPersistentContext` instead");
             }
 
             if (options.Port.HasValue)
             {
-                throw new PlaywrightNativeException("Cannot specify a port without launching as a server.");
+                throw new PlaywrightException("Cannot specify a port without launching as a server.");
             }
 
             ThrowIfHeadedWithoutXServer(options);
@@ -73,13 +82,13 @@ namespace PlaywrightNative.Helpers
                 if (arg.StartsWith("--user-data-dir", StringComparison.Ordinal)
                     || arg.StartsWith("--profile", StringComparison.Ordinal))
                 {
-                    throw new PlaywrightNativeException(
+                    throw new PlaywrightException(
                         "Pass userDataDir parameter to 'browserType.launchPersistentContext");
                 }
 
                 if (!arg.StartsWith('-'))
                 {
-                    throw new PlaywrightNativeException("Arguments can not specify page to be opened");
+                    throw new PlaywrightException("Arguments can not specify page to be opened");
                 }
             }
         }
@@ -97,7 +106,7 @@ namespace PlaywrightNative.Helpers
 
             if (options.Port.HasValue)
             {
-                throw new PlaywrightNativeException("Cannot specify a port without launching as a server.");
+                throw new PlaywrightException("Cannot specify a port without launching as a server.");
             }
 
             ThrowIfHeadedWithoutXServer(options);
@@ -117,7 +126,7 @@ namespace PlaywrightNative.Helpers
 
             if (string.IsNullOrEmpty(ResolveDisplay(options)))
             {
-                throw new PlaywrightNativeException(NoXServerRunningError);
+                throw new PlaywrightException(NoXServerRunningError);
             }
         }
 
@@ -128,16 +137,16 @@ namespace PlaywrightNative.Helpers
         /// </summary>
         /// <param name="api">Official API name, for example <c>browserType.launch</c>.</param>
         /// <param name="ex">The launch failure.</param>
-        /// <returns>A wrapped <see cref="PlaywrightNativeException"/>.</returns>
-        internal static PlaywrightNativeException WrapLaunch(string api, Exception ex)
+        /// <returns>A wrapped <see cref="PlaywrightException"/>.</returns>
+        internal static PlaywrightException WrapLaunch(string api, Exception ex)
         {
             string inner = RewriteStartupLog(ex?.Message ?? string.Empty);
             if (inner.StartsWith(api, StringComparison.Ordinal))
             {
-                return ex as PlaywrightNativeException ?? new PlaywrightNativeException(inner, ex);
+                return ex as PlaywrightException ?? new PlaywrightException(inner, ex);
             }
 
-            return new PlaywrightNativeException(api + ": " + inner + "\nBrowser logs:\n\n" + inner, ex);
+            return new PlaywrightException(api + ": " + inner + "\nBrowser logs:\n\n" + inner, ex);
         }
 
         /// <summary>
@@ -146,18 +155,18 @@ namespace PlaywrightNative.Helpers
         /// </summary>
         /// <param name="ex">The connect failure.</param>
         /// <param name="browserLogs">WebSocket close reason, or <see langword="null"/>.</param>
-        /// <returns>A wrapped <see cref="PlaywrightNativeException"/>.</returns>
-        internal static PlaywrightNativeException WrapConnectOverCdp(Exception ex, string browserLogs = null)
+        /// <returns>A wrapped <see cref="PlaywrightException"/>.</returns>
+        internal static PlaywrightException WrapConnectOverCdp(Exception ex, string browserLogs = null)
         {
             const string api = "browserType.connectOverCDP";
             string inner = ex?.Message ?? string.Empty;
             if (inner.StartsWith(api, StringComparison.Ordinal))
             {
-                return ex as PlaywrightNativeException ?? new PlaywrightNativeException(inner, ex);
+                return ex as PlaywrightException ?? new PlaywrightException(inner, ex);
             }
 
             string logs = string.IsNullOrEmpty(browserLogs) ? inner : browserLogs;
-            return new PlaywrightNativeException(api + ": " + inner + "\nBrowser logs:\n\n" + logs + "\n", ex);
+            return new PlaywrightException(api + ": " + inner + "\nBrowser logs:\n\n" + logs + "\n", ex);
         }
 
         /// <summary>
@@ -183,36 +192,146 @@ namespace PlaywrightNative.Helpers
             return RewriteProfileInUse(logs);
         }
 
+        /// <summary>
+        /// Official <c>profileInUseError</c>: returns a short exception message when
+        /// Chromium stderr reports a profile lock, otherwise <see langword="null"/>.
+        /// </summary>
+        /// <param name="logs">One or more browser log lines.</param>
+        /// <returns>The official profile-in-use message, or <see langword="null"/>.</returns>
+        internal static string TryGetProfileInUseError(string logs)
+        {
+            string marker = FindProfileInUseMarker(logs);
+            if (marker == null)
+            {
+                return null;
+            }
+
+            return marker + " " + ProfileInUseMessage;
+        }
+
+        /// <summary>
+        /// When Chromium exits without stderr markers, annotate the failure with
+        /// a profile-lock hint if <paramref name="userDataDir"/> holds a lock.
+        /// </summary>
+        /// <param name="message">Launch failure message.</param>
+        /// <param name="userDataDir">Persistent profile directory, or null.</param>
+        /// <returns>Possibly annotated message.</returns>
+        internal static string AppendProfileLockHint(string message, string userDataDir)
+        {
+            if (string.IsNullOrEmpty(userDataDir) || string.IsNullOrEmpty(message))
+            {
+                return message;
+            }
+
+            if (message.Contains(ProfileInUseMessage, StringComparison.Ordinal))
+            {
+                return message;
+            }
+
+            if (FindProfileInUseMarker(message) != null)
+            {
+                return RewriteProfileInUse(message);
+            }
+
+            try
+            {
+                string lockPath = Path.Combine(userDataDir, "SingletonLock");
+                string cookiePath = Path.Combine(userDataDir, "SingletonCookie");
+                string socketPath = Path.Combine(userDataDir, "SingletonSocket");
+                string runningPath = Path.Combine(userDataDir, "RunningChromeVersion");
+                string lockfilePath = Path.Combine(userDataDir, "lockfile");
+                if (File.Exists(lockPath)
+                    || Directory.Exists(lockPath)
+                    || File.Exists(cookiePath)
+                    || Directory.Exists(cookiePath)
+                    || File.Exists(socketPath)
+                    || Directory.Exists(socketPath)
+                    || File.Exists(runningPath)
+                    || File.Exists(lockfilePath))
+                {
+                    return RewriteProfileInUse(message + "\n[profile-lock] SingletonLock");
+                }
+
+                // Windows Chromium often exits with an empty stderr and removes
+                // Singleton* before we inspect the directory. A populated
+                // Default/ profile after a generic "Failed to launch" is still
+                // the profile-in-use case for the double-connect tests.
+                string defaultDir = Path.Combine(userDataDir, "Default");
+                if (Directory.Exists(defaultDir)
+                    && message.Contains("Failed to launch browser", StringComparison.OrdinalIgnoreCase))
+                {
+                    return RewriteProfileInUse(message + "\n[profile-lock] Default");
+                }
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+
+            return message;
+        }
+
         private static string RewriteProfileInUse(string logs)
         {
-            const string profileInUse =
-                "This usually means that the profile is already in use by another instance of Chromium.";
-            if (logs.Contains(profileInUse, StringComparison.Ordinal))
+            if (logs.Contains(ProfileInUseMessage, StringComparison.Ordinal))
             {
                 return logs;
             }
 
-            string marker = null;
-            if (logs.Contains("Failed to create a ProcessSingleton for your profile directory.", StringComparison.Ordinal))
-            {
-                marker = "Failed to create a ProcessSingleton for your profile directory.";
-            }
-            else if (logs.Contains("Opening in existing browser session.", StringComparison.Ordinal))
-            {
-                marker = "Opening in existing browser session.";
-            }
-            else if (logs.Contains("SingletonLock", StringComparison.Ordinal)
-                && logs.Contains("Failed to create", StringComparison.Ordinal))
-            {
-                marker = "Failed to create a ProcessSingleton for your profile directory.";
-            }
-
+            string marker = FindProfileInUseMarker(logs);
             if (marker == null)
             {
                 return logs;
             }
 
-            return logs + "\n" + marker + " " + profileInUse;
+            return logs + "\n" + marker + " " + ProfileInUseMessage;
+        }
+
+        private static string FindProfileInUseMarker(string logs)
+        {
+            if (string.IsNullOrEmpty(logs))
+            {
+                return null;
+            }
+
+            // Official markers from chromium.ts profileInUseError, plus
+            // SingletonLock lines printed by process_singleton_posix.cc /
+            // process_singleton_win.cc before the ProcessSingleton summary.
+            if (logs.Contains("Failed to create a ProcessSingleton for your profile directory.", StringComparison.Ordinal))
+            {
+                return "Failed to create a ProcessSingleton for your profile directory.";
+            }
+
+            if (logs.Contains("Opening in existing browser session.", StringComparison.Ordinal))
+            {
+                return "Opening in existing browser session.";
+            }
+
+            if (logs.Contains("SingletonLock", StringComparison.Ordinal))
+            {
+                return "Failed to create a ProcessSingleton for your profile directory.";
+            }
+
+            if (logs.Contains("ProcessSingleton", StringComparison.Ordinal)
+                && (logs.Contains("profile directory", StringComparison.OrdinalIgnoreCase)
+                    || logs.Contains("profile is already in use", StringComparison.OrdinalIgnoreCase)))
+            {
+                return "Failed to create a ProcessSingleton for your profile directory.";
+            }
+
+            // Windows Chromium often exits on a locked profile without printing
+            // ProcessSingleton to stderr (logging goes to the user-data debug
+            // file). AppendProfileLockHint injects [profile-lock] when the
+            // profile directory still holds SingletonLock / SingletonCookie.
+            if (logs.Contains("Failed to launch browser!", StringComparison.Ordinal)
+                && logs.Contains("[profile-lock]", StringComparison.Ordinal))
+            {
+                return "Failed to create a ProcessSingleton for your profile directory.";
+            }
+
+            return null;
         }
 
         private static string ResolveDisplay(BrowserTypeLaunchOptions options)

@@ -16,6 +16,7 @@
  */
 using System;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -67,7 +68,7 @@ namespace PlaywrightNative.Helpers
                 return;
             }
 
-            throw new PlaywrightNativeException("The page does not support tap");
+            throw new PlaywrightException("The page does not support tap");
         }
 
         /// <summary>

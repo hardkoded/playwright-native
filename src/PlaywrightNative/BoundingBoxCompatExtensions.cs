@@ -39,5 +39,22 @@ namespace PlaywrightNative
                 Height = box.Height,
             };
         }
+
+        /// <summary>Converts an element-handle bounding box to a locator bounding box.</summary>
+        public static LocatorBoundingBoxResult AsLocatorBoundingBox(this ElementHandleBoundingBoxResult box)
+        {
+            if (box == null)
+            {
+                return null;
+            }
+
+            return new LocatorBoundingBoxResult
+            {
+                X = box.X,
+                Y = box.Y,
+                Width = box.Width,
+                Height = box.Height,
+            };
+        }
     }
 }

@@ -112,6 +112,14 @@ namespace PlaywrightNative.Helpers
         /// <returns>A primitive JS handle.</returns>
         internal static IJSHandle WrapPrimitive(JsonElement remoteObject)
         {
+            // WebKit serializes Infinity / NaN / -0 as
+            // { type: "number", value: null, description: "Infinity" } with no
+            // unserializableValue. Prefer the special-number token over a null value.
+            if (JsonValueHelper.TryReadUnserializableToken(remoteObject, out string token))
+            {
+                return new ImmediateJSHandle(JsonSerializer.SerializeToElement(token), token);
+            }
+
             string preview = HandlePreview(remoteObject);
             JsonElement value;
             if (remoteObject.TryGetProperty("value", out JsonElement inner))

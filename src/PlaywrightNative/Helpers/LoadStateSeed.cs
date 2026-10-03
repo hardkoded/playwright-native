@@ -16,6 +16,7 @@
  */
 using System;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -65,10 +66,48 @@ namespace PlaywrightNative.Helpers
 
             try
             {
-                string readyState = await page.EvaluateAsync<string>("(() => document.readyState)()").ConfigureAwait(false);
+                string readyState;
+                using (ActionTrace.SuppressRecording())
+                {
+                    readyState = await page.EvaluateAsync<string>("(() => document.readyState)()")
+                        .ConfigureAwait(false);
+                }
+
                 Apply(record, readyState);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
+            {
+                // Execution context is not available yet.
+            }
+        }
+
+        /// <summary>
+        /// Evaluates <c>document.readyState</c> on <paramref name="frame"/> and
+        /// seeds lifecycle. about:blank iframes often finish load before protocol
+        /// events are wired (ShouldResolveImmediatelyWhenAlreadyLoaded).
+        /// </summary>
+        /// <param name="frame">The frame to probe.</param>
+        /// <param name="record">Records a lifecycle event name.</param>
+        /// <returns>A task that completes when the probe finishes.</returns>
+        internal static async Task TryFromDocumentAsync(IFrame frame, Action<string> record)
+        {
+            if (frame == null || record == null)
+            {
+                return;
+            }
+
+            try
+            {
+                string readyState;
+                using (ActionTrace.SuppressRecording())
+                {
+                    readyState = await frame.EvaluateAsync<string>("(() => document.readyState)()")
+                        .ConfigureAwait(false);
+                }
+
+                Apply(record, readyState);
+            }
+            catch (PlaywrightException)
             {
                 // Execution context is not available yet.
             }

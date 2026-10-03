@@ -361,6 +361,13 @@ namespace PlaywrightNative.Tests
                 Assert.Ignore("cookieStore change events not supported on WebKit/Windows (curl backend lacks cookie change notifications)");
             }
 
+            // Official it.skip(isFrozenWebkit): macOS < 15 (and some old Linux hosts) ship a
+            // frozen WebKit build without the Cookie Store API (cookieStore is undefined).
+            if (TestConstants.IsWebKit && IsFrozenWebKitHost())
+            {
+                Assert.Ignore("cookieStore is unavailable on frozen WebKit (macOS < 15 / legacy hosts)");
+            }
+
             string hostname = new Uri(Prefix).Host;
             await _context.AddCookiesAsync(new[]
             {
@@ -504,6 +511,38 @@ namespace PlaywrightNative.Tests
             {
                 Assert.Ignore("Test server is unavailable.");
             }
+        }
+
+        /// <summary>
+        /// Matches upstream <c>isFrozenWebkit</c>: WebKit hosts that pin an older
+        /// browser build without Cookie Store (macOS &lt; 15).
+        /// </summary>
+        /// <returns><see langword="true"/> when Cookie Store is expected to be missing.</returns>
+        private static bool IsFrozenWebKitHost()
+        {
+            if (!OperatingSystem.IsMacOS())
+            {
+                return false;
+            }
+
+            // Prefer the BrowserData platform key (mac14* always ships frozen revision 2251).
+            try
+            {
+                string platformKey = BrowserData.PlaywrightPlatformKey(
+                    SupportedBrowser.Webkit,
+                    BrowserData.CurrentPlatform());
+                if (platformKey.StartsWith("mac14", StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+            catch (ArgumentException)
+            {
+            }
+
+            // Darwin 23 == macOS 14.x; Darwin 24+ == macOS 15+.
+            Version version = Environment.OSVersion.Version;
+            return version.Major == 23;
         }
 
         private static void ServeHtml(string path)

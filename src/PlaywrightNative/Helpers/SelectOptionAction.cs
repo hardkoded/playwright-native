@@ -20,6 +20,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -72,14 +73,16 @@ namespace PlaywrightNative.Helpers
                         ElementStateScript.SelectOptionFromJsonFunction,
                         payload).ConfigureAwait(false);
                 }
-                catch (PlaywrightNativeException ex)
+                catch (PlaywrightException ex)
                 {
                     if (!IsTransientEvaluateError(ex))
                     {
                         throw;
                     }
 
-                    lastReason = "detached";
+                    // Detached / destroyed context: re-query via selector retry
+                    // (ShouldWaitForSelectToBeSwapped replaces the <select>).
+                    throw new PlaywrightException(ClickAction.NotAttachedMessage);
                 }
 
                 if (raw != null)
@@ -100,7 +103,7 @@ namespace PlaywrightNative.Helpers
                         string message = root.TryGetProperty("message", out JsonElement messageElement)
                             ? messageElement.GetString()
                             : "Element is not a <select> element";
-                        throw new PlaywrightNativeException(message ?? "Element is not a <select> element");
+                        throw new PlaywrightException(message ?? "Element is not a <select> element");
                     }
 
                     if (string.Equals(status, "wait", StringComparison.Ordinal))
@@ -124,6 +127,76 @@ namespace PlaywrightNative.Helpers
             }
         }
 
+        /// <summary>
+        /// Re-queries <paramref name="selector"/> and retries selectOption when the
+        /// matched node detaches (official locator/page selectOption swap waits).
+        /// </summary>
+        /// <typeparam name="T">The selectOption result type.</typeparam>
+        /// <param name="querySelectorAsync">One-shot selector query.</param>
+        /// <param name="selector">The selector.</param>
+        /// <param name="onHandle">Select on the matched handle.</param>
+        /// <param name="timeout">Timeout in milliseconds. <c>0</c> waits forever.</param>
+        /// <param name="apiName">Name used in timeout messages.</param>
+        /// <param name="scroll">Scroll option forwarded to the wait helper.</param>
+        /// <returns>The selectOption result.</returns>
+        internal static async Task<T> RunOnSelectorAsync<T>(
+            Func<string, Task<IElementHandle>> querySelectorAsync,
+            string selector,
+            Func<IElementHandle, Task<T>> onHandle,
+            float? timeout,
+            string apiName,
+            ActionScroll scroll = ActionScroll.None)
+        {
+            if (onHandle == null)
+            {
+                throw new ArgumentNullException(nameof(onHandle));
+            }
+
+            int timeoutMs = TimeoutSettings.TimeoutMs(timeout);
+            Stopwatch sw = Stopwatch.StartNew();
+            int[] waits = { 0, 20, 100, 100, 500 };
+            int retry = 0;
+
+            while (true)
+            {
+                try
+                {
+                    return await ElementQuery.WaitQueryAsync(
+                        querySelectorAsync,
+                        selector,
+                        onHandle,
+                        RemainingTimeout(timeoutMs, sw),
+                        apiName,
+                        scroll).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ClickAction.IsRetryable(ex))
+                {
+                    if (timeoutMs != Timeout.Infinite && sw.ElapsedMilliseconds >= timeoutMs)
+                    {
+                        throw;
+                    }
+
+                    int wait = waits[Math.Min(retry, waits.Length - 1)];
+                    retry++;
+                    if (wait > 0)
+                    {
+                        await Task.Delay(wait).ConfigureAwait(false);
+                    }
+                }
+            }
+        }
+
+        private static float? RemainingTimeout(int timeoutMs, Stopwatch sw)
+        {
+            if (timeoutMs == Timeout.Infinite)
+            {
+                return 0;
+            }
+
+            long left = timeoutMs - sw.ElapsedMilliseconds;
+            return left < 1 ? 1 : left;
+        }
+
         private static IReadOnlyCollection<string> ReadValues(JsonElement root)
         {
             List<string> values = new List<string>();
@@ -143,7 +216,7 @@ namespace PlaywrightNative.Helpers
             return values;
         }
 
-        private static bool IsTransientEvaluateError(PlaywrightNativeException ex)
+        private static bool IsTransientEvaluateError(PlaywrightException ex)
         {
             string message = ex?.Message ?? string.Empty;
             return message.Contains("detached", StringComparison.OrdinalIgnoreCase)
@@ -153,7 +226,7 @@ namespace PlaywrightNative.Helpers
                 || message.Contains("session closed", StringComparison.OrdinalIgnoreCase);
         }
 
-        private static PlaywrightNativeException TimeoutError(int timeoutMs, string reason)
+        private static PlaywrightException TimeoutError(int timeoutMs, string reason)
         {
             string message = "Timeout " + timeoutMs + "ms exceeded.";
             if (string.Equals(reason, "notenabled", StringComparison.Ordinal))
@@ -161,7 +234,7 @@ namespace PlaywrightNative.Helpers
                 message += " option being selected is not enabled";
             }
 
-            return new PlaywrightNativeException(message);
+            return new PlaywrightException(message);
         }
     }
 }

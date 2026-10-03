@@ -22,6 +22,7 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
+using Microsoft.Playwright;
 using PlaywrightNative.Helpers;
 using PlaywrightNative.Transport;
 
@@ -170,16 +171,7 @@ namespace PlaywrightNative.Chromium
         public async ValueTask DisposeAsync()
         {
             GC.SuppressFinalize(this);
-
-            _connection.Disconnected -= OnDisconnected;
-
-            _connection.Dispose();
-
-            if (_processManager != null)
-            {
-                await _processManager.KillAsync().ConfigureAwait(false);
-                _processManager.Dispose();
-            }
+            await CloseAsync().ConfigureAwait(false);
         }
 
         /// <summary>
@@ -198,6 +190,10 @@ namespace PlaywrightNative.Chromium
         /// Official <c>connectOverCDP({ noDefaults })</c>. Skip default
         /// overrides on targets that already exist when connecting.
         /// </param>
+        /// <param name="headless">
+        /// When <see langword="false"/>, keep the automatic launch page so headed
+        /// Chromium retains a window; when <see langword="true"/>, close it.
+        /// </param>
         /// <returns>A fully initialized <see cref="CRBrowser"/> instance.</returns>
         internal static async Task<CRBrowser> ConnectAsync(
             CRConnection connection,
@@ -205,7 +201,8 @@ namespace PlaywrightNative.Chromium
             BrowserProcessManager processManager = null,
             ILoggerFactory loggerFactory = null,
             bool persistent = false,
-            bool noDefaults = false)
+            bool noDefaults = false,
+            bool headless = true)
         {
             // Retrieve browser version information.
             JsonElement? versionResponse = await connection.RootSession
@@ -269,10 +266,21 @@ namespace PlaywrightNative.Chromium
             browser._adoptingExistingTargets = false;
             if (!persistent && processManager != null)
             {
-                // Official launch() uses --no-startup-window. Websocket launch
-                // still needs leftover about:blank to start; close those pages
-                // so Target.setDiscoverTargets sees none.
-                await browser.CloseAutomaticLaunchPagesAsync().ConfigureAwait(false);
+                if (headless)
+                {
+                    // Official launch() uses --no-startup-window. Websocket launch
+                    // still needs leftover about:blank to start; close those pages
+                    // so Target.setDiscoverTargets sees none.
+                    await browser.CloseAutomaticLaunchPagesAsync().ConfigureAwait(false);
+                }
+                else
+                {
+                    // Headed Chrome must keep at least one window or
+                    // Target.createTarget fails with "Failed to open a new tab".
+                    // Still hide leftover launch contexts from browser.Contexts()
+                    // so launch() matches official "no contexts until newContext".
+                    browser.OmitAutomaticLaunchContextsFromPublicList();
+                }
             }
 
             return browser;
@@ -287,6 +295,20 @@ namespace PlaywrightNative.Chromium
         /// <returns>A <see cref="Task"/> that completes when leftover pages are closed.</returns>
         internal async Task CloseAutomaticLaunchPagesAsync()
         {
+            // Keep the whole leftover-close path inside a short budget so Channel
+            // Chrome under suite load cannot burn the NUnit / ConnectAsync 30s
+            // (LaunchShouldUseChromeChannel on Windows / Ubuntu headful).
+            System.Diagnostics.Stopwatch budget = System.Diagnostics.Stopwatch.StartNew();
+            const int budgetMs = 2_500;
+
+            // Auto-attach delivers leftover about:blank asynchronously after
+            // Target.setAutoAttach. Brief wait so we close the startup page
+            // instead of racing past an empty _crPages.
+            for (int i = 0; i < 20 && _crPages.IsEmpty && budget.ElapsedMilliseconds < budgetMs; i++)
+            {
+                await Task.Delay(25).ConfigureAwait(false);
+            }
+
             List<CRPage> pages = new List<CRPage>();
             foreach (CRPage page in _crPages.Values)
             {
@@ -295,10 +317,72 @@ namespace PlaywrightNative.Chromium
 
             foreach (CRPage page in pages)
             {
+                if (budget.ElapsedMilliseconds >= budgetMs)
+                {
+                    break;
+                }
+
                 try
                 {
-                    await page.ClosePageAsync(runBeforeUnload: false).ConfigureAwait(false);
-                    await Task.WhenAny(page.ClosedTask, Task.Delay(2000)).ConfigureAwait(false);
+                    // Do not call ClosePageAsync here — it awaits ClosedTask with no
+                    // budget, so Channel Chrome launch hung the full NUnit 30s
+                    // (LaunchShouldUseChromeChannel on Windows). Fire
+                    // Target.closeTarget, then bound the wait.
+                    //
+                    // Also bound SendAsync itself: system Chrome under Ubuntu
+                    // headful suite load can leave Target.closeTarget unanswered
+                    // when the leftover page is still mid-InitializeAsync /
+                    // waitForDebuggerOnStart (LaunchShouldUseChromeChannel NUnit
+                    // 30s hang on hfub2).
+                    if (!page.ClosedTask.IsCompleted)
+                    {
+                        if (!page.InitializedTask.IsCompleted)
+                        {
+                            // Unstick waitForDebuggerOnStart so closeTarget can
+                            // complete; InitializeAsync is fire-and-forget and may
+                            // still be awaiting Page/Runtime enable under load.
+                            try
+                            {
+                                _ = page.Session.SendAsync("Runtime.runIfWaitingForDebugger");
+                            }
+                            catch (PlaywrightException)
+                            {
+                            }
+
+                            int initWaitMs = (int)Math.Max(0, Math.Min(500, budgetMs - budget.ElapsedMilliseconds));
+                            if (initWaitMs > 0)
+                            {
+                                await Task.WhenAny(page.InitializedTask, Task.Delay(initWaitMs))
+                                    .ConfigureAwait(false);
+                            }
+                        }
+
+                        try
+                        {
+                            int closeWaitMs = (int)Math.Max(0, Math.Min(750, budgetMs - budget.ElapsedMilliseconds));
+                            Task closeSend = Connection.RootSession
+                                .SendAsync("Target.closeTarget", new { targetId = page.TargetId });
+                            if (closeWaitMs > 0)
+                            {
+                                await Task.WhenAny(closeSend, Task.Delay(closeWaitMs)).ConfigureAwait(false);
+                            }
+
+                            if (closeSend.IsFaulted)
+                            {
+                                _ = closeSend.Exception;
+                            }
+                        }
+                        catch (PlaywrightException)
+                        {
+                        }
+
+                        int closedWaitMs = (int)Math.Max(0, Math.Min(750, budgetMs - budget.ElapsedMilliseconds));
+                        if (closedWaitMs > 0 && !page.ClosedTask.IsCompleted)
+                        {
+                            await Task.WhenAny(page.ClosedTask, Task.Delay(closedWaitMs))
+                                .ConfigureAwait(false);
+                        }
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -306,19 +390,30 @@ namespace PlaywrightNative.Chromium
                 }
             }
 
+            OmitAutomaticLaunchContextsFromPublicList();
+        }
+
+        /// <summary>
+        /// Drops leftover websocket-launch contexts from <see cref="Contexts"/> while
+        /// keeping any open pages attached (needed for headed <c>createTarget</c>).
+        /// </summary>
+        internal void OmitAutomaticLaunchContextsFromPublicList()
+        {
             // Official launch() has no contexts until newContext(). Leftover
-            // about:blank adopted Chrome's default profile; drop the empty
-            // tracking entry (it cannot Target.disposeBrowserContext).
+            // about:blank adopted Chrome's default profile; drop it from the
+            // public Contexts() list. Keep the CRBrowserContext in _contexts
+            // while a headed about:blank page is still attached (createTarget
+            // needs that window); only discard empty tracking entries.
             lock (_contextOrderLock)
             {
                 List<string> leftover = new List<string>(_contextOrder);
                 foreach (string id in leftover)
                 {
+                    _contextOrder.Remove(id);
                     if (_contexts.TryGetValue(id, out CRBrowserContext context)
                         && context.Pages.Count == 0)
                     {
                         _contexts.TryRemove(id, out _);
-                        _contextOrder.Remove(id);
                     }
                 }
             }
@@ -354,7 +449,7 @@ namespace PlaywrightNative.Chromium
 
             if (string.IsNullOrEmpty(browserContextId))
             {
-                throw new PlaywrightNativeException("Target.createBrowserContext did not return a browserContextId.");
+                throw new PlaywrightException("Target.createBrowserContext did not return a browserContextId.");
             }
 
             CRBrowserContext context = new(this, browserContextId);
@@ -418,6 +513,40 @@ namespace PlaywrightNative.Chromium
             }
 
             CloseRemainingPages();
+
+            try
+            {
+                _connection.Disconnected -= OnDisconnected;
+            }
+#pragma warning disable RCS1075
+            catch (Exception)
+            {
+            }
+#pragma warning restore RCS1075
+
+            try
+            {
+                _connection.Dispose();
+            }
+#pragma warning disable RCS1075
+            catch (Exception)
+            {
+            }
+#pragma warning restore RCS1075
+
+            if (_processManager != null)
+            {
+                try
+                {
+                    _processManager.Dispose();
+                }
+#pragma warning disable RCS1075
+                catch (Exception)
+                {
+                }
+#pragma warning restore RCS1075
+            }
+
             RaiseDisconnected();
         }
 
@@ -464,9 +593,18 @@ namespace PlaywrightNative.Chromium
             CRBrowserContext created = new CRBrowserContext(this, browserContextId);
             if (_contexts.TryAdd(browserContextId, created))
             {
-                lock (_contextOrderLock)
+                // Launch (non-persistent) must not publish auto-adopted chrome
+                // profile contexts into browser.Contexts() — only
+                // Target.createBrowserContext (NewContextAsync) does. Headed
+                // websocket launch keeps about:blank attached for createTarget
+                // but still matches official "no contexts until newContext".
+                bool publish = _processManager == null || _defaultContext != null;
+                if (publish)
                 {
-                    _contextOrder.Add(browserContextId);
+                    lock (_contextOrderLock)
+                    {
+                        _contextOrder.Add(browserContextId);
+                    }
                 }
 
                 return created;
@@ -494,6 +632,110 @@ namespace PlaywrightNative.Chromium
         }
 
         /// <summary>
+        /// Attaches to dedicated-worker targets that autoAttach created but whose
+        /// <c>Target.attachedToTarget</c> event was never delivered (suite-load
+        /// drop). Without this, PlzDedicatedWorker stays paused and
+        /// RequestFinished for the main script never fires.
+        /// </summary>
+        /// <returns>A task that completes when adoption attempts finish.</returns>
+        internal async Task AdoptOrphanWorkersAsync()
+        {
+            JsonElement? response;
+            try
+            {
+                response = await _connection.RootSession.SendAsync("Target.getTargets").ConfigureAwait(false);
+            }
+            catch (PlaywrightException)
+            {
+                return;
+            }
+
+            if (!response.HasValue
+                || !response.Value.TryGetProperty("targetInfos", out JsonElement infos)
+                || infos.ValueKind != JsonValueKind.Array)
+            {
+                return;
+            }
+
+            foreach (JsonElement info in infos.EnumerateArray())
+            {
+                string type = info.TryGetProperty("type", out JsonElement typeEl)
+                    ? typeEl.GetString()
+                    : string.Empty;
+                if (!string.Equals(type, "worker", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                string targetId = info.TryGetProperty("targetId", out JsonElement idEl)
+                    ? idEl.GetString()
+                    : string.Empty;
+                string url = info.TryGetProperty("url", out JsonElement urlEl)
+                    ? urlEl.GetString()
+                    : string.Empty;
+                string parentFrameId = info.TryGetProperty("parentFrameId", out JsonElement parentEl)
+                    ? parentEl.GetString()
+                    : string.Empty;
+                if (string.IsNullOrEmpty(targetId))
+                {
+                    continue;
+                }
+
+                CRPage owner = FindPageForOopif(frameId: null, parentFrameId);
+                if (owner == null)
+                {
+                    foreach (CRPage page in _crPages.Values)
+                    {
+                        owner = page;
+                        break;
+                    }
+                }
+
+                // Nested workers can share the same script URL as their parent;
+                // only skip when this CDP targetId is already tracked. Also skip
+                // targets closed by a document replacement — getTargets can still
+                // list a dying worker briefly after CloseAllWorkers.
+                if (owner == null
+                    || owner.HasWorkerTarget(targetId)
+                    || owner.IsWorkerTargetDiscarded(targetId))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    CRSession session = await AttachToTargetAsync(targetId)
+                        .WaitAsync(TimeSpan.FromSeconds(2))
+                        .ConfigureAwait(false);
+                    owner.AttachChildWorker(session, session.SessionId, info);
+                }
+                catch (TimeoutException)
+                {
+                }
+                catch (PlaywrightException)
+                {
+                    // Already attached (autoAttach) but attachedToTarget was dropped:
+                    // do not detach — that races a healthy in-flight attach. Resume
+                    // so PlzDedicatedWorker can finish the main script on the page
+                    // session's Network.requestWillBeSent request.
+                    try
+                    {
+                        await _connection.RootSession.SendAsync(
+                            "Target.sendMessageToTarget",
+                            new
+                            {
+                                targetId,
+                                message = "{\"id\":1,\"method\":\"Runtime.runIfWaitingForDebugger\"}",
+                            }).ConfigureAwait(false);
+                    }
+                    catch (PlaywrightException)
+                    {
+                    }
+                }
+            }
+        }
+
+        /// <summary>
         /// Attaches a flattened CDP session to the browser target.
         /// </summary>
         /// <returns>The child session for browser-level CDP commands.</returns>
@@ -517,7 +759,7 @@ namespace PlaywrightNative.Chromium
 
             if (string.IsNullOrEmpty(sessionId))
             {
-                throw new PlaywrightNativeException($"{method} did not return a sessionId.");
+                throw new PlaywrightException($"{method} did not return a sessionId.");
             }
 
             if (_connection.Sessions.TryGetValue(sessionId, out CRSession existing))
@@ -648,6 +890,54 @@ namespace PlaywrightNative.Chromium
             return null;
         }
 
+        private async Task AttachWorkerWhenPageReadyAsync(
+            CRSession workerSession,
+            string sessionId,
+            JsonElement targetInfo,
+            string parentFrameId)
+        {
+            string workerTargetId = targetInfo.TryGetProperty("targetId", out JsonElement workerTargetEl)
+                ? workerTargetEl.GetString()
+                : string.Empty;
+
+            for (int i = 0; i < 40; i++)
+            {
+                await Task.Delay(25).ConfigureAwait(false);
+                CRPage owner = FindPageForOopif(frameId: null, parentFrameId);
+                if (owner == null)
+                {
+                    continue;
+                }
+
+                // Navigation may have closed this worker while we waited for the
+                // owning page — do not resurrect it into Page.Workers.
+                if (owner.IsWorkerTargetDiscarded(workerTargetId) || owner.HasWorkerTarget(workerTargetId))
+                {
+                    try
+                    {
+                        await workerSession.SendAsync("Runtime.runIfWaitingForDebugger").ConfigureAwait(false);
+                    }
+                    catch (PlaywrightException)
+                    {
+                    }
+
+                    return;
+                }
+
+                owner.AttachChildWorker(workerSession, sessionId, targetInfo);
+                return;
+            }
+
+            // Last resort: never leave waitForDebuggerOnStart stuck forever.
+            try
+            {
+                await workerSession.SendAsync("Runtime.runIfWaitingForDebugger").ConfigureAwait(false);
+            }
+            catch (PlaywrightException)
+            {
+            }
+        }
+
         private void OnAttachedToTarget(JsonElement? parameters)
         {
             if (!parameters.HasValue)
@@ -718,18 +1008,48 @@ namespace PlaywrightNative.Chromium
                 return;
             }
 
+            // Dedicated workers: under suite load page-session Target.attachedToTarget
+            // can be missed while browser-level autoAttach still sees the worker.
+            // Leaving it paused here dropped RequestFinished for worker.js in an
+            // iframe (ShouldResolveWorkerScriptAllHeadersInIframe). Route to the
+            // owning page so Network.enable + resume run (AttachChildWorker is
+            // idempotent via _workers.TryAdd).
+            if (string.Equals(type, "worker", StringComparison.Ordinal))
+            {
+                CRSession workerSession = _connection.RootSession.CreateChildSession(sessionId);
+                string parentFrameId = targetInfo.TryGetProperty("parentFrameId", out JsonElement workerParentEl)
+                    ? workerParentEl.GetString()
+                    : string.Empty;
+                string workerTargetId = targetInfo.TryGetProperty("targetId", out JsonElement workerTargetEl)
+                    ? workerTargetEl.GetString()
+                    : string.Empty;
+                CRPage owner = FindPageForOopif(frameId: null, parentFrameId);
+                if (owner != null && owner.IsWorkerTargetDiscarded(workerTargetId))
+                {
+                    _ = workerSession.SendAsync("Runtime.runIfWaitingForDebugger");
+                    return;
+                }
+
+                if (owner != null)
+                {
+                    owner.AttachChildWorker(workerSession, sessionId, targetInfo);
+                }
+                else
+                {
+                    // Iframe frames can lag FrameManager registration under load.
+                    _ = AttachWorkerWhenPageReadyAsync(workerSession, sessionId, targetInfo, parentFrameId);
+                }
+
+                return;
+            }
+
             // We only create pages for page targets. Other types (shared_worker,
             // browser, ...) still need a session so waitForDebuggerOnStart
-            // does not leave them paused. Dedicated workers stay paused until
-            // the page FrameSession runs Runtime.enable (official order).
+            // does not leave them paused.
             if (type != "page")
             {
                 CRSession other = _connection.RootSession.CreateChildSession(sessionId);
-                if (!string.Equals(type, "worker", StringComparison.Ordinal))
-                {
-                    _ = other.SendAsync("Runtime.runIfWaitingForDebugger");
-                }
-
+                _ = other.SendAsync("Runtime.runIfWaitingForDebugger");
                 return;
             }
 
@@ -866,11 +1186,13 @@ namespace PlaywrightNative.Chromium
                 return;
             }
 
-            context?.AddServiceWorker(targetId, worker);
-            _ = InitializeServiceWorkerAsync(worker, context);
+            // Defer context.AddServiceWorker (and the public ServiceWorker event)
+            // until Network is armed when PublicContext exists — otherwise
+            // FirstServiceWorkerAsync + evaluate can race ahead of Network.enable.
+            _ = InitializeServiceWorkerAsync(worker, context, targetId);
         }
 
-        private async Task InitializeServiceWorkerAsync(CRWorker worker, CRBrowserContext context)
+        private async Task InitializeServiceWorkerAsync(CRWorker worker, CRBrowserContext context, string targetId)
         {
             try
             {
@@ -878,15 +1200,32 @@ namespace PlaywrightNative.Chromium
                 {
                     // Official CRServiceWorker applies UA/network before
                     // Runtime.runIfWaitingForDebugger. Persistent extension
-                    // workers attach during setAutoAttach before the instance
-                    // exists — keep them paused until AdoptExisting. For
-                    // connectOverCDP, still resume so page.goto(sw.html) can
-                    // finish while the default-context instance is created.
-                    await worker.InitializeAsync().ConfigureAwait(false);
+                    // workers attach during setAutoAttach before the public
+                    // context exists — keep them paused until
+                    // AdoptExistingServiceWorkersAsync instruments Network.
+                    // connectOverCDP (_processManager == null) still resumes so
+                    // page.goto(sw.html) can finish while the default-context
+                    // instance is created.
+                    context?.AddServiceWorker(targetId, worker);
+                    if (_processManager == null)
+                    {
+                        await worker.InitializeAsync().ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        // Keep waitForDebugger pause, but enable Runtime so the
+                        // target stays healthy until AdoptExisting resumes it.
+                        await worker.EnableRuntimeAsync().ConfigureAwait(false);
+                    }
+
                     return;
                 }
 
+                // Arm Network listeners + Network.enable before resume and before
+                // the public ServiceWorker event so SW fetch() is observed as
+                // context Request/Response (extensions.spec.ts).
                 await context.PublicContext.PrepareServiceWorkerNetworkAsync(worker).ConfigureAwait(false);
+                context.AddServiceWorker(targetId, worker);
                 await worker.InitializeAsync().ConfigureAwait(false);
             }
             catch (Exception ex)
@@ -949,6 +1288,32 @@ namespace PlaywrightNative.Chromium
                 return;
             }
 
+            // Dedicated workers attached via browser-level autoAttach (or orphan
+            // adoption) receive Target.detachedFromTarget on the root session.
+            // Dispose alone left CRPage._workers holding a ghost ChromiumWorker
+            // after cross-document navigation (WorkersParityTests.PageWorkers).
+            if (!string.IsNullOrEmpty(sessionId))
+            {
+                foreach (CRPage page in _crPages.Values)
+                {
+                    if (page.TryRemoveWorkerSession(sessionId))
+                    {
+                        return;
+                    }
+                }
+            }
+
+            if (!string.IsNullOrEmpty(targetId))
+            {
+                foreach (CRPage page in _crPages.Values)
+                {
+                    if (page.TryRemoveWorkerTarget(targetId))
+                    {
+                        return;
+                    }
+                }
+            }
+
             if (!string.IsNullOrEmpty(sessionId)
                 && _connection.Sessions.TryGetValue(sessionId, out CRSession extra)
                 && extra != _connection.RootSession)
@@ -971,7 +1336,7 @@ namespace PlaywrightNative.Chromium
             {
                 response = await _connection.RootSession.SendAsync("Target.getBrowserContexts").ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 return;
             }
@@ -1084,7 +1449,7 @@ namespace PlaywrightNative.Chromium
                 catch (TimeoutException)
                 {
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
             }
@@ -1116,7 +1481,7 @@ namespace PlaywrightNative.Chromium
             {
                 response = await _connection.RootSession.SendAsync("Target.getTargets").ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException)
+            catch (PlaywrightException)
             {
                 return false;
             }

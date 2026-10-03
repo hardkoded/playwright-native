@@ -16,6 +16,7 @@
  */
 using System;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -179,7 +180,7 @@ namespace PlaywrightNative.Helpers
         {
             if (abortOnSocketClose && socket.IsClosed)
             {
-                throw new PlaywrightNativeException("Socket closed");
+                throw new PlaywrightException("Socket closed");
             }
 
             TaskCompletionSource<T> closed = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -193,7 +194,7 @@ namespace PlaywrightNative.Helpers
                 }
                 else
                 {
-                    closed.TrySetException(new PlaywrightNativeException("Socket closed"));
+                    closed.TrySetException(new PlaywrightException("Socket closed"));
                 }
             }
 

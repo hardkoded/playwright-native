@@ -105,6 +105,16 @@ namespace PlaywrightNative.Helpers
             => string.IsNullOrEmpty(url) || string.Equals(url, ":", StringComparison.Ordinal);
 
         /// <summary>
+        /// Public <see cref="IPage.Url"/> / <see cref="IFrame.Url"/> value.
+        /// Internal frame state may be <c>""</c> for initial-empty detection;
+        /// callers see official <c>about:blank</c>.
+        /// </summary>
+        /// <param name="url">Internal frame URL.</param>
+        /// <returns>The URL exposed on the public API.</returns>
+        internal static string PublicDocumentUrl(string url)
+            => IsInitialEmptyDocumentUrl(url) ? "about:blank" : url;
+
+        /// <summary>
         /// Returns the only sibling of <paramref name="popup"/>, or
         /// <see langword="null"/> when the set is empty or ambiguous.
         /// Used when CDP/WebKit omit <c>openerId</c> for <c>noopener</c> popups.
@@ -203,7 +213,11 @@ namespace PlaywrightNative.Helpers
                         CancellationToken.None,
                         TaskContinuationOptions.ExecuteSynchronously,
                         TaskScheduler.Default);
-                    await Task.WhenAny(ready, closed.Task, Task.Delay(3_000)).ConfigureAwait(false);
+
+                    // Cap well under typical 5s popup CTS waits used in tests, but
+                    // long enough for Video attach / context Page reporting on WebKit.
+                    await Task.WhenAny(ready, closed.Task, Task.Delay(4_000))
+                        .ConfigureAwait(false);
                 }
             }
             finally

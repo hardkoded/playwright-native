@@ -16,6 +16,7 @@
  */
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using PlaywrightNative.Input;
 
 namespace PlaywrightNative.WebKit
@@ -126,7 +127,7 @@ namespace PlaywrightNative.WebKit
         {
             if (_page.EmulatesMobile)
             {
-                throw new PlaywrightNativeException("Mouse wheel is not supported in mobile WebKit");
+                throw new PlaywrightException("Mouse wheel is not supported in mobile WebKit");
             }
 
             // Matches upstream wkInput.ts RawMouseImpl.wheel: sync compositor state,

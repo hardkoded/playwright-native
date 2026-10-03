@@ -18,6 +18,7 @@ using System;
 using System.IO;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 
@@ -52,7 +53,7 @@ namespace PlaywrightNative.Tests
         [Timeout(TestConstants.DefaultTestTimeout)]
         public void ShouldThrowIfUserDataDirOptionIsPassed()
         {
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => LaunchAsync(new BrowserTypeLaunchOptions { UserDataDir = "random-path" }));
             Assert.That(error.Message, Does.Contain("userDataDir option is not supported in `browserType.launch`. Use `browserType.launchPersistentContext` instead"));
         }
@@ -62,7 +63,7 @@ namespace PlaywrightNative.Tests
         [Timeout(TestConstants.DefaultTestTimeout)]
         public void ShouldThrowIfUserDataDirIsPassedAsAnArgument()
         {
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => LaunchAsync(new BrowserTypeLaunchOptions
                 {
                     Args = new[] { "--user-data-dir=random-path", "--profile=random-path" },
@@ -75,7 +76,7 @@ namespace PlaywrightNative.Tests
         [Timeout(TestConstants.DefaultTestTimeout)]
         public void ShouldThrowIfPortOptionIsPassed()
         {
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => LaunchAsync(new BrowserTypeLaunchOptions { Port = 1234 }));
             Assert.That(error.Message, Does.Contain("Cannot specify a port without launching as a server."));
         }
@@ -85,7 +86,7 @@ namespace PlaywrightNative.Tests
         [Timeout(TestConstants.DefaultTestTimeout)]
         public void ShouldThrowIfPortOptionIsPassedForPersistentContext()
         {
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => CurrentBrowserType().LaunchPersistentContextAsync(
                     "foo",
                     new BrowserTypeLaunchOptions { Port = 1234 }));
@@ -102,7 +103,7 @@ namespace PlaywrightNative.Tests
                 Assert.Ignore("official skip: browserName === 'firefox' && !isBidi");
             }
 
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => LaunchAsync(new BrowserTypeLaunchOptions { Args = new[] { "http://example.com" } }));
             Assert.That(error.Message, Does.Contain("can not specify page"));
         }
@@ -113,7 +114,7 @@ namespace PlaywrightNative.Tests
         public void ShouldRejectIfLaunchedBrowserFailsImmediately()
         {
             string dummy = TestUtils.GetWebServerFile("dummy_bad_browser_executable.js");
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => CurrentBrowserType().LaunchAsync(new BrowserTypeLaunchOptions { ExecutablePath = dummy }));
             Assert.That(
                 Regex.IsMatch(error.Message, @"browserType\.launch(.|\n)*(spawn UNKNOWN|spawn EFTYPE|Browser logs:)", RegexOptions.IgnoreCase | RegexOptions.Multiline),
@@ -126,7 +127,7 @@ namespace PlaywrightNative.Tests
         [Timeout(TestConstants.DefaultTestTimeout)]
         public void ShouldRejectIfExecutablePathIsInvalid()
         {
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => CurrentBrowserType().LaunchAsync(new BrowserTypeLaunchOptions { ExecutablePath = "random-invalid-path" }));
             Assert.That(error.Message, Does.Contain("Failed to launch"));
         }

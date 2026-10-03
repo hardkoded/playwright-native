@@ -20,6 +20,7 @@ using System.IO;
 using System.Text;
 using System.Text.Json.Serialization;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 
@@ -219,7 +220,7 @@ namespace PlaywrightNative.Tests
             await page.SetContentAsync("<div id='dropzone' style='width: 200px; height: 100px;'></div>")
                 .ConfigureAwait(false);
 
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => page.DropAsync("#dropzone", new DropPayload
                 {
                     Data = new Dictionary<string, string> { ["text/plain"] = "nope" },
@@ -238,7 +239,7 @@ namespace PlaywrightNative.Tests
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
             await page.SetContentAsync(DropzoneSetup).ConfigureAwait(false);
 
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => page.DropAsync("#dropzone", new DropPayload()));
             Assert.That(error, Is.Not.Null);
             Assert.That(error.Message, Does.Contain("At least one of \"files\" or \"data\""));

@@ -18,6 +18,7 @@ using System;
 using System.Collections.Generic;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 
@@ -93,7 +94,7 @@ namespace PlaywrightNative.Tests
         public async Task ShouldThrowUponSecondCreateNewPage()
         {
             IPage page = await _browser.NewPageAsync().ConfigureAwait(false);
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => page.Context.NewPageAsync());
             await page.CloseAsync().ConfigureAwait(false);
             Assert.That(error.Message, Does.Contain("Please use browser.newContext()"));

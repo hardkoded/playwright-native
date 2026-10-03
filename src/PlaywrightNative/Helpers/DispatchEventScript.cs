@@ -20,6 +20,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Reflection;
 using System.Text.Json;
+using Microsoft.Playwright;
 using PlaywrightNative.Chromium;
 using PlaywrightNative.Firefox;
 using PlaywrightNative.WebKit;
@@ -242,7 +243,7 @@ namespace PlaywrightNative.Helpers
             {
                 if (crTarget.ExecutionContext.ContextId != crArgument.ExecutionContext.ContextId)
                 {
-                    throw new PlaywrightNativeException(DifferentContextMessage);
+                    throw new PlaywrightException(DifferentContextMessage);
                 }
 
                 return;
@@ -252,7 +253,7 @@ namespace PlaywrightNative.Helpers
             {
                 if (wkTarget.ExecutionContext.ContextId != wkArgument.ExecutionContext.ContextId)
                 {
-                    throw new PlaywrightNativeException(DifferentContextMessage);
+                    throw new PlaywrightException(DifferentContextMessage);
                 }
 
                 return;
@@ -262,7 +263,7 @@ namespace PlaywrightNative.Helpers
             {
                 if (!ReferenceEquals(ffTarget.ExecutionContext, ffArgument.ExecutionContext))
                 {
-                    throw new PlaywrightNativeException(DifferentContextMessage);
+                    throw new PlaywrightException(DifferentContextMessage);
                 }
             }
         }

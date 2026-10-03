@@ -22,6 +22,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -108,8 +109,9 @@ namespace PlaywrightNative.Helpers
                     return;
                 }
 
-                navigatedUrls.Add(frame.Url ?? string.Empty);
-                if (MatchesUrl(frame.Url, urlString, urlRegex, urlFunc))
+                string frameUrl = frame.Url ?? string.Empty;
+                navigatedUrls.Add(frameUrl);
+                if (MatchesUrl(frameUrl, urlString, urlRegex, urlFunc))
                 {
                     navigatedTcs.TrySetResult(true);
                 }
@@ -123,7 +125,7 @@ namespace PlaywrightNative.Helpers
                 }
 
                 failureTcs.TrySetException(
-                    new PlaywrightNativeException(
+                    new PlaywrightException(
                         WaitingLine(urlString, urlRegex, waitUntil) + Environment.NewLine + "frame was detached"));
             }
 
@@ -139,7 +141,7 @@ namespace PlaywrightNative.Helpers
                 {
                     frame = request.Frame;
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                     return;
                 }
@@ -162,7 +164,7 @@ namespace PlaywrightNative.Helpers
                     return;
                 }
 
-                failureTcs.TrySetException(new PlaywrightNativeException(failure));
+                failureTcs.TrySetException(new PlaywrightException(failure));
             }
 
             page.Response += OnResponse;
@@ -202,12 +204,17 @@ namespace PlaywrightNative.Helpers
                     {
                         throw BuildTimeout(apiName, timeoutMs, urlString, urlRegex, waitUntil, navigatedUrls);
                     }
-                    catch (PlaywrightNativeException ex) when (ex.Message.Contains("frame was detached", StringComparison.OrdinalIgnoreCase))
+                    catch (PlaywrightException ex) when (ex.Message.Contains("frame was detached", StringComparison.OrdinalIgnoreCase))
                     {
-                        throw new PlaywrightNativeException(
+                        throw new PlaywrightException(
                             WaitingLine(urlString, urlRegex, waitUntil) + Environment.NewLine + "frame was detached",
                             ex);
                     }
+                }
+
+                if (waitUntil == WaitUntilState.Commit)
+                {
+                    await WaitForCommitParserAsync(page, navigatedUrls, timeoutMs, sw).ConfigureAwait(false);
                 }
 
                 return captured;
@@ -218,6 +225,50 @@ namespace PlaywrightNative.Helpers
                 page.FrameNavigated -= OnNavigated;
                 page.FrameDetached -= OnDetached;
                 page.RequestFailed -= OnRequestFailed;
+            }
+        }
+
+        /// <summary>
+        /// macOS WebKit can emit <c>frameNavigated</c> before the parser has
+        /// applied <c>&lt;title&gt;</c>. Commit should still observe that title
+        /// (page-wait-for-navigation "should work with commit") without waiting
+        /// for a document that never reaches <c>load</c> (blocking script).
+        /// </summary>
+        private static async Task WaitForCommitParserAsync(
+            IPage page,
+            List<string> navigatedUrls,
+            int timeoutMs,
+            Stopwatch sw)
+        {
+            string committed = navigatedUrls.Count > 0 ? navigatedUrls[navigatedUrls.Count - 1] : page.Url;
+            if (string.IsNullOrEmpty(committed)
+                || committed.Equals("about:blank", StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            int remain = RemainingTimeoutMs(timeoutMs, sw);
+            int parserWait = remain == Timeout.Infinite ? 1000 : Math.Min(1000, Math.Max(0, remain));
+            if (parserWait <= 0)
+            {
+                return;
+            }
+
+            try
+            {
+                await page.WaitForFunctionAsync(
+                    "() => {"
+                    + "const href = String(location.href || '');"
+                    + "if (!href || href === 'about:blank') return false;"
+                    + "return document.readyState !== 'loading' || !!document.title || !!document.body;"
+                    + "}",
+                    timeout: parserWait).ConfigureAwait(false);
+            }
+            catch (TimeoutException)
+            {
+            }
+            catch (PlaywrightException)
+            {
             }
         }
 

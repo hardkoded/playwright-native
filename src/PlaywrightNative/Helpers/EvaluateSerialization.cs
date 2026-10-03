@@ -23,6 +23,7 @@ using System.Reflection;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -51,10 +52,14 @@ namespace PlaywrightNative.Helpers
 
         /// <summary>
         /// Browser-side serialize matching Playwright's utility-script serializer.
+        /// Cycle detection uses a parallel object/id array instead of <c>Map</c>,
+        /// since page code can reassign the global <c>Map</c> binding (official
+        /// "should work with deleted Map in main world" parity).
         /// </summary>
         internal const string SerializeJs =
             "function (value) {" +
-            "  const seen = new Map();" +
+            "  const seenObjs = [];" +
+            "  const seenIds = [];" +
             "  let nextId = 1;" +
             "  const isRegExp = (obj) => { try { return obj instanceof RegExp || Object.prototype.toString.call(obj) === '[object RegExp]'; } catch (e) { return false; } };" +
             "  const isDate = (obj) => { try { return obj instanceof Date || Object.prototype.toString.call(obj) === '[object Date]'; } catch (e) { return false; } };" +
@@ -114,9 +119,11 @@ namespace PlaywrightNative.Helpers
             "      if (!ctor) continue;" +
             "      try { if (v instanceof ctor) return { ta: { b: toBase64(v), k: typed[t][0] } }; } catch (e) {}" +
             "    }" +
-            "    if (seen.has(v)) return { ref: seen.get(v) };" +
+            "    const seenIdx = seenObjs.indexOf(v);" +
+            "    if (seenIdx !== -1) return { ref: seenIds[seenIdx] };" +
             "    const id = nextId++;" +
-            "    seen.set(v, id);" +
+            "    seenObjs.push(v);" +
+            "    seenIds.push(id);" +
             "    if (Array.isArray(v)) {" +
             "      const a = [];" +
             "      for (let i = 0; i < v.length; i++) a[i] = visit(v[i]);" +
@@ -144,11 +151,13 @@ namespace PlaywrightNative.Helpers
             "}";
 
         /// <summary>
-        /// Browser-side parse of the tagged evaluate payload.
+        /// Browser-side parse of the tagged evaluate payload. Keyed by the
+        /// numeric tag id, so a plain object stands in for <c>Map</c> here too -
+        /// same reasoning as <see cref="SerializeJs"/>.
         /// </summary>
         internal const string ParseJs =
             "function (value) {" +
-            "  const refs = new Map();" +
+            "  const refs = Object.create(null);" +
             "  const typed = {" +
             "    i8: typeof Int8Array === 'function' ? Int8Array : null," +
             "    ui8: typeof Uint8Array === 'function' ? Uint8Array : null," +
@@ -170,7 +179,7 @@ namespace PlaywrightNative.Helpers
             "  };" +
             "  const visit = (v) => {" +
             "    if (v === undefined || v === null || typeof v !== 'object') return v;" +
-            "    if (Object.prototype.hasOwnProperty.call(v, 'ref')) return refs.get(v.ref);" +
+            "    if (Object.prototype.hasOwnProperty.call(v, 'ref')) return refs[v.ref];" +
             "    if (Object.prototype.hasOwnProperty.call(v, 'v')) {" +
             "      if (v.v === 'undefined') return undefined;" +
             "      if (v.v === 'null') return null;" +
@@ -196,13 +205,13 @@ namespace PlaywrightNative.Helpers
             "    if (Object.prototype.hasOwnProperty.call(v, 'ta')) return fromBase64(v.ta.b, typed[v.ta.k]);" +
             "    if (Object.prototype.hasOwnProperty.call(v, 'a')) {" +
             "      const a = [];" +
-            "      refs.set(v.id, a);" +
+            "      refs[v.id] = a;" +
             "      for (let i = 0; i < v.a.length; i++) a[i] = visit(v.a[i]);" +
             "      return a;" +
             "    }" +
             "    if (Object.prototype.hasOwnProperty.call(v, 'o')) {" +
             "      const o = {};" +
-            "      refs.set(v.id, o);" +
+            "      refs[v.id] = o;" +
             "      for (let i = 0; i < v.o.length; i++) {" +
             "        const e = v.o[i];" +
             "        if (e.k === '__proto__') continue;" +
@@ -235,14 +244,30 @@ namespace PlaywrightNative.Helpers
         /// <returns>An evaluable expression that returns the tagged payload.</returns>
         internal static string WithSerializedResult(string expression)
         {
-            return "(function(){ const s = (" + SerializeJs + "); const v = (" + expression +
+            // Trailing semicolons (common on IIFE installers like `(() => {…})();`)
+            // must not sit inside the parenthesized `const v = (…)` or JS reports
+            // "Unexpected token ';'".
+            string expr = expression ?? string.Empty;
+            expr = expr.TrimEnd();
+            while (expr.Length > 0 && expr[expr.Length - 1] == ';')
+            {
+                expr = expr.Substring(0, expr.Length - 1).TrimEnd();
+            }
+
+            return "(function(){ const s = (" + SerializeJs + "); const v = (" + expr +
                 "); if (v && typeof v.then === 'function') return v.then(s); return s(v); })()";
         }
 
         /// <summary>
         /// Returns whether <paramref name="expression"/> can be parenthesized as a
-        /// JavaScript expression (function IIFEs and wrapped calls). Programs such as
-        /// <c>1 + 5;</c> must stay two-step so the completion value is preserved.
+        /// JavaScript expression (function IIFEs, wrapped calls, and simple bare
+        /// sync expressions such as <c>1 + 1</c>). Programs such as <c>1 + 5;</c>
+        /// must stay two-step so the completion value is preserved. Thenables
+        /// (<c>Promise</c>, <c>fetch(</c>, <c>.then(</c>, <c>await</c>, property
+        /// access that may yield a thenable) must keep a handle so WebKit can
+        /// <c>awaitPromise</c> via <c>callFunctionOn</c>; wrapping them with
+        /// <c>returnByValue:true</c> drops the objectId and a second evaluate
+        /// re-runs side effects or wedges Darwin.
         /// </summary>
         /// <param name="expression">The already-invoked evaluate expression.</param>
         /// <returns><see langword="true"/> when same-turn serialize wrapping is safe.</returns>
@@ -254,21 +279,52 @@ namespace PlaywrightNative.Helpers
             }
 
             string trimmed = expression.TrimStart();
+
+            // Async functions/IIFEs must keep a handle so awaitPromise can settle.
+            if (trimmed.StartsWith("(async", StringComparison.Ordinal)
+                || trimmed.StartsWith("async ", StringComparison.Ordinal)
+                || trimmed.StartsWith("async(", StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            // Sync IIFEs / function expressions: always wrap. WithSerializedResult
+            // awaits any thenable completion value. Rejecting them because the BODY
+            // mentions Promise/.then/fetch forces EvaluateHandle+awaitPromise, which
+            // deadlocks Darwin when the IIFE only schedules work and returns sync
+            // (clock kickoff embeds controller scripts that contain those substrings).
+            if (trimmed.StartsWith('(') || trimmed.StartsWith("function", StringComparison.Ordinal))
+            {
+                return true;
+            }
+
             if (trimmed.Contains(".then(", StringComparison.Ordinal)
                 || trimmed.Contains("await ", StringComparison.Ordinal)
                 || trimmed.Contains("new Promise", StringComparison.Ordinal)
                 || trimmed.Contains("Promise.", StringComparison.Ordinal)
-                || trimmed.StartsWith("(async", StringComparison.Ordinal)
-                || trimmed.StartsWith("async ", StringComparison.Ordinal)
-                || trimmed.StartsWith("async(", StringComparison.Ordinal))
+                || trimmed.Contains("fetch(", StringComparison.Ordinal))
             {
-                // Thenables must keep a handle so WebKit can awaitPromise via
-                // callFunctionOn. Wrapping them with returnByValue:true drops
-                // the objectId and a second evaluate re-runs fetch/side effects.
+                // Bare thenable expressions must keep a handle so WebKit can
+                // awaitPromise via callFunctionOn. Wrapping them with
+                // returnByValue:true drops the objectId and a second evaluate
+                // re-runs fetch/side effects.
                 return false;
             }
 
-            return trimmed.StartsWith('(') || trimmed.StartsWith("function", StringComparison.Ordinal);
+            // Simple bare sync expressions (e.g. `1 + 1`) can be parenthesized for
+            // same-turn returnByValue serialize. Leaving them on the handle +
+            // MaterializeAsync(awaitPromise) path wedges Darwin WebKit forever
+            // (FrameEvaluateShouldRunInOwnWorld). Do NOT wrap property access /
+            // calls / object literals — those may be thenables without the
+            // keywords above (document.body.textContent, fonts.ready, …).
+            return !trimmed.Contains(';')
+                && !trimmed.Contains('\n')
+                && !trimmed.Contains('\r')
+                && !trimmed.Contains('.')
+                && !trimmed.Contains('(')
+                && !trimmed.Contains('[')
+                && !trimmed.Contains('{')
+                && !trimmed.Contains('`');
         }
 
         /// <summary>
@@ -339,7 +395,9 @@ namespace PlaywrightNative.Helpers
 
             if (message.Contains("Execution context was destroyed", StringComparison.Ordinal)
                 || message.Contains("Frame was detached", StringComparison.Ordinal)
-                || message.Contains("Missing injected script", StringComparison.Ordinal))
+                || message.Contains("Missing injected script", StringComparison.Ordinal)
+                || (frameEvaluate
+                    && message.Contains("Execution context is not yet available", StringComparison.Ordinal)))
             {
                 if (!frameEvaluate)
                 {
@@ -347,6 +405,7 @@ namespace PlaywrightNative.Helpers
                 }
 
                 string detail = message.Contains("Frame was detached", StringComparison.Ordinal)
+                    || message.Contains("Execution context is not yet available", StringComparison.Ordinal)
                     ? "Frame was detached"
                     : "Execution context was destroyed";
                 return "frame.evaluate: " + detail;
@@ -368,7 +427,7 @@ namespace PlaywrightNative.Helpers
         /// <param name="error">The protocol or engine exception.</param>
         /// <param name="frameEvaluate">Whether the call is <c>frame.evaluate</c>.</param>
         /// <returns>The original or rewritten exception.</returns>
-        internal static PlaywrightNativeException RewriteException(PlaywrightNativeException error, bool frameEvaluate = false)
+        internal static PlaywrightException RewriteException(PlaywrightException error, bool frameEvaluate = false)
         {
             if (error == null)
             {
@@ -376,7 +435,7 @@ namespace PlaywrightNative.Helpers
             }
 
             string rewritten = RewriteError(error.Message, frameEvaluate);
-            return rewritten == error.Message ? error : new PlaywrightNativeException(rewritten);
+            return rewritten == error.Message ? error : new PlaywrightException(rewritten);
         }
 
         /// <summary>
@@ -403,6 +462,25 @@ namespace PlaywrightNative.Helpers
                 return ParseRemote<T>(remote);
             }
 
+            // Sync primitives often still carry an objectId on WebKit. Running
+            // SerializeAwaitedJs (awaitPromise) on them wedges Darwin forever
+            // (Date.now(), matchMedia(...).matches, FrameEvaluate `1 + 1` before
+            // bare-wrap). Prefer the already-present by-value payload.
+            if (HasInlinePrimitivePayload(remote.Value))
+            {
+                try
+                {
+                    return ParseRemote<T>(remote);
+                }
+                finally
+                {
+                    if (release != null)
+                    {
+                        await release(objectId).ConfigureAwait(false);
+                    }
+                }
+            }
+
             try
             {
                 JsonElement tagged = await serializeOnHandle(objectId).ConfigureAwait(false);
@@ -415,6 +493,40 @@ namespace PlaywrightNative.Helpers
                     await release(objectId).ConfigureAwait(false);
                 }
             }
+        }
+
+        /// <summary>
+        /// Returns whether <paramref name="remote"/> already carries a typed primitive
+        /// <c>value</c> (or undefined) that <see cref="ParseRemote{T}"/> can read
+        /// without a second protocol round-trip.
+        /// </summary>
+        /// <param name="remote">A protocol remote object.</param>
+        /// <returns><see langword="true"/> when inline materialization is safe.</returns>
+        private static bool HasInlinePrimitivePayload(JsonElement remote)
+        {
+            if (!remote.TryGetProperty("type", out JsonElement typeEl)
+                || typeEl.ValueKind != JsonValueKind.String)
+            {
+                return false;
+            }
+
+            string type = typeEl.GetString();
+            if (string.Equals(type, "undefined", StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            if (string.Equals(type, "number", StringComparison.Ordinal)
+                || string.Equals(type, "boolean", StringComparison.Ordinal)
+                || string.Equals(type, "string", StringComparison.Ordinal)
+                || string.Equals(type, "bigint", StringComparison.Ordinal)
+                || string.Equals(type, "symbol", StringComparison.Ordinal))
+            {
+                return remote.TryGetProperty("value", out _)
+                    || remote.TryGetProperty("unserializableValue", out _);
+            }
+
+            return false;
         }
 
         private static object VisitArgument(object value, IDictionary<object, int> seen, IdBox ids, string path)
@@ -532,7 +644,7 @@ namespace PlaywrightNative.Helpers
 
             if (value is IJSHandle)
             {
-                throw new PlaywrightNativeException("JSHandle arguments must be passed through the handle evaluate path.");
+                throw new PlaywrightException("JSHandle arguments must be passed through the handle evaluate path.");
             }
 
             Type type = value.GetType();

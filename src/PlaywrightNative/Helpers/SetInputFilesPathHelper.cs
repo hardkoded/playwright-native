@@ -18,6 +18,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -87,12 +88,12 @@ namespace PlaywrightNative.Helpers
 
             if (dirs.Count > 1)
             {
-                throw new PlaywrightNativeException(MultipleDirectoriesMessage);
+                throw new PlaywrightException(MultipleDirectoriesMessage);
             }
 
             if (dirs.Count == 1 && files.Count > 0)
             {
-                throw new PlaywrightNativeException(MixMessage);
+                throw new PlaywrightException(MixMessage);
             }
 
             if (dirs.Count == 1)
@@ -139,18 +140,18 @@ namespace PlaywrightNative.Helpers
         {
             if (element == null)
             {
-                throw new PlaywrightNativeException("Element is not an <input type=\"file\">");
+                throw new PlaywrightException("Element is not an <input type=\"file\">");
             }
 
             bool isDirectoryInput = await element.EvaluateAsync<bool>(IsDirectoryInputFunction).ConfigureAwait(false);
             if (resolved.IsDirectory && !isDirectoryInput)
             {
-                throw new PlaywrightNativeException(FolderOnFileInputMessage);
+                throw new PlaywrightException(FolderOnFileInputMessage);
             }
 
             if (!resolved.IsDirectory && isDirectoryInput)
             {
-                throw new PlaywrightNativeException(FileOnDirectoryInputMessage);
+                throw new PlaywrightException(FileOnDirectoryInputMessage);
             }
         }
 

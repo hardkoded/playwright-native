@@ -7,6 +7,7 @@
 using System;
 using System.Collections.Generic;
 using System.Text.RegularExpressions;
+using Microsoft.Playwright;
 using PlaywrightNative.Helpers;
 
 namespace PlaywrightNative
@@ -470,7 +471,7 @@ namespace PlaywrightNative
 
                 if (_ops.Count == 0)
                 {
-                    throw new PlaywrightNativeException(
+                    throw new PlaywrightException(
                         "Empty \"by\" locator. Start with one of by.role(), by.text(), by.testId() and friends.");
                 }
 
@@ -763,7 +764,7 @@ namespace PlaywrightNative
                 {
                     if (current == null)
                     {
-                        throw new PlaywrightNativeException(
+                        throw new PlaywrightException(
                             "Empty \"by\" locator. Start with one of by.role(), by.text(), by.testId() and friends.");
                     }
 
@@ -820,7 +821,7 @@ namespace PlaywrightNative
                 {
                     if (current == null)
                     {
-                        throw new PlaywrightNativeException(
+                        throw new PlaywrightException(
                             "Empty \"by\" locator. Start with one of by.role(), by.text(), by.testId() and friends.");
                     }
 
@@ -841,7 +842,7 @@ namespace PlaywrightNative
                 {
                     if (current == null)
                     {
-                        throw new PlaywrightNativeException(
+                        throw new PlaywrightException(
                             "Empty \"by\" locator. Start with one of by.role(), by.text(), by.testId() and friends.");
                     }
 
@@ -862,7 +863,7 @@ namespace PlaywrightNative
                 {
                     if (current == null)
                     {
-                        throw new PlaywrightNativeException(
+                        throw new PlaywrightException(
                             "Empty \"by\" locator. Start with one of by.role(), by.text(), by.testId() and friends.");
                     }
 
@@ -878,7 +879,7 @@ namespace PlaywrightNative
                 {
                     if (current == null)
                     {
-                        throw new PlaywrightNativeException(
+                        throw new PlaywrightException(
                             "Empty \"by\" locator. Start with one of by.role(), by.text(), by.testId() and friends.");
                     }
 
@@ -899,7 +900,7 @@ namespace PlaywrightNative
                 {
                     if (current == null)
                     {
-                        throw new PlaywrightNativeException(
+                        throw new PlaywrightException(
                             "Empty \"by\" locator. Start with one of by.role(), by.text(), by.testId() and friends.");
                     }
 

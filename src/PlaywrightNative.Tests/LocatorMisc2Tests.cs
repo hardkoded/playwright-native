@@ -18,6 +18,7 @@ using System;
 using System.Globalization;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 using PlaywrightNative.TestServer;
@@ -402,13 +403,13 @@ namespace PlaywrightNative.Tests
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
             await page.SetContentAsync("<input type='text' value='hello' />").ConfigureAwait(false);
             ILocator locator = page.GetByRole("textbox");
-            PlaywrightNativeException unknown = Assert.CatchAsync<PlaywrightNativeException>(() => locator.PressAsync("NotARealKey"));
+            PlaywrightException unknown = Assert.CatchAsync<PlaywrightException>(() => locator.PressAsync("NotARealKey"));
             Assert.That(unknown, Is.Not.Null);
             Assert.That(unknown.Message, Does.Match(new Regex("Unknown key: \"NotARealKey\"")));
-            PlaywrightNativeException yo = Assert.CatchAsync<PlaywrightNativeException>(() => locator.PressAsync("ё"));
+            PlaywrightException yo = Assert.CatchAsync<PlaywrightException>(() => locator.PressAsync("ё"));
             Assert.That(yo, Is.Not.Null);
             Assert.That(yo.Message, Does.Match(new Regex("Unknown key: \"ё\"")));
-            PlaywrightNativeException emoji = Assert.CatchAsync<PlaywrightNativeException>(() => locator.PressAsync("😊"));
+            PlaywrightException emoji = Assert.CatchAsync<PlaywrightException>(() => locator.PressAsync("😊"));
             Assert.That(emoji, Is.Not.Null);
             Assert.That(emoji.Message, Does.Match(new Regex("Unknown key: \"😊\"")));
         }

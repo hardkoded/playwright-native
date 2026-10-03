@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 using System;
+using System.Collections.Generic;
 using System.Threading.Tasks;
 
 namespace PlaywrightNative.Helpers
@@ -119,7 +120,28 @@ namespace PlaywrightNative.Helpers
                         h => context.Dialog += h,
                         h => context.Dialog -= h,
                         matches,
-                        timeout);
+                        timeout,
+                        abortOnClose: null,
+                        existingAfterSubscribe: () =>
+                        {
+                            List<IDialog> open = new();
+                            foreach (IPage page in context.Pages)
+                            {
+                                if (page is IHasPageExtras extras)
+                                {
+                                    IDialog dialog = extras.TryGetOpenDialog();
+                                    if (dialog != null)
+                                    {
+                                        extras.TryMarkOpenDialogEmitted();
+                                        open.Add(dialog);
+                                    }
+                                }
+                            }
+
+                            return Task.FromResult<IReadOnlyList<T>>(
+                                (IReadOnlyList<T>)(object)open);
+                        },
+                        deferPredicateEvaluation: false);
                 case "DialogClosed":
                     if (context is not IHasBrowserContextExtras extrasDialogClosed)
                     {
@@ -183,7 +205,9 @@ namespace PlaywrightNative.Helpers
             Action<EventHandler<TEvent>> removeHandler,
             Func<T, bool> matches,
             float? timeout,
-            IBrowserContext abortOnClose = null)
+            IBrowserContext abortOnClose = null,
+            Func<Task<IReadOnlyList<T>>> existingAfterSubscribe = null,
+            bool deferPredicateEvaluation = true)
         {
             if (typeof(T) != typeof(TEvent))
             {
@@ -207,12 +231,24 @@ namespace PlaywrightNative.Helpers
 
             try
             {
+                Func<Task<IReadOnlyList<TEvent>>> existing = null;
+                if (existingAfterSubscribe != null)
+                {
+                    existing = async () =>
+                    {
+                        IReadOnlyList<T> items = await existingAfterSubscribe().ConfigureAwait(false);
+                        return (IReadOnlyList<TEvent>)items;
+                    };
+                }
+
                 Task<TEvent> waitTask = WaitForEventHelper.WaitAsync(
                     addHandler,
                     removeHandler,
                     e => matches((T)(object)e),
                     timeout,
-                    "browserContext.waitForEvent");
+                    "browserContext.waitForEvent",
+                    existingAfterSubscribe: existing,
+                    deferPredicateEvaluation: deferPredicateEvaluation);
                 if (closed == null)
                 {
                     TEvent result = await waitTask.ConfigureAwait(false);

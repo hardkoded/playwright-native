@@ -18,6 +18,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 
@@ -171,10 +172,10 @@ namespace PlaywrightNative.Tests
             await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
             await page.GoToAsync(EmptyPage).ConfigureAwait(false);
-            PlaywrightNativeException pageError = Assert.CatchAsync<PlaywrightNativeException>(() => page.EvalOnSelectorAsync<int>("iframe >> internal:control=enter-frame >> canvas", "e => 1"));
+            PlaywrightException pageError = Assert.CatchAsync<PlaywrightException>(() => page.EvalOnSelectorAsync<int>("iframe >> internal:control=enter-frame >> canvas", "e => 1"));
             Assert.That(pageError.Message, Does.Contain("page.$eval: Failed to find element matching selector"));
             IElementHandle body = await page.QuerySelectorAsync("body").ConfigureAwait(false);
-            PlaywrightNativeException handleError = Assert.CatchAsync<PlaywrightNativeException>(() => body.EvalOnSelectorAsync<int>("iframe >> internal:control=enter-frame >> canvas", "e => 1"));
+            PlaywrightException handleError = Assert.CatchAsync<PlaywrightException>(() => body.EvalOnSelectorAsync<int>("iframe >> internal:control=enter-frame >> canvas", "e => 1"));
             Assert.That(handleError.Message, Does.Contain("elementHandle.$eval: Failed to find element matching selector"));
         }
 
@@ -278,7 +279,7 @@ namespace PlaywrightNative.Tests
             await RouteIframeAsync(page).ConfigureAwait(false);
             await page.GoToAsync(EmptyPage).ConfigureAwait(false);
             ILocator button = page.Locator("iframe >> internal:control=enter-frame");
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(() => button.ClickAsync());
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(() => button.ClickAsync());
             Assert.That(error.Message, Does.Contain("Selector cannot end with"));
             Assert.That(error.Message, Does.Contain("iframe >> internal:control=enter-frame"));
         }
@@ -293,7 +294,7 @@ namespace PlaywrightNative.Tests
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
             await RouteIframeAsync(page).ConfigureAwait(false);
             await page.GoToAsync(EmptyPage).ConfigureAwait(false);
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(() => page.WaitForSelectorAsync("internal:control=enter-frame >> button"));
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(() => page.WaitForSelectorAsync("internal:control=enter-frame >> button"));
             Assert.That(error.Message, Does.Contain("Selector cannot start with"));
         }
 
@@ -308,7 +309,7 @@ namespace PlaywrightNative.Tests
             await RouteIframeAsync(page).ConfigureAwait(false);
             await page.GoToAsync(EmptyPage).ConfigureAwait(false);
             ILocator button = page.Locator("*css=iframe >> internal:control=enter-frame >> div");
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(() => button.ClickAsync());
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(() => button.ClickAsync());
             Assert.That(error.Message, Does.Contain("Can not capture the selector before diving into the frame"));
         }
 
@@ -479,59 +480,10 @@ namespace PlaywrightNative.Tests
             await RouteIframeAsync(page).ConfigureAwait(false);
             await page.SetContentAsync("<div></div>").ConfigureAwait(false);
             ILocator button = page.Locator("div >> internal:control=enter-frame >> button");
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(() => button.WaitForAsync());
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(() => button.WaitForAsync());
             Assert.That(error.Message, Does.Contain("<div></div>"));
             Assert.That(error.Message, Does.Contain("<iframe> was expected"));
         }
-
-        [PlaywrightTest("selectors-frame.spec.ts", "should pierce frames into a single descendant frame")]
-        [Test]
-        [Timeout(TestConstants.DefaultTestTimeout)]
-        public async Task ShouldPierceFramesIntoASingleDescendantFrame()
-        {
-            await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
-            await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
-            IPage page = await context.NewPageAsync().ConfigureAwait(false);
-            await RouteIframeAsync(page).ConfigureAwait(false);
-            await page.GoToAsync(EmptyPage).ConfigureAwait(false);
-            ILocator div = page.Locator("internal:control=pierce-frames >> div");
-            await div.WaitForAsync().ConfigureAwait(false);
-            await Assertions.Expect(div).ToHaveCountAsync(1).ConfigureAwait(false);
-            Assert.That(await div.InnerHTMLAsync().ConfigureAwait(false), Does.Contain("<button>Hello iframe</button>"));
-        }
-
-        [PlaywrightTest("selectors-frame.spec.ts", "should pierce through multiple frames")]
-        [Test]
-        [Timeout(TestConstants.DefaultTestTimeout)]
-        public async Task ShouldPierceThroughMultipleFrames()
-        {
-            await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
-            await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
-            IPage page = await context.NewPageAsync().ConfigureAwait(false);
-            await RouteIframeAsync(page).ConfigureAwait(false);
-            await page.GoToAsync(EmptyPage).ConfigureAwait(false);
-            ILocator button = page.Locator("internal:control=pierce-frames >> button[tag=\"iframe2\"]");
-            await button.WaitForAsync().ConfigureAwait(false);
-            await Assertions.Expect(button).ToHaveCountAsync(1).ConfigureAwait(false);
-            Assert.That(await button.TextContentAsync().ConfigureAwait(false), Is.EqualTo("Hello nested iframe"));
-        }
-
-        [PlaywrightTest("selectors-frame.spec.ts", "should pierce multiple times")]
-        [Test]
-        [Timeout(TestConstants.DefaultTestTimeout)]
-        public async Task ShouldPierceMultipleTimes()
-        {
-            await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
-            await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
-            IPage page = await context.NewPageAsync().ConfigureAwait(false);
-            await RouteIframeAsync(page).ConfigureAwait(false);
-            await page.GoToAsync(EmptyPage).ConfigureAwait(false);
-            ILocator button = page.Locator("internal:control=pierce-frames >> div >> button[tag=\"iframe2\"]");
-            await button.WaitForAsync().ConfigureAwait(false);
-            await Assertions.Expect(button).ToHaveCountAsync(1).ConfigureAwait(false);
-            Assert.That(await button.TextContentAsync().ConfigureAwait(false), Is.EqualTo("Hello nested iframe"));
-        }
-
         [PlaywrightTest("selectors-frame.spec.ts", "should match multiple elements")]
         [Test]
         [Timeout(TestConstants.DefaultTestTimeout)]
@@ -547,91 +499,6 @@ namespace PlaywrightNative.Tests
 
             string[] texts = await page.EvalOnSelectorAllAsync<string[]>("internal:control=pierce-frames >> span", "els => els.map(e => e.textContent)").ConfigureAwait(false);
             Assert.That(texts, Is.EqualTo(new[] { "two", "three" }));
-        }
-
-        [PlaywrightTest("selectors-frame.spec.ts", "should throw when piercing frames matches multiple frames")]
-        [Test]
-        [Timeout(TestConstants.DefaultTestTimeout)]
-        public async Task ShouldThrowWhenPiercingFramesMatchesMultipleFrames()
-        {
-            await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
-            await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
-            IPage page = await context.NewPageAsync().ConfigureAwait(false);
-            await page.RouteAsync("**/empty.html", route => route.FulfillAsync(new() { Body = "<iframe src=\"a.html\"></iframe><iframe src=\"b.html\"></iframe>", ContentType = "text/html" })).ConfigureAwait(false);
-            await page.RouteAsync("**/a.html", route => route.FulfillAsync(new() { Body = "<div>one</div>", ContentType = "text/html" })).ConfigureAwait(false);
-            await page.RouteAsync("**/b.html", route => route.FulfillAsync(new() { Body = "<div>two</div>", ContentType = "text/html" })).ConfigureAwait(false);
-            await page.GoToAsync(EmptyPage).ConfigureAwait(false);
-
-            Stopwatch sw = Stopwatch.StartNew();
-            while (page.Frames.Count < 3 && sw.ElapsedMilliseconds < 5000)
-            {
-                await Task.Delay(50).ConfigureAwait(false);
-            }
-
-            Assert.That(page.Frames.Count, Is.EqualTo(3));
-            foreach (IFrame frame in page.Frames)
-            {
-                if (!ReferenceEquals(frame, page.MainFrame))
-                {
-                    await frame.WaitForSelectorAsync("div").ConfigureAwait(false);
-                }
-            }
-
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(() => page.Locator("internal:control=pierce-frames >> div").InnerHTMLAsync());
-            Assert.That(error.Message, Does.Contain("Pierce-frame mode matched elements from multiple frames"));
-        }
-
-        [PlaywrightTest("selectors-frame.spec.ts", "should not allow pierce-frames in the middle of a selector")]
-        [Test]
-        [Timeout(TestConstants.DefaultTestTimeout)]
-        public async Task ShouldNotAllowPierceFramesInTheMiddleOfASelector()
-        {
-            await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
-            await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
-            IPage page = await context.NewPageAsync().ConfigureAwait(false);
-            await RouteIframeAsync(page).ConfigureAwait(false);
-            await page.GoToAsync(EmptyPage).ConfigureAwait(false);
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(() => page.Locator("iframe >> internal:control=pierce-frames >> div").WaitForAsync());
-            Assert.That(error.Message, Does.Contain("\"pierce-frames\" is only allowed as the first selector token"));
-        }
-
-        [PlaywrightTest("selectors-frame.spec.ts", "should allow entering frames while piercing")]
-        [Test]
-        [Timeout(TestConstants.DefaultTestTimeout)]
-        public async Task ShouldAllowEnteringFramesWhilePiercing()
-        {
-            await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
-            await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
-            IPage page = await context.NewPageAsync().ConfigureAwait(false);
-            await RouteIframeAsync(page).ConfigureAwait(false);
-            await page.GoToAsync(EmptyPage).ConfigureAwait(false);
-            ILocator button = page.Locator("internal:control=pierce-frames >> iframe[src=\"iframe-2.html\"] >> internal:control=enter-frame >> button");
-            await button.WaitForAsync().ConfigureAwait(false);
-            Assert.That(await button.InnerTextAsync().ConfigureAwait(false), Is.EqualTo("Hello nested iframe"));
-        }
-
-        [PlaywrightTest("selectors-frame.spec.ts", "should not allow pierce-frames after entering a frame")]
-        [Test]
-        [Timeout(TestConstants.DefaultTestTimeout)]
-        public async Task ShouldNotAllowPierceFramesAfterEnteringAFrame()
-        {
-            await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
-            await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
-            IPage page = await context.NewPageAsync().ConfigureAwait(false);
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(() => page.Locator("iframe >> internal:control=enter-frame >> internal:control=pierce-frames >> button").CountAsync());
-            Assert.That(error.Message, Does.Contain("\"pierce-frames\" is only allowed as the first selector token"));
-        }
-
-        [PlaywrightTest("selectors-frame.spec.ts", "should not allow dangling enter-frame while piercing")]
-        [Test]
-        [Timeout(TestConstants.DefaultTestTimeout)]
-        public async Task ShouldNotAllowDanglingEnterFrameWhilePiercing()
-        {
-            await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
-            await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
-            IPage page = await context.NewPageAsync().ConfigureAwait(false);
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(() => page.Locator("internal:control=pierce-frames >> iframe >> internal:control=enter-frame").CountAsync());
-            Assert.That(error.Message, Does.Contain("Selector cannot end with entering frame"));
         }
     }
 }

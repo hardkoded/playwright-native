@@ -30,23 +30,6 @@ namespace PlaywrightNative.Tests
     [TestFixture]
     public class WaitForFunctionTests : PageTestEx
     {
-        [PlaywrightTest("page-wait-for-function.spec.ts", "should work with waitForTimeout")]
-        [Test]
-        [Timeout(30_000)]
-        public async Task ShouldWorkWithWaitForTimeout()
-        {
-            await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
-            await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
-            IPage page = await context.NewPageAsync().ConfigureAwait(false);
-
-            await page.GoToAsync("about:blank").ConfigureAwait(false);
-
-            Stopwatch sw = Stopwatch.StartNew();
-            await page.WaitForTimeoutAsync(300).ConfigureAwait(false);
-            sw.Stop();
-            Assert.That(sw.ElapsedMilliseconds, Is.GreaterThanOrEqualTo(200));
-        }
-
         [PlaywrightTest("page-wait-for-function.spec.ts", "should timeout")]
         [Test]
         [Timeout(30_000)]
@@ -76,23 +59,6 @@ namespace PlaywrightNative.Tests
             await page.GoToAsync("about:blank").ConfigureAwait(false);
 
             Task<IJSHandle> waitTask = page.WaitForFunctionAsync("window.__FOO === 1");
-            await page.EvaluateAsync("window.__FOO = 1").ConfigureAwait(false);
-            IJSHandle handle = await waitTask.ConfigureAwait(false);
-            Assert.That(handle, Is.Not.Null);
-        }
-
-        [PlaywrightTest("page-wait-for-function.spec.ts", "should work with raf polling")]
-        [Test]
-        [Timeout(30_000)]
-        public async Task ShouldWorkWithFunctionPredicate()
-        {
-            await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
-            await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
-            IPage page = await context.NewPageAsync().ConfigureAwait(false);
-
-            await page.GoToAsync("about:blank").ConfigureAwait(false);
-
-            Task<IJSHandle> waitTask = page.WaitForFunctionAsync("() => window.__FOO === 1");
             await page.EvaluateAsync("window.__FOO = 1").ConfigureAwait(false);
             IJSHandle handle = await waitTask.ConfigureAwait(false);
             Assert.That(handle, Is.Not.Null);

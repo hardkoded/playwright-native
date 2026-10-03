@@ -15,8 +15,11 @@
  * limitations under the License.
  */
 using System;
+using System.Diagnostics;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -33,6 +36,7 @@ namespace PlaywrightNative.Helpers
         /// <summary>
         /// Waits until <paramref name="handle"/> is visible and editable unless
         /// <paramref name="force"/> is <see langword="true"/>.
+        /// Visible and editable share one deadline (upstream <c>progress.race</c>).
         /// </summary>
         /// <param name="handle">The element to observe.</param>
         /// <param name="force">When <see langword="true"/>, skip actionability.</param>
@@ -45,8 +49,16 @@ namespace PlaywrightNative.Helpers
                 return;
             }
 
-            await WaitForElementStateHelper.WaitAsync(handle, ElementState.Visible, timeout).ConfigureAwait(false);
-            await WaitForElementStateHelper.WaitAsync(handle, ElementState.Editable, timeout).ConfigureAwait(false);
+            int timeoutMs = TimeoutSettings.TimeoutMs(timeout);
+            Stopwatch sw = Stopwatch.StartNew();
+            await WaitForElementStateHelper.WaitAsync(
+                handle,
+                ElementState.Visible,
+                RemainingTimeout(timeoutMs, sw)).ConfigureAwait(false);
+            await WaitForElementStateHelper.WaitAsync(
+                handle,
+                ElementState.Editable,
+                RemainingTimeout(timeoutMs, sw)).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -74,11 +86,22 @@ namespace PlaywrightNative.Helpers
         /// </summary>
         /// <param name="ex">The original evaluate exception.</param>
         /// <param name="apiName">Official API name such as <c>page.fill</c>.</param>
-        /// <returns>A stackless <see cref="PlaywrightNativeException"/>.</returns>
-        internal static PlaywrightNativeException Wrap(Exception ex, string apiName)
+        /// <returns>A stackless <see cref="PlaywrightException"/>.</returns>
+        internal static PlaywrightException Wrap(Exception ex, string apiName)
         {
             string name = string.IsNullOrEmpty(apiName) ? "page.fill" : apiName;
-            return new PlaywrightNativeException(name + ": Error: " + Extract(ex) + "\nCall log:");
+            return new PlaywrightException(name + ": Error: " + Extract(ex) + "\nCall log:");
+        }
+
+        private static float? RemainingTimeout(int timeoutMs, Stopwatch sw)
+        {
+            if (timeoutMs == Timeout.Infinite)
+            {
+                return 0;
+            }
+
+            int remaining = timeoutMs - (int)sw.ElapsedMilliseconds;
+            return remaining <= 0 ? 1f : remaining;
         }
 
         private static string Extract(Exception ex)

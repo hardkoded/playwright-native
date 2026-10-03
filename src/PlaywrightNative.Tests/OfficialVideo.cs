@@ -18,6 +18,7 @@ using System;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
+using PlaywrightNative.Helpers;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
 
@@ -107,14 +108,15 @@ namespace PlaywrightNative.Tests
 
         internal static Image<Rgba32> LastFrame(string videoFile, int x = 0, int y = 0, int width = 0, int height = 0)
         {
+            string ffmpeg = FfmpegLocator.Resolve();
             string temp = Path.Combine(Path.GetTempPath(), "pw-video-last-" + Guid.NewGuid().ToString("N") + ".png");
             Run(
-                "ffmpeg",
+                ffmpeg,
                 "-y -sseof -0.04 -i " + Quote(videoFile) + " -frames:v 1 " + Quote(temp));
             if (!File.Exists(temp) || new FileInfo(temp).Length == 0)
             {
                 Run(
-                    "ffmpeg",
+                    ffmpeg,
                     "-y -i " + Quote(videoFile) + " -update 1 -frames:v 1 " + Quote(temp));
             }
 
@@ -152,7 +154,11 @@ namespace PlaywrightNative.Tests
             Directory.CreateDirectory(temp);
             try
             {
-                Run("ffmpeg", "-y -i " + Quote(videoFile) + " -vsync 0 " + Quote(Path.Combine(temp, "f-%03d.png")));
+                // Upstream videoPlayer.ts uses bundled ffmpeg with -r 25 (not -vsync 0).
+                // PATH ffmpeg 9+ rejects -vsync entirely.
+                Run(
+                    FfmpegLocator.Resolve(),
+                    "-y -i " + Quote(videoFile) + " -r 25 " + Quote(Path.Combine(temp, "f-%03d.png")));
                 foreach (string file in Directory.GetFiles(temp, "*.png"))
                 {
                     using Image<Rgba32> image = Image.Load<Rgba32>(file);

@@ -1,0 +1,3 @@
+# Keep test fixture bodies byte-stable across platforms (Windows checkout must not inject CRLF).
+src/PlaywrightNative.TestServer/wwwroot/** text eol=lf
+*.json text eol=lf

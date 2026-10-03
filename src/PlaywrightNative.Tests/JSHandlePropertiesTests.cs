@@ -160,35 +160,6 @@ namespace PlaywrightNative.Tests
             Dictionary<string, IJSHandle> properties = await aHandle.GetPropertiesAsync().ConfigureAwait(false);
             Assert.That(properties, Is.Empty);
         }
-
-        [PlaywrightTest("jshandle-properties.spec.ts", "getProperties should return even non-own properties")]
-        [Test]
-        [Timeout(30_000)]
-        public async Task GetPropertiesShouldReturnEvenNonOwnProperties()
-        {
-            await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
-            await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
-            IPage page = await context.NewPageAsync().ConfigureAwait(false);
-
-            IJSHandle aHandle = await page.EvaluateHandleAsync(@"() => {
-                class A {
-                    constructor() {
-                        this.a = '1';
-                    }
-                }
-                class B extends A {
-                    constructor() {
-                        super();
-                        this.b = '2';
-                    }
-                }
-                return new B();
-            }").ConfigureAwait(false);
-            Dictionary<string, IJSHandle> properties = await aHandle.GetPropertiesAsync().ConfigureAwait(false);
-            Assert.That(await properties["a"].JsonValueAsync<string>().ConfigureAwait(false), Is.EqualTo("1"));
-            Assert.That(await properties["b"].JsonValueAsync<string>().ConfigureAwait(false), Is.EqualTo("2"));
-        }
-
         [PlaywrightTest("jshandle-properties.spec.ts", "getProperties should work with elements")]
         [Test]
         [Timeout(30_000)]

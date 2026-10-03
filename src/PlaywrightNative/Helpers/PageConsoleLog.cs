@@ -29,6 +29,32 @@ namespace PlaywrightNative.Helpers
         private int _navigationWatermark;
 
         /// <summary>
+        /// Message count using the default
+        /// <see cref="ConsoleMessagesFilter.SinceNavigation"/> rules (same as
+        /// <c>page.consoleMessages()</c> / waitForEvent console baseline).
+        /// </summary>
+        internal int CountSinceNavigation
+        {
+            get
+            {
+                lock (_gate)
+                {
+                    if (_navigationWatermark <= 0)
+                    {
+                        return _messages.Count;
+                    }
+
+                    if (_navigationWatermark >= _messages.Count)
+                    {
+                        return 0;
+                    }
+
+                    return _messages.Count - _navigationWatermark;
+                }
+            }
+        }
+
+        /// <summary>
         /// Appends <paramref name="message"/> when it is not <see langword="null"/>.
         /// </summary>
         /// <param name="message">The console message.</param>

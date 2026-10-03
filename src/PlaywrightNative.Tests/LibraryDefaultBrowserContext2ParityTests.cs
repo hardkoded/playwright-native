@@ -24,6 +24,7 @@ using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text.Json.Serialization;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 using PlaywrightNative.TestServer;
@@ -746,7 +747,7 @@ namespace PlaywrightNative.Tests
             {
                 await Playwright.Selectors.RegisterAsync(name, script).ConfigureAwait(false);
             }
-            catch (PlaywrightNativeException ex)
+            catch (PlaywrightException ex)
                 when (ex.Message.IndexOf("already registered", StringComparison.Ordinal) >= 0)
             {
             }

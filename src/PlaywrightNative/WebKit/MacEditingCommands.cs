@@ -138,6 +138,11 @@ namespace PlaywrightNative.WebKit
             ["Shift+Meta+ArrowLeft"] = ["moveToLeftEndOfLineAndModifySelection:"],
             ["Shift+Meta+ArrowRight"] = ["moveToRightEndOfLineAndModifySelection:"],
             ["Meta+KeyA"] = ["selectAll:"],
+            ["Meta+KeyC"] = ["copy:"],
+            ["Meta+KeyX"] = ["cut:"],
+            ["Meta+KeyV"] = ["paste:"],
+            ["Meta+KeyZ"] = ["undo:"],
+            ["Shift+Meta+KeyZ"] = ["redo:"],
         };
 
         /// <summary>

@@ -14,6 +14,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+using Microsoft.Playwright;
+
 namespace PlaywrightNative.Helpers
 {
     /// <summary>
@@ -36,13 +38,13 @@ namespace PlaywrightNative.Helpers
 
             if (geolocation.Longitude < -180 || geolocation.Longitude > 180)
             {
-                throw new PlaywrightNativeException(
+                throw new PlaywrightException(
                     "geolocation.longitude: precondition -180 <= LONGITUDE <= 180 failed.");
             }
 
             if (geolocation.Latitude < -90 || geolocation.Latitude > 90)
             {
-                throw new PlaywrightNativeException(
+                throw new PlaywrightException(
                     "geolocation.latitude: precondition -90 <= LATITUDE <= 90 failed.");
             }
         }

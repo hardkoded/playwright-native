@@ -30,6 +30,7 @@ namespace PlaywrightNative.Chromium
         private readonly object _contextLock = new();
         private TaskCompletionSource<CRExecutionContext> _contextTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private CRExecutionContext _context;
+        private bool _workerScriptLoaded;
 
         internal CRWorker(CRSession session, string sessionId, string url)
         {
@@ -84,6 +85,23 @@ namespace PlaywrightNative.Chromium
             _session.Dispose();
         }
 
+        /// <summary>
+        /// Chromium below major version 143 never sends
+        /// <c>Inspector.workerScriptLoaded</c>, so treat the worker's script as
+        /// loaded as soon as it attaches (matching official's pre-143 fallback).
+        /// </summary>
+        internal void MarkScriptLoadedImmediately()
+        {
+            lock (_contextLock)
+            {
+                _workerScriptLoaded = true;
+                if (_context != null)
+                {
+                    _contextTcs.TrySetResult(_context);
+                }
+            }
+        }
+
         private Task<CRExecutionContext> WaitForExecutionContextAsync()
         {
             lock (_contextLock)
@@ -92,11 +110,22 @@ namespace PlaywrightNative.Chromium
             }
         }
 
-        private void ResetExecutionContext()
+        private void ResetExecutionContext(bool clearScriptLoaded)
         {
             lock (_contextLock)
             {
                 _context = null;
+
+                // Official dedicated-worker sessions never clear workerScriptLoaded on
+                // Runtime.executionContextDestroyed / executionContextsCleared — that
+                // CDP event fires once. Clearing the flag here leaves Evaluate hung
+                // forever waiting for a second Inspector.workerScriptLoaded that never
+                // arrives (observed as 30s NUnit timeouts under Chromium headful CI).
+                if (clearScriptLoaded)
+                {
+                    _workerScriptLoaded = false;
+                }
+
                 if (_contextTcs.Task.IsCompleted)
                 {
                     _contextTcs = new TaskCompletionSource<CRExecutionContext>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -119,15 +148,20 @@ namespace PlaywrightNative.Chromium
                 return;
             }
 
-            if (method == "Inspector.targetCrashed" || method == "Runtime.executionContextsCleared")
+            if (method == "Inspector.targetCrashed")
             {
-                ResetExecutionContext();
+                // Official CRServiceWorker.destroyExecutionContext on crash: script
+                // must load again after Chrome restarts the worker.
+                ResetExecutionContext(clearScriptLoaded: true);
                 return;
             }
 
-            if (method == "Runtime.executionContextDestroyed")
+            if (method == "Runtime.executionContextsCleared"
+                || method == "Runtime.executionContextDestroyed")
             {
-                ResetExecutionContext();
+                // Official dedicated workers use session.once for context creation
+                // and do not reset the evaluate gate here — workerScriptLoaded is
+                // one-shot. Clearing it caused 30s Evaluate hangs under headful CI.
                 return;
             }
 
@@ -135,6 +169,20 @@ namespace PlaywrightNative.Chromium
             {
                 // Official CRServiceWorker: resume after Chrome restarts the worker.
                 _ = ResumeDebuggerAsync();
+                return;
+            }
+
+            if (method == "Inspector.workerScriptLoaded")
+            {
+                lock (_contextLock)
+                {
+                    _workerScriptLoaded = true;
+                    if (_context != null)
+                    {
+                        _contextTcs.TrySetResult(_context);
+                    }
+                }
+
                 return;
             }
 
@@ -154,7 +202,17 @@ namespace PlaywrightNative.Chromium
             lock (_contextLock)
             {
                 _context = created;
-                _contextTcs.TrySetResult(created);
+
+                // Official Worker.createExecutionContext: only resolve once the
+                // worker's top-level script has actually finished running
+                // (Inspector.workerScriptLoaded). Resolving on context-creation
+                // alone lets evaluate() race the worker's own initialization --
+                // e.g. self.someFunction() throwing "not a function" because the
+                // script body that defines it hasn't executed yet.
+                if (_workerScriptLoaded)
+                {
+                    _contextTcs.TrySetResult(created);
+                }
             }
         }
 

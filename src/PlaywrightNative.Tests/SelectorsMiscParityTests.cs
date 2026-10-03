@@ -17,6 +17,7 @@
 using System;
 using System.Globalization;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 using PlaywrightNative.TestServer;
@@ -197,15 +198,15 @@ namespace PlaywrightNative.Tests
             Assert.That(await page.EvalOnSelectorAsync<string>(":nth-match(div, section, 3)", "e => e.id").ConfigureAwait(false), Is.EqualTo("target2"));
             Assert.That(await page.EvalOnSelectorAllAsync<int>(":is(:nth-match(div, 1), :nth-match(div, 2))", "els => els.length").ConfigureAwait(false), Is.EqualTo(2));
 
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => page.QuerySelectorAsync(":nth-match(div, bar, 0)"));
             Assert.That(error.Message, Does.Contain("\"nth-match\" engine expects a one-based index as the last argument"));
 
-            error = Assert.CatchAsync<PlaywrightNativeException>(
+            error = Assert.CatchAsync<PlaywrightException>(
                 () => page.QuerySelectorAsync(":nth-match(2)"));
             Assert.That(error.Message, Does.Contain("\"nth-match\" engine expects non-empty selector list and an index argument"));
 
-            error = Assert.CatchAsync<PlaywrightNativeException>(
+            error = Assert.CatchAsync<PlaywrightException>(
                 () => page.QuerySelectorAsync(":nth-match(div, bar, foo)"));
             Assert.That(error.Message, Does.Contain("\"nth-match\" engine expects a one-based index as the last argument"));
 
@@ -357,7 +358,7 @@ namespace PlaywrightNative.Tests
             Assert.That(await page.EvalOnSelectorAsync<string>("div:below(#id5):above(#id8)", "e => e.id").ConfigureAwait(false), Is.EqualTo("id7"));
             Assert.That(await page.EvalOnSelectorAllAsync<string>("div:right-of(#id0) + div:above(#id8)", "els => els.map(e => e.id).join(',')").ConfigureAwait(false), Is.EqualTo("id5,id6,id3"));
 
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => page.QuerySelectorAsync(":near(50)"));
             Assert.That(error.Message, Does.Contain("\"near\" engine expects a selector list and optional maximum distance in pixels"));
         }
@@ -431,7 +432,7 @@ namespace PlaywrightNative.Tests
             await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
 
-            PlaywrightNativeException error = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => page.Locator("//*[contains(@Class, 'foo']").IsVisibleAsync());
             Assert.That(error.Message, Does.Contain("//*[contains(@Class, \\'foo\\']"));
             Assert.That(error.Message, Does.Not.Contain(".//*[contains(@Class, 'foo']"));
@@ -512,16 +513,16 @@ namespace PlaywrightNative.Tests
             Assert.That(await page.EvalOnSelectorAsync<string>("div >> internal:has=\"span >> text=wor\"", "e => e.outerHTML").ConfigureAwait(false), Is.EqualTo("<div><span>world</span></div>"));
             Assert.That(await page.EvalOnSelectorAsync<string>("div >> internal:has=\"span >> text=wor\" >> span", "e => e.outerHTML").ConfigureAwait(false), Is.EqualTo("<span>world</span>"));
 
-            PlaywrightNativeException error1 = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error1 = Assert.CatchAsync<PlaywrightException>(
                 () => page.QuerySelectorAsync("div >> internal:has=abc"));
             Assert.That(error1.Message, Does.Contain("Malformed selector: internal:has=abc"));
-            PlaywrightNativeException error2 = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error2 = Assert.CatchAsync<PlaywrightException>(
                 () => page.QuerySelectorAsync("internal:has=\"div\""));
             Assert.That(error2.Message, Does.Contain("\"internal:has\" selector cannot be first"));
-            PlaywrightNativeException error3 = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error3 = Assert.CatchAsync<PlaywrightException>(
                 () => page.QuerySelectorAsync("div >> internal:has=33"));
             Assert.That(error3.Message, Does.Contain("Malformed selector: internal:has=33"));
-            PlaywrightNativeException error4 = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException error4 = Assert.CatchAsync<PlaywrightException>(
                 () => page.QuerySelectorAsync("div >> internal:has=\"span!\""));
             Assert.That(error4.Message, Does.Contain("Unexpected token \"!\" while parsing css selector \"span!\""));
         }

@@ -6,6 +6,7 @@
 // http://www.apache.org/licenses/LICENSE-2.0
 
 using System;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative
 {
@@ -13,7 +14,7 @@ namespace PlaywrightNative
     /// Official Node <c>AbortError</c> thrown when an action is cancelled
     /// through <see cref="AbortSignal"/>.
     /// </summary>
-    public sealed class AbortError : PlaywrightNativeException
+    public sealed class AbortError : PlaywrightException
     {
         /// <summary>
         /// Initializes a new instance of the <see cref="AbortError"/> class.

@@ -288,7 +288,7 @@ Call log:
         {
             await Page.SetContentAsync("<div>content</div>").ConfigureAwait(false);
             AbortController controller = new AbortController();
-            Task promise = Assertions.Expect(Page.Locator("span")).ToBeVisibleAsync(new() { Timeout = 5000 });
+            Task promise = Assertions.Expect(Page.Locator("span")).ToBeVisibleAsync(new LocatorAssertionsToBeVisibleOptions { Timeout = 5000, Signal = controller.Signal });
             await Page.WaitForTimeoutAsync(500).ConfigureAwait(false);
             controller.Abort(new Exception("stop it"));
             Exception error = Assert.CatchAsync(() => promise);
@@ -313,7 +313,7 @@ Call log:
         {
             await Page.SetContentAsync("<div>content</div>").ConfigureAwait(false);
             AbortController controller = new AbortController();
-            Task promise = Assertions.Expect(Page.Locator("span")).ToHaveTextAsync("missing", new() { Timeout = 5000 });
+            Task promise = Assertions.Expect(Page.Locator("span")).ToHaveTextAsync("missing", new LocatorAssertionsToHaveTextOptions { Timeout = 5000, Signal = controller.Signal });
             await Page.WaitForTimeoutAsync(300).ConfigureAwait(false);
             controller.Abort(new Exception("stop it"));
             Exception error = Assert.CatchAsync(() => promise);
@@ -328,7 +328,7 @@ Call log:
         {
             await Page.SetContentAsync("<div>content</div>").ConfigureAwait(false);
             AbortController controller = new AbortController();
-            Task promise = Assertions.Expect(Page.Locator("span")).ToHaveCountAsync(3, new() { Timeout = 5000 });
+            Task promise = Assertions.Expect(Page.Locator("span")).ToHaveCountAsync(3, new LocatorAssertionsToHaveCountOptions { Timeout = 5000, Signal = controller.Signal });
             await Page.WaitForTimeoutAsync(300).ConfigureAwait(false);
             controller.Abort(new Exception("stop it"));
             Exception error = Assert.CatchAsync(() => promise);
@@ -343,7 +343,7 @@ Call log:
         {
             await Page.SetContentAsync("<div>content</div>").ConfigureAwait(false);
             AbortController controller = new AbortController();
-            Task promise = Assertions.Expect(Page.Locator("body")).ToMatchAriaSnapshotAsync("- list", new() { Timeout = 5000 });
+            Task promise = Assertions.Expect(Page.Locator("body")).ToMatchAriaSnapshotAsync("- list", new LocatorAssertionsToMatchAriaSnapshotOptions { Timeout = 5000, Signal = controller.Signal });
             await Page.WaitForTimeoutAsync(300).ConfigureAwait(false);
             controller.Abort(new Exception("stop it"));
             Exception error = Assert.CatchAsync(() => promise);
@@ -358,7 +358,7 @@ Call log:
         {
             await Page.SetContentAsync("<div>content</div>").ConfigureAwait(false);
             AbortController controller = new AbortController();
-            Task promise = Assertions.Expect(Page).ToHaveURLAsync("https://example.com/", new() { Timeout = 5000 });
+            Task promise = Assertions.Expect(Page).ToHaveURLAsync("https://example.com/", new PageAssertionsToHaveURLOptions { Timeout = 5000, Signal = controller.Signal });
             await Page.WaitForTimeoutAsync(500).ConfigureAwait(false);
             controller.Abort(new Exception("stop it"));
             Exception error = Assert.CatchAsync(() => promise);
@@ -375,7 +375,7 @@ Call log:
             {
                 AbortController controller = new AbortController();
                 controller.Abort(new Exception("already aborted"));
-                Exception error = Assert.CatchAsync(() => Assertions.Expect(Page.Locator("div")).ToBeVisibleAsync(new() { Timeout = 5000 }));
+                Exception error = Assert.CatchAsync(() => Assertions.Expect(Page.Locator("div")).ToBeVisibleAsync(new LocatorAssertionsToBeVisibleOptions { Timeout = 5000, Signal = controller.Signal }));
                 Assert.That(error.GetType().Name, Is.Not.EqualTo("AbortError"));
                 Assert.That(MessageOf(error), Is.EqualTo(Lines(@"expect(locator).toBeVisible() failed
 
@@ -393,7 +393,7 @@ Error: The assertion was aborted: already aborted
 
                 AbortController controller = new AbortController();
                 controller.Abort("stop it");
-                Exception error = Assert.CatchAsync(() => Assertions.Expect(Page).ToHaveURLAsync(EmptyPage, new() { Timeout = 5000 }));
+                Exception error = Assert.CatchAsync(() => Assertions.Expect(Page).ToHaveURLAsync(EmptyPage, new PageAssertionsToHaveURLOptions { Timeout = 5000, Signal = controller.Signal }));
                 Assert.That(error.GetType().Name, Is.Not.EqualTo("AbortError"));
                 Assert.That(MessageOf(error), Is.EqualTo(Lines("expect(page).toHaveURL(expected) failed\n\nExpected: " + System.Text.Json.JsonSerializer.Serialize(EmptyPage) + "\nError: The assertion was aborted: stop it\n")));
             }

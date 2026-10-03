@@ -16,6 +16,7 @@
  */
 using System;
 using System.Collections.Generic;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -74,7 +75,7 @@ namespace PlaywrightNative.Helpers
                 || !Uri.TryCreate(overrideUrl, UriKind.Absolute, out Uri newUri)
                 || !string.Equals(oldUri.Scheme, newUri.Scheme, StringComparison.OrdinalIgnoreCase))
             {
-                throw new PlaywrightNativeException("New URL must have same protocol as overridden URL");
+                throw new PlaywrightException("New URL must have same protocol as overridden URL");
             }
         }
 
@@ -147,6 +148,46 @@ namespace PlaywrightNative.Helpers
             }
 
             return result;
+        }
+
+        /// <summary>
+        /// True when two header maps have the same names and values
+        /// (case-insensitive names).
+        /// </summary>
+        /// <param name="left">First map.</param>
+        /// <param name="right">Second map.</param>
+        /// <returns><see langword="true"/> when the maps match.</returns>
+        internal static bool HeaderMapsEqual(
+            IDictionary<string, string> left,
+            IDictionary<string, string> right)
+        {
+            if (ReferenceEquals(left, right))
+            {
+                return true;
+            }
+
+            int leftCount = left?.Count ?? 0;
+            int rightCount = right?.Count ?? 0;
+            if (leftCount != rightCount)
+            {
+                return false;
+            }
+
+            if (leftCount == 0)
+            {
+                return true;
+            }
+
+            foreach (KeyValuePair<string, string> pair in left)
+            {
+                if (!right.TryGetValue(pair.Key, out string value)
+                    || !string.Equals(pair.Value ?? string.Empty, value ?? string.Empty, StringComparison.Ordinal))
+                {
+                    return false;
+                }
+            }
+
+            return true;
         }
 
         /// <summary>

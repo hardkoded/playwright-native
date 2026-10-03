@@ -26,6 +26,7 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
 using NUnit.Framework;
+using PlaywrightNative.Helpers;
 using PlaywrightNative.NUnit;
 using PlaywrightNative.TestServer;
 
@@ -220,20 +221,35 @@ namespace PlaywrightNative.Tests
             IBrowserContext context = await NewHttpsContextAsync().ConfigureAwait(false);
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
             AddCommonCookieHandlers();
+            Cookie topLevelPartitioned = new Cookie
+            {
+                Name = "top-level-partitioned",
+                Value = "value",
+                Domain = HttpsHostname,
+                Path = "/",
+                Expires = -1,
+                HttpOnly = false,
+                Secure = true,
+                SameSite = SameSiteAttribute.None,
+                PartitionKey = "https://localhost",
+            };
+            CookieExtras.SetHasCrossSiteAncestor(topLevelPartitioned, false);
+            Cookie framePartitioned = new Cookie
+            {
+                Name = "frame-partitioned",
+                Value = "value",
+                Domain = HttpsHostname,
+                Path = "/",
+                Expires = -1,
+                HttpOnly = false,
+                Secure = true,
+                SameSite = SameSiteAttribute.None,
+                PartitionKey = "https://127.0.0.1",
+            };
+            CookieExtras.SetHasCrossSiteAncestor(framePartitioned, true);
             await context.AddCookiesAsync(new[]
             {
-                new Cookie
-                {
-                    Name = "top-level-partitioned",
-                    Value = "value",
-                    Domain = HttpsHostname,
-                    Path = "/",
-                    Expires = -1,
-                    HttpOnly = false,
-                    Secure = true,
-                    SameSite = SameSiteAttribute.None,
-                    PartitionKey = "https://localhost",
-                },
+                topLevelPartitioned,
                 new Cookie
                 {
                     Name = "top-level-non-partitioned",
@@ -245,18 +261,7 @@ namespace PlaywrightNative.Tests
                     Secure = true,
                     SameSite = SameSiteAttribute.None,
                 },
-                new Cookie
-                {
-                    Name = "frame-partitioned",
-                    Value = "value",
-                    Domain = HttpsHostname,
-                    Path = "/",
-                    Expires = -1,
-                    HttpOnly = false,
-                    Secure = true,
-                    SameSite = SameSiteAttribute.None,
-                    PartitionKey = "https://127.0.0.1",
-                },
+                framePartitioned,
                 new Cookie
                 {
                     Name = "frame-non-partitioned",
@@ -925,7 +930,7 @@ namespace PlaywrightNative.Tests
             List<Cookie> list = new List<Cookie>();
             foreach (BrowserContextCookiesResult cookie in cookies)
             {
-                list.Add(new Cookie
+                Cookie mapped = new Cookie
                 {
                     Name = cookie.Name,
                     Value = cookie.Value,
@@ -936,7 +941,11 @@ namespace PlaywrightNative.Tests
                     Secure = cookie.Secure,
                     SameSite = cookie.SameSite,
                     PartitionKey = cookie.PartitionKey,
-                });
+                };
+                CookieExtras.SetHasCrossSiteAncestor(
+                    mapped,
+                    BrowserContextCookiesResultExtras.GetHasCrossSiteAncestor(cookie));
+                list.Add(mapped);
             }
 
             return list;

@@ -16,6 +16,7 @@
  */
 using System;
 using System.Globalization;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -67,7 +68,7 @@ namespace PlaywrightNative.Helpers
 
             if (!double.TryParse(text.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out double number))
             {
-                throw new PlaywrightNativeException($"Cannot parse PDF paper size '{value}'.");
+                throw new PlaywrightException($"Cannot parse PDF paper size '{value}'.");
             }
 
             return number * pixelsPerUnit / 96.0;
@@ -98,7 +99,7 @@ namespace PlaywrightNative.Helpers
                 "A4" => (8.27, 11.7),
                 "A5" => (5.83, 8.27),
                 "A6" => (4.13, 5.83),
-                _ => throw new PlaywrightNativeException($"Unknown paper format: '{format}'."),
+                _ => throw new PlaywrightException($"Unknown paper format: '{format}'."),
             };
         }
     }

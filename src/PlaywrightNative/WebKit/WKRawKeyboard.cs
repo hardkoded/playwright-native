@@ -18,6 +18,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using PlaywrightNative.Input;
 
 namespace PlaywrightNative.WebKit
@@ -154,7 +155,7 @@ namespace PlaywrightNative.WebKit
         public Task InsertTextAsync(string text)
         {
             WKTargetSession target = _page.CurrentTargetSession
-                ?? throw new PlaywrightNativeException("Cannot insert text: the page has no active target session.");
+                ?? throw new PlaywrightException("Cannot insert text: the page has no active target session.");
 
             return target.SendAsync("Page.insertText", new { text });
         }

@@ -1,6 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <RunSettings>
   <RunConfiguration>
-    <TestSessionTimeout>3600000</TestSessionTimeout>
+    <!-- 2.5h: Linux/Windows shards were aborting at the prior 2h wall with
+         0 remaining tests (hlub) or after long Windows shards (winhl2). -->
+    <TestSessionTimeout>9000000</TestSessionTimeout>
   </RunConfiguration>
 </RunSettings>

@@ -17,6 +17,7 @@
 using System;
 using System.Text.Json;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using PlaywrightNative.Helpers;
 
 namespace PlaywrightNative.Chromium
@@ -81,20 +82,26 @@ namespace PlaywrightNative.Chromium
         protected CRExecutionContext Context => _context;
 
         /// <inheritdoc/>
-        public async ValueTask DisposeAsync()
+        /// <remarks>
+        /// Upstream <c>JSHandle.dispose</c> fire-and-forgets <c>Runtime.releaseObject</c>
+        /// so dispose does not hang while a JavaScript dialog holds the page.
+        /// </remarks>
+        public ValueTask DisposeAsync()
         {
             GC.SuppressFinalize(this);
 
             if (_disposed)
             {
-                return;
+                return default;
             }
 
             _disposed = true;
             if (!string.IsNullOrEmpty(_objectId))
             {
-                await _context.ReleaseHandleAsync(_objectId).ConfigureAwait(false);
+                _ = _context.ReleaseHandleAsync(_objectId);
             }
+
+            return default;
         }
 
         /// <summary>
@@ -193,7 +200,7 @@ namespace PlaywrightNative.Chromium
         {
             if (_disposed)
             {
-                throw new PlaywrightNativeException(EvaluateSerialization.DisposedHandleMessage);
+                throw new PlaywrightException(EvaluateSerialization.DisposedHandleMessage);
             }
         }
     }

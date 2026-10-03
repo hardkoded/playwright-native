@@ -57,37 +57,42 @@ namespace PlaywrightNative.Chromium
         /// </summary>
         /// <param name="promptText">Text to return from a prompt dialog.</param>
         /// <returns>A task that completes when the reply has been sent.</returns>
-        internal async Task AcceptAsync(string promptText = null)
+        internal Task AcceptAsync(string promptText = null)
         {
             if (_handled)
             {
-                return;
+                return Task.CompletedTask;
             }
 
             _handled = true;
-            await _session.SendAsync("Page.handleJavaScriptDialog", new
+
+            // Return the CDP send Task directly (no async state machine) so
+            // fire-and-forget Accept from Dialog handlers schedules the
+            // handleJavaScriptDialog write before yielding back to the CDP
+            // receive callback (DialogAcceptShouldWork under Windows load).
+            return _session.SendAsync("Page.handleJavaScriptDialog", new
             {
                 accept = true,
                 promptText = promptText ?? string.Empty,
-            }).ConfigureAwait(false);
+            });
         }
 
         /// <summary>
         /// Dismisses (cancels) the dialog.
         /// </summary>
         /// <returns>A task that completes when the reply has been sent.</returns>
-        internal async Task DismissAsync()
+        internal Task DismissAsync()
         {
             if (_handled)
             {
-                return;
+                return Task.CompletedTask;
             }
 
             _handled = true;
-            await _session.SendAsync("Page.handleJavaScriptDialog", new
+            return _session.SendAsync("Page.handleJavaScriptDialog", new
             {
                 accept = false,
-            }).ConfigureAwait(false);
+            });
         }
     }
 }

@@ -17,6 +17,7 @@
 using System;
 using System.Collections.Generic;
 using System.Text.Json;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -61,15 +62,15 @@ namespace PlaywrightNative.Helpers
                     ["value"] = rewritten.Value ?? string.Empty,
                 };
 
-                // Official toChromiumCookie keeps url after rewriteCookies.
-                if (!string.IsNullOrEmpty(rewritten.Url))
-                {
-                    item["url"] = rewritten.Url;
-                }
-
+                // After Rewrite, Url-only cookies are expanded to Domain/Path.
+                // Prefer domain/path for the protocol payload (Chromium and WebKit).
                 if (!string.IsNullOrEmpty(rewritten.Domain))
                 {
                     item["domain"] = rewritten.Domain;
+                }
+                else if (!string.IsNullOrEmpty(rewritten.Url))
+                {
+                    item["url"] = rewritten.Url;
                 }
 
                 if (!string.IsNullOrEmpty(rewritten.Path))
@@ -81,7 +82,20 @@ namespace PlaywrightNative.Helpers
                 if (rewritten.Expires.HasValue)
                 {
                     double expires = rewritten.Expires.Value;
-                    item["expires"] = webKit && expires != -1 ? expires * 1000d : expires;
+
+                    // Upstream wkBrowser addCookies:
+                    //   expires && expires !== -1 ? expires * 1000 : expires
+                    // Falsy 0 must stay 0 (clearCookies expire-in-place). Multiplying is
+                    // harmless for 0 but keep the JS truthiness so session cookies and
+                    // deletions round-trip the same as Playwright.
+                    if (webKit)
+                    {
+                        item["expires"] = expires != 0 && expires != -1 ? expires * 1000d : expires;
+                    }
+                    else
+                    {
+                        item["expires"] = expires;
+                    }
                 }
 
                 if (rewritten.HttpOnly.HasValue)
@@ -104,14 +118,17 @@ namespace PlaywrightNative.Helpers
                 {
                     // Chromium Storage.setCookies drops cookies that omit sameSite.
                     // Official cookies() then reports sameSite ?? 'Lax' (None on
-                    // Windows WebKit), which is defaultSameSiteCookieValue.
-                    item["sameSite"] = webKit && OperatingSystem.IsWindows()
+                    // Windows/macOS WebKit), which is defaultSameSiteCookieValue.
+                    item["sameSite"] = webKit && !OperatingSystem.IsLinux()
                         ? nameof(Microsoft.Playwright.SameSiteAttribute.None)
                         : nameof(Microsoft.Playwright.SameSiteAttribute.Lax);
                 }
 
                 if (webKit)
                 {
+                    // Upstream always sends session with setCookies. For expires:0
+                    // (clearCookies), session must be false so WebKit replaces the
+                    // live cookie with an already-expired row instead of a session cookie.
                     item["session"] = session;
                 }
 
@@ -162,7 +179,7 @@ namespace PlaywrightNative.Helpers
                     Value = ReadString(item, "value"),
                     Domain = ReadString(item, "domain"),
                     Path = ReadString(item, "path"),
-                    Expires = (float)ReadExpires(item, webKit),
+                    Expires = ToExpiresFloat(ReadExpires(item, webKit)),
                     HttpOnly = ReadBool(item, "httpOnly"),
                     Secure = ReadBool(item, "secure"),
                     SameSite = ReadSameSite(item, webKit),
@@ -260,24 +277,24 @@ namespace PlaywrightNative.Helpers
             bool hasPath = !string.IsNullOrEmpty(cookie.Path);
             if (!hasUrl && !(hasDomain && hasPath))
             {
-                throw new PlaywrightNativeException("Cookie should have a url or a domain/path pair");
+                throw new PlaywrightException("Cookie should have a url or a domain/path pair");
             }
 
             if (hasUrl && hasDomain)
             {
-                throw new PlaywrightNativeException("Cookie should have either url or domain");
+                throw new PlaywrightException("Cookie should have either url or domain");
             }
 
             if (hasUrl && hasPath)
             {
-                throw new PlaywrightNativeException("Cookie should have either url or path");
+                throw new PlaywrightException("Cookie should have either url or path");
             }
 
             if (cookie.Expires.HasValue
                 && cookie.Expires.Value < 0
                 && cookie.Expires.Value != -1)
             {
-                throw new PlaywrightNativeException(
+                throw new PlaywrightException(
                     "Cookie should have a valid expires, only -1 or a positive number for the unix timestamp in seconds is allowed");
             }
 
@@ -285,7 +302,7 @@ namespace PlaywrightNative.Helpers
                 && cookie.Expires.Value > 0
                 && cookie.Expires.Value > MaxCookieExpiresDateInSeconds)
             {
-                throw new PlaywrightNativeException(
+                throw new PlaywrightException(
                     "Cookie should have a valid expires, only -1 or a positive number for the unix timestamp in seconds is allowed");
             }
 
@@ -296,28 +313,31 @@ namespace PlaywrightNative.Helpers
 
             if (string.Equals(cookie.Url, "about:blank", StringComparison.Ordinal))
             {
-                throw new PlaywrightNativeException(
+                throw new PlaywrightException(
                     "Blank page can not have cookie \"" + (cookie.Name ?? string.Empty) + "\"");
             }
 
             if (cookie.Url.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
             {
-                throw new PlaywrightNativeException(
+                throw new PlaywrightException(
                     "Data URL page can not have cookie \"" + (cookie.Name ?? string.Empty) + "\"");
             }
 
             if (!Uri.TryCreate(cookie.Url, UriKind.Absolute, out Uri uri))
             {
-                throw new PlaywrightNativeException("Cookie should have a url or a domain/path pair");
+                throw new PlaywrightException("Cookie should have a url or a domain/path pair");
             }
 
             string pathname = uri.AbsolutePath;
             int slash = pathname.LastIndexOf('/');
+
+            // Official rewriteCookies expands Url → Domain/Path/Secure and drops
+            // Url. Keeping both makes WebKit Network.setCookies reject the cookie
+            // ("either url or domain") so mirrored local.playwright rows never land.
             Cookie result = new Cookie
             {
                 Name = cookie.Name,
                 Value = cookie.Value,
-                Url = cookie.Url,
                 Domain = uri.Host,
                 Path = slash >= 0 ? pathname.Substring(0, slash + 1) : "/",
                 Expires = cookie.Expires,
@@ -420,6 +440,32 @@ namespace PlaywrightNative.Helpers
         private static bool ReadBool(JsonElement item, string name)
             => item.TryGetProperty(name, out JsonElement value) && value.ValueKind == JsonValueKind.True;
 
+        /// <summary>
+        /// Converts protocol expires (seconds) to the public float32 field without
+        /// rounding above the protocol double.
+        /// </summary>
+        /// <param name="seconds">Expires in seconds, or <c>-1</c> for session cookies.</param>
+        /// <returns>A float suitable for <see cref="BrowserContextCookiesResult.Expires"/>.</returns>
+        private static float ToExpiresFloat(double seconds)
+        {
+            if (seconds <= 0)
+            {
+                return (float)seconds;
+            }
+
+            float rounded = (float)seconds;
+            if (rounded > seconds)
+            {
+                float previous = MathF.BitDecrement(rounded);
+                if (previous > 0)
+                {
+                    return previous;
+                }
+            }
+
+            return rounded;
+        }
+
         private static double ReadExpires(JsonElement item, bool webKit)
         {
             if (ReadBool(item, "session"))
@@ -465,8 +511,11 @@ namespace PlaywrightNative.Helpers
                 return Microsoft.Playwright.SameSiteAttribute.None;
             }
 
-            // Official Chromium: sameSite ?? 'Lax'. WebKit reports the engine value.
-            return webKit ? default : Microsoft.Playwright.SameSiteAttribute.Lax;
+            // Official Chromium: sameSite ?? 'Lax'. WebKit macOS/Linux also default to
+            // Lax when the engine omits the field; Windows WebKit reports None.
+            return webKit && OperatingSystem.IsWindows()
+                ? Microsoft.Playwright.SameSiteAttribute.None
+                : Microsoft.Playwright.SameSiteAttribute.Lax;
         }
     }
 }

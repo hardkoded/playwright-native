@@ -12,6 +12,7 @@ using System.Globalization;
 using System.Reflection;
 using System.Text.Json;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using PlaywrightNative.Chromium;
 using PlaywrightNative.WebKit;
 
@@ -83,18 +84,18 @@ namespace PlaywrightNative.Helpers
         {
             if (page == null)
             {
-                throw new PlaywrightNativeException("Passing a function is not supported as an argument here");
+                throw new PlaywrightException("Passing a function is not supported as an argument here");
             }
 
             if (!exposeFunctions)
             {
-                await page.AddInitScriptAsync(script, DropFunctions(arg)).ConfigureAwait(false);
+                await page.AddInitScriptAsync(script, DropFunctions(AddInitScriptHelper.UnwrapInitScriptArg(arg))).ConfigureAwait(false);
                 return AddInitScriptHelper.CreateDisposable(() => Task.CompletedTask);
             }
 
             if (!EvaluateWithArg.IsFunction(script))
             {
-                throw new PlaywrightNativeException(InitScriptRequiresFunction);
+                throw new PlaywrightException(InitScriptRequiresFunction);
             }
 
             List<string> names = new List<string>();
@@ -109,7 +110,7 @@ namespace PlaywrightNative.Helpers
                 {
                     await page.EvaluateAsync(wrapped).ConfigureAwait(false);
                 }
-                catch (PlaywrightNativeException)
+                catch (PlaywrightException)
                 {
                 }
             }
@@ -142,10 +143,10 @@ namespace PlaywrightNative.Helpers
             {
                 if (string.IsNullOrEmpty(path))
                 {
-                    throw new PlaywrightNativeException("Attempting to serialize unexpected value: () => {}");
+                    throw new PlaywrightException("Attempting to serialize unexpected value: () => {}");
                 }
 
-                throw new PlaywrightNativeException(
+                throw new PlaywrightException(
                     UnexpectedFunctionPrefix + path + "\": () => {}");
             }
         }
@@ -312,7 +313,7 @@ namespace PlaywrightNative.Helpers
         {
             if (page == null)
             {
-                throw new PlaywrightNativeException("Passing a function is not supported as an argument here");
+                throw new PlaywrightException("Passing a function is not supported as an argument here");
             }
 
             Dictionary<Delegate, string> names = new Dictionary<Delegate, string>();
@@ -595,7 +596,7 @@ namespace PlaywrightNative.Helpers
                 return;
             }
 
-            throw new PlaywrightNativeException("Passing a function is not supported as an argument here");
+            throw new PlaywrightException("Passing a function is not supported as an argument here");
         }
 
         private static Task<string> RegisterPersistentAsync(IPage page, string name, Func<JsonElement[], Task<object>> handler)
@@ -610,7 +611,7 @@ namespace PlaywrightNative.Helpers
                 return webkit.RegisterPersistentEvalFnAsync(name, handler);
             }
 
-            throw new PlaywrightNativeException("Passing a function is not supported as an argument here");
+            throw new PlaywrightException("Passing a function is not supported as an argument here");
         }
 
         private static Task UnregisterPersistentAsync(IPage page, string name, string identifier)
@@ -676,7 +677,7 @@ namespace PlaywrightNative.Helpers
                 return frame.EvaluateAsync<T>(expression, arg);
             }
 
-            throw new PlaywrightNativeException("Cannot evaluate on this target.");
+            throw new PlaywrightException("Cannot evaluate on this target.");
         }
 
         private static async Task<IJSHandle> AwaitThenableHandleAsync(IJSHandle handle)
@@ -701,7 +702,7 @@ namespace PlaywrightNative.Helpers
                 return frame.EvaluateHandleAsync(expression, arg);
             }
 
-            throw new PlaywrightNativeException("Cannot evaluate on this target.");
+            throw new PlaywrightException("Cannot evaluate on this target.");
         }
 
         private sealed class IdentityComparer : IEqualityComparer<object>

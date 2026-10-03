@@ -20,6 +20,7 @@ using System.IO;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using PlaywrightNative.Chromium;
 using PlaywrightNative.WebKit;
 
@@ -160,9 +161,26 @@ namespace PlaywrightNative.Helpers
             internal async Task FlushAsync()
             {
                 Detach();
+
+                // Snapshot then await every Stop (including ones kicked off on
+                // page.Close) so context.Close cannot return with a still-pending
+                // WriteWhiteVideo under Windows headful suite load.
+                PageRecording[] recordings = new PageRecording[_recordings.Count];
+                int index = 0;
                 foreach (PageRecording recording in _recordings.Values)
                 {
-                    await recording.StopAsync().ConfigureAwait(false);
+                    recordings[index++] = recording;
+                }
+
+                Task[] stops = new Task[index];
+                for (int i = 0; i < index; i++)
+                {
+                    stops[i] = recordings[i].StopAsync();
+                }
+
+                if (stops.Length > 0)
+                {
+                    await Task.WhenAll(stops).ConfigureAwait(false);
                 }
 
                 _recordings.Clear();
@@ -186,13 +204,18 @@ namespace PlaywrightNative.Helpers
 
                 Videos.Add(page, recording.Video);
 
+                // Start StopAsync on the Close thread so FlushAsync joins the same
+                // shared task. Deferring StopAsync into Task.Run let Flush race a
+                // still-null _stopTask under Windows headful load and miss awaiting
+                // WriteWhiteVideo (ShouldCloseFfmpegEvenIfThereWereNoFrames).
                 page.Close += (_, _) =>
                 {
+                    Task stopTask = recording.StopAsync();
                     _ = Task.Run(async () =>
                     {
                         try
                         {
-                            await recording.StopAsync().ConfigureAwait(false);
+                            await stopTask.ConfigureAwait(false);
                         }
                         catch (Exception ex)
                         {
@@ -250,7 +273,7 @@ namespace PlaywrightNative.Helpers
                 await _completed.Task.ConfigureAwait(false);
                 if (_browserClosed || _browser == null || !_browser.IsConnected)
                 {
-                    throw new PlaywrightNativeException("browser has been closed");
+                    throw new PlaywrightException("browser has been closed");
                 }
 
                 string directory = System.IO.Path.GetDirectoryName(path);
@@ -297,6 +320,7 @@ namespace PlaywrightNative.Helpers
             private int _wkGeneration;
             private Task _startTask = Task.CompletedTask;
             private Task _stopTask;
+            private Task _deliverChain = Task.CompletedTask;
 
             internal PageRecording(IPage page, string path, RecordVideoSize size)
             {
@@ -426,7 +450,7 @@ namespace PlaywrightNative.Helpers
                     catch (TimeoutException)
                     {
                     }
-                    catch (PlaywrightNativeException)
+                    catch (PlaywrightException)
                     {
                     }
                 }
@@ -446,9 +470,31 @@ namespace PlaywrightNative.Helpers
                     catch (TimeoutException)
                     {
                     }
-                    catch (PlaywrightNativeException)
+                    catch (PlaywrightException)
                     {
                     }
+                }
+
+                // Drain writes/acks that were already queued off the CDP read loop
+                // before closing ffmpeg stdin.
+                Task pending;
+                lock (_gate)
+                {
+                    pending = _deliverChain;
+                }
+
+                try
+                {
+                    await pending
+                        .WithTimeout(TimeSpan.FromSeconds(2), _ => new TimeoutException())
+                        .ConfigureAwait(false);
+                }
+                catch (TimeoutException)
+                {
+                }
+                catch (Exception ex)
+                {
+                    LogError(ex);
                 }
 
                 try
@@ -478,25 +524,10 @@ namespace PlaywrightNative.Helpers
                     ? value
                     : 0;
 
-                if (!string.IsNullOrEmpty(data))
-                {
-                    try
-                    {
-                        byte[] jpeg = Convert.FromBase64String(data);
-                        WriteFrame(jpeg);
-                    }
-                    catch (FormatException)
-                    {
-                    }
-                }
-
-                CRSession session = _crSession;
-                if (session == null)
-                {
-                    return;
-                }
-
-                _ = session.SendAsync("Page.screencastFrameAck", new { sessionId });
+                // Never Write/Flush on the CDP read loop: under continuous CSS
+                // animation (e.g. rotate-z) a full ffmpeg pipe stalls every
+                // Evaluate/Screenshot response for the whole session.
+                EnqueueFrame(data, () => AckCrAsync(sessionId));
             }
 
             private void OnWkMessage(string method, JsonElement? parameters)
@@ -510,25 +541,98 @@ namespace PlaywrightNative.Helpers
                 string data = payload.TryGetProperty("data", out JsonElement dataElement)
                     ? dataElement.GetString()
                     : null;
-                if (!string.IsNullOrEmpty(data))
+
+                EnqueueFrame(data, AckWkAsync);
+            }
+
+            private void EnqueueFrame(string data, Func<Task> ackAsync)
+            {
+                Task previous;
+                TaskCompletionSource<bool> done = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                bool write;
+                lock (_gate)
                 {
-                    try
-                    {
-                        byte[] jpeg = Convert.FromBase64String(data);
-                        WriteFrame(jpeg);
-                    }
-                    catch (FormatException)
-                    {
-                    }
+                    // StopAsync owns the gate first; skip new writes once closing.
+                    write = _stopTask == null;
+                    previous = _deliverChain;
+                    _deliverChain = done.Task;
                 }
 
+                _ = DeliverFrameAsync(previous, done, write ? data : null, ackAsync);
+            }
+
+            private async Task DeliverFrameAsync(
+                Task previous,
+                TaskCompletionSource<bool> done,
+                string data,
+                Func<Task> ackAsync)
+            {
+                try
+                {
+                    await previous.ConfigureAwait(false);
+
+                    if (!string.IsNullOrEmpty(data))
+                    {
+                        try
+                        {
+                            WriteFrame(Convert.FromBase64String(data));
+                        }
+                        catch (FormatException)
+                        {
+                        }
+                    }
+
+                    await ackAsync().ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    LogError(ex);
+                }
+                finally
+                {
+                    done.TrySetResult(true);
+                }
+            }
+
+            private async Task AckCrAsync(int sessionId)
+            {
+                CRSession session = _crSession;
+                if (session == null)
+                {
+                    return;
+                }
+
+                try
+                {
+                    await session.SendAsync("Page.screencastFrameAck", new { sessionId }).ConfigureAwait(false);
+                }
+                catch (TargetClosedException)
+                {
+                }
+                catch (PlaywrightException)
+                {
+                }
+            }
+
+            private async Task AckWkAsync()
+            {
                 WKSession session = _wkSession;
                 if (session == null)
                 {
                     return;
                 }
 
-                _ = session.SendAsync("Screencast.screencastFrameAck", new { generation = _wkGeneration });
+                try
+                {
+                    await session.SendAsync("Screencast.screencastFrameAck", new { generation = _wkGeneration })
+                        .ConfigureAwait(false);
+                }
+                catch (TargetClosedException)
+                {
+                }
+                catch (PlaywrightException)
+                {
+                }
             }
 
             private void WriteFrame(byte[] jpeg)
@@ -540,6 +644,16 @@ namespace PlaywrightNative.Helpers
 
                 _video.LastJpeg = jpeg;
                 _writer.Write(jpeg);
+            }
+
+            private void LogError(Exception ex)
+            {
+                if (ex == null)
+                {
+                    return;
+                }
+
+                System.Diagnostics.Debug.WriteLine(ex);
             }
         }
     }

@@ -43,6 +43,19 @@ namespace PlaywrightNative.Tests
         private const string SelfSignedMessage = "Sorry Bob, certificates from Bob are not welcome here.";
         private const string MissingMessage = "Sorry, but you need to provide a client certificate to continue.";
 
+        /// <summary>
+        /// Official <c>useFakeLocalhost: browserName === 'webkit' &amp;&amp; isMac</c>:
+        /// WebKit on macOS does not send localhost through the client-certificate SOCKS MITM.
+        /// </summary>
+        private static bool UseFakeLocalhost => TestConstants.IsWebKit && TestConstants.IsMacOSX;
+
+        private static string ProxiedConnectHost => UseFakeLocalhost ? "localhost" : "127.0.0.1";
+
+        private static Task<OfficialClientCertificateServer> StartCcServerAsync(
+            bool http2 = false,
+            bool enableHttp1Fallback = false)
+            => OfficialClientCertificateServer.StartAsync(http2, enableHttp1Fallback, UseFakeLocalhost);
+
         private static SimpleServer _ownedServer;
         private static string Prefix = TestConstants.ServerUrl;
 
@@ -355,7 +368,7 @@ namespace PlaywrightNative.Tests
         [Timeout(TestConstants.DefaultTestTimeout)]
         public async Task BrowserShouldFailWithNoClientCertificates()
         {
-            await using OfficialClientCertificateServer server = await OfficialClientCertificateServer.StartAsync()
+            await using OfficialClientCertificateServer server = await StartCcServerAsync()
                 .ConfigureAwait(false);
             await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
             IPage page = await browser.NewPageAsync(new() { IgnoreHTTPSErrors = true, ClientCertificates = new[] { Trusted("https://not-matching.com") } })
@@ -370,7 +383,7 @@ namespace PlaywrightNative.Tests
         [Timeout(TestConstants.DefaultTestTimeout)]
         public async Task BrowserShouldFailWithSelfSignedClientCertificates()
         {
-            await using OfficialClientCertificateServer server = await OfficialClientCertificateServer.StartAsync()
+            await using OfficialClientCertificateServer server = await StartCcServerAsync()
                 .ConfigureAwait(false);
             await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
             IPage page = await browser.NewPageAsync(new() { IgnoreHTTPSErrors = true, ClientCertificates = new[] { SelfSigned(OriginOf(server.Url)) } })
@@ -385,7 +398,7 @@ namespace PlaywrightNative.Tests
         [Timeout(TestConstants.DefaultTestTimeout)]
         public async Task BrowserShouldPassWithMatchingCertificates()
         {
-            await using OfficialClientCertificateServer server = await OfficialClientCertificateServer.StartAsync()
+            await using OfficialClientCertificateServer server = await StartCcServerAsync()
                 .ConfigureAwait(false);
             await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
             IPage page = await browser.NewPageAsync(new() { IgnoreHTTPSErrors = true, ClientCertificates = new[] { Trusted(OriginOf(server.Url)) } })
@@ -400,7 +413,7 @@ namespace PlaywrightNative.Tests
         [Timeout(TestConstants.DefaultTestTimeout)]
         public async Task BrowserShouldPassWithMatchingCertificatesWhenPassingAsContent()
         {
-            await using OfficialClientCertificateServer server = await OfficialClientCertificateServer.StartAsync()
+            await using OfficialClientCertificateServer server = await StartCcServerAsync()
                 .ConfigureAwait(false);
             await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
             IPage page = await browser.NewPageAsync(new()
@@ -427,7 +440,7 @@ namespace PlaywrightNative.Tests
         [Timeout(TestConstants.DefaultTestTimeout)]
         public async Task BrowserShouldPassWithMatchingCertificatesAndWhenAHttpProxyIsUsed()
         {
-            await using OfficialClientCertificateServer server = await OfficialClientCertificateServer.StartAsync()
+            await using OfficialClientCertificateServer server = await StartCcServerAsync()
                 .ConfigureAwait(false);
             await using OfficialTestProxy proxyServer = new OfficialTestProxy();
             proxyServer.ForwardTo(server.Port, allowConnectRequests: true);
@@ -436,7 +449,7 @@ namespace PlaywrightNative.Tests
                 .ConfigureAwait(false);
             Assert.That(proxyServer.ConnectHosts, Is.Empty);
             await page.GoToAsync(server.Url).ConfigureAwait(false);
-            Assert.That(proxyServer.ConnectHosts.Distinct().ToArray(), Is.EqualTo(new[] { "127.0.0.1:" + server.Port.ToString(CultureInfo.InvariantCulture) }));
+            Assert.That(proxyServer.ConnectHosts.Distinct().ToArray(), Is.EqualTo(new[] { ProxiedConnectHost + ":" + server.Port.ToString(CultureInfo.InvariantCulture) }));
             await Assertions.Expect(page.GetByTestId("message")).ToHaveTextAsync(TrustedMessage).ConfigureAwait(false);
             await page.CloseAsync().ConfigureAwait(false);
         }
@@ -446,7 +459,7 @@ namespace PlaywrightNative.Tests
         [Timeout(TestConstants.DefaultTestTimeout)]
         public async Task BrowserShouldPassWithMatchingCertificatesAndWhenAHttpProxyIsUsedFromEnv()
         {
-            await using OfficialClientCertificateServer server = await OfficialClientCertificateServer.StartAsync()
+            await using OfficialClientCertificateServer server = await StartCcServerAsync()
                 .ConfigureAwait(false);
             await using OfficialTestProxy proxyServer = new OfficialTestProxy();
             proxyServer.ForwardTo(server.Port, allowConnectRequests: true);
@@ -460,8 +473,8 @@ namespace PlaywrightNative.Tests
                 proxyServer.ConnectHosts = Array.Empty<string>();
                 await page.GoToAsync(server.Url).ConfigureAwait(false);
                 Assert.That(
-                    proxyServer.ConnectHosts.Where(host => host.StartsWith("127.0.0.1:", StringComparison.Ordinal)).Distinct().ToArray(),
-                    Is.EqualTo(new[] { "127.0.0.1:" + server.Port.ToString(CultureInfo.InvariantCulture) }));
+                    proxyServer.ConnectHosts.Where(host => host.StartsWith(ProxiedConnectHost + ":", StringComparison.Ordinal)).Distinct().ToArray(),
+                    Is.EqualTo(new[] { ProxiedConnectHost + ":" + server.Port.ToString(CultureInfo.InvariantCulture) }));
                 await Assertions.Expect(page.GetByTestId("message")).ToHaveTextAsync(TrustedMessage).ConfigureAwait(false);
                 await page.CloseAsync().ConfigureAwait(false);
             }
@@ -476,7 +489,7 @@ namespace PlaywrightNative.Tests
         [Timeout(TestConstants.DefaultTestTimeout)]
         public async Task BrowserShouldPassWithMatchingCertificatesAndWhenAHttpProxyIsUsedFromConfigButEnvIsThere()
         {
-            await using OfficialClientCertificateServer server = await OfficialClientCertificateServer.StartAsync()
+            await using OfficialClientCertificateServer server = await StartCcServerAsync()
                 .ConfigureAwait(false);
             await using OfficialTestProxy proxyServer = new OfficialTestProxy();
             proxyServer.ForwardTo(server.Port, allowConnectRequests: true);
@@ -489,7 +502,7 @@ namespace PlaywrightNative.Tests
                     .ConfigureAwait(false);
                 Assert.That(proxyServer.ConnectHosts, Is.Empty);
                 await page.GoToAsync(server.Url).ConfigureAwait(false);
-                Assert.That(proxyServer.ConnectHosts.Distinct().ToArray(), Is.EqualTo(new[] { "127.0.0.1:" + server.Port.ToString(CultureInfo.InvariantCulture) }));
+                Assert.That(proxyServer.ConnectHosts.Distinct().ToArray(), Is.EqualTo(new[] { ProxiedConnectHost + ":" + server.Port.ToString(CultureInfo.InvariantCulture) }));
                 await Assertions.Expect(page.GetByTestId("message")).ToHaveTextAsync(TrustedMessage).ConfigureAwait(false);
                 await page.CloseAsync().ConfigureAwait(false);
             }
@@ -504,7 +517,7 @@ namespace PlaywrightNative.Tests
         [Timeout(TestConstants.DefaultTestTimeout)]
         public async Task BrowserShouldPassWithMatchingCertificatesAndWhenASocksProxyIsUsed()
         {
-            await using OfficialClientCertificateServer server = await OfficialClientCertificateServer.StartAsync()
+            await using OfficialClientCertificateServer server = await StartCcServerAsync()
                 .ConfigureAwait(false);
             await using OfficialSocksForwardingProxy socks = new OfficialSocksForwardingProxy(server.Port, server.Port);
             await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
@@ -513,7 +526,7 @@ namespace PlaywrightNative.Tests
             await page.GoToAsync(server.Url).ConfigureAwait(false);
             Assert.That(
                 socks.ConnectHosts.Distinct().ToArray(),
-                Is.EqualTo(new[] { "127.0.0.1:" + server.Port.ToString(CultureInfo.InvariantCulture) }));
+                Is.EqualTo(new[] { ProxiedConnectHost + ":" + server.Port.ToString(CultureInfo.InvariantCulture) }));
             await Assertions.Expect(page.GetByTestId("message")).ToHaveTextAsync(TrustedMessage).ConfigureAwait(false);
             await page.CloseAsync().ConfigureAwait(false);
         }
@@ -527,9 +540,12 @@ namespace PlaywrightNative.Tests
             foreach (SslProtocols version in new[] { SslProtocols.Tls13, SslProtocols.Tls12 })
             {
                 await using OfficialTlsSniRejectServer server = OfficialTlsSniRejectServer.Start(version);
-                IPage page = await browser.NewPageAsync(new() { IgnoreHTTPSErrors = true, ClientCertificates = new[] { SelfSigned(OriginOf(server.Url)) } })
+                string serverUrl = UseFakeLocalhost
+                    ? server.Url.Replace("localhost", "local.playwright", StringComparison.Ordinal)
+                    : server.Url;
+                IPage page = await browser.NewPageAsync(new() { IgnoreHTTPSErrors = true, ClientCertificates = new[] { SelfSigned(OriginOf(serverUrl)) } })
                     .ConfigureAwait(false);
-                await page.GoToAsync(server.Url).ConfigureAwait(false);
+                await page.GoToAsync(serverUrl).ConfigureAwait(false);
                 await Assertions.Expect(page.GetByText(
                     "Playwright client-certificate error: Client network socket disconnected before secure TLS connection was established"))
                     .ToBeVisibleAsync().ConfigureAwait(false);
@@ -542,7 +558,7 @@ namespace PlaywrightNative.Tests
         [Timeout(TestConstants.DefaultTestTimeout)]
         public async Task BrowserShouldPassWithMatchingCertificatesInPfxFormat()
         {
-            await using OfficialClientCertificateServer server = await OfficialClientCertificateServer.StartAsync()
+            await using OfficialClientCertificateServer server = await StartCcServerAsync()
                 .ConfigureAwait(false);
             await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
             IPage page = await browser.NewPageAsync(new() { IgnoreHTTPSErrors = true, ClientCertificates = new[] { TrustedPfx(OriginOf(server.Url)) } })
@@ -558,11 +574,14 @@ namespace PlaywrightNative.Tests
         public async Task BrowserShouldHandleTlsRenegotiationWithClientCertificates()
         {
             await using OfficialTlsRenegotiationServer server = OfficialTlsRenegotiationServer.Start();
+            string serverUrl = UseFakeLocalhost
+                ? server.Url.Replace("localhost", "local.playwright", StringComparison.Ordinal)
+                : server.Url;
             await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
-            await using IBrowserContext context = await browser.NewContextAsync(new() { IgnoreHTTPSErrors = true, ClientCertificates = new[] { Trusted(server.Url) } })
+            await using IBrowserContext context = await browser.NewContextAsync(new() { IgnoreHTTPSErrors = true, ClientCertificates = new[] { Trusted(serverUrl) } })
                 .ConfigureAwait(false);
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
-            await page.GoToAsync(server.Url).ConfigureAwait(false);
+            await page.GoToAsync(serverUrl).ConfigureAwait(false);
             string response = await page.EvaluateAsync<string>(@"async () => {
                 const response = await fetch('/from-fetch-api', {
                   method: 'POST',
@@ -579,7 +598,7 @@ namespace PlaywrightNative.Tests
                 "3-from-server",
                 "server closed the connection",
             })));
-            await page.GoToAsync(server.Url).ConfigureAwait(false);
+            await page.GoToAsync(serverUrl).ConfigureAwait(false);
             await page.SetContentAsync("<button>Click me</button><link rel=\"stylesheet\" href=\"/style.css\">")
                 .ConfigureAwait(false);
             await Assertions.Expect(page.Locator("button")).ToHaveCSSAsync("background-color", "rgb(255, 0, 0)")
@@ -591,7 +610,7 @@ namespace PlaywrightNative.Tests
         [Timeout(TestConstants.DefaultTestTimeout)]
         public async Task BrowserShouldPassWithMatchingCertificatesInPfxFormatWhenPassingAsContent()
         {
-            await using OfficialClientCertificateServer server = await OfficialClientCertificateServer.StartAsync()
+            await using OfficialClientCertificateServer server = await StartCcServerAsync()
                 .ConfigureAwait(false);
             await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
             IPage page = await browser.NewPageAsync(new()
@@ -618,7 +637,7 @@ namespace PlaywrightNative.Tests
         [Timeout(TestConstants.DefaultTestTimeout)]
         public async Task BrowserShouldFailWithMatchingCertificatesInLegacyPfxFormat()
         {
-            await using OfficialClientCertificateServer server = await OfficialClientCertificateServer.StartAsync()
+            await using OfficialClientCertificateServer server = await StartCcServerAsync()
                 .ConfigureAwait(false);
             await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
             Exception error = await CatchAsync(() => browser.NewPageAsync(new() { IgnoreHTTPSErrors = true, ClientCertificates = new[] { LegacyPfx(OriginOf(server.Url)) } }))
@@ -632,7 +651,7 @@ namespace PlaywrightNative.Tests
         [Timeout(TestConstants.DefaultTestTimeout)]
         public async Task BrowserShouldThrowAHttpErrorIfThePfxPassphraseIsIncorect()
         {
-            await using OfficialClientCertificateServer server = await OfficialClientCertificateServer.StartAsync()
+            await using OfficialClientCertificateServer server = await StartCcServerAsync()
                 .ConfigureAwait(false);
             await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
             Exception error = await CatchAsync(() => browser.NewPageAsync(new()
@@ -658,7 +677,7 @@ namespace PlaywrightNative.Tests
         [Timeout(TestConstants.DefaultTestTimeout)]
         public async Task BrowserShouldPassWithMatchingCertificatesOnContextApiRequestContextInstance()
         {
-            await using OfficialClientCertificateServer server = await OfficialClientCertificateServer.StartAsync()
+            await using OfficialClientCertificateServer server = await StartCcServerAsync()
                 .ConfigureAwait(false);
             await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
             string origin = OriginOf(server.Url);
@@ -687,7 +706,7 @@ namespace PlaywrightNative.Tests
         [Timeout(TestConstants.DefaultTestTimeout)]
         public async Task BrowserShouldPassWithMatchingCertificatesAndTrailingSlash()
         {
-            await using OfficialClientCertificateServer server = await OfficialClientCertificateServer.StartAsync()
+            await using OfficialClientCertificateServer server = await StartCcServerAsync()
                 .ConfigureAwait(false);
             await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
             IPage page = await browser.NewPageAsync(new() { IgnoreHTTPSErrors = true, ClientCertificates = new[] { Trusted(server.Url) } })
@@ -704,10 +723,13 @@ namespace PlaywrightNative.Tests
         {
             await using OfficialPlaywrightTestHttpsServer https = await OfficialPlaywrightTestHttpsServer.StartAsync()
                 .ConfigureAwait(false);
+            string targetUrl = UseFakeLocalhost
+                ? https.EmptyPage.Replace("127.0.0.1", "local.playwright", StringComparison.Ordinal)
+                : https.EmptyPage;
             await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
-            IPage page = await browser.NewPageAsync(new() { ClientCertificates = new[] { Trusted(OriginOf(https.EmptyPage)) } })
+            IPage page = await browser.NewPageAsync(new() { ClientCertificates = new[] { Trusted(OriginOf(targetUrl)) } })
                 .ConfigureAwait(false);
-            await page.GoToAsync(https.EmptyPage).ConfigureAwait(false);
+            await page.GoToAsync(targetUrl).ConfigureAwait(false);
             await Assertions.Expect(page.GetByText("Playwright client-certificate error: self-signed certificate"))
                 .ToBeVisibleAsync().ConfigureAwait(false);
             await page.CloseAsync().ConfigureAwait(false);
@@ -718,7 +740,12 @@ namespace PlaywrightNative.Tests
         [Timeout(TestConstants.DefaultTestTimeout)]
         public async Task BrowserSupportHttp2()
         {
-            await using OfficialClientCertificateServer server = await OfficialClientCertificateServer.StartAsync(http2: true)
+            if (UseFakeLocalhost)
+            {
+                Assert.Ignore("official skip: WebKit on macOS does not proxy localhost");
+            }
+
+            await using OfficialClientCertificateServer server = await StartCcServerAsync(http2: true)
                 .ConfigureAwait(false);
             await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
             IPage page = await browser.NewPageAsync(new() { IgnoreHTTPSErrors = true, ClientCertificates = new[] { Trusted(OriginOf(server.Url)) } })
@@ -744,7 +771,7 @@ namespace PlaywrightNative.Tests
                 Assert.Ignore("official skip: browserName !== chromium");
             }
 
-            await using OfficialClientCertificateServer server = await OfficialClientCertificateServer.StartAsync(http2: true, enableHttp1Fallback: true)
+            await using OfficialClientCertificateServer server = await StartCcServerAsync(http2: true, enableHttp1Fallback: true)
                 .ConfigureAwait(false);
             await using IBrowser browser = await BrowserLauncher.LaunchAsync(new BrowserTypeLaunchOptions
             {
@@ -766,7 +793,12 @@ namespace PlaywrightNative.Tests
         [Timeout(TestConstants.DefaultTestTimeout)]
         public async Task BrowserShouldReturnTargetConnectionErrorsWhenUsingHttp2()
         {
-            await using OfficialClientCertificateServer server = await OfficialClientCertificateServer.StartAsync(http2: true)
+            if (UseFakeLocalhost)
+            {
+                Assert.Ignore("official skip: WebKit on macOS does not proxy localhost");
+            }
+
+            await using OfficialClientCertificateServer server = await StartCcServerAsync(http2: true)
                 .ConfigureAwait(false);
             await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
             IPage page = await browser.NewPageAsync(new() { ClientCertificates = new[] { Trusted(OriginOf(server.Url)) } })
@@ -782,7 +814,7 @@ namespace PlaywrightNative.Tests
         [Timeout(TestConstants.DefaultTestTimeout)]
         public async Task BrowserShouldHandleRejectedCertificateInHandshakeWithHttp2()
         {
-            await using OfficialClientCertificateServer server = await OfficialClientCertificateServer.StartAsync(http2: true)
+            await using OfficialClientCertificateServer server = await StartCcServerAsync(http2: true)
                 .ConfigureAwait(false);
             await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
             await using IBrowserContext context = await browser.NewContextAsync(new()
@@ -826,7 +858,7 @@ namespace PlaywrightNative.Tests
         [Timeout(60_000)]
         public async Task PersistentContextShouldPassWithMatchingCertificates()
         {
-            await using OfficialClientCertificateServer server = await OfficialClientCertificateServer.StartAsync()
+            await using OfficialClientCertificateServer server = await StartCcServerAsync()
                 .ConfigureAwait(false);
             await using PersistentLaunch launch = await LaunchPersistentAsync(new BrowserTypeLaunchPersistentContextOptions
             {

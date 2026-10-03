@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 
@@ -69,7 +70,7 @@ namespace PlaywrightNative.Tests
             string htmlContent = "<div class=\"a\">not-a-child-div</div><div id=\"myId\"></div>";
             await page.SetContentAsync(htmlContent).ConfigureAwait(false);
             IElementHandle elementHandle = await page.QuerySelectorAsync("#myId").ConfigureAwait(false);
-            PlaywrightNativeException ex = Assert.CatchAsync<PlaywrightNativeException>(
+            PlaywrightException ex = Assert.CatchAsync<PlaywrightException>(
                 () => elementHandle.EvalOnSelectorAsync<string>(".a", "node => node.innerText"));
             Assert.That(ex, Is.Not.Null);
             Assert.That(ex.Message, Does.Contain("Failed to find element matching selector \".a\""));

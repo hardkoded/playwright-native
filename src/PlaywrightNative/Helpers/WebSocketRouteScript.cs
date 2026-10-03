@@ -78,9 +78,12 @@ namespace PlaywrightNative.Helpers
             "const pwSeenSeq = new Set();" +
             "globalThis.__pwWebSocketDispatch = (request) => {" +
             "  if (!request) return;" +
-            "  if (request._seq != null) { if (pwSeenSeq.has(request._seq)) return; pwSeenSeq.add(request._seq); }" +
             "  const ws = idToSocket.get(request.id);" +
             "  if (!ws) return;" +
+
+            // Only consume _seq once the socket is local to this world so a
+            // main-frame miss cannot poison iframe pull / evaluate retries.
+            "  if (request._seq != null) { if (pwSeenSeq.has(request._seq)) return; pwSeenSeq.add(request._seq); }" +
             "  if (request.type === 'connect') ws._apiConnect();" +
             "  if (request.type === 'passthrough') ws._apiPassThrough();" +
             "  if (request.type === 'ensureOpened') ws._apiEnsureOpened();" +
@@ -120,9 +123,10 @@ namespace PlaywrightNative.Helpers
             "        if (routed) {" +
             "          if (result && result.ops) pwWebSocketApplyRaw(result.ops);" +
             "          pwWebSocketPull();" +
-            "          setTimeout(function() {" +
-            "            if (self.readyState === 0 && !self._ws) self._apiEnsureOpened();" +
-            "          }, 20);" +
+
+            // Official mock stays CONNECTING until connect / ensureOpened from the
+            // route handler. Do not auto-open here: a timer races Task.Run handlers
+            // and can send page frames before OnMessage is registered.
             "          return;" +
             "        }" +
             "        self._apiPassThrough();" +
@@ -238,7 +242,10 @@ namespace PlaywrightNative.Helpers
             "function pwWebSocketApply(req) {" +
             "  if (!req) return;" +
             "  try { if (globalThis.__pwWebSocketDispatch) globalThis.__pwWebSocketDispatch(req); } catch (e) {}" +
-            "  try { const list = globalThis.frames || []; for (let i = 0; i < list.length; i++) { const w = list[i]; if (w && w.__pwWebSocketDispatch) w.__pwWebSocketDispatch(req); } } catch (e) {}" +
+
+            // Per-frame try so one inaccessible child cannot skip the rest
+            // (iframe hello delivery under WebKit Linux suite load).
+            "  try { const list = globalThis.frames || []; for (let i = 0; i < list.length; i++) { try { const w = list[i]; if (w && w.__pwWebSocketDispatch) w.__pwWebSocketDispatch(req); } catch (e) {} } } catch (e) {}" +
             "}" +
             "function pwWebSocketApplyRaw(raw) {" +
             "  let reqs = raw;" +
@@ -255,8 +262,10 @@ namespace PlaywrightNative.Helpers
             "  if (typeof b !== 'function' || idToSocket.size === 0) return Promise.resolve();" +
             "  return Promise.resolve(b({ type: 'onPull', pageId: globalThis.__pwWebSocketPageId || '' })).then(pwWebSocketApplyRaw, () => {});" +
             "}" +
-            "const pwIsMain = globalThis.window ? globalThis.window === globalThis.window.top : true;" +
-            "if (pwIsMain && !globalThis.__pwWebSocketPumping) {" +
+
+            // Pump from every frame: iframe sockets never see main-only pull
+            // fan-out when frames[i] access fails under WebKit Linux load.
+            "if (!globalThis.__pwWebSocketPumping) {" +
             "  globalThis.__pwWebSocketPumping = true;" +
             "  setInterval(function() { pwWebSocketPull(); }, 50);" +
             "}" +

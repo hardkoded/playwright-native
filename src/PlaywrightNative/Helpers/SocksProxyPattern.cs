@@ -17,6 +17,7 @@
 using System;
 using System.Net;
 using System.Text.RegularExpressions;
+using Microsoft.Playwright;
 
 namespace PlaywrightNative.Helpers
 {
@@ -65,7 +66,7 @@ namespace PlaywrightNative.Helpers
             Match match = Regex.Match(token, @"^(.*?)(?::(\d+))?$");
             if (!match.Success)
             {
-                throw new PlaywrightNativeException("Unsupported token \"" + token + "\" in pattern \"" + pattern + "\"");
+                throw new PlaywrightException("Unsupported token \"" + token + "\" in pattern \"" + pattern + "\"");
             }
 
             int? tokenPort = null;

@@ -25,6 +25,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
+using Microsoft.Playwright;
 using PlaywrightNative.Transport;
 using PlaywrightNative.Transport.Protocol;
 
@@ -215,7 +216,7 @@ namespace PlaywrightNative.Firefox
                 processManager.Process.ErrorDataReceived += (_, e) => OnLogLine(e.Data);
                 processManager.Process.OutputDataReceived += (_, e) => OnLogLine(e.Data);
                 processManager.Process.Exited += (_, _) =>
-                    readyTcs.TrySetException(new PlaywrightNativeException("Firefox exited before Juggler reported ready."));
+                    readyTcs.TrySetException(new PlaywrightException("Firefox exited before Juggler reported ready."));
 
                 await processManager.StartAsync().ConfigureAwait(false);
 
@@ -227,7 +228,7 @@ namespace PlaywrightNative.Firefox
                 using CancellationTokenSource readyCts = new(timeout);
                 readyCts.Token.Register(
                     () => readyTcs.TrySetException(
-                        new PlaywrightNativeException(
+                        new PlaywrightException(
                             $"Timed out after {timeout} ms waiting for Juggler to listen on the pipe.")));
                 await readyTcs.Task.ConfigureAwait(false);
 
@@ -265,7 +266,7 @@ namespace PlaywrightNative.Firefox
                         exited = false;
                     }
 
-                    throw new PlaywrightNativeException(
+                    throw new PlaywrightException(
                         $"Firefox Juggler failed to stay connected (processExited={exited}, exitCode={exitCode?.ToString() ?? "<n/a>"}).\n" +
                         $"Executable: {executablePath}\n" +
                         $"Args: {string.Join(" ", launchArgs)}\n" +

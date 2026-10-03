@@ -17,6 +17,7 @@
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using PlaywrightNative;
 
 namespace PlaywrightNative.Helpers
 {
@@ -88,29 +89,43 @@ namespace PlaywrightNative.Helpers
             switch (name)
             {
                 case "Console":
-                    return ActionTrace.RunAsync(
-                        page.Context,
-                        "Wait for event \"console\"",
-                        "Page",
-                        "waitForEvent",
-                        () => WaitTypedAsync<T, IConsoleMessage>(
-                            page,
-                            h => page.Console += h,
-                            h => page.Console -= h,
-                            matches,
-                            timeout,
-                            existingAfterSubscribe: async () =>
-                            {
-                                IReadOnlyList<IConsoleMessage> items = await page.ConsoleMessagesAsync().ConfigureAwait(false);
-                                return (IReadOnlyList<T>)items;
-                            }));
+                    // Subscribe before ActionTrace yields. evaluate() also yields before
+                    // its body; if waitForEvent delayed subscribe until after that yield,
+                    // console.log from a racing evaluate could fire with no listener
+                    // (tracing "should not emit after w/o before" hangs 30s).
+                    // Replay only messages that arrived after this wait started — replaying
+                    // the absolute last ConsoleMessages entry re-delivers prior logs
+                    // (ShouldFireOrientationchangeEvent got "1" for the second wait).
+                    return WaitConsoleEventAsync(page, matches, timeout);
                 case "Dialog":
+                    // Resolve inline so waitForEvent('dialog') completes during
+                    // RaiseDialog (same as Load). Deferred predicate ContinueWith
+                    // can starve under macOS suite load while alert blocks evaluate
+                    // (ContextWaitForDialogShouldResolveOnAlert 30s empty stack).
+                    // Replay OpenDialog after subscribe when ScheduleOpen deferred
+                    // the raise past the waiter attach.
                     return WaitTypedAsync<T, IDialog>(
                         page,
                         h => page.Dialog += h,
                         h => page.Dialog -= h,
                         matches,
-                        timeout);
+                        timeout,
+                        existingAfterSubscribe: () =>
+                        {
+                            if (page is IHasPageExtras extras)
+                            {
+                                IDialog open = extras.TryGetOpenDialog();
+                                if (open != null)
+                                {
+                                    extras.TryMarkOpenDialogEmitted();
+                                    return Task.FromResult<IReadOnlyList<T>>(
+                                        (IReadOnlyList<T>)(object)new IDialog[] { open });
+                                }
+                            }
+
+                            return Task.FromResult<IReadOnlyList<T>>(Array.Empty<T>());
+                        },
+                        deferPredicateEvaluation: false);
                 case "DialogClosed":
                     if (page is not IHasPageExtras extras)
                     {
@@ -180,7 +195,72 @@ namespace PlaywrightNative.Helpers
                         h => page.Popup += h,
                         h => page.Popup -= h,
                         matches,
-                        timeout);
+                        timeout,
+                        existingAfterSubscribe: async () =>
+                        {
+                            // evaluate-first CaptureAlert can emit Popup /
+                            // ReportPopupAsNew before WaitForPopupAsync subscribes.
+                            // Blank + alert may EmitWhenReady after NoteDialogOpened
+                            // unblocks init while HasCommittedNonInitialNavigation
+                            // is still false (frameNavigated races the dialog), so
+                            // IsClientInitialized alone misses the replay.
+                            List<IPage> ready = new();
+                            if (page.Context == null)
+                            {
+                                return (IReadOnlyList<T>)(object)ready;
+                            }
+
+                            foreach (IPage candidate in page.Context.Pages)
+                            {
+                                if (ReferenceEquals(candidate, page))
+                                {
+                                    continue;
+                                }
+
+                                bool clientReady = candidate is IHasClientInitializedPage init
+                                    && init.IsClientInitialized;
+
+                                // Blank + alert: NoteDialogOpened completes init before
+                                // about:blank sets HasCommittedNonInitialNavigation, so
+                                // EmitWhenReady can raise Popup while IsClientInitialized
+                                // is still false. Replay when init finished, opener is
+                                // set, and a dialog is open (or was — Prefer open dialog;
+                                // also accept blank URL after init so auto-dismiss races
+                                // still resolve WaitForPopup).
+                                bool blankPopupReadyForReplay = false;
+                                if (!clientReady && candidate is Page crCandidate
+                                    && crCandidate.CrPage.Opener != null
+                                    && crCandidate.CrPage.InitializedTask.IsCompleted)
+                                {
+                                    bool hasOpenDialog = candidate is IHasPageExtras extras
+                                        && extras.TryGetOpenDialog() != null;
+                                    bool blankUrl = PopupOpenedHelper.IsBlankUrl(
+                                        crCandidate.CrPage.MainFrame?.Url);
+                                    blankPopupReadyForReplay = hasOpenDialog || blankUrl;
+                                }
+
+                                if (!clientReady && !blankPopupReadyForReplay)
+                                {
+                                    continue;
+                                }
+
+                                IPage opener = null;
+                                try
+                                {
+                                    opener = await candidate.OpenerAsync().ConfigureAwait(false);
+                                }
+                                catch (Microsoft.Playwright.PlaywrightException)
+                                {
+                                }
+
+                                if (ReferenceEquals(opener, page))
+                                {
+                                    ready.Add(candidate);
+                                }
+                            }
+
+                            return (IReadOnlyList<T>)(object)ready;
+                        });
                 case "FrameNavigated":
                     return WaitTypedAsync<T, IFrame>(
                         page,
@@ -203,26 +283,45 @@ namespace PlaywrightNative.Helpers
                         matches,
                         timeout);
                 case "PageError":
-                    return WaitTypedAsync<T, string>(
-                        page,
-                        h => page.PageError += h,
-                        h => page.PageError -= h,
-                        matches,
-                        timeout);
+                    // IPage.PageError is EventHandler<string> (Microsoft API), while
+                    // PageEvent.PageError is typed as PageErrorEventArgs for callers.
+                    if (typeof(T) == typeof(string))
+                    {
+                        return WaitTypedAsync<T, string>(
+                            page,
+                            h => page.PageError += h,
+                            h => page.PageError -= h,
+                            matches,
+                            timeout);
+                    }
+
+                    if (typeof(T) != typeof(PageErrorEventArgs))
+                    {
+                        throw new ArgumentException(
+                            $"Page event payload type is String, not {typeof(T).Name}.");
+                    }
+
+                    return WaitPageErrorAsArgsAsync(page, matches, timeout);
                 case "Load":
+                    // Resolve inline so waitForEvent('load') posts its RCA continuation
+                    // before waitForLoadState's LifecycleChanged handler (autowait
+                    // route|load|clickload). Continuations stay RCA so protocol I/O
+                    // from the awaiter cannot block the CDP/WebKit read loop.
                     return WaitTypedAsync<T, IPage>(
                         page,
                         h => page.Load += h,
                         h => page.Load -= h,
                         matches,
-                        timeout);
+                        timeout,
+                        deferPredicateEvaluation: false);
                 case "DOMContentLoaded":
                     return WaitTypedAsync<T, IPage>(
                         page,
                         h => page.DOMContentLoaded += h,
                         h => page.DOMContentLoaded -= h,
                         matches,
-                        timeout);
+                        timeout,
+                        deferPredicateEvaluation: false);
                 case "Worker":
                     return WaitTypedAsync<T, IWorker>(
                         page,
@@ -238,15 +337,145 @@ namespace PlaywrightNative.Helpers
                         matches,
                         timeout);
                 case "Crash":
+                    // crash() then waitForEvent('crash') races: WebKit can raise Crash
+                    // before the waiter subscribes. Replay after subscribe when already
+                    // crashed (same pattern as other existingAfterSubscribe waits).
                     return WaitTypedAsync<T, IPage>(
                         page,
                         h => page.Crash += h,
                         h => page.Crash -= h,
                         matches,
                         timeout,
-                        abortOnPageCrash: false);
+                        abortOnPageCrash: false,
+                        existingAfterSubscribe: () =>
+                        {
+                            if (page is IHasPageExtras extras && extras.HasCrashed)
+                            {
+                                return Task.FromResult<IReadOnlyList<T>>(
+                                    (IReadOnlyList<T>)(object)new IPage[] { page });
+                            }
+
+                            return Task.FromResult<IReadOnlyList<T>>(Array.Empty<T>());
+                        });
                 default:
                     throw new ArgumentException($"Unknown page event '{name}'.");
+            }
+        }
+
+        private static async Task<T> WaitPageErrorAsArgsAsync<T>(
+            IPage page,
+            Func<T, bool> matches,
+            float? timeout)
+        {
+            string message = await WaitForEventHelper.WaitAsync<string>(
+                h => page.PageError += h,
+                h => page.PageError -= h,
+                raw =>
+                {
+                    PageErrorEventArgs args = PageErrorText.Parse(raw);
+                    return matches == null || matches((T)(object)args);
+                },
+                timeout,
+                "page.waitForEvent",
+                waitForEventName: "PageError",
+                abortOnPageClose: page,
+                abortOnPageCrash: true).ConfigureAwait(false);
+            return (T)(object)PageErrorText.Parse(message);
+        }
+
+        /// <summary>
+        /// Console waitForEvent: capture the ConsoleMessages baseline before
+        /// ActionTrace can yield, subscribe, then replay only messages that
+        /// arrived after that baseline (race under tracing Snapshots).
+        /// </summary>
+        private static async Task<T> WaitConsoleEventAsync<T>(
+            IPage page,
+            Func<T, bool> matches,
+            float? timeout)
+        {
+            // Sync snapshot only — awaiting a completed ConsoleMessagesAsync Task
+            // can still post a ConfigureAwait(false) continuation after evaluate's
+            // console.log arrives, raising the baseline past the raced message
+            // (ShouldNotEmitAfterWithoutBefore under Windows suite load).
+            int consoleBaseline = SyncConsoleMessageCount(page);
+
+            // evaluate() stamps its console count at TryBeginAction; if that
+            // console.log landed before this wait took its baseline, pull the
+            // replay floor back to the open evaluate so we do not hang 30s.
+            OfficialTraceSession session = OfficialTraceSession.Active(page.Context);
+            if (session != null
+                && session.TryGetOpenEvaluateConsoleBaseline(out int evaluateBaseline)
+                && evaluateBaseline < consoleBaseline)
+            {
+                consoleBaseline = evaluateBaseline;
+            }
+
+            Task<T> consoleWait = WaitTypedAsync<T, IConsoleMessage>(
+                page,
+                h => page.Console += h,
+                h => page.Console -= h,
+                matches,
+                timeout,
+                existingAfterSubscribe: () =>
+                {
+                    IReadOnlyList<IConsoleMessage> messages = SyncConsoleMessages(page);
+                    if (messages == null || messages.Count <= consoleBaseline)
+                    {
+                        return Task.FromResult<IReadOnlyList<T>>(Array.Empty<T>());
+                    }
+
+                    for (int i = consoleBaseline; i < messages.Count; i++)
+                    {
+                        IConsoleMessage msg = messages[i];
+                        if (msg != null && matches((T)(object)msg))
+                        {
+                            return Task.FromResult<IReadOnlyList<T>>(
+                                new T[] { (T)(object)msg });
+                        }
+                    }
+
+                    return Task.FromResult<IReadOnlyList<T>>(Array.Empty<T>());
+                });
+            return await ActionTrace.RunAsync(
+                page.Context,
+                "Wait for event \"console\"",
+                "Page",
+                "waitForEvent",
+                () => consoleWait).ConfigureAwait(false);
+        }
+
+        private static int SyncConsoleMessageCount(IPage page)
+        {
+            IReadOnlyList<IConsoleMessage> existing = SyncConsoleMessages(page);
+            return existing?.Count ?? 0;
+        }
+
+        private static IReadOnlyList<IConsoleMessage> SyncConsoleMessages(IPage page)
+        {
+            if (page == null)
+            {
+                return Array.Empty<IConsoleMessage>();
+            }
+
+            try
+            {
+                // Chromium/WebKit ConsoleMessagesAsync is Task.FromResult — read
+                // synchronously so we never post a continuation after a raced log.
+                Task<IReadOnlyList<IConsoleMessage>> task = page.ConsoleMessagesAsync();
+                if (task.IsCompletedSuccessfully)
+                {
+#pragma warning disable VSTHRD002 // Safe: only accessed after IsCompletedSuccessfully.
+                    return task.Result ?? Array.Empty<IConsoleMessage>();
+#pragma warning restore VSTHRD002
+                }
+
+                return Array.Empty<IConsoleMessage>();
+            }
+#pragma warning disable RCS1075
+            catch (Exception)
+#pragma warning restore RCS1075
+            {
+                return Array.Empty<IConsoleMessage>();
             }
         }
 
@@ -259,7 +488,8 @@ namespace PlaywrightNative.Helpers
             string waitForEventName = null,
             bool abortOnClose = true,
             bool abortOnPageCrash = true,
-            Func<Task<IReadOnlyList<T>>> existingAfterSubscribe = null)
+            Func<Task<IReadOnlyList<T>>> existingAfterSubscribe = null,
+            bool deferPredicateEvaluation = true)
         {
             if (typeof(T) != typeof(TEvent))
             {
@@ -285,7 +515,8 @@ namespace PlaywrightNative.Helpers
                 waitForEventName: waitForEventName,
                 abortOnPageClose: abortOnClose ? page : null,
                 abortOnPageCrash: abortOnPageCrash,
-                existingAfterSubscribe: existing).ConfigureAwait(false);
+                existingAfterSubscribe: existing,
+                deferPredicateEvaluation: deferPredicateEvaluation).ConfigureAwait(false);
             return (T)(object)result;
         }
 

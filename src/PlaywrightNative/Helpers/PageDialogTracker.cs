@@ -28,6 +28,7 @@ namespace PlaywrightNative.Helpers
     {
         private IDialog _open;
         private bool _closedEmitted;
+        private bool _emitted;
 
         /// <summary>
         /// Playwright auto-dismisses when neither the page nor the context has
@@ -38,6 +39,32 @@ namespace PlaywrightNative.Helpers
         /// <returns>True when the dialog should be dismissed automatically.</returns>
         internal static bool ShouldAutoDismiss(EventHandler<IDialog> pageDialog, bool contextHasListeners)
             => pageDialog == null && !contextHasListeners;
+
+        /// <summary>
+        /// Defers snapshot + raise + auto-dismiss by a short async gap so the
+        /// Click-then-<c>WaitForDialog</c> pattern (browsercontext-events
+        /// inline-script popup) can subscribe before an in-process prompt is
+        /// auto-dismissed. Yield alone can starve under macOS suite-load
+        /// thread-pool pressure; a short delay gives waiters a reliable turn.
+        /// Windows Chromium under suite load needs more than 1ms —
+        /// CDP can deliver <c>javascriptDialogOpening</c> on a background
+        /// thread before the test arms <c>WaitForDialogAsync</c>
+        /// (<c>ShouldBeAbleToCaptureAlert</c>). A 250ms deferral covers
+        /// evaluate-first races on winhf shards under long suite load.
+        /// </summary>
+        /// <param name="emitAndMaybeDismiss">
+        /// Captures listeners, raises <c>Dialog</c>, then auto-dismisses when
+        /// nobody was listening.
+        /// </param>
+        internal static void ScheduleOpen(Action emitAndMaybeDismiss)
+        {
+            if (emitAndMaybeDismiss == null)
+            {
+                return;
+            }
+
+            _ = EmitOpenDeferredAsync(emitAndMaybeDismiss);
+        }
 
         /// <summary>
         /// Dismisses <paramref name="dialog"/> when nobody was listening at
@@ -97,7 +124,36 @@ namespace PlaywrightNative.Helpers
             TrackedDialog tracked = new TrackedDialog(inner, this, emitClosed);
             _open = tracked;
             _closedEmitted = false;
+            _emitted = false;
             return tracked;
+        }
+
+        /// <summary>
+        /// The still-open dialog, if any. Used by <c>waitForEvent('dialog')</c>
+        /// to replay an open that raced ahead of the subscription (ScheduleOpen
+        /// deferral under suite load).
+        /// </summary>
+        /// <returns>The open dialog, or <see langword="null"/>.</returns>
+        internal IDialog TryGetOpenDialog() => !_closedEmitted ? _open : null;
+
+        /// <summary>
+        /// Marks the dialog as delivered to page/context listeners so a deferred
+        /// <see cref="ScheduleOpen"/> auto-dismiss does not dismiss after a waiter
+        /// already claimed it via open-dialog replay.
+        /// </summary>
+        /// <returns>
+        /// <see langword="true"/> when this is the first emit; <see langword="false"/>
+        /// when a waiter already replayed the open dialog.
+        /// </returns>
+        internal bool TryMarkEmitted()
+        {
+            if (_emitted)
+            {
+                return false;
+            }
+
+            _emitted = true;
+            return true;
         }
 
         /// <summary>
@@ -125,6 +181,27 @@ namespace PlaywrightNative.Helpers
             emitClosed(dialog);
         }
 
+        private static async Task EmitOpenDeferredAsync(Action emitAndMaybeDismiss)
+        {
+            try
+            {
+                await Task.Yield();
+
+                // 250ms: Windows Chromium suite load can deliver the dialog CDP
+                // event well before WaitForDialogAsync / WaitForPopupAsync arm
+                // when evaluate is started first (ShouldBeAbleToCaptureAlert).
+                // 150ms still auto-dismissed under winhf shard load.
+                await Task.Delay(250).ConfigureAwait(false);
+                emitAndMaybeDismiss();
+            }
+#pragma warning disable RCS1075
+            catch (Exception)
+#pragma warning restore RCS1075
+            {
+                // Best-effort open; page/context may already be closed.
+            }
+        }
+
         private sealed class TrackedDialog : IDialog
         {
             private readonly IDialog _inner;
@@ -136,19 +213,29 @@ namespace PlaywrightNative.Helpers
                 _inner = inner ?? throw new ArgumentNullException(nameof(inner));
                 _tracker = tracker ?? throw new ArgumentNullException(nameof(tracker));
                 _emitClosed = emitClosed ?? throw new ArgumentNullException(nameof(emitClosed));
-
-                // Official DialogDispatcher: page is omitted until reportAsNew
-                // (javascript: dialogs open during initialization).
-                IPage page = inner.Page;
-                if (page is IHasClientInitializedPage initialized && !initialized.IsClientInitialized)
-                {
-                    page = null;
-                }
-
-                Page = page;
             }
 
-            public IPage Page { get; }
+            /// <summary>
+            /// Official DialogDispatcher: page is omitted until reportAsNew
+            /// (<c>javascript:</c> dialogs open during initialization). Re-check
+            /// on each read so a blank popup that commits <c>about:blank</c>
+            /// after <c>javascriptDialogOpening</c> still exposes
+            /// <c>dialog.Page</c> for CaptureAlert without freezing null from
+            /// the open-time snapshot.
+            /// </summary>
+            public IPage Page
+            {
+                get
+                {
+                    IPage page = _inner.Page;
+                    if (page is IHasClientInitializedPage initialized && !initialized.IsClientInitialized)
+                    {
+                        return null;
+                    }
+
+                    return page;
+                }
+            }
 
             public string DefaultValue => _inner.DefaultValue;
 

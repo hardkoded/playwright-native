@@ -8,6 +8,7 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
+using Microsoft.Playwright;
 using PlaywrightNative.Helpers;
 
 namespace PlaywrightNative.Transport
@@ -19,9 +20,15 @@ namespace PlaywrightNative.Transport
     /// </summary>
     internal class BrowserProcessManager : IDisposable
     {
+        private static readonly string[] DevToolsActivePortLineSeparators = { "\r\n", "\n" };
+
         private static int _processCount;
 
         private readonly string _tempUserDataDir;
+
+        // Profile dir used to poll Chromium's DevToolsActivePort when stderr never
+        // emits "DevTools listening on ..." (common for system Chrome on Windows).
+        private readonly string _devtoolsUserDataDir;
         private readonly int _timeout;
         private readonly Func<Task> _gracefulCloseCallback;
         private readonly Func<string, string> _endpointExtractor;
@@ -104,6 +111,7 @@ namespace PlaywrightNative.Transport
 
             string finalExecutable = executablePath;
             List<string> argList = args == null ? new List<string>() : new List<string>(args);
+            _devtoolsUserDataDir = tempUserDataDir ?? TryGetUserDataDir(argList);
 
             bool redirectStdio = transportMode == TransportMode.PipeStdio;
 
@@ -163,6 +171,31 @@ namespace PlaywrightNative.Transport
                         }
                     }
                 }
+            }
+
+            // Official processLauncher strips proxy env from the browser process so
+            // Chromium/WebKit do not inherit HTTPS_PROXY from the test host when a
+            // context Proxy / client-cert MITM is configured. Callers can still
+            // pass explicit values via the environment dictionary above.
+            // ClientCertificatesProxy still reads HTTPS_PROXY from the host process
+            // for outbound hops (FromEnv / FromConfigButEnvIsThere).
+            string[] inheritedProxyKeys =
+            {
+                "HTTP_PROXY",
+                "HTTPS_PROXY",
+                "ALL_PROXY",
+                "http_proxy",
+                "https_proxy",
+                "all_proxy",
+            };
+            foreach (string key in inheritedProxyKeys)
+            {
+                if (environment != null && environment.ContainsKey(key))
+                {
+                    continue;
+                }
+
+                Process.StartInfo.Environment.Remove(key);
             }
 
             if (_handleSIGINT)
@@ -325,14 +358,167 @@ namespace PlaywrightNative.Transport
         /// <returns>The WebSocket endpoint string if found; otherwise <c>null</c>.</returns>
         private static string DefaultEndpointExtractor(string line)
         {
-            // Chromium: "DevTools listening on ws://..."
-            Match match = Regex.Match(line, "^DevTools listening on (ws:\\/\\/.*)");
+            if (string.IsNullOrEmpty(line))
+            {
+                return null;
+            }
+
+            // Official waitForReadyState: /DevTools listening on (.*)/ — do not
+            // require start-of-line; Windows Chrome may prefix the banner.
+            Match match = Regex.Match(line, "DevTools listening on (ws://\\S+)");
             if (match.Success)
             {
-                return match.Groups[1].Value;
+                return match.Groups[1].Value.TrimEnd('\r');
             }
 
             return null;
+        }
+
+        private static string TryGetUserDataDir(IReadOnlyList<string> args)
+        {
+            if (args == null)
+            {
+                return null;
+            }
+
+            for (int i = 0; i < args.Count; i++)
+            {
+                string arg = args[i];
+                if (string.IsNullOrEmpty(arg))
+                {
+                    continue;
+                }
+
+                if (arg.StartsWith("--user-data-dir=", StringComparison.Ordinal))
+                {
+                    string value = arg.Substring("--user-data-dir=".Length);
+                    return string.IsNullOrEmpty(value) ? null : value;
+                }
+
+                if (string.Equals(arg, "--user-data-dir", StringComparison.Ordinal)
+                    && i + 1 < args.Count
+                    && !string.IsNullOrEmpty(args[i + 1]))
+                {
+                    return args[i + 1];
+                }
+            }
+
+            return null;
+        }
+
+        private static void TryDeleteStaleDevToolsActivePort(string userDataDir)
+        {
+            if (string.IsNullOrEmpty(userDataDir))
+            {
+                return;
+            }
+
+            string portFile = Path.Combine(userDataDir, "DevToolsActivePort");
+            try
+            {
+                if (File.Exists(portFile))
+                {
+                    File.Delete(portFile);
+                }
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+
+        /// <summary>
+        /// Reads Chromium's <c>DevToolsActivePort</c> (port + browser path) into a
+        /// WebSocket debugger URL. Returns <c>null</c> until both lines are present.
+        /// </summary>
+        /// <param name="portFile">Absolute path to <c>DevToolsActivePort</c>.</param>
+        /// <returns>A <c>ws://127.0.0.1:port/devtools/browser/...</c> URL, or <c>null</c>.</returns>
+        private static string TryReadDevToolsActivePortEndpoint(string portFile)
+        {
+            if (string.IsNullOrEmpty(portFile) || !File.Exists(portFile))
+            {
+                return null;
+            }
+
+            try
+            {
+                // Chromium keeps DevToolsActivePort open with a write lock on
+                // Windows; share + retry across rewrite races (ConnectOverCdpTests).
+                string text;
+                using (FileStream stream = new FileStream(
+                    portFile,
+                    FileMode.Open,
+                    FileAccess.Read,
+                    FileShare.ReadWrite | FileShare.Delete))
+                using (StreamReader reader = new StreamReader(stream))
+                {
+                    text = reader.ReadToEnd();
+                }
+
+                if (string.IsNullOrEmpty(text))
+                {
+                    return null;
+                }
+
+                string[] lines = text.Split(DevToolsActivePortLineSeparators, StringSplitOptions.None);
+                if (lines.Length < 2
+                    || !int.TryParse(lines[0].Trim(), out int port)
+                    || port <= 0)
+                {
+                    return null;
+                }
+
+                string path = lines[1].Trim();
+                if (string.IsNullOrEmpty(path) || path[0] != '/')
+                {
+                    return null;
+                }
+
+                return "ws://127.0.0.1:" + port.ToString(System.Globalization.CultureInfo.InvariantCulture) + path;
+            }
+            catch (IOException)
+            {
+                return null;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return null;
+            }
+        }
+
+        private static async Task PollDevToolsActivePortAsync(
+            BrowserProcessManager manager,
+            CancellationToken cancellationToken)
+        {
+            if (manager == null
+                || string.IsNullOrEmpty(manager._devtoolsUserDataDir)
+                || manager._transportMode != TransportMode.WebSocket)
+            {
+                return;
+            }
+
+            string portFile = Path.Combine(manager._devtoolsUserDataDir, "DevToolsActivePort");
+            while (!cancellationToken.IsCancellationRequested
+                && !manager._startCompletionSource.Task.IsCompleted)
+            {
+                string endpoint = TryReadDevToolsActivePortEndpoint(portFile);
+                if (endpoint != null)
+                {
+                    manager._startCompletionSource.TrySetResult(endpoint);
+                    return;
+                }
+
+                try
+                {
+                    await Task.Delay(50, cancellationToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    return;
+                }
+            }
         }
 
         private static string JoinProcessArguments(IReadOnlyList<string> args)
@@ -394,7 +580,7 @@ namespace PlaywrightNative.Transport
             if (!RuntimeInformation.IsOSPlatform(OSPlatform.OSX) &&
                 !RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
             {
-                throw new PlaywrightNativeException(
+                throw new PlaywrightException(
                     "The bash fd-3/4 remap is only used on macOS and Linux. Windows uses STARTUPINFOEX.");
             }
 
@@ -433,7 +619,7 @@ namespace PlaywrightNative.Transport
                 int read = await stdout.ReadAsync(one.AsMemory(0, 1), cancellationToken).ConfigureAwait(false);
                 if (read == 0)
                 {
-                    throw new PlaywrightNativeException("Firefox stdout closed before Juggler reported ready.");
+                    throw new PlaywrightException("Firefox stdout closed before Juggler reported ready.");
                 }
 
                 if (one[0] == (byte)'\n')
@@ -710,22 +896,45 @@ namespace PlaywrightNative.Transport
                 {
                     StringBuilder output = new StringBuilder();
 
+                    void FailStartup(string message)
+                        => p._startCompletionSource.TrySetException(new PlaywrightException(
+                            BrowserTypeLaunchGuard.RewriteStartupLog(message)));
+
                     void OnProcessDataReceivedWhileStarting(object sender, DataReceivedEventArgs e)
                     {
-                        if (e.Data != null)
+                        if (e.Data == null)
                         {
-                            output.AppendLine(e.Data);
-                            string endpoint = p._endpointExtractor(e.Data);
-                            if (endpoint != null)
-                            {
-                                p._startCompletionSource.TrySetResult(endpoint);
-                            }
+                            return;
+                        }
+
+                        output.AppendLine(e.Data);
+
+                        // Official chromium waitForReadyState / profileInUseError:
+                        // reject as soon as stderr reports a profile lock so the
+                        // message is not lost if Exited races ahead of drain.
+                        if (BrowserTypeLaunchGuard.TryGetProfileInUseError(e.Data) != null)
+                        {
+                            FailStartup($"Failed to launch browser! {output}");
+                            return;
+                        }
+
+                        string endpoint = p._endpointExtractor(e.Data);
+                        if (endpoint != null)
+                        {
+                            p._startCompletionSource.TrySetResult(endpoint);
                         }
                     }
 
                     void OnProcessExitedWhileStarting(object sender, EventArgs e)
-                        => p._startCompletionSource.TrySetException(new PlaywrightNativeException(
-                            BrowserTypeLaunchGuard.RewriteStartupLog($"Failed to launch browser! {output}")));
+                    {
+                        // ErrorDataReceived is asynchronous; give stderr a brief
+                        // chance to flush before building the launch failure.
+                        _ = Task.Run(async () =>
+                        {
+                            await Task.Delay(100).ConfigureAwait(false);
+                            FailStartup($"Failed to launch browser! {output}");
+                        });
+                    }
 
                     void OnProcessExited(object sender, EventArgs e) => _exited.EnterFrom(p, p._currentState);
 
@@ -735,15 +944,40 @@ namespace PlaywrightNative.Transport
                     CancellationTokenSource cts = null;
                     try
                     {
+                        // Drop a stale DevToolsActivePort so a prior crash cannot
+                        // complete StartAsync before the new browser is ready.
+                        TryDeleteStaleDevToolsActivePort(p._devtoolsUserDataDir);
+
                         p.StartProcess();
+
+                        // Start stderr async read immediately so a fast profile-lock
+                        // exit still delivers ProcessSingleton / SingletonLock lines
+                        // into |output| before (or as) Exited fires.
+                        p.Process.BeginErrorReadLine();
 
                         int timeout = p._timeout;
                         if (timeout > 0)
                         {
                             cts = new CancellationTokenSource(timeout);
-                            cts.Token.Register(() => p._startCompletionSource.TrySetException(
-                                new PlaywrightNativeException($"Timed out after {timeout} ms while trying to connect to the browser!")));
+                            cts.Token.Register(() =>
+                            {
+                                string buffered = output.ToString();
+                                string detail = $"Timed out after {timeout} ms while trying to connect to the browser!";
+                                if (!string.IsNullOrEmpty(buffered))
+                                {
+                                    detail = detail + " " + buffered;
+                                }
+
+                                FailStartup(detail);
+                            });
                         }
+
+                        // Windows system Chrome often never prints the DevTools
+                        // banner on stderr; poll DevToolsActivePort in parallel.
+                        CancellationToken pollToken = cts == null
+                            ? CancellationToken.None
+                            : cts.Token;
+                        _ = PollDevToolsActivePortAsync(p, pollToken);
 
                         // PipeStdio (Firefox): the ready banner is written on stdout, then
                         // the same stream becomes the Juggler protocol pipe. Consume the
@@ -762,8 +996,6 @@ namespace PlaywrightNative.Transport
                         }
 
                         await _started.EnterFromAsync(p, _starting).ConfigureAwait(false);
-
-                        p.Process.BeginErrorReadLine();
 
                         // PipeFd34 has no stderr "ready" line to wait for — the inspector pipe
                         // is usable as soon as the process is alive.
@@ -785,8 +1017,13 @@ namespace PlaywrightNative.Transport
                     }
                     catch (Exception ex)
                     {
-                        throw new PlaywrightNativeException(
-                            string.IsNullOrEmpty(ex.Message) ? "Failed to launch browser" : ex.Message,
+                        // Official browsertype-launch.spec.ts asserts the message contains
+                        // "Failed to launch" even when Process.Start fails (missing binary).
+                        string detail = string.IsNullOrEmpty(ex.Message) ? "browser" : ex.Message;
+                        throw new PlaywrightException(
+                            detail.Contains("Failed to launch", StringComparison.Ordinal)
+                                ? detail
+                                : $"Failed to launch browser: {detail}",
                             ex);
                     }
                     finally

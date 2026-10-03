@@ -53,9 +53,13 @@ namespace PlaywrightNative.Chromium
         public Task UpAsync(string key) => _keyboard.UpAsync(key);
 
 #pragma warning disable SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
-        Task IKeyboard.PressAsync(string key, KeyboardPressOptions options) => Task.CompletedTask;
+        // Official IKeyboard Press/Type are options-only. Compat extensions call these;
+        // stubs made every PressAsync/TypeAsync via IKeyboard a silent no-op.
+        Task IKeyboard.PressAsync(string key, KeyboardPressOptions options)
+            => PressAsync(key, options?.Delay);
 
-        Task IKeyboard.TypeAsync(string text, KeyboardTypeOptions options) => Task.CompletedTask;
+        Task IKeyboard.TypeAsync(string text, KeyboardTypeOptions options)
+            => TypeAsync(text, options?.Delay);
 #pragma warning restore SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
     }
 }

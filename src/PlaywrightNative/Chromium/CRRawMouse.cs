@@ -21,48 +21,73 @@ using PlaywrightNative.Input;
 namespace PlaywrightNative.Chromium
 {
     /// <summary>
-    /// Sends CDP <c>Input.dispatchMouseEvent</c> commands.
+    /// Sends CDP <c>Input.dispatchMouseEvent</c> commands and routes HTML5 drag
+    /// through <see cref="CRDragManager"/> (upstream <c>crInput.RawMouseImpl</c>).
     /// </summary>
     internal class CRRawMouse : IRawMouse
     {
         private readonly CRSession _session;
+        private readonly CRDragManager _dragManager;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="CRRawMouse"/> class.
         /// </summary>
         /// <param name="session">The CDP session to send commands on.</param>
-        public CRRawMouse(CRSession session)
+        /// <param name="dragManager">Chromium drag interceptor.</param>
+        public CRRawMouse(CRSession session, CRDragManager dragManager)
         {
             _session = session;
+            _dragManager = dragManager;
         }
 
         /// <summary>
-        /// Dispatches <c>mouseMoved</c>.
+        /// Dispatches <c>mouseMoved</c>, or intercepts / continues an HTML5 drag.
         /// </summary>
         public Task MoveAsync(double x, double y, Input.MouseButton button, IReadOnlyCollection<Input.MouseButton> buttons, IReadOnlyCollection<Input.KeyboardModifier> modifiers)
         {
-            int buttonsMask = buttons.ToCdpMask();
-
-            return _session.SendAsync("Input.dispatchMouseEvent", new
+            async Task ActualMoveAsync()
             {
-                type = "mouseMoved",
-                button = button.ToCdpName(),
-                buttons = buttonsMask,
-                x,
-                y,
-                modifiers = modifiers.ToCdpMask(),
-                force = buttonsMask > 0 ? 0.5 : 0.0,
-            });
+                int buttonsMask = buttons.ToCdpMask();
+                await _session.SendAsync("Input.dispatchMouseEvent", new
+                {
+                    type = "mouseMoved",
+                    button = button.ToCdpName(),
+                    buttons = buttonsMask,
+                    x,
+                    y,
+                    modifiers = modifiers.ToCdpMask(),
+                    force = buttonsMask > 0 ? 0.5 : 0.0,
+                }).ConfigureAwait(false);
+            }
+
+            return _dragManager.InterceptDragCausedByMoveAsync(x, y, button, modifiers, ActualMoveAsync);
         }
 
         /// <summary>
-        /// Dispatches <c>mousePressed</c>.
+        /// Dispatches <c>mousePressed</c>. Skipped while an intercepted drag is active.
         /// </summary>
-        public Task DownAsync(double x, double y, Input.MouseButton button, IReadOnlyCollection<Input.MouseButton> buttons, IReadOnlyCollection<Input.KeyboardModifier> modifiers, int clickCount)
+        public async Task DownAsync(double x, double y, Input.MouseButton button, IReadOnlyCollection<Input.MouseButton> buttons, IReadOnlyCollection<Input.KeyboardModifier> modifiers, int clickCount)
         {
+            if (_dragManager.IsDragging)
+            {
+                return;
+            }
+
+            // Record the press point before mousePressed so a following held move
+            // sees _hasLastDown, but do not await text/drag probes yet — delaying
+            // mousePressed after mouseMoved under headful suite load lands the
+            // caret mid-textarea (ShouldSelectTheTextWithMouse).
+            _dragManager.BeginMouseDown(x, y);
+
+            // Typing long text scrolls the textarea to the bottom. The test sets
+            // scrollTop=0, but under headful suite load that can still race the
+            // press so (x+2,y+2) anchors near the end ("t goes." / empty select).
+            // Flush scroll origin at the pointer before mousePressed.
+            await _dragManager.EnsureTextFieldScrollOriginAsync(x, y).ConfigureAwait(false);
+
             int buttonsMask = buttons.ToCdpMask();
 
-            return _session.SendAsync("Input.dispatchMouseEvent", new
+            await _session.SendAsync("Input.dispatchMouseEvent", new
             {
                 type = "mousePressed",
                 button = button.ToCdpName(),
@@ -72,24 +97,41 @@ namespace PlaywrightNative.Chromium
                 modifiers = modifiers.ToCdpMask(),
                 clickCount,
                 force = buttonsMask > 0 ? 0.5 : 0.0,
-            });
+            }).ConfigureAwait(false);
+
+            // Latch skip-intercept for subsequent held moves after the press
+            // has already established the caret / selection anchor.
+            await _dragManager.CompleteMouseDownAsync(x, y).ConfigureAwait(false);
         }
 
         /// <summary>
-        /// Dispatches <c>mouseReleased</c>.
+        /// Dispatches <c>mouseReleased</c>, or completes an intercepted drag with <c>drop</c>.
         /// </summary>
-        public Task UpAsync(double x, double y, Input.MouseButton button, IReadOnlyCollection<Input.MouseButton> buttons, IReadOnlyCollection<Input.KeyboardModifier> modifiers, int clickCount)
+        public async Task UpAsync(double x, double y, Input.MouseButton button, IReadOnlyCollection<Input.MouseButton> buttons, IReadOnlyCollection<Input.KeyboardModifier> modifiers, int clickCount)
         {
-            return _session.SendAsync("Input.dispatchMouseEvent", new
+            try
             {
-                type = "mouseReleased",
-                button = button.ToCdpName(),
-                buttons = buttons.ToCdpMask(),
-                x,
-                y,
-                modifiers = modifiers.ToCdpMask(),
-                clickCount,
-            });
+                if (_dragManager.IsDragging)
+                {
+                    await _dragManager.DropAsync(x, y, modifiers).ConfigureAwait(false);
+                    return;
+                }
+
+                await _session.SendAsync("Input.dispatchMouseEvent", new
+                {
+                    type = "mouseReleased",
+                    button = button.ToCdpName(),
+                    buttons = buttons.ToCdpMask(),
+                    x,
+                    y,
+                    modifiers = modifiers.ToCdpMask(),
+                    clickCount,
+                }).ConfigureAwait(false);
+            }
+            finally
+            {
+                _dragManager.NoteMouseUp();
+            }
         }
 
         /// <summary>
