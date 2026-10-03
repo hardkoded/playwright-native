@@ -15,11 +15,13 @@
  * limitations under the License.
  */
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using Microsoft.Playwright;
+using PlaywrightNative.Helpers;
 
 namespace PlaywrightNative.Chromium
 {
@@ -31,6 +33,7 @@ namespace PlaywrightNative.Chromium
         private readonly CRSession _session;
         private readonly CRSession _rootSession;
         private readonly Dictionary<string, CRCDPSessionEvent> _eventSubscriptions = new(StringComparer.Ordinal);
+        private readonly ConcurrentDictionary<string, byte> _suppressedFaviconRequestIds = new(StringComparer.Ordinal);
         private bool _detached;
 
         internal CRCDPSession(CRSession session, CRSession rootSession)
@@ -111,10 +114,73 @@ namespace PlaywrightNative.Chromium
 
         private void OnMessageReceived(string method, JsonElement? parameters)
         {
+            // Match page-level NetworkRequestEvents: Chromium still emits favicon
+            // housekeeping on a raw Network.enable session after document load.
+            // page.goto can return before or after that frame depending on
+            // continuation scheduling, so session.spec.ts "should send events"
+            // (expects exactly one EmptyPage requestWillBeSent) would flake.
+            // Suppress favicon Network.* like page.Request does.
+            if (IsFaviconNetworkEvent(method, parameters))
+            {
+                return;
+            }
+
             if (_eventSubscriptions.TryGetValue(method, out CRCDPSessionEvent subscription))
             {
                 subscription.Raise(parameters);
             }
+        }
+
+        private bool IsFaviconNetworkEvent(string method, JsonElement? parameters)
+        {
+            if (string.IsNullOrEmpty(method)
+                || !method.StartsWith("Network.", StringComparison.Ordinal)
+                || !parameters.HasValue)
+            {
+                return false;
+            }
+
+            JsonElement payload = parameters.Value;
+            string requestId = payload.TryGetProperty("requestId", out JsonElement idEl)
+                ? idEl.GetString()
+                : null;
+
+            if (string.Equals(method, "Network.requestWillBeSent", StringComparison.Ordinal))
+            {
+                string url = null;
+                if (payload.TryGetProperty("request", out JsonElement request)
+                    && request.ValueKind == JsonValueKind.Object
+                    && request.TryGetProperty("url", out JsonElement urlEl))
+                {
+                    url = urlEl.GetString();
+                }
+
+                if (!NetworkRequestEvents.IsFaviconUrl(url))
+                {
+                    return false;
+                }
+
+                if (!string.IsNullOrEmpty(requestId))
+                {
+                    _suppressedFaviconRequestIds[requestId] = 0;
+                }
+
+                return true;
+            }
+
+            if (string.IsNullOrEmpty(requestId)
+                || !_suppressedFaviconRequestIds.ContainsKey(requestId))
+            {
+                return false;
+            }
+
+            if (string.Equals(method, "Network.loadingFinished", StringComparison.Ordinal)
+                || string.Equals(method, "Network.loadingFailed", StringComparison.Ordinal))
+            {
+                _suppressedFaviconRequestIds.TryRemove(requestId, out _);
+            }
+
+            return true;
         }
 
         private void OnSessionClosed(object sender, EventArgs e)
