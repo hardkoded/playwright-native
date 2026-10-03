@@ -3575,6 +3575,14 @@ namespace PlaywrightNative.Chromium
 
                 ensureLifecycleOnExit = true;
                 frame.Url = NavigationTimeout.PreserveUserInfo(url, frame.Url);
+                if (ReferenceEquals(frame, MainFrame))
+                {
+                    // frameAttached can lag past load under Windows suite load so
+                    // Page.Frames still has only the main frame after GoTo
+                    // (LocatorConvenienceTests.ShouldReturnPage). Re-adopt children
+                    // from Page.getFrameTree like FrameSession._handleFrameTree.
+                    await SyncChildFramesFromTreeAsync().ConfigureAwait(false);
+                }
             }
             finally
             {
@@ -7322,7 +7330,74 @@ namespace PlaywrightNative.Chromium
                 _frameManager.MainFrame.Url = url;
             }
 
+            AdoptFrameTreeChildren(tree);
             MarkFirstNonInitialNavigation(url);
+        }
+
+        /// <summary>
+        /// Adopts missing child frames from a <c>Page.getFrameTree</c> payload
+        /// (upstream <c>FrameSession._handleFrameTree</c>).
+        /// </summary>
+        /// <returns>A task that completes when the tree has been applied.</returns>
+        private async Task SyncChildFramesFromTreeAsync()
+        {
+            JsonElement? response;
+            try
+            {
+                response = await _client.SendAsync("Page.getFrameTree")
+                    .WaitAsync(TimeSpan.FromMilliseconds(1_000))
+                    .ConfigureAwait(false);
+            }
+            catch (PlaywrightException)
+            {
+                return;
+            }
+            catch (TimeoutException)
+            {
+                return;
+            }
+
+            if (!response.HasValue
+                || !response.Value.TryGetProperty("frameTree", out JsonElement tree))
+            {
+                return;
+            }
+
+            AdoptFrameTreeChildren(tree);
+        }
+
+        private void AdoptFrameTreeChildren(JsonElement frameTree)
+        {
+            if (frameTree.ValueKind != JsonValueKind.Object)
+            {
+                return;
+            }
+
+            if (frameTree.TryGetProperty("frame", out JsonElement framePayload)
+                && framePayload.ValueKind == JsonValueKind.Object)
+            {
+                string frameId = framePayload.TryGetProperty("id", out JsonElement idEl)
+                    ? idEl.GetString()
+                    : string.Empty;
+                string parentId = framePayload.TryGetProperty("parentId", out JsonElement parentEl)
+                    ? parentEl.GetString()
+                    : string.Empty;
+                if (!string.IsNullOrEmpty(frameId) && !string.IsNullOrEmpty(parentId))
+                {
+                    HandleFrameAttached(frameId, parentId);
+                }
+            }
+
+            if (!frameTree.TryGetProperty("childFrames", out JsonElement children)
+                || children.ValueKind != JsonValueKind.Array)
+            {
+                return;
+            }
+
+            foreach (JsonElement child in children.EnumerateArray())
+            {
+                AdoptFrameTreeChildren(child);
+            }
         }
 
         /// <summary>
