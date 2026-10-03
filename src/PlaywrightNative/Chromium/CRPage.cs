@@ -3192,7 +3192,13 @@ namespace PlaywrightNative.Chromium
             // yield and fired Page.Load before parallel WaitForLoadAsync subscribed
             // (page-basic should fire load / domcontentloaded). Always navigate, then
             // replay lifecycle after Page.navigate returns when Chromium omits events.
-            TaskCompletionSource<bool> lifecycleTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            //
+            // Continuations run synchronously on SetResult so page.goto can finish
+            // inside the load CDP handler before the transport reads the next frame
+            // (favicon Network.requestWillBeSent on a user CDP session). Official
+            // Node relies on promise microtasks between setImmediate deliveries for
+            // the same ordering (session.spec.ts should send events).
+            TaskCompletionSource<bool> lifecycleTcs = new();
             string expectedDocumentId = null;
             bool navigationSettled = false;
             bool sawTargetLifecycle = false;
@@ -3532,7 +3538,7 @@ namespace PlaywrightNative.Chromium
                                 await lifecycleTcs.Task.ConfigureAwait(false);
                             }
 
-                            lifecycleTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                            lifecycleTcs = new();
                         }
 
                         if (frame.LifecycleEvents.Contains(targetLifecycleEvent))
