@@ -3588,12 +3588,14 @@ namespace PlaywrightNative.Chromium
                     // session before page.goto returns (session.spec.ts should
                     // send events expects exactly one event for EmptyPage).
                     //
-                    // Task.Run so SendAsync is not started on the CDP receive
-                    // thread. An already-completed lifecycle TCS continues
-                    // inline there; getFrameTree then waits for a reply the
-                    // same thread must read (HAR abort fetch / CSS screencast
-                    // 30-60s hangs on Windows headful).
-                    _ = Task.Run(SyncChildFramesFromTreeAsync);
+                    // SyncChildFramesFromTreeAsync yields before SendAsync so
+                    // getFrameTree is not started on the CDP receive thread.
+                    // An already-completed lifecycle TCS continues inline there;
+                    // SendAsync then waits for a reply the same thread must read
+                    // (HAR abort fetch / CSS screencast hangs on Windows headful).
+                    // Do not Task.Run the whole sync: that races AdoptFrameTree
+                    // with live frameAttached (drag-in-iframe / click after GoTo).
+                    _ = SyncChildFramesFromTreeAsync();
                 }
             }
             finally
@@ -7353,6 +7355,13 @@ namespace PlaywrightNative.Chromium
         /// <returns>A task that completes when the tree has been applied.</returns>
         private async Task SyncChildFramesFromTreeAsync()
         {
+            if (ClosedForBindings())
+            {
+                return;
+            }
+
+            await Task.Yield();
+
             if (ClosedForBindings())
             {
                 return;
