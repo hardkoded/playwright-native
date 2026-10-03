@@ -224,6 +224,29 @@ namespace PlaywrightNative.Tests
   ").ConfigureAwait(false);
         }
 
+        [PlaywrightTest("page-aria-snapshot.spec.ts", "should quote names that look like regexes")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public async Task ShouldQuoteNamesThatLookLikeRegexes()
+        {
+            await Page.SetContentAsync(@"
+    <nav>
+      <a href=""/"">/</a>
+      <a href=""/docs/"">/docs/</a>
+      <a href=""/a(b/"">/a(b/</a>
+    </nav>
+  ").ConfigureAwait(false);
+            await CheckAndMatchSnapshotAsync(Page.Locator("nav"), @"
+    - navigation:
+      - link ""/"":
+        - /url: /
+      - link ""/docs/"":
+        - /url: /docs/
+      - link ""/a(b/"":
+        - /url: /a(b/
+  ").ConfigureAwait(false);
+        }
+
         [PlaywrightTest("page-aria-snapshot.spec.ts", "should snapshot complex")]
         [Test]
         [Timeout(TestConstants.DefaultTestTimeout)]
@@ -1077,6 +1100,21 @@ namespace PlaywrightNative.Tests
             await Page.SetContentAsync("<button>click</button>").ConfigureAwait(false);
             string snapshot = await Page.AriaSnapshotAsync().ConfigureAwait(false);
             Assert.That(snapshot, Does.Not.Match(new Regex(@"\[box=")));
+        }
+
+        [PlaywrightTest("page-aria-snapshot.spec.ts", "should not include hidden iframes")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public async Task ShouldNotIncludeHiddenIframes()
+        {
+            await Page.SetContentAsync(@"
+    <iframe name=""visible"" srcdoc=""<button>Visible</button>""></iframe>
+    <iframe name=""hidden"" style=""visibility: hidden"" srcdoc=""<button>Hidden</button>""></iframe>
+    <iframe name=""none"" style=""display: none"" srcdoc=""<button>None</button>""></iframe>
+  ").ConfigureAwait(false);
+            Assert.That(await Page.AriaSnapshotAsync().ConfigureAwait(false), Is.EqualTo(Unshift(@"
+    - iframe
+  ")));
         }
     }
 }

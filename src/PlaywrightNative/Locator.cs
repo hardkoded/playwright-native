@@ -24,6 +24,8 @@ namespace PlaywrightNative
     /// </summary>
     public sealed partial class Locator : ILocator
     {
+        private const string InsideHiddenFrameLog = "\n  - element is inside a hidden frame, retrying";
+
         private const string TagIdFunction = @"el => {
     if (el.__pwLocId == null) {
         window.__pwLocSeq = (window.__pwLocSeq || 0) + 1;
@@ -469,6 +471,7 @@ namespace PlaywrightNative
 
             AbortSignal previous = ClickAction.ActiveSignal.Value;
             ClickAction.ActiveSignal.Value = signal;
+            bool insideHiddenFrame = false;
             try
             {
                 await ClickAction.RunOnSelectorAsync(
@@ -479,7 +482,14 @@ namespace PlaywrightNative
                         await LocatorHandlers.RunAsync(Page, timeout).ConfigureAwait(false);
                     }
 
-                    return await ResolveOneOrNullAsync().ConfigureAwait(false);
+                    IElementHandle handle = await ResolveOneOrNullAsync().ConfigureAwait(false);
+                    if (handle != null && force != true && !await IsFrameVisibleAsync(handle).ConfigureAwait(false))
+                    {
+                        insideHiddenFrame = true;
+                        return null;
+                    }
+
+                    return handle;
                 },
                 ToString(),
                 h => h.ClickAsync(
@@ -504,7 +514,7 @@ namespace PlaywrightNative
             }
             catch (TimeoutException ex)
             {
-                throw new TimeoutException(ex.Message + "\nwaiting for " + ToString(), ex);
+                throw new TimeoutException(ex.Message + "\nwaiting for " + ToString() + (insideHiddenFrame ? InsideHiddenFrameLog : string.Empty), ex);
             }
             finally
             {
@@ -525,7 +535,7 @@ namespace PlaywrightNative
             ActionScroll scroll = default,
             int? steps = default)
         {
-            IElementHandle handle = await WaitForHandleAsync(timeout, "locator.dblclick", force == true).ConfigureAwait(false);
+            IElementHandle handle = await WaitForHandleAsync(timeout, "locator.dblclick", force == true, force != true).ConfigureAwait(false);
             await handle.DblClickAsync(
                 button,
                 delay,
@@ -548,7 +558,7 @@ namespace PlaywrightNative
             bool? trial = default,
             ActionScroll scroll = default)
         {
-            IElementHandle handle = await WaitForHandleAsync(timeout, "locator.hover", force == true).ConfigureAwait(false);
+            IElementHandle handle = await WaitForHandleAsync(timeout, "locator.hover", force == true, force != true).ConfigureAwait(false);
             await handle.HoverAsync(position, modifiers, force, timeout, trial, scroll).ConfigureAwait(false);
         }
 
@@ -570,7 +580,7 @@ namespace PlaywrightNative
             ActionScroll scroll = default)
         {
             TapSupport.ThrowIfDisabled(_frame.Page?.Context);
-            IElementHandle handle = await WaitForHandleAsync(timeout, "locator.tap").ConfigureAwait(false);
+            IElementHandle handle = await WaitForHandleAsync(timeout, "locator.tap", waitForFrameVisible: force != true).ConfigureAwait(false);
             await handle.TapAsync(position, modifiers, force, noWaitAfter, timeout, trial, scroll).ConfigureAwait(false);
         }
 
@@ -582,7 +592,7 @@ namespace PlaywrightNative
             bool? force = default,
             ActionScroll scroll = default)
         {
-            IElementHandle handle = await WaitForHandleAsync(timeout, "locator.fill").ConfigureAwait(false);
+            IElementHandle handle = await WaitForHandleAsync(timeout, "locator.fill", waitForFrameVisible: force != true).ConfigureAwait(false);
             try
             {
                 await handle.FillAsync(value, noWaitAfter, timeout, force, scroll).ConfigureAwait(false);
@@ -609,7 +619,7 @@ namespace PlaywrightNative
             bool? trial = default,
             ActionScroll scroll = default)
         {
-            IElementHandle handle = await WaitForHandleAsync(timeout, "locator.check").ConfigureAwait(false);
+            IElementHandle handle = await WaitForHandleAsync(timeout, "locator.check", waitForFrameVisible: force != true).ConfigureAwait(false);
             await handle.CheckAsync(position, force, noWaitAfter, timeout, trial, scroll).ConfigureAwait(false);
         }
 
@@ -622,7 +632,7 @@ namespace PlaywrightNative
             bool? trial = default,
             ActionScroll scroll = default)
         {
-            IElementHandle handle = await WaitForHandleAsync(timeout, "locator.uncheck").ConfigureAwait(false);
+            IElementHandle handle = await WaitForHandleAsync(timeout, "locator.uncheck", waitForFrameVisible: force != true).ConfigureAwait(false);
             await handle.UncheckAsync(position, force, noWaitAfter, timeout, trial, scroll).ConfigureAwait(false);
         }
 
@@ -636,7 +646,7 @@ namespace PlaywrightNative
             bool? trial = default,
             ActionScroll scroll = default)
         {
-            IElementHandle handle = await WaitForHandleAsync(timeout, "locator.setChecked").ConfigureAwait(false);
+            IElementHandle handle = await WaitForHandleAsync(timeout, "locator.setChecked", waitForFrameVisible: force != true).ConfigureAwait(false);
             await handle.SetCheckedAsync(checkedState, position, force, noWaitAfter, timeout, trial, scroll).ConfigureAwait(false);
         }
 
@@ -659,7 +669,7 @@ namespace PlaywrightNative
                     return false;
                 }
 
-                return await handle.IsVisibleAsync().ConfigureAwait(false);
+                return await IsElementVisibleAsync(handle).ConfigureAwait(false);
             }
             catch (Exception ex) when (DomVisibility.IsTransientVisibilityError(ex))
             {
@@ -679,7 +689,8 @@ namespace PlaywrightNative
                     return true;
                 }
 
-                return await handle.IsHiddenAsync().ConfigureAwait(false);
+                return await handle.IsHiddenAsync().ConfigureAwait(false)
+                    || !await IsFrameVisibleAsync(handle).ConfigureAwait(false);
             }
             catch (Exception ex) when (DomVisibility.IsTransientVisibilityError(ex))
             {
@@ -945,7 +956,7 @@ namespace PlaywrightNative
             IEnumerable<ILocator> mask = default,
             string maskColor = default)
         {
-            IElementHandle handle = await WaitForHandleAsync(timeout, "locator.screenshot").ConfigureAwait(false);
+            IElementHandle handle = await WaitForHandleAsync(timeout, "locator.screenshot", waitForFrameVisible: true).ConfigureAwait(false);
             return await handle.ScreenshotAsync(
                 path,
                 type,
@@ -1044,7 +1055,7 @@ namespace PlaywrightNative
             }
 
             _ = noWaitAfter;
-            IElementHandle sourceHandle = await WaitForHandleAsync(timeout, "locator.dragTo").ConfigureAwait(false);
+            IElementHandle sourceHandle = await WaitForHandleAsync(timeout, "locator.dragTo", waitForFrameVisible: force != true).ConfigureAwait(false);
             IElementHandle targetHandle = await target.ElementHandleAsync(timeout).ConfigureAwait(false);
             if (force != true)
             {
@@ -1084,7 +1095,7 @@ namespace PlaywrightNative
         public async Task DropAsync(DropPayload payload, float? timeout = default)
         {
             ArgumentNullException.ThrowIfNull(payload);
-            IElementHandle handle = await WaitForHandleAsync(timeout, "locator.drop").ConfigureAwait(false);
+            IElementHandle handle = await WaitForHandleAsync(timeout, "locator.drop", waitForFrameVisible: true).ConfigureAwait(false);
             await handle.EvaluateAsync<bool>(PageDropHelper.DropFunction, ToDropJson(payload)).ConfigureAwait(false);
 
             static string ToDropJson(DropPayload drop)
@@ -1364,6 +1375,53 @@ namespace PlaywrightNative
             string payload = "{\"tooltip\":" + JsonSerializer.Serialize(tooltip) + ",\"style\":" + JsonSerializer.Serialize(style ?? string.Empty) + ",\"id\":" + JsonSerializer.Serialize(tooltip) + "}";
             await handle.EvaluateAsync<bool>(ElementStateScript.HighlightFunction, payload).ConfigureAwait(false);
             PageHighlights.Remember(Page, this, style, tooltip);
+        }
+
+        /// <summary>
+        /// Official <c>elementState(node, 'visible', frameVisible)</c>: an element
+        /// is visible only when it and every iframe between it and this locator's
+        /// frame are visible.
+        /// </summary>
+        /// <param name="handle">An element resolved by this locator.</param>
+        /// <returns><see langword="true"/> when the element is visible.</returns>
+        internal async Task<bool> IsElementVisibleAsync(IElementHandle handle)
+            => await handle.IsVisibleAsync().ConfigureAwait(false)
+                && await IsFrameVisibleAsync(handle).ConfigureAwait(false);
+
+        /// <summary>
+        /// Official <c>frameSelectors</c> <c>frameVisible</c>: whether every
+        /// iframe element between this locator's frame and the frame that owns
+        /// <paramref name="handle"/> is visible.
+        /// </summary>
+        /// <param name="handle">An element resolved by this locator.</param>
+        /// <returns><see langword="false"/> when the element is inside a hidden iframe.</returns>
+        internal async Task<bool> IsFrameVisibleAsync(IElementHandle handle)
+        {
+            if (_frame.ChildFrames.Count == 0)
+            {
+                return true;
+            }
+
+            IFrame frame = await handle.OwnerFrameAsync().ConfigureAwait(false);
+            while (frame != null && !ReferenceEquals(frame, _frame) && frame.ParentFrame != null)
+            {
+                IElementHandle host = await frame.FrameElementAsync().ConfigureAwait(false);
+                try
+                {
+                    if (!await host.EvaluateAsync<bool>(DomVisibility.IsVisibleFunction).ConfigureAwait(false))
+                    {
+                        return false;
+                    }
+                }
+                finally
+                {
+                    await host.DisposeAsync().ConfigureAwait(false);
+                }
+
+                frame = frame.ParentFrame;
+            }
+
+            return true;
         }
 
         internal Locator WithAnyFrame()
@@ -2255,7 +2313,8 @@ namespace PlaywrightNative
                         done = true;
                         foreach (IElementHandle handle in all)
                         {
-                            if (!await handle.IsHiddenAsync().ConfigureAwait(false))
+                            if (!await handle.IsHiddenAsync().ConfigureAwait(false)
+                                && await IsFrameVisibleAsync(handle).ConfigureAwait(false))
                             {
                                 done = false;
                                 break;
@@ -2281,7 +2340,7 @@ namespace PlaywrightNative
                                 await StrictResolvedMessageAsync(all).ConfigureAwait(false));
                         }
 
-                        done = all.Count == 1 && await all[0].IsVisibleAsync().ConfigureAwait(false);
+                        done = all.Count == 1 && await IsElementVisibleAsync(all[0]).ConfigureAwait(false);
                         break;
                 }
 
@@ -2327,7 +2386,7 @@ namespace PlaywrightNative
             return await ResolveOneOrNullAsync().ConfigureAwait(false);
         }
 
-        private async Task<IElementHandle> WaitForHandleAsync(float? timeout, string apiName, bool skipHandlers = false)
+        private async Task<IElementHandle> WaitForHandleAsync(float? timeout, string apiName, bool skipHandlers = false, bool waitForFrameVisible = false)
         {
             if (TryAriaRefBody(out string ariaRef))
             {
@@ -2340,6 +2399,7 @@ namespace PlaywrightNative
                 return found;
             }
 
+            bool insideHiddenFrame = false;
             try
             {
                 return await GetByWaiter.WaitAsync(
@@ -2350,7 +2410,14 @@ namespace PlaywrightNative
                             await LocatorHandlers.RunAsync(Page, timeout).ConfigureAwait(false);
                         }
 
-                        return await ResolveOneOrNullAsync().ConfigureAwait(false);
+                        IElementHandle handle = await ResolveOneOrNullAsync().ConfigureAwait(false);
+                        if (handle != null && waitForFrameVisible && !await IsFrameVisibleAsync(handle).ConfigureAwait(false))
+                        {
+                            insideHiddenFrame = true;
+                            return null;
+                        }
+
+                        return handle;
                     },
                     timeout,
                     apiName).ConfigureAwait(false);
@@ -2362,7 +2429,7 @@ namespace PlaywrightNative
                     throw;
                 }
 
-                throw new TimeoutException(ex.Message + "\nwaiting for " + ToString(), ex);
+                throw new TimeoutException(ex.Message + "\nwaiting for " + ToString() + (insideHiddenFrame ? InsideHiddenFrameLog : string.Empty), ex);
             }
         }
 

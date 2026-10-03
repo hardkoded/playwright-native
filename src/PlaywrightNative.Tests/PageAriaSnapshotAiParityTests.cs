@@ -1238,5 +1238,24 @@ namespace PlaywrightNative.Tests
       - paragraph [ref=e4]: Paragraph
   ");
         }
+
+        [PlaywrightTest("page-aria-snapshot-ai.spec.ts", "should not include hidden iframes")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public async Task ShouldNotIncludeHiddenIframes()
+        {
+            await Page.SetContentAsync(@"
+    <iframe name=""visible"" srcdoc=""<button>Visible</button>""></iframe>
+    <iframe name=""hidden"" style=""visibility: hidden"" srcdoc=""<button>Hidden</button>""></iframe>
+    <iframe name=""none"" style=""display: none"" srcdoc=""<button>None</button>""></iframe>
+  ").ConfigureAwait(false);
+            string snapshot = await SnapshotForAIAsync(Page).ConfigureAwait(false);
+            AssertContainsYaml(snapshot, @"
+    - iframe [ref=e2]:
+      - button ""Visible"" [ref=f1e2]
+  ");
+            Assert.That(snapshot, Does.Not.Contain("Hidden"));
+            Assert.That(snapshot, Does.Not.Contain("None"));
+        }
     }
 }
