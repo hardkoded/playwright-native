@@ -12,7 +12,7 @@ Chromium is the primary, fully supported browser. Firefox and WebKit launch toda
 
 **PlaywrightNative is a community-first project, created by the community, for the community.**
 
-[Microsoft's playwright-dotnet](https://github.com/microsoft/playwright-dotnet) is a thin auto-generated wrapper around a bundled Node.js process. After years of accumulated community frustration — [89% of open issues unanswered](tasks/playwright-dotnet-pain-points-report.md), top feature requests open for 4+ years, and a widening gap with the Node.js version — we decided to build something better.
+[Microsoft's playwright-dotnet](https://github.com/microsoft/playwright-dotnet) is a thin auto-generated wrapper around a bundled Node.js process. After years of accumulated community frustration — [89% of open issues unanswered](https://github.com/microsoft/playwright-dotnet/issues), top feature requests open for 4+ years, and a widening gap with the Node.js version — we decided to build something better.
 
 ### No Node.js. Pure .NET.
 

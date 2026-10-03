@@ -1,5 +1,7 @@
 # CLAUDE.md
 
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
 ## Goal
 
 PlaywrightNative is a .NET port of Microsoft Playwright for automating Chromium, Firefox, and WebKit browsers.
@@ -11,19 +13,11 @@ Public launch entry points match upstream playwright-dotnet:
 There is no Node.js driver. Static `Playwright.Chromium` /
 `LaunchChromiumAsync` helpers remain for convenience.
 
-## Compatibility campaigns
+## Upstream test parity
 
-Leftover options ended at Wave 500 (`tasks/leftover-campaign.md`).
-Locator core ended at Wave 523 (`tasks/locator-campaign.md`).
-Expect matchers ended at Wave 549 (`tasks/expect-campaign.md`).
-Screenshot, pause, client certificates, HAR update, Firefox launcher,
-expect options, Firefox smoke, tracing chunks, and UnrouteBehavior
-are on `main` (through Wave 586).
-The active track is IgnoreDefaultArgs list: follow
-`tasks/ignore-default-args-campaign.md` and `tasks/todo.md` Current Phase.
-Campaign order and the paste-ready automation prompt: `tasks/campaign-chain.md`.
-After IgnoreDefaultArgs: Firefox persistent.
-Then stop.
+Every portable upstream `tests/page` and `tests/library` title already has a
+local `[PlaywrightTest]` twin. The remaining upstream titles are Node-only
+internals. `tasks/validate-playwright-tests.py` checks this.
 
 ## Quick Reference
 
@@ -94,7 +88,7 @@ These rules cause build failures. Violating them will break CI:
 ### Project Structure
 
 ```
-PlaywrightNative/                    ← Main library (netstandard2.1 + net10.0)
+PlaywrightNative/                    ← Main library (net10.0)
   ├── Chromium/                     ← Direct CDP (CRPage, CRNetworkManager, ...)
   ├── Firefox/                      ← Direct Juggler (FFPage, FFConnection, ...)
   ├── WebKit/                       ← Direct WIP (WKPage, WKConnection, ...)
@@ -146,8 +140,9 @@ PlaywrightNative.TestServer/         ← HTTP/HTTPS server for test fixtures
 
 ### CI Matrix
 
-CI (`.github/workflows/dotnet.yml`) runs `net10.0` with `test.runsettings` (1-hour
-session timeout). Matrix:
+CI (`.github/workflows/dotnet.yml`) runs `net10.0` with `test.runsettings` (2.5-hour
+session timeout). Jobs are split into shards by test class
+(`.github/workflows/compute-test-shard-filter.sh` sets `TEST_FILTER`). Matrix:
 
 - Chromium headless + headful on `ubuntu-latest` and `windows-latest`
   (`PRODUCT=CHROMIUM`, full `PlaywrightNative.Tests` suite)

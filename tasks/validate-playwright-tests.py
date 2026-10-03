@@ -7,8 +7,7 @@ Checks:
    microsoft/playwright tests/page or tests/library.
 3. Every portable official test() / it() title in those suites has a local twin.
 
-Node-only / inspector / driver / unit-clock specs are listed in SKIP_SPECS
-(see tasks/upstream-test-parity-campaign.md).
+Node-only / inspector / driver / unit-clock specs are listed in SKIP_SPECS.
 
 Usage:
   python3 tasks/validate-playwright-tests.py --playwright-dir /tmp/playwright
