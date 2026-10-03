@@ -1357,8 +1357,15 @@ namespace PlaywrightNative.WebKit
         {
             // Browser/page close marks the session closing before (or instead of)
             // surfacing TargetClosedException. A disposed session without that
-            // flag is a navigation target swap — isVisible must not treat it as
-            // "target closed".
+            // flag is a navigation target swap — isVisible / SetContent must not
+            // treat it as "target closed". Prefer the navigation destroyed-context
+            // error whenever the session was disposed without an explicit close so
+            // EvaluateInFrameAsync can retry on the replacement world.
+            if (_session.IsDisposed && !_session.IsClosing)
+            {
+                return new PlaywrightException(EvaluateSerialization.NavigationMessage);
+            }
+
             if (_session.IsClosing || _session.IsConnectionClosed)
             {
                 return ClosedTarget.Exception(

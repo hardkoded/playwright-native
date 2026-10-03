@@ -102,8 +102,9 @@ namespace PlaywrightNative.WebKit
 
         /// <summary>
         /// Gets or sets the reason recorded when the owning page was closed.
-        /// Assigning (including <see langword="null"/>) marks the session as closing so
-        /// in-flight evaluates prefer TargetClosed messaging over navigation errors.
+        /// Assigning (including <see langword="null"/> from <c>CloseAsync</c>) marks
+        /// the session as closing so in-flight evaluates prefer TargetClosed messaging
+        /// over navigation errors. Process-swap dispose must not assign this property.
         /// </summary>
         internal string CloseReason
         {

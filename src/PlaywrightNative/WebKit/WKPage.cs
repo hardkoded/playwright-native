@@ -4204,6 +4204,16 @@ namespace PlaywrightNative.WebKit
                     return false;
                 }
 
+                // Session dispose during process-swap can still surface as TargetClosed when
+                // ClosedOrNavigationException sees IsClosing/IsConnectionClosed stamped on the
+                // dying session. The outer catch already requires !_closed && !_closing on the
+                // page, so retry on the replacement world (ShouldReportNonNavigationDownloads
+                // SetContent on Linux WebKit CI).
+                if (ex is TargetClosedException)
+                {
+                    return true;
+                }
+
                 if (DestroyedContext.IsDestroyedContext(ex))
                 {
                     return true;
