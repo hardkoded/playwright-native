@@ -226,7 +226,20 @@ namespace PlaywrightNative.Transport
                     if (json.Length > 0)
                     {
                         ProtocolResponse response = JsonSerializer.Deserialize<ProtocolResponse>(json);
-                        OnMessage?.Invoke(response);
+                        Action<ProtocolResponse> handler = OnMessage;
+                        if (handler != null)
+                        {
+                            handler.Invoke(response);
+
+                            // Official transport.ts wraps each ws 'message' in
+                            // setImmediate: the browser can deliver several CDP
+                            // frames while ReceiveAsync completes synchronously
+                            // from the socket buffer. Without a yield, page.goto's
+                            // load continuation cannot run before a later
+                            // Network.requestWillBeSent (favicon) on a user CDP
+                            // session (session.spec.ts "should send events").
+                            await Task.Yield();
+                        }
                     }
                 }
 
