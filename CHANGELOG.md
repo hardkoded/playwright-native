@@ -47,7 +47,7 @@ build into the local cache (`PLAYWRIGHT_BROWSERS_PATH` if set).
 - Driver-era channel `IBrowserType` obtained only from the Node driver —
   replaced by direct `BrowserTypeInfo` implementing `Microsoft.Playwright.IBrowserType`
 - `ILocator` / `IFrameLocator` — not yet implemented in the earliest direct cut
-  (later waves restored locator work; see `tasks/todo.md`)
+  (later waves restored locator work)
 - `IPageAssertions` / `ILocatorAssertions` — not yet implemented in the earliest
   direct cut
 - `ISelectors` — not yet implemented in the earliest direct cut
