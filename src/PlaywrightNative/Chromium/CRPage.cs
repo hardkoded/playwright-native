@@ -3581,7 +3581,13 @@ namespace PlaywrightNative.Chromium
                     // Page.Frames still has only the main frame after GoTo
                     // (LocatorConvenienceTests.ShouldReturnPage). Re-adopt children
                     // from Page.getFrameTree like FrameSession._handleFrameTree.
-                    await SyncChildFramesFromTreeAsync().ConfigureAwait(false);
+                    //
+                    // Do not await: official goto resolves at lifecycle and does
+                    // not block on getFrameTree. Awaiting here lets a later
+                    // Network.requestWillBeSent (/favicon.ico) reach a user CDP
+                    // session before page.goto returns (session.spec.ts should
+                    // send events expects exactly one event for EmptyPage).
+                    _ = SyncChildFramesFromTreeAsync();
                 }
             }
             finally
