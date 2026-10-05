@@ -9,6 +9,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -471,7 +472,7 @@ namespace PlaywrightNative
 
             AbortSignal previous = ClickAction.ActiveSignal.Value;
             ClickAction.ActiveSignal.Value = signal;
-            bool insideHiddenFrame = false;
+            StrongBox<bool> insideHiddenFrame = new StrongBox<bool>();
             try
             {
                 await ClickAction.RunOnSelectorAsync(
@@ -483,13 +484,7 @@ namespace PlaywrightNative
                     }
 
                     IElementHandle handle = await ResolveOneOrNullAsync().ConfigureAwait(false);
-                    if (handle != null && force != true && !await IsFrameVisibleAsync(handle).ConfigureAwait(false))
-                    {
-                        insideHiddenFrame = true;
-                        return null;
-                    }
-
-                    return handle;
+                    return force == true ? handle : await SkipInsideHiddenFrameAsync(handle, insideHiddenFrame).ConfigureAwait(false);
                 },
                 ToString(),
                 h => h.ClickAsync(
@@ -514,7 +509,7 @@ namespace PlaywrightNative
             }
             catch (TimeoutException ex)
             {
-                throw new TimeoutException(ex.Message + "\nwaiting for " + ToString() + (insideHiddenFrame ? InsideHiddenFrameLog : string.Empty), ex);
+                throw new TimeoutException(ex.Message + "\nwaiting for " + ToString() + (insideHiddenFrame.Value ? InsideHiddenFrameLog : string.Empty), ex);
             }
             finally
             {
@@ -791,12 +786,7 @@ namespace PlaywrightNative
             bool? noWaitAfter = default,
             float? timeout = default,
             bool? force = default)
-            => SelectOptionAction.RunOnSelectorAsync(
-                ResolveSelectHandleAsync,
-                ToString(),
-                h => h.SelectOptionAsync(values, noWaitAfter, timeout, force),
-                timeout,
-                "locator.selectOption");
+            => SelectOptionCoreAsync(h => h.SelectOptionAsync(values, noWaitAfter, timeout, force), timeout, force);
 
         /// <inheritdoc/>
         public Task<IReadOnlyCollection<string>> SelectOptionAsync(
@@ -804,12 +794,7 @@ namespace PlaywrightNative
             bool? noWaitAfter = default,
             float? timeout = default,
             bool? force = default)
-            => SelectOptionAction.RunOnSelectorAsync(
-                ResolveSelectHandleAsync,
-                ToString(),
-                h => h.SelectOptionAsync(values, noWaitAfter, timeout, force),
-                timeout,
-                "locator.selectOption");
+            => SelectOptionCoreAsync(h => h.SelectOptionAsync(values, noWaitAfter, timeout, force), timeout, force);
 
         /// <inheritdoc/>
         public Task<IReadOnlyCollection<string>> SelectOptionAsync(
@@ -818,13 +803,7 @@ namespace PlaywrightNative
             float? timeout = default,
             bool? force = default,
             ActionScroll scroll = default)
-            => SelectOptionAction.RunOnSelectorAsync(
-                ResolveSelectHandleAsync,
-                ToString(),
-                h => h.SelectOptionAsync(values, noWaitAfter, timeout, force, scroll),
-                timeout,
-                "locator.selectOption",
-                scroll);
+            => SelectOptionCoreAsync(h => h.SelectOptionAsync(values, noWaitAfter, timeout, force, scroll), timeout, force, scroll);
 
         /// <inheritdoc/>
         public Task<IReadOnlyCollection<string>> SelectOptionAsync(
@@ -832,12 +811,7 @@ namespace PlaywrightNative
             bool? noWaitAfter = default,
             float? timeout = default,
             bool? force = default)
-            => SelectOptionAction.RunOnSelectorAsync(
-                ResolveSelectHandleAsync,
-                ToString(),
-                h => h.SelectOptionAsync(values, noWaitAfter, timeout, force),
-                timeout,
-                "locator.selectOption");
+            => SelectOptionCoreAsync(h => h.SelectOptionAsync(values, noWaitAfter, timeout, force), timeout, force);
 
         /// <inheritdoc/>
         public Task<IReadOnlyCollection<string>> SelectOptionAsync(
@@ -845,12 +819,7 @@ namespace PlaywrightNative
             bool? noWaitAfter = default,
             float? timeout = default,
             bool? force = default)
-            => SelectOptionAction.RunOnSelectorAsync(
-                ResolveSelectHandleAsync,
-                ToString(),
-                h => h.SelectOptionAsync(values, noWaitAfter, timeout, force),
-                timeout,
-                "locator.selectOption");
+            => SelectOptionCoreAsync(h => h.SelectOptionAsync(values, noWaitAfter, timeout, force), timeout, force);
 
         /// <inheritdoc/>
         public Task<IReadOnlyCollection<string>> SelectOptionAsync(
@@ -858,12 +827,7 @@ namespace PlaywrightNative
             bool? noWaitAfter = default,
             float? timeout = default,
             bool? force = default)
-            => SelectOptionAction.RunOnSelectorAsync(
-                ResolveSelectHandleAsync,
-                ToString(),
-                h => h.SelectOptionAsync(values, noWaitAfter, timeout, force),
-                timeout,
-                "locator.selectOption");
+            => SelectOptionCoreAsync(h => h.SelectOptionAsync(values, noWaitAfter, timeout, force), timeout, force);
 
         /// <inheritdoc/>
         public Task<IReadOnlyCollection<string>> SelectOptionAsync(params string[] values)
@@ -1056,7 +1020,9 @@ namespace PlaywrightNative
 
             _ = noWaitAfter;
             IElementHandle sourceHandle = await WaitForHandleAsync(timeout, "locator.dragTo", waitForFrameVisible: force != true).ConfigureAwait(false);
-            IElementHandle targetHandle = await target.ElementHandleAsync(timeout).ConfigureAwait(false);
+            IElementHandle targetHandle = target is Locator targetLocator
+                ? await targetLocator.WaitForHandleAsync(timeout, "locator.dragTo", waitForFrameVisible: force != true).ConfigureAwait(false)
+                : await target.ElementHandleAsync(timeout).ConfigureAwait(false);
             if (force != true)
             {
                 await sourceHandle.WaitForElementStateAsync(ElementState.Visible, timeout).ConfigureAwait(false);
@@ -2386,6 +2352,52 @@ namespace PlaywrightNative
             return await ResolveOneOrNullAsync().ConfigureAwait(false);
         }
 
+        private async Task<IReadOnlyCollection<string>> SelectOptionCoreAsync(
+            Func<IElementHandle, Task<IReadOnlyCollection<string>>> onHandle,
+            float? timeout,
+            bool? force,
+            ActionScroll scroll = ActionScroll.None)
+        {
+            StrongBox<bool> insideHiddenFrame = new StrongBox<bool>();
+            try
+            {
+                return await SelectOptionAction.RunOnSelectorAsync(
+                    async selector =>
+                    {
+                        IElementHandle handle = await ResolveSelectHandleAsync(selector).ConfigureAwait(false);
+                        return force == true ? handle : await SkipInsideHiddenFrameAsync(handle, insideHiddenFrame).ConfigureAwait(false);
+                    },
+                    ToString(),
+                    onHandle,
+                    timeout,
+                    "locator.selectOption",
+                    scroll).ConfigureAwait(false);
+            }
+            catch (TimeoutException ex) when (insideHiddenFrame.Value)
+            {
+                throw new TimeoutException(ex.Message + InsideHiddenFrameLog, ex);
+            }
+        }
+
+        /// <summary>
+        /// Official <c>waitForFrameVisible</c>: drops a resolved action target
+        /// that sits inside a hidden iframe so the caller keeps polling.
+        /// </summary>
+        /// <param name="handle">The resolved target, or <see langword="null"/>.</param>
+        /// <param name="insideHiddenFrame">Set to whether this poll found the target inside a hidden frame.</param>
+        /// <returns><paramref name="handle"/>, or <see langword="null"/> when its frame is hidden.</returns>
+        private async Task<IElementHandle> SkipInsideHiddenFrameAsync(IElementHandle handle, StrongBox<bool> insideHiddenFrame)
+        {
+            insideHiddenFrame.Value = handle != null && !await IsFrameVisibleAsync(handle).ConfigureAwait(false);
+            if (!insideHiddenFrame.Value)
+            {
+                return handle;
+            }
+
+            await handle.DisposeAsync().ConfigureAwait(false);
+            return null;
+        }
+
         private async Task<IElementHandle> WaitForHandleAsync(float? timeout, string apiName, bool skipHandlers = false, bool waitForFrameVisible = false)
         {
             if (TryAriaRefBody(out string ariaRef))
@@ -2399,7 +2411,7 @@ namespace PlaywrightNative
                 return found;
             }
 
-            bool insideHiddenFrame = false;
+            StrongBox<bool> insideHiddenFrame = new StrongBox<bool>();
             try
             {
                 return await GetByWaiter.WaitAsync(
@@ -2411,13 +2423,7 @@ namespace PlaywrightNative
                         }
 
                         IElementHandle handle = await ResolveOneOrNullAsync().ConfigureAwait(false);
-                        if (handle != null && waitForFrameVisible && !await IsFrameVisibleAsync(handle).ConfigureAwait(false))
-                        {
-                            insideHiddenFrame = true;
-                            return null;
-                        }
-
-                        return handle;
+                        return waitForFrameVisible ? await SkipInsideHiddenFrameAsync(handle, insideHiddenFrame).ConfigureAwait(false) : handle;
                     },
                     timeout,
                     apiName).ConfigureAwait(false);
@@ -2429,7 +2435,7 @@ namespace PlaywrightNative
                     throw;
                 }
 
-                throw new TimeoutException(ex.Message + "\nwaiting for " + ToString() + (insideHiddenFrame ? InsideHiddenFrameLog : string.Empty), ex);
+                throw new TimeoutException(ex.Message + "\nwaiting for " + ToString() + (insideHiddenFrame.Value ? InsideHiddenFrameLog : string.Empty), ex);
             }
         }
 
