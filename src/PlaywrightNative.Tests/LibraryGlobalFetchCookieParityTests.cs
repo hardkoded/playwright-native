@@ -15,8 +15,10 @@
  * limitations under the License.
  */
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Net.Security;
 using System.Net.Sockets;
@@ -25,6 +27,7 @@ using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
@@ -36,16 +39,8 @@ using PlaywrightNative.TestServer;
 namespace PlaywrightNative.Tests
 {
     /// <summary>
-    /// Official <c>library/global-fetch-cookie.spec.ts</c> parity. Skip
-    /// Node-only <c>__testHookLookup</c> titles:
-    /// <c>should store cookie from Set-Cookie header</c>,
-    /// <c>should filter outgoing cookies by domain</c>,
-    /// <c>should do case-insensitive match of cookie domain</c>,
-    /// <c>should do case-insensitive match of request domain</c>,
-    /// <c>should send secure cookie over http for subdomains of localhost</c>,
-    /// <c>should store cookie from Set-Cookie header even if it contains equal signs</c>,
-    /// <c>should export cookies to storage state</c>, and
-    /// <c>should send cookies from storage state</c>.
+    /// Official <c>library/global-fetch-cookie.spec.ts</c> parity. Titles that
+    /// need the Node-only <c>__testHookLookup</c> DNS hook are ignored.
     /// </summary>
     [TestFixture]
     [NonParallelizable]
@@ -105,6 +100,246 @@ namespace PlaywrightNative.Tests
         {
             _ownedServer?.Reset();
             TestServerSetup.Server?.Reset();
+        }
+
+        [PlaywrightTest("global-fetch-cookie.spec.ts", "should store cookie from Set-Cookie header")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public void ShouldStoreCookieFromSetCookieHeader()
+        {
+            Assert.Ignore("Node __testHookLookup DNS hook");
+        }
+
+        [PlaywrightTest("global-fetch-cookie.spec.ts", "addCookies should add cookies to the cookie jar")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public async Task AddCookiesShouldAddCookiesToTheCookieJar()
+        {
+            EnsureServer();
+            IAPIRequestContext request = await NewRequestAsync().ConfigureAwait(false);
+            try
+            {
+                await request.AddCookiesAsync(new[]
+                {
+                    new Cookie { Name = "a", Value = "b", Url = EmptyPage },
+                    new Cookie { Name = "c", Value = "d", Domain = "localhost", Path = "/input", HttpOnly = true, SameSite = SameSiteAttribute.Strict },
+                    new Cookie { Name = "e", Value = "f", Domain = "other.com", Path = "/" },
+                }).ConfigureAwait(false);
+                Task<string> serverRequest = Server.WaitForRequest(
+                    "/input/button.html",
+                    req => req.Headers["Cookie"].ToString());
+                Task<IAPIResponse> responseTask = request.GetAsync(Prefix + "/input/button.html");
+                await Task.WhenAll(serverRequest, responseTask).ConfigureAwait(false);
+                Assert.That(serverRequest.Result, Is.EqualTo("a=b; c=d"));
+                string state = await request.StorageStateAsync().ConfigureAwait(false);
+                AssertJsonEqual(
+                    "[" +
+                    "{\"name\":\"a\",\"value\":\"b\",\"domain\":\"localhost\",\"path\":\"/\",\"expires\":-1,\"httpOnly\":false,\"secure\":false,\"sameSite\":\"Lax\"}," +
+                    "{\"name\":\"c\",\"value\":\"d\",\"domain\":\"localhost\",\"path\":\"/input\",\"expires\":-1,\"httpOnly\":true,\"secure\":false,\"sameSite\":\"Strict\"}," +
+                    "{\"name\":\"e\",\"value\":\"f\",\"domain\":\"other.com\",\"path\":\"/\",\"expires\":-1,\"httpOnly\":false,\"secure\":false,\"sameSite\":\"Lax\"}" +
+                    "]",
+                    JsonNode.Parse(state)["cookies"].ToJsonString());
+            }
+            finally
+            {
+                await request.DisposeAsync().ConfigureAwait(false);
+            }
+        }
+
+        [PlaywrightTest("global-fetch-cookie.spec.ts", "addCookies should validate cookies")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public async Task AddCookiesShouldValidateCookies()
+        {
+            IAPIRequestContext request = await NewRequestAsync().ConfigureAwait(false);
+            try
+            {
+                Microsoft.Playwright.PlaywrightException error = Assert.ThrowsAsync<Microsoft.Playwright.PlaywrightException>(
+                    () => request.AddCookiesAsync(new[] { new Cookie { Name = "a", Value = "b" } }));
+                Assert.That(error.Message, Does.Contain("Cookie should have a url or a domain/path pair"));
+            }
+            finally
+            {
+                await request.DisposeAsync().ConfigureAwait(false);
+            }
+        }
+
+        [PlaywrightTest("global-fetch-cookie.spec.ts", "cookies should return cookies filtered by urls")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public async Task CookiesShouldReturnCookiesFilteredByUrls()
+        {
+            EnsureServer();
+            IAPIRequestContext request = await NewRequestAsync().ConfigureAwait(false);
+            try
+            {
+                await request.AddCookiesAsync(new[]
+                {
+                    new Cookie { Name = "a", Value = "b", Domain = "localhost", Path = "/" },
+                    new Cookie { Name = "c", Value = "d", Domain = "localhost", Path = "/input" },
+                    new Cookie { Name = "e", Value = "f", Domain = "one.com", Path = "/" },
+                    new Cookie { Name = "g", Value = "h", Domain = "two.com", Path = "/", Secure = true },
+                }).ConfigureAwait(false);
+                Assert.That(Names(await request.CookiesAsync().ConfigureAwait(false)), Is.EqualTo(new[] { "a", "c", "e", "g" }));
+                Assert.That(Names(await request.CookiesAsync(EmptyPage).ConfigureAwait(false)), Is.EqualTo(new[] { "a" }));
+                Assert.That(Names(await request.CookiesAsync(Prefix + "/input/button.html").ConfigureAwait(false)), Is.EqualTo(new[] { "a", "c" }));
+                Assert.That(Names(await request.CookiesAsync(new[] { "http://sub.one.com/", "http://two.com/" }).ConfigureAwait(false)), Is.EqualTo(new[] { "e" }));
+                Assert.That(Names(await request.CookiesAsync(new[] { "http://sub.one.com/", "https://two.com/" }).ConfigureAwait(false)), Is.EqualTo(new[] { "e", "g" }));
+                Assert.That(await request.CookiesAsync("http://other.com/").ConfigureAwait(false), Is.Empty);
+            }
+            finally
+            {
+                await request.DisposeAsync().ConfigureAwait(false);
+            }
+        }
+
+        [PlaywrightTest("global-fetch-cookie.spec.ts", "cookies should include cookies from Set-Cookie header")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public async Task CookiesShouldIncludeCookiesFromSetCookieHeader()
+        {
+            EnsureServer();
+            IAPIRequestContext request = await NewRequestAsync().ConfigureAwait(false);
+            try
+            {
+                Server.SetRoute("/setcookie.html", http =>
+                {
+                    http.Response.Headers.Append("Set-Cookie", "a=b; HttpOnly; SameSite=Strict");
+                    http.Response.Headers.Append("Set-Cookie", "c=d; path=/input");
+                    return Task.CompletedTask;
+                });
+                await request.GetAsync(Prefix + "/setcookie.html").ConfigureAwait(false);
+                IReadOnlyList<BrowserContextCookiesResult> cookies = await request.CookiesAsync().ConfigureAwait(false);
+                Assert.That(
+                    cookies.Select(c => (c.Name, c.Value, c.Domain, c.Path, c.Expires, c.HttpOnly, c.Secure, c.SameSite)),
+                    Is.EqualTo(new[]
+                    {
+                        ("a", "b", "localhost", "/", -1f, true, false, SameSiteAttribute.Strict),
+                        ("c", "d", "localhost", "/input", -1f, false, false, SameSiteAttribute.Lax),
+                    }));
+            }
+            finally
+            {
+                await request.DisposeAsync().ConfigureAwait(false);
+            }
+        }
+
+        [PlaywrightTest("global-fetch-cookie.spec.ts", "clearCookies should remove all cookies")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public async Task ClearCookiesShouldRemoveAllCookies()
+        {
+            EnsureServer();
+            IAPIRequestContext request = await NewRequestAsync().ConfigureAwait(false);
+            try
+            {
+                await request.AddCookiesAsync(new[]
+                {
+                    new Cookie { Name = "a", Value = "b", Url = EmptyPage },
+                    new Cookie { Name = "c", Value = "d", Domain = "one.com", Path = "/" },
+                }).ConfigureAwait(false);
+                await request.ClearCookiesAsync().ConfigureAwait(false);
+                Assert.That(await request.CookiesAsync().ConfigureAwait(false), Is.Empty);
+                Task<string> serverRequest = Server.WaitForRequest(
+                    "/empty.html",
+                    req => req.Headers["Cookie"].ToString());
+                Task<IAPIResponse> responseTask = request.GetAsync(EmptyPage);
+                await Task.WhenAll(serverRequest, responseTask).ConfigureAwait(false);
+                Assert.That(serverRequest.Result, Is.Null.Or.Empty);
+            }
+            finally
+            {
+                await request.DisposeAsync().ConfigureAwait(false);
+            }
+        }
+
+        [PlaywrightTest("global-fetch-cookie.spec.ts", "clearCookies should filter by name, domain and path")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public async Task ClearCookiesShouldFilterByNameDomainAndPath()
+        {
+            IAPIRequestContext request = await NewRequestAsync().ConfigureAwait(false);
+            try
+            {
+                await request.AddCookiesAsync(new[]
+                {
+                    new Cookie { Name = "session", Value = "1", Domain = "one.com", Path = "/" },
+                    new Cookie { Name = "session", Value = "2", Domain = "two.com", Path = "/" },
+                    new Cookie { Name = "session", Value = "3", Domain = "two.com", Path = "/api" },
+                    new Cookie { Name = "other", Value = "4", Domain = "one.com", Path = "/" },
+                }).ConfigureAwait(false);
+                async Task<string[]> ValuesAsync()
+                    => (await request.CookiesAsync().ConfigureAwait(false)).Select(c => c.Value).OrderBy(v => v, StringComparer.Ordinal).ToArray();
+
+                await request.ClearCookiesAsync(new Microsoft.Playwright.BrowserContextClearCookiesOptions { Name = "session", Domain = "two.com", Path = "/api" }).ConfigureAwait(false);
+                Assert.That(await ValuesAsync().ConfigureAwait(false), Is.EqualTo(new[] { "1", "2", "4" }));
+
+                await request.ClearCookiesAsync(new Microsoft.Playwright.BrowserContextClearCookiesOptions { DomainRegex = new Regex("one\\.com$") }).ConfigureAwait(false);
+                Assert.That(await ValuesAsync().ConfigureAwait(false), Is.EqualTo(new[] { "2" }));
+
+                await request.ClearCookiesAsync(new Microsoft.Playwright.BrowserContextClearCookiesOptions { NameRegex = new Regex("^sess") }).ConfigureAwait(false);
+                Assert.That(await ValuesAsync().ConfigureAwait(false), Is.Empty);
+            }
+            finally
+            {
+                await request.DisposeAsync().ConfigureAwait(false);
+            }
+        }
+
+        [PlaywrightTest("global-fetch-cookie.spec.ts", "should filter outgoing cookies by domain")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public void ShouldFilterOutgoingCookiesByDomain()
+        {
+            Assert.Ignore("Node __testHookLookup DNS hook");
+        }
+
+        [PlaywrightTest("global-fetch-cookie.spec.ts", "should do case-insensitive match of cookie domain")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public void ShouldDoCaseInsensitiveMatchOfCookieDomain()
+        {
+            Assert.Ignore("Node __testHookLookup DNS hook");
+        }
+
+        [PlaywrightTest("global-fetch-cookie.spec.ts", "should do case-insensitive match of request domain")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public void ShouldDoCaseInsensitiveMatchOfRequestDomain()
+        {
+            Assert.Ignore("Node __testHookLookup DNS hook");
+        }
+
+        [PlaywrightTest("global-fetch-cookie.spec.ts", "should send secure cookie over http for subdomains of localhost")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public void ShouldSendSecureCookieOverHttpForSubdomainsOfLocalhost()
+        {
+            Assert.Ignore("Node __testHookLookup DNS hook");
+        }
+
+        [PlaywrightTest("global-fetch-cookie.spec.ts", "should store cookie from Set-Cookie header even if it contains equal signs")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public void ShouldStoreCookieFromSetCookieHeaderEvenIfItContainsEqualSigns()
+        {
+            Assert.Ignore("Node __testHookLookup DNS hook");
+        }
+
+        [PlaywrightTest("global-fetch-cookie.spec.ts", "should export cookies to storage state")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public void ShouldExportCookiesToStorageState()
+        {
+            Assert.Ignore("Node __testHookLookup DNS hook");
+        }
+
+        [PlaywrightTest("global-fetch-cookie.spec.ts", "should send cookies from storage state")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public void ShouldSendCookiesFromStorageState()
+        {
+            Assert.Ignore("Node __testHookLookup DNS hook");
         }
 
         [PlaywrightTest("global-fetch-cookie.spec.ts", "should filter outgoing cookies by path")]
@@ -483,6 +718,9 @@ namespace PlaywrightNative.Tests
 
         private static Task<IAPIRequestContext> NewRequestAsync()
             => Playwright.APIRequest.NewContextAsync(new() { IgnoreHTTPSErrors = true });
+
+        private static string[] Names(IEnumerable<BrowserContextCookiesResult> cookies)
+            => cookies.Select(c => c.Name).ToArray();
 
         private static string ToUtcString(DateTimeOffset value)
             => value.UtcDateTime.ToString("r", CultureInfo.InvariantCulture);
