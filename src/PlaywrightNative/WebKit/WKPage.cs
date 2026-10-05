@@ -613,6 +613,7 @@ namespace PlaywrightNative.WebKit
                 }
 
                 ApplyCloseReason(reason);
+                await OfficialTraceSession.OnPageWillCloseAsync(Context, this).ConfigureAwait(false);
                 bool runUnload = runBeforeUnload ?? false;
                 if (!runUnload)
                 {

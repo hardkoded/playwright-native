@@ -42,6 +42,7 @@ namespace PlaywrightNative
 
             ScreenSnapshots = clone.ScreenSnapshots;
             AriaSnapshots = clone.AriaSnapshots;
+            Coverage = clone.Coverage;
         }
 
         /// <summary>
@@ -55,5 +56,11 @@ namespace PlaywrightNative
         /// with before/action/after phases.
         /// </summary>
         public bool? AriaSnapshots { get; set; }
+
+        /// <summary>
+        /// Official hidden <c>_coverage</c> option. Collects istanbul
+        /// <c>window.__coverage__</c> counters into the trace.
+        /// </summary>
+        internal bool? Coverage { get; set; }
     }
 }

@@ -520,6 +520,7 @@ namespace PlaywrightNative
 
                 _closeReason = reason;
                 _crPage.Session.CloseReason = reason;
+                await OfficialTraceSession.OnPageWillCloseAsync(_context, this).ConfigureAwait(false);
                 bool runUnload = runBeforeUnload ?? false;
                 try
                 {
