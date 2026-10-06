@@ -36,7 +36,7 @@ namespace PlaywrightNative.Tests
     /// </summary>
     [TestFixture]
     [NonParallelizable]
-    public class LibraryCoverageParityTests : BrowserTestEx
+    public class CoverageTests : BrowserTestEx
     {
         private string _outputDir;
 
