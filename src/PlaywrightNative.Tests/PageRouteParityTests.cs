@@ -17,6 +17,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
@@ -1590,6 +1591,83 @@ namespace PlaywrightNative.Tests
             }).ConfigureAwait(false);
         }
 
+        [PlaywrightTest("page-route.spec.ts", "should contain sec-fetch headers in route")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public async Task ShouldContainSecFetchHeadersInRoute()
+        {
+            if (TestConstants.IsChromium)
+            {
+                Assert.Ignore("Official it.fail(chromium): Fetch.requestPaused fires before Chromium attaches Fetch Metadata headers.");
+            }
+
+            EnsureServer();
+            await WithPageAsync(async page =>
+            {
+                static Dictionary<string, string> SecFetch(IEnumerable<KeyValuePair<string, string>> headers)
+                {
+                    Dictionary<string, string> result = new();
+                    foreach (KeyValuePair<string, string> header in headers)
+                    {
+                        if (header.Key.StartsWith("sec-fetch-", StringComparison.OrdinalIgnoreCase))
+                        {
+                            result[header.Key.ToLowerInvariant()] = header.Value;
+                        }
+                    }
+
+                    return result;
+                }
+
+                string[] modes = { "cors", "no-cors", "same-origin" };
+
+                await page.GoToAsync(EmptyPage).ConfigureAwait(false);
+
+                Dictionary<string, (Dictionary<string, string> Headers, Dictionary<string, string> AllHeaders)> routed = new();
+                await page.RouteAsync("**/probe-*", async route =>
+                {
+                    IRequest request = route.Request;
+                    string path = new Uri(request.Url).AbsolutePath;
+                    Dictionary<string, string> allHeaders = await request.AllHeadersAsync().ConfigureAwait(false);
+                    lock (routed)
+                    {
+                        routed[path] = (SecFetch(request.Headers), SecFetch(allHeaders));
+                    }
+
+                    _ = route.ContinueAsync();
+                }).ConfigureAwait(false);
+
+                Task<Dictionary<string, string>>[] serverRequests = Array.ConvertAll(
+                    modes,
+                    mode => Server.WaitForRequest("/probe-" + mode, request => SecFetch(request.Headers.Select(h => new KeyValuePair<string, string>(h.Key, h.Value.ToString())))));
+                await page.EvaluateAsync(
+                    @"async modes => {
+                        for (const mode of modes)
+                            await (await fetch(`/probe-${mode}`, { mode })).text();
+                    }",
+                    modes).ConfigureAwait(false);
+                Dictionary<string, string>[] onServerAll = await Task.WhenAll(serverRequests).ConfigureAwait(false);
+
+                Assert.Multiple(() =>
+                {
+                    for (int i = 0; i < modes.Length; i++)
+                    {
+                        string path = "/probe-" + modes[i];
+                        Dictionary<string, string> onServer = onServerAll[i];
+                        // The server does receive the browser-computed Fetch Metadata.
+                        Assert.That(onServer, Is.EquivalentTo(new Dictionary<string, string>
+                        {
+                            ["sec-fetch-site"] = "same-origin",
+                            ["sec-fetch-mode"] = modes[i],
+                            ["sec-fetch-dest"] = "empty",
+                        }), path + " on server");
+                        // The route handler should see the same headers.
+                        Assert.That(routed[path].Headers, Is.EquivalentTo(onServer), path + " route.request().headers()");
+                        Assert.That(routed[path].AllHeaders, Is.EquivalentTo(onServer), path + " route.request().allHeaders()");
+                    }
+                });
+            }).ConfigureAwait(false);
+        }
+
         [PlaywrightTest("page-route.spec.ts", "should contain raw response header")]
         [Test]
         [Timeout(TestConstants.DefaultTestTimeout)]
@@ -1698,6 +1776,14 @@ namespace PlaywrightNative.Tests
                 await page.GoToAsync(url).ConfigureAwait(false);
                 Assert.That(interceptions, Is.EqualTo(2));
             }).ConfigureAwait(false);
+        }
+
+        [PlaywrightTest("page-route.spec.ts", "should respect URLPattern ignoreCase")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public void ShouldRespectURLPatternIgnoreCase()
+        {
+            Assert.Ignore("Official it.skip(globalThis.URLPattern === undefined): URLPattern is not supported in this environment.");
         }
     }
 }
