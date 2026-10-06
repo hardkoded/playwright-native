@@ -727,6 +727,100 @@ namespace PlaywrightNative.Tests
             Assert.That(await _page.EvaluateAsync<long>("Date.now()").ConfigureAwait(false), Is.EqualTo(1001));
         }
 
+        [PlaywrightTest("page-clock.spec.ts", "should follow fixed time")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public async Task ShouldFollowFixedTime()
+        {
+            await SkipUnlessTemporalAsync().ConfigureAwait(false);
+            await _page.Clock.SetFixedTimeAsync(new DateTime(2020, 1, 1, 0, 0, 0, DateTimeKind.Utc)).ConfigureAwait(false);
+            await _page.GoToAsync("data:text/html,").ConfigureAwait(false);
+            Dictionary<string, string> result = await _page.EvaluateAsync<Dictionary<string, string>>(
+                @"() => {
+                    const Temporal = globalThis.Temporal;
+                    return {
+                        instant: Temporal.Now.instant().toString(),
+                        zonedDateTime: Temporal.Now.zonedDateTimeISO('UTC').toString(),
+                        plainDateTime: Temporal.Now.plainDateTimeISO('UTC').toString(),
+                        plainDate: Temporal.Now.plainDateISO('UTC').toString(),
+                        plainTime: Temporal.Now.plainTimeISO('UTC').toString(),
+                    };
+                }").ConfigureAwait(false);
+            Assert.That(result, Is.EqualTo(new Dictionary<string, string>
+            {
+                ["instant"] = "2020-01-01T00:00:00Z",
+                ["zonedDateTime"] = "2020-01-01T00:00:00+00:00[UTC]",
+                ["plainDateTime"] = "2020-01-01T00:00:00",
+                ["plainDate"] = "2020-01-01",
+                ["plainTime"] = "00:00:00",
+            }));
+        }
+
+        [PlaywrightTest("page-clock.spec.ts", "should advance with the clock")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public async Task ShouldAdvanceWithTheClock()
+        {
+            await SkipUnlessTemporalAsync().ConfigureAwait(false);
+            await _page.Clock.InstallAsync(0).ConfigureAwait(false);
+            await _page.GoToAsync("data:text/html,").ConfigureAwait(false);
+            await _page.Clock.PauseAtAsync(1000).ConfigureAwait(false);
+            await _page.Clock.RunForAsync(2000).ConfigureAwait(false);
+            Assert.That(await _page.EvaluateAsync<long>("() => globalThis.Temporal.Now.instant().epochMilliseconds").ConfigureAwait(false), Is.EqualTo(3000));
+        }
+
+        [PlaywrightTest("page-clock.spec.ts", "should use the system time zone by default")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public async Task ShouldUseTheSystemTimeZoneByDefault()
+        {
+            await SkipUnlessTemporalAsync().ConfigureAwait(false);
+            IBrowserContext context = await _browser.NewContextAsync(new BrowserNewContextOptions { TimezoneId = "America/Los_Angeles" }).ConfigureAwait(false);
+            IPage page = await context.NewPageAsync().ConfigureAwait(false);
+            await page.Clock.SetFixedTimeAsync(new DateTime(2020, 1, 1, 0, 0, 0, DateTimeKind.Utc)).ConfigureAwait(false);
+            await page.GoToAsync("data:text/html,").ConfigureAwait(false);
+            Dictionary<string, string> result = await page.EvaluateAsync<Dictionary<string, string>>(
+                @"() => {
+                    const Temporal = globalThis.Temporal;
+                    return {
+                        timeZoneId: Temporal.Now.timeZoneId(),
+                        zonedDateTime: Temporal.Now.zonedDateTimeISO().toString(),
+                        plainDateTime: Temporal.Now.plainDateTimeISO().toString(),
+                    };
+                }").ConfigureAwait(false);
+            Assert.That(result, Is.EqualTo(new Dictionary<string, string>
+            {
+                ["timeZoneId"] = "America/Los_Angeles",
+                ["zonedDateTime"] = "2019-12-31T16:00:00-08:00[America/Los_Angeles]",
+                ["plainDateTime"] = "2019-12-31T16:00:00",
+            }));
+            await context.CloseAsync().ConfigureAwait(false);
+        }
+
+        [PlaywrightTest("page-clock.spec.ts", "should keep the rest of Temporal intact")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public async Task ShouldKeepTheRestOfTemporalIntact()
+        {
+            await SkipUnlessTemporalAsync().ConfigureAwait(false);
+            await _page.Clock.InstallAsync(0).ConfigureAwait(false);
+            await _page.GoToAsync("data:text/html,").ConfigureAwait(false);
+            JsonElement result = await _page.EvaluateAsync<JsonElement>(
+                @"() => {
+                    const Temporal = globalThis.Temporal;
+                    return {
+                        tag: Object.prototype.toString.call(Temporal.Now),
+                        enumerable: Object.keys(Temporal).concat(Object.keys(Temporal.Now)),
+                        isInstant: Temporal.Now.instant() instanceof Temporal.Instant,
+                        duration: Temporal.Duration.from({ hours: 1 }).toString(),
+                    };
+                }").ConfigureAwait(false);
+            Assert.That(result.GetProperty("tag").GetString(), Is.EqualTo("[object Temporal.Now]"));
+            Assert.That(result.GetProperty("enumerable").GetArrayLength(), Is.Zero);
+            Assert.That(result.GetProperty("isInstant").GetBoolean(), Is.True);
+            Assert.That(result.GetProperty("duration").GetString(), Is.EqualTo("PT1H"));
+        }
+
         [PlaywrightTest("page-clock.spec.ts", "AbortSignal.timeout")]
         [Test]
         [Timeout(TestConstants.DefaultTestTimeout)]
@@ -799,6 +893,14 @@ namespace PlaywrightNative.Tests
         {
             await _page.Clock.InstallAsync(0).ConfigureAwait(false);
             await _page.Clock.PauseAtAsync(1000).ConfigureAwait(false);
+        }
+
+        private async Task SkipUnlessTemporalAsync()
+        {
+            if (!await _page.EvaluateAsync<bool>("() => 'Temporal' in globalThis").ConfigureAwait(false))
+            {
+                Assert.Ignore("Temporal is not supported");
+            }
         }
 
         private long[] CallNumbers()
