@@ -481,6 +481,78 @@ namespace PlaywrightNative.Tests
             }
         }
 
+        [PlaywrightTest("global-fetch-cookie.spec.ts", "should preserve origin storage on import/export of storage state")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public async Task ShouldPreserveOriginStorageOnImportExportOfStorageState()
+        {
+            EnsureServer();
+            const string storageState = @"{
+                ""cookies"": [
+                    {
+                        ""name"": ""a"",
+                        ""value"": ""b"",
+                        ""domain"": ""a.b.one.com"",
+                        ""path"": ""/"",
+                        ""expires"": -1,
+                        ""httpOnly"": false,
+                        ""secure"": false,
+                        ""sameSite"": ""Lax""
+                    }
+                ],
+                ""origins"": [
+                    {
+                        ""origin"": ""https://www.example.com"",
+                        ""localStorage"": [{
+                            ""name"": ""name1"",
+                            ""value"": ""value1""
+                        }],
+                        ""opfs"": [
+                            {
+                                ""path"": ""hello.txt"",
+                                ""type"": ""file"",
+                                ""base64"": ""SGVsbG8sIHdvcmxkIQ==""
+                            },
+                            {
+                                ""path"": ""empty"",
+                                ""type"": ""directory""
+                            }
+                        ],
+                        ""indexedDB"": [
+                            {
+                                ""name"": ""db"",
+                                ""version"": 5,
+                                ""stores"": [
+                                    {
+                                        ""name"": ""store"",
+                                        ""keyPath"": ""id"",
+                                        ""autoIncrement"": false,
+                                        ""indexes"": [],
+                                        ""records"": [
+                                            {
+                                                ""value"": { ""id"": ""foo"", ""name"": ""John Doe"" }
+                                            }
+                                        ]
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }";
+            IAPIRequestContext request = await Playwright.APIRequest.NewContextAsync(new() { StorageState = storageState }).ConfigureAwait(false);
+            try
+            {
+                await request.GetAsync(EmptyPage).ConfigureAwait(false);
+                string exportedState = await request.StorageStateAsync(indexedDB: true, opfs: true).ConfigureAwait(false);
+                AssertJsonEqual(storageState, exportedState);
+            }
+            finally
+            {
+                await request.DisposeAsync().ConfigureAwait(false);
+            }
+        }
+
         private static Task<IAPIRequestContext> NewRequestAsync()
             => Playwright.APIRequest.NewContextAsync(new() { IgnoreHTTPSErrors = true });
 
