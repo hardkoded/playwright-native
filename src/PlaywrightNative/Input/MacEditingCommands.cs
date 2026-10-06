@@ -15,14 +15,16 @@
  * limitations under the License.
  */
 using System.Collections.Generic;
+using System.Linq;
 
-namespace PlaywrightNative.WebKit
+namespace PlaywrightNative.Input
 {
     /// <summary>
     /// Maps a keyboard shortcut (modifiers + physical <c>code</c>, joined with <c>+</c>) to the
-    /// macOS editing command(s) WebKit should execute for that key. WebKit applies these named
-    /// commands (e.g. <c>insertNewline:</c> for Enter) instead of inserting the raw key text,
-    /// so an Enter in a textarea produces a real newline rather than a carriage return.
+    /// macOS editing command(s) the browser should execute for that key. WebKit and Chromium on
+    /// macOS apply these named commands (e.g. <c>insertNewline:</c> for Enter, <c>selectAll:</c>
+    /// for Meta+A) because the native key bindings that would run them are not used for
+    /// synthetic key events.
     /// Ported from upstream Playwright's <c>macEditingCommands.ts</c>.
     /// </summary>
     internal static class MacEditingCommands
@@ -144,6 +146,44 @@ namespace PlaywrightNative.WebKit
             ["Meta+KeyZ"] = ["undo:"],
             ["Shift+Meta+KeyZ"] = ["redo:"],
         };
+
+        /// <summary>
+        /// Builds the shortcut string for a key press: held modifiers (in
+        /// <c>Shift+Control+Alt+Meta</c> order) followed by the physical key code, joined
+        /// with <c>+</c>. Mirrors upstream <c>wkInput.ts</c> and <c>crInput.ts</c>.
+        /// </summary>
+        /// <param name="modifiers">The held modifiers.</param>
+        /// <param name="code">The physical <c>event.code</c> of the key.</param>
+        /// <returns>The shortcut string used to look up macOS editing commands.</returns>
+        internal static string BuildShortcut(IReadOnlyCollection<KeyboardModifier> modifiers, string code)
+        {
+            List<string> parts = new();
+            if (modifiers != null)
+            {
+                if (modifiers.Contains(KeyboardModifier.Shift))
+                {
+                    parts.Add("Shift");
+                }
+
+                if (modifiers.Contains(KeyboardModifier.Control))
+                {
+                    parts.Add("Control");
+                }
+
+                if (modifiers.Contains(KeyboardModifier.Alt))
+                {
+                    parts.Add("Alt");
+                }
+
+                if (modifiers.Contains(KeyboardModifier.Meta))
+                {
+                    parts.Add("Meta");
+                }
+            }
+
+            parts.Add(code);
+            return string.Join("+", parts);
+        }
 
         /// <summary>
         /// Resolves the macOS editing command(s) for a shortcut, or an empty array when the
