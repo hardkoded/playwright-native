@@ -331,6 +331,12 @@ namespace PlaywrightNative.Chromium
         internal double TimestampSeconds { get; set; }
 
         /// <summary>
+        /// Gets or sets the browser <c>wallTime</c> from <c>Network.requestWillBeSent</c>
+        /// (milliseconds since the Unix epoch).
+        /// </summary>
+        internal double WallTimeMs { get; set; }
+
+        /// <summary>
         /// Official <c>Network.requestServedFromCache</c> / memory-cache.
         /// </summary>
         internal bool ServedFromCache { get; set; }

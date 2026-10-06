@@ -194,6 +194,57 @@ namespace PlaywrightNative.Tests
             await context.Tracing.StopAsync().ConfigureAwait(false);
         }
 
+        [PlaywrightTest("tracing.spec.ts", "start should return a disposable that discards the trace")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public async Task StartShouldReturnADisposableThatDiscardsTheTrace()
+        {
+            string path = Path.Combine(Path.GetTempPath(), "pwsharp-trace-" + Path.GetRandomFileName() + ".zip");
+            try
+            {
+                await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
+                await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
+                IPage page = await context.NewPageAsync().ConfigureAwait(false);
+                IAsyncDisposable disposable = await context.Tracing.StartAsync(name: default).ConfigureAwait(false);
+                await page.GoToAsync(EmptyPage).ConfigureAwait(false);
+                await disposable.DisposeAsync().ConfigureAwait(false);
+                PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
+                    () => context.Tracing.StopAsync(new TracingStopOptions { Path = path }));
+                Assert.That(error, Is.Not.Null);
+                Assert.That(error.Message, Does.Contain("Must start tracing before stopping"));
+            }
+            finally
+            {
+                TryDelete(path);
+            }
+        }
+
+        [PlaywrightTest("tracing.spec.ts", "startChunk should return a disposable that discards the chunk")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public async Task StartChunkShouldReturnADisposableThatDiscardsTheChunk()
+        {
+            string path = Path.Combine(Path.GetTempPath(), "pwsharp-trace-" + Path.GetRandomFileName() + ".zip");
+            try
+            {
+                await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
+                await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
+                IPage page = await context.NewPageAsync().ConfigureAwait(false);
+                await context.Tracing.StartAsync().ConfigureAwait(false);
+                IAsyncDisposable disposable = await context.Tracing.StartChunkAsync(name: default).ConfigureAwait(false);
+                await page.GoToAsync(EmptyPage).ConfigureAwait(false);
+                await disposable.DisposeAsync().ConfigureAwait(false);
+                PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
+                    () => context.Tracing.StopChunkAsync(new TracingStopChunkOptions { Path = path }));
+                Assert.That(error, Is.Not.Null);
+                Assert.That(error.Message, Does.Contain("Must start tracing before stopping"));
+            }
+            finally
+            {
+                TryDelete(path);
+            }
+        }
+
         [PlaywrightTest("tracing.spec.ts", "should use the correct title for event driven callbacks")]
         [Test]
         [Timeout(TestConstants.DefaultTestTimeout)]

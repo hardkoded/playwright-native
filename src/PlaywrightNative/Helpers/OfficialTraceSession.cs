@@ -52,6 +52,7 @@ namespace PlaywrightNative.Helpers
         private readonly bool _apiOnly;
         private TracingStartOptions _options;
         private bool _recording;
+        private bool _chunkRecording;
         private bool _networkAttached;
         private int _callId;
         private int _shaIndex;
@@ -170,6 +171,7 @@ namespace PlaywrightNative.Helpers
 
                 _options = next;
                 _recording = true;
+                _chunkRecording = true;
                 _traceLines.Clear();
                 _resources.Clear();
                 _chunkCallIds.Clear();
@@ -842,7 +844,9 @@ namespace PlaywrightNative.Helpers
                 string tracesDir;
                 lock (_gate)
                 {
-                    if (!_recording)
+                    // Upstream ends the chunk on every stopChunk; a second stopChunk
+                    // (or an exporting stop) without a new startChunk has nothing to save.
+                    if (!_recording || (!_chunkRecording && (keepRecording || !string.IsNullOrEmpty(path))))
                     {
                         if (!string.IsNullOrEmpty(path))
                         {
@@ -912,6 +916,7 @@ namespace PlaywrightNative.Helpers
                     }
                     else
                     {
+                        _chunkRecording = false;
                         WriteContextOptions();
                     }
                 }
