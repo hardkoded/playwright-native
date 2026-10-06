@@ -55,6 +55,8 @@ namespace PlaywrightNative.Tests
             internal int Height { get; init; }
 
             internal double Duration { get; init; }
+
+            internal double Fps { get; init; }
         }
 
         internal static bool IsAlmostRed(Pixel pixel)
@@ -73,18 +75,21 @@ namespace PlaywrightNative.Tests
         {
             string output = Run(
                 "ffprobe",
-                "-v error -select_streams v:0 -show_entries stream=width,height -show_entries format=duration -of csv=p=0 " + Quote(videoFile));
+                "-v error -select_streams v:0 -show_entries stream=width,height,avg_frame_rate -show_entries format=duration -of csv=p=0 " + Quote(videoFile));
             string[] lines = output.Replace(',', ' ').Split((char[])null, StringSplitOptions.RemoveEmptyEntries);
-            if (lines.Length < 3)
+            if (lines.Length < 4)
             {
                 throw new InvalidOperationException("ffprobe failed for " + videoFile + ": " + output);
             }
 
+            // Upstream videoPlayer.ts reads the "<n> fps" ffmpeg prints, which is avg_frame_rate.
+            string[] rate = lines[2].Split('/');
             return new Probe
             {
                 Width = int.Parse(lines[0], CultureInfo.InvariantCulture),
                 Height = int.Parse(lines[1], CultureInfo.InvariantCulture),
-                Duration = double.Parse(lines[2], CultureInfo.InvariantCulture),
+                Fps = double.Parse(rate[0], CultureInfo.InvariantCulture) / (rate.Length > 1 ? double.Parse(rate[1], CultureInfo.InvariantCulture) : 1),
+                Duration = double.Parse(lines[3], CultureInfo.InvariantCulture),
             };
         }
 

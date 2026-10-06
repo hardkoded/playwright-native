@@ -19,6 +19,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using Microsoft.Playwright;
+using PlaywrightNative.Compat;
 using PlaywrightNative.Helpers;
 
 namespace PlaywrightNative.Chromium
@@ -46,7 +47,7 @@ namespace PlaywrightNative.Chromium
         }
 
         /// <inheritdoc/>
-        public async Task<IAsyncDisposable> StartAsync(Func<ScreencastFrame, Task> onFrame = default, int quality = default, int width = default, int height = default, string path = default)
+        public async Task<IAsyncDisposable> StartAsync(Func<ScreencastFrame, Task> onFrame = default, int quality = default, int width = default, int height = default, string path = default, int? fps = default)
         {
             ThrowIfClosed();
             lock (_gate)
@@ -54,6 +55,11 @@ namespace PlaywrightNative.Chromium
                 if (_started)
                 {
                     throw new PlaywrightException("Screencast is already started");
+                }
+
+                if (fps <= 0)
+                {
+                    throw new PlaywrightException($"\"fps\" must be a positive number, got {fps}");
                 }
 
                 _started = true;
@@ -79,7 +85,7 @@ namespace PlaywrightNative.Chromium
 
             if (!string.IsNullOrEmpty(path))
             {
-                _video = ScreencastVideoWriter.Start(path, maxWidth, maxHeight);
+                _video = ScreencastVideoWriter.Start(path, maxWidth, maxHeight, fps);
             }
 
             _artifactsVideo = ScreencastArtifacts.TryStart(_page, maxWidth, maxHeight);
@@ -626,7 +632,8 @@ namespace PlaywrightNative.Chromium
                 options?.Quality ?? 0,
                 options?.Size?.Width ?? 0,
                 options?.Size?.Height ?? 0,
-                options?.Path);
+                options?.Path,
+                (options as LegacyScreencastStartOptions)?.Fps);
 #pragma warning restore SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
     }
 }

@@ -15,9 +15,12 @@
  * limitations under the License.
  */
 using System;
+using System.Linq;
 using System.Threading.Tasks;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
+using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.PixelFormats;
 
 namespace PlaywrightNative.Tests
 {
@@ -29,6 +32,18 @@ namespace PlaywrightNative.Tests
     [NonParallelizable]
     public class LibraryScreencastOverlayParityTests : PageTestEx
     {
+        private const string DialogPage = @"
+    <dialog id=""target"" style=""position: fixed; inset: 0; margin: 0; width: 100vw; height: 100vh; padding: 0; border: 0; background: rgb(200, 200, 200);""></dialog>
+    <button onclick=""target.showModal()"">Open</button>
+  ";
+
+        private const string PopoverPage = @"
+    <div id=""target"" popover=""manual"" style=""inset: 0; margin: 0; width: 100%; height: 100%; max-width: none; max-height: none; padding: 0; border: 0; background: rgb(200, 200, 200);""></div>
+    <button onclick=""target.showPopover()"">Open</button>
+  ";
+
+        private const string RedOverlay = "<div style=\"position: absolute; top: 50px; left: 50px; width: 200px; height: 100px; background: rgb(255, 0, 0);\"></div>";
+
         private static string EmptyPage => TestConstants.EmptyPage;
 
         private static async Task GoEmptyAsync(IPage page)
@@ -214,6 +229,84 @@ namespace PlaywrightNative.Tests
             string color = await page.Locator("#styled").EvaluateAsync<string>("el => getComputedStyle(el).color")
                 .ConfigureAwait(false);
             Assert.That(color, Is.EqualTo("rgb(255, 0, 0)"));
+        }
+
+        [PlaywrightTest("screencast-overlay.spec.ts", "should show overlay above dialog opened before it")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public Task ShouldShowOverlayAboveDialogOpenedBeforeIt()
+            => ShouldShowOverlayAboveTopLayerOpenedBeforeItAsync(DialogPage);
+
+        [PlaywrightTest("screencast-overlay.spec.ts", "should keep overlay above dialog opened after it")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public Task ShouldKeepOverlayAboveDialogOpenedAfterIt()
+            => ShouldKeepOverlayAboveTopLayerOpenedAfterItAsync(DialogPage);
+
+        [PlaywrightTest("screencast-overlay.spec.ts", "should show overlay above popover opened before it")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public Task ShouldShowOverlayAbovePopoverOpenedBeforeIt()
+            => ShouldShowOverlayAboveTopLayerOpenedBeforeItAsync(PopoverPage);
+
+        [PlaywrightTest("screencast-overlay.spec.ts", "should keep overlay above popover opened after it")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public Task ShouldKeepOverlayAbovePopoverOpenedAfterIt()
+            => ShouldKeepOverlayAboveTopLayerOpenedAfterItAsync(PopoverPage);
+
+        private static async Task ShouldShowOverlayAboveTopLayerOpenedBeforeItAsync(string content)
+        {
+            await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
+            await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
+            IPage page = await context.NewPageAsync().ConfigureAwait(false);
+            await page.SetContentAsync(content).ConfigureAwait(false);
+            IAsyncDisposable disposable = await page.Screencast.ShowOverlayAsync("<div></div>").ConfigureAwait(false);
+            await disposable.DisposeAsync().ConfigureAwait(false);
+
+            await page.GetByRole(AriaRole.Button, new() { Name = "Open" }).ClickAsync().ConfigureAwait(false);
+            Assert.That(Pixel(await page.ScreenshotAsync().ConfigureAwait(false), 100, 100), Is.EqualTo(new[] { 200, 200, 200 }));
+
+            await page.Screencast.ShowOverlayAsync(RedOverlay).ConfigureAwait(false);
+            Assert.That(Pixel(await page.ScreenshotAsync().ConfigureAwait(false), 100, 100), Is.EqualTo(new[] { 255, 0, 0 }));
+
+            await context.CloseAsync().ConfigureAwait(false);
+        }
+
+        private static async Task ShouldKeepOverlayAboveTopLayerOpenedAfterItAsync(string content)
+        {
+            await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
+            await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
+            IPage page = await context.NewPageAsync().ConfigureAwait(false);
+            await page.SetContentAsync(content).ConfigureAwait(false);
+            await page.Screencast.ShowOverlayAsync(RedOverlay).ConfigureAwait(false);
+            Assert.That(Pixel(await page.ScreenshotAsync().ConfigureAwait(false), 100, 100), Is.EqualTo(new[] { 255, 0, 0 }));
+
+            await page.GetByRole(AriaRole.Button, new() { Name = "Open" }).ClickAsync().ConfigureAwait(false);
+            int[] pixel = null;
+            DateTime deadline = DateTime.UtcNow.AddSeconds(5);
+            do
+            {
+                pixel = Pixel(await page.ScreenshotAsync().ConfigureAwait(false), 100, 100);
+                if (pixel.SequenceEqual(new[] { 255, 0, 0 }))
+                {
+                    break;
+                }
+
+                await Task.Delay(100).ConfigureAwait(false);
+            }
+            while (DateTime.UtcNow < deadline);
+
+            Assert.That(pixel, Is.EqualTo(new[] { 255, 0, 0 }));
+
+            await context.CloseAsync().ConfigureAwait(false);
+        }
+
+        private static int[] Pixel(byte[] screenshot, int x, int y)
+        {
+            using Image<Rgba32> png = Image.Load<Rgba32>(screenshot);
+            Rgba32 color = png[x, y];
+            return new int[] { color.R, color.G, color.B };
         }
     }
 }

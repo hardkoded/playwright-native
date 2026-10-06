@@ -178,6 +178,25 @@ namespace PlaywrightNative.Compat
         public float? PollingInterval { get; set; }
     }
 
+    /// <summary>Browser new-context options with the official <c>recordVideo.fps</c>.</summary>
+    public class LegacyBrowserNewContextOptions : Microsoft.Playwright.BrowserNewContextOptions
+    {
+        /// <summary>
+        /// Frame rate of the recorded videos in frames per second. Defaults to <c>25</c>.
+        /// </summary>
+        public int? RecordVideoFps { get; set; }
+    }
+
+    /// <summary>Screencast start options with the official <c>fps</c>.</summary>
+    public class LegacyScreencastStartOptions : Microsoft.Playwright.ScreencastStartOptions
+    {
+        /// <summary>
+        /// Frame rate of the video recording in frames per second. Only used together
+        /// with <see cref="Microsoft.Playwright.ScreencastStartOptions.Path"/>. Defaults to <c>25</c>.
+        /// </summary>
+        public int? Fps { get; set; }
+    }
+
     /// <summary>Legacy persistent-context launch options.</summary>
     public class LegacyBrowserTypeLaunchPersistentContextOptions : Microsoft.Playwright.BrowserTypeLaunchPersistentContextOptions
     {

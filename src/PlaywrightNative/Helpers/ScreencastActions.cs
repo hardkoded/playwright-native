@@ -55,15 +55,15 @@ namespace PlaywrightNative.Helpers
             "ap.style.margin='-10px 0 0 -10px';ap.style.left=cx+'px';ap.style.top=cy+'px';ap.style.zIndex='2';}" +
             "else{hide(host.querySelector('x-pw-highlight'));hide(host.querySelector('x-pw-action-point'));}" +
             "var cur=host.querySelector('x-pw-action-cursor');" +
-            "if(arg.cursor&&arg.box){if(!cur){cur=document.createElement('x-pw-action-cursor');" +
+            "if(arg.cursor&&arg.point){if(!cur){cur=document.createElement('x-pw-action-cursor');" +
             "cur.setAttribute('data-pw-screencast-action-cursor','1');" +
             "cur.style.position='absolute';cur.style.width='18px';cur.style.height='22px';" +
             "cur.style.background='#fff';cur.style.border='2px solid #000';cur.style.boxSizing='border-box';" +
             "cur.style.zIndex='4';cur.style.pointerEvents='none';host.appendChild(cur);}" +
             "cur.removeAttribute('hidden');cur.style.display='block';cur.style.visibility='visible';" +
-            "cur.style.transition='top 200ms ease, left 200ms ease';" +
-            "cur.style.left=Math.round(cx)+'px';cur.style.top=Math.round(cy)+'px';}" +
-            "else{hide(cur);}" +
+            "cur.style.transition=arg.restore?'':'top 200ms ease, left 200ms ease';" +
+            "cur.style.left=Math.round(arg.point.x)+'px';cur.style.top=Math.round(arg.point.y)+'px';}" +
+            "else if(!arg.cursor){hide(cur);}" +
             "if(arg.title){var t=show('x-pw-title','data-pw-screencast-action-title');t.textContent=arg.title;" +
             "t.style.position='absolute';t.style.color='#fff';t.style.backgroundColor='rgba(0, 0, 0, 0.5)';" +
             "t.style.borderRadius='6px';t.style.padding='6px';t.style.fontFamily='sans-serif';" +
@@ -80,11 +80,20 @@ namespace PlaywrightNative.Helpers
 
         private const string HideAnnotationsFunction =
             "(function(){var host=document.getElementById('pw-screencast-actions');if(!host)return;" +
-            "var tags=['x-pw-highlight','x-pw-action-point','x-pw-title','x-pw-action-cursor'];" +
+            "var tags=['x-pw-highlight','x-pw-action-point','x-pw-title'];" +
             "for(var i=0;i<tags.length;i++){var n=host.querySelector(tags[i]);" +
             "if(n){n.setAttribute('hidden','true');n.style.display='none';n.style.visibility='hidden';}}})()";
 
+        private const string HideCursorFunction =
+            "(function(){var host=document.getElementById('pw-screencast-actions');if(!host)return;" +
+            "var n=host.querySelector('x-pw-action-cursor');" +
+            "if(n){n.setAttribute('hidden','true');n.style.display='none';n.style.visibility='hidden';}})()";
+
         private static readonly ConditionalWeakTable<IPage, Options> Sessions = new();
+
+        // Official screencast.ts _cursorPoint: the cursor outlives the annotation and
+        // stays at the last action point until hideActions, across navigations.
+        private static readonly ConditionalWeakTable<IPage, CursorState> Cursors = new();
 
         internal static void Show(IPage page, float? duration, AnnotatePosition position, int fontSize, ScreencastCursor cursor)
         {
@@ -106,6 +115,11 @@ namespace PlaywrightNative.Helpers
                 FontSize = fontSize > 0 ? fontSize : 24,
                 Cursor = cursor == EnumCompat.UndefinedScreencastCursor ? ScreencastCursor.Pointer : cursor,
             });
+
+            if (cursor == ScreencastCursor.None)
+            {
+                _ = HideCursorAsync(page);
+            }
         }
 
         internal static Task HideAsync(IPage page)
@@ -119,6 +133,11 @@ namespace PlaywrightNative.Helpers
             {
                 options.BumpGeneration();
                 Sessions.Remove(page);
+            }
+
+            if (Cursors.TryGetValue(page, out CursorState cursor))
+            {
+                cursor.Point = null;
             }
 
             return RemoveOverlayAsync(page);
@@ -156,8 +175,16 @@ namespace PlaywrightNative.Helpers
             {
             }
 
+            Position point = box == null
+                ? null
+                : new Position { X = box.X + (box.Width / 2), Y = box.Y + (box.Height / 2) };
+            if (point != null && options.Cursor == ScreencastCursor.Pointer)
+            {
+                RememberCursor(page, point);
+            }
+
             int generation = options.BumpGeneration();
-            await PaintAsync(page, TitleFromApiName(apiName), box, options).ConfigureAwait(false);
+            await PaintAsync(page, TitleFromApiName(apiName), box, point, options).ConfigureAwait(false);
             await Task.Delay(TimeSpan.FromMilliseconds(options.Duration)).ConfigureAwait(false);
             if (options.CurrentGeneration == generation)
             {
@@ -196,11 +223,66 @@ namespace PlaywrightNative.Helpers
             return char.ToUpperInvariant(last[0]) + last.Substring(1);
         }
 
-        private static async Task PaintAsync(IPage page, string title, ElementHandleBoundingBoxResult box, Options options)
+        private static void RememberCursor(IPage page, Position point)
+        {
+            CursorState state = Cursors.GetValue(page, static target =>
+            {
+                target.DOMContentLoaded += (_, _) => _ = RestoreCursorAsync(target);
+                return new CursorState();
+            });
+            state.Point = point;
+        }
+
+        /// <summary>
+        /// Official <c>restoreScreencastCursor</c>: a new document starts without the
+        /// cursor, so paint it back at the last action point.
+        /// </summary>
+        private static async Task RestoreCursorAsync(IPage page)
+        {
+            if (!Cursors.TryGetValue(page, out CursorState state) || state.Point is not Position point)
+            {
+                return;
+            }
+
+            string payload = JsonSerializer.Serialize(new
+            {
+                cursor = true,
+                restore = true,
+                point = new { x = point.X, y = point.Y },
+            });
+            try
+            {
+                await page.EvaluateAsync(PaintFunction + "(" + payload + ")").ConfigureAwait(false);
+            }
+            catch (PlaywrightException)
+            {
+            }
+        }
+
+        private static async Task HideCursorAsync(IPage page)
+        {
+            if (Cursors.TryGetValue(page, out CursorState state))
+            {
+                state.Point = null;
+            }
+
+            try
+            {
+                await page.EvaluateAsync(HideCursorFunction).ConfigureAwait(false);
+            }
+            catch (PlaywrightException)
+            {
+            }
+        }
+
+        private static async Task PaintAsync(IPage page, string title, ElementHandleBoundingBoxResult box, Position point, Options options)
         {
             object boxPayload = box == null
                 ? null
                 : new { x = box.X, y = box.Y, width = box.Width, height = box.Height };
+            object pointPayload = point == null
+                ? null
+                : new { x = point.X, y = point.Y };
             string payload = JsonSerializer.Serialize(new
             {
                 title,
@@ -208,6 +290,7 @@ namespace PlaywrightNative.Helpers
                 fontSize = options.FontSize,
                 cursor = options.Cursor == ScreencastCursor.Pointer,
                 box = boxPayload,
+                point = pointPayload,
             });
 
             try
@@ -276,6 +359,12 @@ namespace PlaywrightNative.Helpers
             internal int CurrentGeneration => Volatile.Read(ref _generation);
 
             internal int BumpGeneration() => Interlocked.Increment(ref _generation);
+        }
+
+        private sealed class CursorState
+        {
+            /// <summary>Gets or sets the last action point, or <see langword="null"/> when hidden.</summary>
+            internal Position Point { get; set; }
         }
     }
 }

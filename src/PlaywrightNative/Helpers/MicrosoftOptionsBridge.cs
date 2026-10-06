@@ -18,6 +18,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Microsoft.Playwright;
+using PlaywrightNative.Compat;
 
 namespace PlaywrightNative.Helpers
 {
@@ -220,6 +221,7 @@ namespace PlaywrightNative.Helpers
                 RecordHarUrlRegex = options.RecordHarUrlFilterRegex,
                 RecordVideoDir = options.RecordVideoDir,
                 RecordVideoSize = options.RecordVideoSize,
+                RecordVideoFps = (options as LegacyBrowserNewContextOptions)?.RecordVideoFps,
                 ServiceWorkers = options.ServiceWorkers ?? default,
                 ScreenSize = options.ScreenSize,
                 Proxy = options.Proxy,

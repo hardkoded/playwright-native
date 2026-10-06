@@ -305,6 +305,33 @@ namespace PlaywrightNative.Tests
             await context.CloseAsync().ConfigureAwait(false);
         }
 
+        [PlaywrightTest("screencast-actions.spec.ts", "cursor stays at the last action point until hideActions")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public async Task CursorStaysAtTheLastActionPointUntilHideActions()
+        {
+            await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
+            await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
+            IPage page = await context.NewPageAsync().ConfigureAwait(false);
+            await page.GoToAsync(ButtonUrl).ConfigureAwait(false);
+
+            await page.Screencast.ShowActionsAsync(new() { Duration = 100 }).ConfigureAwait(false);
+            await page.ClickAsync("button").ConfigureAwait(false);
+            await Assertions.Expect(page.Locator("x-pw-title")).ToBeHiddenAsync().ConfigureAwait(false);
+            ILocator cursor = page.Locator("x-pw-action-cursor");
+            await Assertions.Expect(cursor).ToBeVisibleAsync().ConfigureAwait(false);
+            string position = await cursor.EvaluateAsync<string>("el => JSON.stringify({ top: el.style.top, left: el.style.left })").ConfigureAwait(false);
+
+            await page.GoToAsync(TestConstants.EmptyPage).ConfigureAwait(false);
+            await Assertions.Expect(cursor).ToBeVisibleAsync().ConfigureAwait(false);
+            Assert.That(await cursor.EvaluateAsync<string>("el => JSON.stringify({ top: el.style.top, left: el.style.left })").ConfigureAwait(false), Is.EqualTo(position));
+
+            await page.Screencast.HideActionsAsync().ConfigureAwait(false);
+            await Assertions.Expect(cursor).ToBeHiddenAsync().ConfigureAwait(false);
+
+            await context.CloseAsync().ConfigureAwait(false);
+        }
+
         [PlaywrightTest("screencast-actions.spec.ts", "should survive navigation")]
         [Test]
         [Timeout(TestConstants.DefaultTestTimeout)]
