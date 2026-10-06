@@ -26,7 +26,7 @@ namespace PlaywrightNative.Tests
     /// </summary>
     [TestFixture]
     [NonParallelizable]
-    public class LibraryWebmcpDisabledParityTests : PageTestEx
+    public class WebmcpDisabledTests : PageTestEx
     {
         [SetUp]
         public void SkipWebKit()

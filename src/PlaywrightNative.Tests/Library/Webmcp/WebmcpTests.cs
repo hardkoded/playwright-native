@@ -34,7 +34,7 @@ namespace PlaywrightNative.Tests
     /// </summary>
     [TestFixture]
     [NonParallelizable]
-    public class LibraryWebmcpParityTests : PlaywrightTestEx
+    public class WebmcpTests : PlaywrightTestEx
     {
         private const string AddTool = @"
   modelContext.registerTool({
