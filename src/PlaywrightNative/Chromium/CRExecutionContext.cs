@@ -584,6 +584,11 @@ namespace PlaywrightNative.Chromium
                 {
                     message = description.GetString();
                 }
+                else if (!exception.TryGetProperty("value", out JsonElement rawValue) || rawValue.ValueKind == JsonValueKind.Null)
+                {
+                    // Official getExceptionMessage: String(exception.value) for thrown null / undefined.
+                    message = rawValue.ValueKind == JsonValueKind.Null ? "null" : "undefined";
+                }
 
                 if (exception.TryGetProperty("value", out JsonElement thrown)
                     && thrown.ValueKind != JsonValueKind.Undefined

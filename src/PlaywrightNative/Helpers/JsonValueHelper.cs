@@ -41,12 +41,12 @@ namespace PlaywrightNative.Helpers
         internal const string SerializeFunction = EvaluateSerialization.SerializeJs;
 
         /// <summary>
-        /// Returns own and inherited (prototype) property names, or an empty list for
-        /// primitives / <c>null</c>. Stops at <c>Object.prototype</c> so <c>getProperties</c>
-        /// includes constructor-assigned parent fields without walking built-ins.
+        /// Returns own enumerable data property names, or an empty list for
+        /// primitives / <c>null</c>. Matches the protocol <c>getProperties</c>
+        /// filter (<c>ownProperties</c>, enumerable, has a value).
         /// </summary>
         internal const string EnumerablePropertyNamesFunction =
-            "o => { if (o === null || o === undefined || (typeof o !== 'object' && typeof o !== 'function')) return []; const names = []; const seen = new Set(); for (let obj = o; obj && obj !== Object.prototype; obj = Object.getPrototypeOf(obj)) { const own = Object.getOwnPropertyNames(obj); for (let i = 0; i < own.length; i++) { const name = own[i]; if (!seen.has(name)) { seen.add(name); names.push(name); } } } return names; }";
+            "o => { if (o === null || o === undefined || (typeof o !== 'object' && typeof o !== 'function')) return []; return Object.keys(o).filter(name => { const descriptor = Object.getOwnPropertyDescriptor(o, name); return !!descriptor && 'value' in descriptor; }); }";
 
         private static readonly JsonSerializerOptions PreserveOptions = new JsonSerializerOptions
         {
