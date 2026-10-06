@@ -300,6 +300,20 @@ namespace PlaywrightNative.Tests
             Assert.That(result, Is.EqualTo("Object {}"));
         }
 
+        [PlaywrightTest("page-evaluate.spec.ts", "should transfer sets as empty objects")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public async Task ShouldTransferSetsAsEmptyObjects()
+        {
+            string result = await Page.EvaluateAsync<string>(
+                "a => a.x.constructor.name + ' ' + JSON.stringify(a.x)",
+                new Dictionary<string, object> { ["x"] = new HashSet<int> { 1, 2 } })
+                .ConfigureAwait(false);
+            Assert.That(result, Is.EqualTo("Object {}"));
+            Dictionary<string, object> set = await Page.EvaluateAsync<Dictionary<string, object>>("() => new Set([1, 2])").ConfigureAwait(false);
+            Assert.That(set, Is.Empty);
+        }
+
         [PlaywrightTest("page-evaluate.spec.ts", "should modify global environment")]
         [Test]
         [Timeout(TestConstants.DefaultTestTimeout)]
@@ -480,6 +494,35 @@ namespace PlaywrightNative.Tests
                 () => Page.EvaluateAsync<object>("() => { throw 100500; }"));
             Assert.That(error, Is.Not.Null);
             Assert.That(error.Message, Does.Contain("100500"));
+        }
+
+        [PlaywrightTest("page-evaluate.spec.ts", "should reject when a falsy value is thrown")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public void ShouldRejectWhenAFalsyValueIsThrown()
+        {
+            foreach (string value in new[] { "null", "undefined", "0", "''", "false", "NaN", "-0", "0n" })
+            {
+                Assert.CatchAsync<PlaywrightException>(
+                    () => Page.EvaluateAsync<object>($"(() => {{ throw {value}; }})()"),
+                    $"throw {value}");
+                Assert.CatchAsync<PlaywrightException>(
+                    () => Page.EvaluateAsync<object>($"Promise.reject({value})"),
+                    $"Promise.reject({value})");
+            }
+        }
+
+        [PlaywrightTest("page-evaluate.spec.ts", "should include a non-error rejection value in the error message")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public void ShouldIncludeANonErrorRejectionValueInTheErrorMessage()
+        {
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
+                () => Page.EvaluateAsync<object>("() => Promise.reject(7)"));
+            Assert.That(error.Message, Does.Contain("7"));
+            PlaywrightException nullError = Assert.CatchAsync<PlaywrightException>(
+                () => Page.EvaluateAsync<object>("() => { throw null; }"));
+            Assert.That(nullError.Message, Does.Contain("null"));
         }
 
         [PlaywrightTest("page-evaluate.spec.ts", "should return complex objects")]

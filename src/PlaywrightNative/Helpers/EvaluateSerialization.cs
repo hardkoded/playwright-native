@@ -658,7 +658,7 @@ namespace PlaywrightNative.Helpers
                 return new Dictionary<string, object> { ["ref"] = existing };
             }
 
-            if (IsNonStringKeyDictionary(value))
+            if (IsNonStringKeyDictionary(value) || IsSet(value))
             {
                 int emptyId = ++ids.Value;
                 seen[value] = emptyId;
@@ -847,6 +847,10 @@ namespace PlaywrightNative.Helpers
             };
             return true;
         }
+
+        // JS Set has no own enumerable keys, so it serializes as an empty object.
+        private static bool IsSet(object value)
+            => Array.Exists(value.GetType().GetInterfaces(), i => i.IsGenericType && i.GetGenericTypeDefinition() == typeof(ISet<>));
 
         private static bool IsNonStringKeyDictionary(object value)
         {
