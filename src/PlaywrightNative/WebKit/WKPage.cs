@@ -550,7 +550,7 @@ namespace PlaywrightNative.WebKit
 
         /// <inheritdoc/>
         public Task<string> ContentAsync()
-            => PageContent.ReadAsync(() => EvaluateExpressionAsync<string>(PageContent.EvaluateExpression));
+            => ContentAsync(includeShadow: false);
 
         /// <summary>
         /// Emulates CSS media features on the page via the inner target session. Maps
@@ -2068,6 +2068,12 @@ namespace PlaywrightNative.WebKit
             ActionScroll scroll = default,
             bool? strict = default)
             => DragAndDropHelper.RunAsync(this, source, target, sourcePosition, targetPosition, force, timeout, trial, steps, scroll, strict);
+
+        /// <summary>Returns the page HTML, optionally including open shadow roots.</summary>
+        /// <param name="includeShadow">Whether to serialize open shadow roots as declarative shadow DOM.</param>
+        /// <returns>The serialized document HTML.</returns>
+        internal Task<string> ContentAsync(bool includeShadow)
+            => PageContent.ReadAsync(() => EvaluateExpressionAsync<string>(PageContent.Expression(includeShadow)));
 
         /// <summary>
         /// Fires <see cref="Popup"/> for a page opened from this page.

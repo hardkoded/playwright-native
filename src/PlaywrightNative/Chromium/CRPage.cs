@@ -2001,9 +2001,10 @@ namespace PlaywrightNative.Chromium
         /// <summary>
         /// Returns the full HTML of the current document, including doctype and root element.
         /// </summary>
+        /// <param name="includeShadow">Whether to serialize open shadow roots as declarative shadow DOM.</param>
         /// <returns>The serialized document HTML.</returns>
-        internal Task<string> ContentAsync()
-            => PageContent.ReadAsync(() => EvaluateAsync<string>(PageContent.EvaluateExpression));
+        internal Task<string> ContentAsync(bool includeShadow = false)
+            => PageContent.ReadAsync(() => EvaluateAsync<string>(PageContent.Expression(includeShadow)));
 
         /// <summary>
         /// Adds a <c>&lt;script&gt;</c> tag to the page by URL or inline content. For URL
