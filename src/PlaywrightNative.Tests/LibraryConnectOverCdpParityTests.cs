@@ -159,6 +159,145 @@ namespace PlaywrightNative.Tests
             }).ConfigureAwait(false);
         }
 
+        [PlaywrightTest("connect-over-cdp.spec.ts", "should connect when an existing page has no renderer")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public async Task ShouldConnectWhenAnExistingPageHasNoRenderer()
+        {
+            EnsureServer();
+            await WithHostAsync(async (host, endpoint) =>
+            {
+                // Prepare a page without a renderer, e.g. one discarded by the Memory Saver.
+                IBrowser cdpBrowser1 = await Playwright.Chromium.ConnectOverCDPAsync(endpoint).ConfigureAwait(false);
+                IBrowserContext context1 = FirstContext(cdpBrowser1);
+                IPage healthyPage1 = await context1.NewPageAsync().ConfigureAwait(false);
+                await healthyPage1.GoToAsync(Prefix + "/title.html").ConfigureAwait(false);
+                IPage crashedPage1 = await context1.NewPageAsync().ConfigureAwait(false);
+                await crashedPage1.GoToAsync(TestConstants.EmptyPage).ConfigureAwait(false);
+                Task<IPage> crashTask = crashedPage1.WaitForCrashAsync();
+                _ = crashedPage1.GoToAsync("chrome://crash").ContinueWith(_ => { }, TaskScheduler.Default);
+                await crashTask.ConfigureAwait(false);
+                await cdpBrowser1.CloseAsync().ConfigureAwait(false);
+
+                // Connecting again should not hang on the page without a renderer,
+                // and should not report it at all.
+                IBrowser cdpBrowser2 = await Playwright.Chromium.ConnectOverCDPAsync(endpoint).ConfigureAwait(false);
+                IReadOnlyList<IPage> pages = FirstContext(cdpBrowser2).Pages;
+                Assert.That(pages.Select(page => page.Url), Is.EqualTo(new[] { Prefix + "/title.html" }));
+                Assert.That(await pages[0].TitleAsync().ConfigureAwait(false), Is.EqualTo("Woof-Woof"));
+                await cdpBrowser2.CloseAsync().ConfigureAwait(false);
+            }).ConfigureAwait(false);
+        }
+
+        [PlaywrightTest("connect-over-cdp.spec.ts", "should connect when the opener of an existing page has no renderer")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public async Task ShouldConnectWhenTheOpenerOfAnExistingPageHasNoRenderer()
+        {
+            EnsureServer();
+
+            // The popup should be in a different process to survive the crash of the opener.
+            await WithHostAsync(
+                async (host, endpoint) =>
+                {
+                    IBrowser cdpBrowser1 = await Playwright.Chromium.ConnectOverCDPAsync(endpoint).ConfigureAwait(false);
+                    IPage crashedPage1 = await FirstContext(cdpBrowser1).NewPageAsync().ConfigureAwait(false);
+                    await crashedPage1.GoToAsync(TestConstants.EmptyPage).ConfigureAwait(false);
+                    Task<IPage> popupTask = crashedPage1.WaitForPopupAsync();
+                    await crashedPage1.EvaluateAsync("url => { window.open(url); }", TestConstants.CrossProcessUrl + "/title.html").ConfigureAwait(false);
+                    IPage popup1 = await popupTask.ConfigureAwait(false);
+                    await popup1.WaitForLoadStateAsync().ConfigureAwait(false);
+                    Task<IPage> crashTask = crashedPage1.WaitForCrashAsync();
+                    _ = crashedPage1.GoToAsync("chrome://crash").ContinueWith(_ => { }, TaskScheduler.Default);
+                    await crashTask.ConfigureAwait(false);
+                    await cdpBrowser1.CloseAsync().ConfigureAwait(false);
+
+                    // Connecting again should not report the opener, and should not wait for it.
+                    IBrowser cdpBrowser2 = await Playwright.Chromium.ConnectOverCDPAsync(endpoint).ConfigureAwait(false);
+                    IReadOnlyList<IPage> pages = FirstContext(cdpBrowser2).Pages;
+                    Assert.That(pages.Select(page => page.Url), Is.EqualTo(new[] { TestConstants.CrossProcessUrl + "/title.html" }));
+                    Assert.That(await pages[0].TitleAsync().ConfigureAwait(false), Is.EqualTo("Woof-Woof"));
+                    Assert.That(await pages[0].OpenerAsync().ConfigureAwait(false), Is.Null);
+                    await cdpBrowser2.CloseAsync().ConfigureAwait(false);
+                },
+                "--site-per-process").ConfigureAwait(false);
+        }
+
+        [PlaywrightTest("connect-over-cdp.spec.ts", "should connect when an existing page has been discarded")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public async Task ShouldConnectWhenAnExistingPageHasBeenDiscarded()
+        {
+            EnsureServer();
+            if (string.IsNullOrEmpty(BrowserExecutableFixture.ChromiumExecutablePath))
+            {
+                Assert.Ignore("Chromium executable not available (download skipped or failed).");
+            }
+
+            int port = FreeCdpPort();
+            string userDataDir = Path.Combine(Path.GetTempPath(), "pwsharp-cdp-discard-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(userDataDir);
+
+            // chrome://discards is an internal debug page that is only available with this pref.
+            await File.WriteAllTextAsync(Path.Combine(userDataDir, "Local State"), "{\"internal_only_uis_enabled\":true}").ConfigureAwait(false);
+            IBrowserContext context = await Playwright.Chromium.LaunchPersistentContextAsync(userDataDir, new BrowserTypeLaunchPersistentContextOptions
+            {
+                ExecutablePath = BrowserExecutableFixture.ChromiumExecutablePath,
+                Headless = false,
+
+                // Emulating the viewport of a discarded tab crashes the browser in
+                // WebContentsImpl::SetDeviceEmulationSize, because it has no view.
+                ViewportSize = ViewportSize.NoViewport,
+                Args = new[]
+                {
+                    "--remote-debugging-port=" + port,
+
+                    // Chrome refuses to discard tabs with DevTools attached, and we attach to all of them.
+                    "--enable-features=AllowDevtoolsConnectedDiscard",
+                },
+            }).ConfigureAwait(false);
+            try
+            {
+                string victimUrl = Prefix + "/title.html";
+                IPage victim = await context.NewPageAsync().ConfigureAwait(false);
+                await victim.GoToAsync(victimUrl).ConfigureAwait(false);
+                IPage discards = await context.NewPageAsync().ConfigureAwait(false);
+                await discards.GoToAsync("chrome://discards/").ConfigureAwait(false);
+
+                // Discarding replaces the tab's WebContents, but the url in the table survives.
+                ILocator row = discards.GetByRole(AriaRole.Row, new() { Name = victimUrl });
+                await row.GetByText("Urgent Discard").ClickAsync().ConfigureAwait(false);
+                await Expect(row).ToContainTextAsync("discarded").ConfigureAwait(false);
+
+                // The renderer process is shut down asynchronously after the discard.
+                await discards.WaitForTimeoutAsync(3000).ConfigureAwait(false);
+                IReadOnlyList<string> rows = await discards.GetByRole(AriaRole.Row).AllInnerTextsAsync().ConfigureAwait(false);
+                TestContext.Out.WriteLine("discards rows:\n" + string.Join("\n", rows.Select(text => System.Text.RegularExpressions.Regex.Replace(text, @"\s+", " "))));
+                using (HttpClient http = new HttpClient())
+                {
+                    string targets = await http.GetStringAsync(new Uri("http://127.0.0.1:" + port + "/json/list")).ConfigureAwait(false);
+                    TestContext.Out.WriteLine("targets:\n" + targets);
+                }
+
+                // Connecting should not hang on the discarded page, and the page should not be reported.
+                IBrowser cdpBrowser = await Playwright.Chromium.ConnectOverCDPAsync("http://127.0.0.1:" + port + "/").ConfigureAwait(false);
+                IReadOnlyList<IPage> pages = FirstContext(cdpBrowser).Pages;
+                Assert.That(pages.Select(page => page.Url).Order(StringComparer.Ordinal), Is.EqualTo(new[] { "about:blank", discards.Url }.Order(StringComparer.Ordinal)));
+                await cdpBrowser.CloseAsync().ConfigureAwait(false);
+            }
+            finally
+            {
+                await context.CloseAsync().ConfigureAwait(false);
+                try
+                {
+                    Directory.Delete(userDataDir, recursive: true);
+                }
+                catch (IOException)
+                {
+                }
+            }
+        }
+
         [PlaywrightTest("connect-over-cdp.spec.ts", "should cleanup artifacts dir after connectOverCDP disconnects due to ws close")]
         [Test]
         [Timeout(TestConstants.DefaultTestTimeout)]
@@ -834,12 +973,12 @@ namespace PlaywrightNative.Tests
             Assert.Ignore("Official skip: Passing a transport to connectOverCDP is only available in-process");
         }
 
-        private static async Task WithHostAsync(Func<IBrowser, string, Task> body)
+        private static async Task WithHostAsync(Func<IBrowser, string, Task> body, params string[] extraArgs)
         {
             int port = FreeCdpPort();
             IBrowser host = await BrowserLauncher.LaunchAsync(new BrowserTypeLaunchOptions
             {
-                Args = new[] { "--remote-debugging-port=" + port },
+                Args = new[] { "--remote-debugging-port=" + port }.Concat(extraArgs).ToArray(),
             }).ConfigureAwait(false);
             try
             {

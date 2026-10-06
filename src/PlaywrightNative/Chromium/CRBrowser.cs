@@ -151,6 +151,12 @@ namespace PlaywrightNative.Chromium
         internal CRBrowserContext DefaultContext => _defaultContext;
 
         /// <summary>
+        /// Official <c>CRBrowser._isConnecting</c>: true while
+        /// <c>connectOverCDP</c> attaches to the targets that already exist.
+        /// </summary>
+        internal bool IsConnecting { get; private set; }
+
+        /// <summary>
         /// Pages currently attached to this browser.
         /// </summary>
         internal IReadOnlyCollection<CRPage> AttachedPages
@@ -249,18 +255,30 @@ namespace PlaywrightNative.Chromium
 
             // Enable auto-attach so the browser sends Target.attachedToTarget events
             // for every new target (page, worker, service worker, etc.).
-            await connection.RootSession
-                .SendAsync("Target.setAutoAttach", new
-                {
-                    autoAttach = true,
-                    waitForDebuggerOnStart = true,
-                    flatten = true,
-                }).ConfigureAwait(false);
-
-            browser.FlushPendingOopifs();
-            if (processManager == null)
+            browser.IsConnecting = processManager == null;
+            try
             {
-                await browser.AdoptExistingOopifsAsync().ConfigureAwait(false);
+                await connection.RootSession
+                    .SendAsync("Target.setAutoAttach", new
+                    {
+                        autoAttach = true,
+                        waitForDebuggerOnStart = true,
+                        flatten = true,
+                    }).ConfigureAwait(false);
+
+                browser.FlushPendingOopifs();
+                if (processManager == null)
+                {
+                    await browser.AdoptExistingOopifsAsync().ConfigureAwait(false);
+
+                    // Official _waitForAllPagesToBeInitialized. Pages without a
+                    // renderer report Inspector.targetCrashed and close instead.
+                    await Task.WhenAll(browser._crPages.Values.Select(page => page.InitializedTask)).ConfigureAwait(false);
+                }
+            }
+            finally
+            {
+                browser.IsConnecting = false;
             }
 
             browser._adoptingExistingTargets = false;
@@ -736,6 +754,28 @@ namespace PlaywrightNative.Chromium
         }
 
         /// <summary>
+        /// Official <c>FrameSession._onTargetCrashed</c> while connecting: an
+        /// existing page without a renderer (crashed or discarded) never
+        /// finishes initializing, so report it as closed right away.
+        /// </summary>
+        /// <param name="page">The crashed page.</param>
+        internal void ClosePageCrashedWhileConnecting(CRPage page)
+        {
+            if (!_crPages.TryRemove(page.TargetId, out _))
+            {
+                return;
+            }
+
+            _defaultContext?.RemovePage(page);
+            foreach (CRBrowserContext context in _contexts.Values)
+            {
+                context.RemovePage(page);
+            }
+
+            page.DidClose();
+        }
+
+        /// <summary>
         /// Attaches a flattened CDP session to the browser target.
         /// </summary>
         /// <returns>The child session for browser-level CDP commands.</returns>
@@ -1135,9 +1175,16 @@ namespace PlaywrightNative.Chromium
 
             // Initialize the page asynchronously (enable CDP domains).
             _ = crPage.InitializeAsync().ContinueWith(
-                t => _logger?.LogError(t.Exception, "Failed to initialize page {TargetId}", targetId),
+                t =>
+                {
+                    _logger?.LogError(t.Exception, "Failed to initialize page {TargetId}", targetId);
+
+                    // Official reportAsNew(error): a failed page still counts as
+                    // initialized, so connectOverCDP does not wait for it forever.
+                    crPage.DidFailInitialization();
+                },
                 default,
-                TaskContinuationOptions.OnlyOnFaulted,
+                TaskContinuationOptions.NotOnRanToCompletion,
                 TaskScheduler.Default);
         }
 

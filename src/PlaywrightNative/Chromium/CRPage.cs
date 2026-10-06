@@ -5221,6 +5221,12 @@ namespace PlaywrightNative.Chromium
         }
 
         /// <summary>
+        /// Official <c>reportAsNew(error)</c>: completes <see cref="InitializedTask"/>
+        /// when <see cref="InitializeAsync"/> fails, so waiters do not hang.
+        /// </summary>
+        internal void DidFailInitialization() => _initializationTcs.TrySetResult(true);
+
+        /// <summary>
         /// Marks this page as reported on the context <c>page</c> event.
         /// </summary>
         /// <returns><see langword="true"/> when this is the first report.</returns>
@@ -5886,9 +5892,16 @@ namespace PlaywrightNative.Chromium
                 return;
             }
 
+            // Check before MarkCrashed: failing the pending init calls also completes InitializedTask.
+            bool closeWhileConnecting = _browser.IsConnecting && !InitializedTask.IsCompleted;
             _crashed = true;
             _client.MarkCrashed();
             Crashed?.Invoke(this, EventArgs.Empty);
+            if (closeWhileConnecting)
+            {
+                // When connecting, any crashed/discarded/unloaded page is reported as closed right away.
+                _browser.ClosePageCrashedWhileConnecting(this);
+            }
         }
 
         /// <summary>

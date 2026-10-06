@@ -217,8 +217,10 @@ jobs:
       if: ${{ matrix.browser == 'chromium' && matrix.os == 'ubuntu-latest' && matrix.mode == 'headless' }}
       env:
         PRODUCT: CHROMIUM
+      # Like upstream, give headless runs a display too: some tests force headless: false.
       run: |
-        dotnet test ./src/PlaywrightNative.Tests/PlaywrightNative.Tests.csproj --no-build -c Release -f net10.0 -s src/PlaywrightNative.Tests/test.runsettings ${TEST_FILTER:+--filter "$TEST_FILTER"}
+        xvfb-run --auto-servernum --server-args="-screen 0 1280x960x24" -- \
+          dotnet test ./src/PlaywrightNative.Tests/PlaywrightNative.Tests.csproj --no-build -c Release -f net10.0 -s src/PlaywrightNative.Tests/test.runsettings ${TEST_FILTER:+--filter "$TEST_FILTER"}
     - name: Test (Chromium, Linux headful)
       if: ${{ matrix.browser == 'chromium' && matrix.os == 'ubuntu-latest' && matrix.mode == 'headful' }}
       env:
