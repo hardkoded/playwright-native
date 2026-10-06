@@ -104,15 +104,14 @@ namespace PlaywrightNative.WebKit
             => EvaluateAsync<JsonElement?>(expression, arg);
 
         /// <inheritdoc/>
-        public Task<T> EvaluateAsync<T>(string expression, object arg = default)
+        public async Task<T> EvaluateAsync<T>(string expression, object arg = default)
         {
-            string functionDeclaration = EvaluateWithArg.AsFunction(expression);
-            if (arg != null)
-            {
-                return EvaluateFunctionAsync<T>(functionDeclaration, arg);
-            }
-
-            return EvaluateFunctionAsync<T>(functionDeclaration);
+            // Same tagged serialization as page.evaluate, so results map onto T the same way.
+            string functionDeclaration = EvaluateHandleArg.WithSerializedHandleResult(EvaluateWithArg.AsFunction(expression));
+            JsonElement serialized = arg != null
+                ? await EvaluateFunctionAsync<JsonElement>(functionDeclaration, arg).ConfigureAwait(false)
+                : await EvaluateFunctionAsync<JsonElement>(functionDeclaration).ConfigureAwait(false);
+            return JsonValueHelper.Parse<T>(serialized);
         }
 
         /// <inheritdoc/>
