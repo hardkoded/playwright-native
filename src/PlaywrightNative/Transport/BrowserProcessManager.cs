@@ -1106,7 +1106,10 @@ namespace PlaywrightNative.Transport
                     {
                         if (!p.Process.HasExited)
                         {
-                            p.Process.Kill();
+                            // Official processLauncher kills the whole process group
+                            // (taskkill /T on Windows). The macOS WebKit pw_run.sh wrapper
+                            // does not exec, so killing only its pid leaves the browser alive.
+                            p.Process.Kill(entireProcessTree: true);
                         }
                     }
                     catch (InvalidOperationException)

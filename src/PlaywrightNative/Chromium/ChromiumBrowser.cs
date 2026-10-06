@@ -28,7 +28,7 @@ using PlaywrightNative.Helpers;
 namespace PlaywrightNative.Chromium
 {
     /// <summary>Public <see cref="IBrowser"/> wrapping <see cref="CRBrowser"/>.</summary>
-    internal sealed partial class ChromiumBrowser : IBrowser, IHasDefaultUserAgent, IHasPlaywrightLogger, IHasLaunchProxy, IHasTracesDir, IHasArtifactsDir
+    internal sealed partial class ChromiumBrowser : IBrowser, IHasDefaultUserAgent, IHasPlaywrightLogger, IHasLaunchProxy, IHasTracesDir, IHasArtifactsDir, IHasKillForTests
     {
         private static readonly string[] DefaultTracingCategories =
         {
@@ -134,6 +134,9 @@ namespace PlaywrightNative.Chromium
 
             await _crBrowser.CloseAsync().ConfigureAwait(false);
         }
+
+        /// <inheritdoc/>
+        Task IHasKillForTests.KillForTestsAsync() => _crBrowser.KillForTestsAsync();
 
         /// <inheritdoc/>
         public async Task<ICDPSession> NewBrowserCDPSessionAsync()
@@ -275,7 +278,8 @@ namespace PlaywrightNative.Chromium
                 recordVideoDir: options.RecordVideoDir,
                 recordVideoSize: options.RecordVideoSize,
                 strictSelectors: options.StrictSelectors,
-                clientCertificates: options.ClientCertificates).ConfigureAwait(false);
+                clientCertificates: options.ClientCertificates,
+                recordVideoFps: options.RecordVideoFps).ConfigureAwait(false);
 
             if (context is IHasPlaywrightLogger has)
             {
@@ -322,7 +326,8 @@ namespace PlaywrightNative.Chromium
             HarContentPolicy recordHarContent = EnumCompat.UndefinedHarContentPolicy,
             Regex recordHarUrlRegex = default,
             bool? strictSelectors = default,
-            IEnumerable<ClientCertificate> clientCertificates = default)
+            IEnumerable<ClientCertificate> clientCertificates = default,
+            int? recordVideoFps = default)
         {
             return await PlaywrightApiLog.RunAsync(Logger, "browser.newContext", async () =>
             {
@@ -330,6 +335,7 @@ namespace PlaywrightNative.Chromium
                 proxy ??= LaunchProxy;
                 BrowserContextOptionGuard.ThrowIfNullViewportConflicts(viewportSize, deviceScaleFactor, isMobile);
                 BrowserContextOptionGuard.ThrowIfInvalidProxy(proxy);
+                BrowserContextOptionGuard.ThrowIfInvalidRecordVideoFps(recordVideoFps);
                 ClientCertificatesProxy certsProxy = ClientCertificatesProxy.TryStart(
                     clientCertificates,
                     ignoreHTTPSErrors == true,
@@ -381,7 +387,7 @@ namespace PlaywrightNative.Chromium
                 await instance.ApplyDownloadBehaviorAsync().ConfigureAwait(false);
                 await StorageStateHelper.ApplyAsync(instance, storageState, storageStatePath).ConfigureAwait(false);
                 HarRecorder.Start(instance, recordHarPath, recordHarOmitContent, recordHarUrl, recordHarMode, recordHarContent, recordHarUrlRegex);
-                VideoRecorder.Start(instance, recordVideoDir, recordVideoSize, viewportSize);
+                VideoRecorder.Start(instance, recordVideoDir, recordVideoSize, viewportSize, recordVideoFps);
                 await ServiceWorkerPolicyHelper.ApplyAsync(instance, serviceWorkers).ConfigureAwait(false);
                 Context?.Invoke(this, instance);
                 instance.Logger = Logger;

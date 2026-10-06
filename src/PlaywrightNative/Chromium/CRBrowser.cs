@@ -466,6 +466,24 @@ namespace PlaywrightNative.Chromium
         }
 
         /// <summary>
+        /// Official <c>browser.killForTests</c>: kills the browser process and waits
+        /// for the disconnect.
+        /// </summary>
+        /// <returns>A task that completes when the browser has disconnected.</returns>
+        internal async Task KillForTestsAsync()
+        {
+            if (!IsConnected)
+            {
+                return;
+            }
+
+            TaskCompletionSource<bool> disconnected = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            Disconnected += (_, _) => disconnected.TrySetResult(true);
+            await _processManager.KillAsync().ConfigureAwait(false);
+            await disconnected.Task.ConfigureAwait(false);
+        }
+
+        /// <summary>
         /// Gracefully closes the browser by sending a <c>Browser.close</c> CDP command
         /// and waiting for the process to exit.
         /// </summary>
@@ -1604,6 +1622,8 @@ namespace PlaywrightNative.Chromium
                     context.RemovePage(page);
                 }
 
+                // Official browser.didClose: downloads still in flight fail with TargetClosedError.
+                page.PublicPage?.AbortDownloads(DriverMessages.BrowserOrContextClosedExceptionMessage);
                 page.DidClose();
             }
         }

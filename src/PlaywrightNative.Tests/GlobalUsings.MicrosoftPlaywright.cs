@@ -18,6 +18,7 @@ global using AriaRole = Microsoft.Playwright.AriaRole;
 global using AriaSnapshotMode = Microsoft.Playwright.AriaSnapshotMode;
 global using BindingSource = Microsoft.Playwright.BindingSource;
 global using BrowserContextCookiesResult = Microsoft.Playwright.BrowserContextCookiesResult;
+global using BrowserNewContextOptions = PlaywrightNative.Compat.LegacyBrowserNewContextOptions;
 // PlaywrightNative compat option bags (legacy property names).
 global using BrowserTypeLaunchPersistentContextOptions = PlaywrightNative.Compat.LegacyBrowserTypeLaunchPersistentContextOptions;
 global using ClientCertificate = Microsoft.Playwright.ClientCertificate;
@@ -129,6 +130,7 @@ global using SameSiteAttribute = Microsoft.Playwright.SameSiteAttribute;
 global using ScreencastCursor = Microsoft.Playwright.ScreencastCursor;
 global using ScreencastFrame = Microsoft.Playwright.ScreencastFrame;
 global using ScreencastSize = Microsoft.Playwright.ScreencastSize;
+global using ScreencastStartOptions = PlaywrightNative.Compat.LegacyScreencastStartOptions;
 global using ScreenshotAnimations = Microsoft.Playwright.ScreenshotAnimations;
 global using ScreenshotCaret = Microsoft.Playwright.ScreenshotCaret;
 global using ScreenshotScale = Microsoft.Playwright.ScreenshotScale;

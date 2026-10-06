@@ -30,6 +30,9 @@ namespace PlaywrightNative.Helpers
     /// </summary>
     internal static class ScreencastOverlay
     {
+        // Official highlight.ts: the host is a manual popover so it paints in the
+        // top layer. Elements that enter the top layer later paint above it, so it
+        // is re-promoted every 500ms while attached.
         private const string InstallFunction =
             "function(arg){" +
             "function sanitize(html){" +
@@ -44,14 +47,26 @@ namespace PlaywrightNative.Helpers
             "if(n.length>2&&n.charAt(0).toLowerCase()==='o'&&n.charAt(1).toLowerCase()==='n')" +
             "el.removeAttribute(n);}}" +
             "return t.innerHTML;}" +
+            "function bringToFront(host){" +
+            "if(!host.showPopover)return;" +
+            "if(host.matches(':popover-open'))host.hidePopover();" +
+            "host.showPopover();}" +
             "function ensureHost(visible){" +
             "var host=document.querySelector('x-pw-user-overlays');" +
             "if(!host){" +
             "host=document.createElement('x-pw-user-overlays');" +
             "host.setAttribute('data-pw-screencast-overlay','1');" +
-            "host.style.cssText='position:fixed;inset:0;z-index:2147483647;pointer-events:none';" +
+            "host.setAttribute('popover','manual');" +
+            "host.style.cssText='position:fixed;inset:0;width:100%;height:100%;max-width:none;max-height:none;" +
+            "margin:0;padding:0;border:none;overflow:visible;background:transparent;z-index:2147483647;pointer-events:none';" +
             "(document.documentElement||document.body).appendChild(host);}" +
             "host.style.visibility=visible?'visible':'hidden';" +
+            "bringToFront(host);" +
+            "if(!host.__pwTimer){" +
+            "var tick=function(){" +
+            "if(!host.isConnected){host.__pwTimer=0;return;}" +
+            "bringToFront(host);host.__pwTimer=setTimeout(tick,500);};" +
+            "host.__pwTimer=setTimeout(tick,500);}" +
             "return host;}" +
             "if(arg.replace){" +
             "var prev=document.querySelector('x-pw-user-overlays');" +
