@@ -34,7 +34,8 @@ namespace PlaywrightNative.Helpers
     const visit = (el) => {
         if (!el || skip[el.tagName]) return false;
         let childHit = false;
-        const children = el.children || [];
+        // Official text engine pierces open shadow roots.
+        const children = [...(el.children || []), ...(el.shadowRoot ? el.shadowRoot.children : [])];
         for (let i = 0; i < children.length; i++)
             childHit = visit(children[i]) || childHit;
         if (matches(el) && !childHit) {
@@ -67,7 +68,8 @@ namespace PlaywrightNative.Helpers
     const visit = (el) => {
         if (!el || skip[el.tagName]) return false;
         let childHit = false;
-        const children = el.children || [];
+        // Official text engine pierces open shadow roots.
+        const children = [...(el.children || []), ...(el.shadowRoot ? el.shadowRoot.children : [])];
         for (let i = 0; i < children.length; i++)
             childHit = visit(children[i]) || childHit;
         if (matches(el) && !childHit) {

@@ -59,6 +59,7 @@ namespace PlaywrightNative.Helpers
     if (tag === 'OPTION') return 'option';
     if (tag === 'OUTPUT') return 'status';
     if (tag === 'LI') return 'listitem';
+    if (tag === 'TR') return 'row';
     if (tag === 'TEXTAREA') return 'textbox';
     if (tag === 'A' && element.hasAttribute('href')) return 'link';
     if (tag === 'IMG') return 'img';

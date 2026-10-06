@@ -5889,6 +5889,11 @@ namespace PlaywrightNative.Chromium
             _crashed = true;
             _client.MarkCrashed();
             Crashed?.Invoke(this, EventArgs.Empty);
+            if (_browser.IsConnecting && !InitializedTask.IsCompleted)
+            {
+                // When connecting, any crashed/discarded/unloaded page is reported as closed right away.
+                _browser.ClosePageCrashedWhileConnecting(this);
+            }
         }
 
         /// <summary>
