@@ -175,6 +175,12 @@ namespace PlaywrightNative.Helpers
   style.remove();
 })()";
 
+        /// <summary>
+        /// Test-only hook (upstream <c>__testHookBeforeScreenshot</c>). Runs after the
+        /// page is prepared and right before the capture.
+        /// </summary>
+        internal static readonly AsyncLocal<Func<Task>> TestHookBeforeScreenshot = new AsyncLocal<Func<Task>>();
+
         private static readonly ConcurrentDictionary<int, SemaphoreSlim> ScreenshotGates = new ConcurrentDictionary<int, SemaphoreSlim>();
 
         /// <summary>
@@ -294,6 +300,11 @@ namespace PlaywrightNative.Helpers
 
                             await ScreenshotMask.ApplyAsync(page, mask, maskColor, tags).ConfigureAwait(false);
                             await WaitForFontsAsync(page).ConfigureAwait(false);
+
+                            if (TestHookBeforeScreenshot.Value != null)
+                            {
+                                await TestHookBeforeScreenshot.Value().ConfigureAwait(false);
+                            }
 
                             return await capture().ConfigureAwait(false);
                         }

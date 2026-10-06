@@ -330,6 +330,29 @@ namespace PlaywrightNative.Tests
             Assert.That(await response.TextAsync().ConfigureAwait(false), Is.EqualTo(SimpleJsonBody));
         }
 
+        [PlaywrightTest("page-network-response.spec.ts", "should return text for identity encoding")]
+        [Test]
+        [Timeout(30_000)]
+        public async Task ShouldReturnTextForIdentityEncoding()
+        {
+            EnsureServer();
+            const string text = "<div>hello</div>";
+            Server.SetRoute("/identity.html", async http =>
+            {
+                http.Response.StatusCode = 200;
+                http.Response.Headers["Content-Type"] = "text/html; charset=utf-8";
+                http.Response.Headers["Content-Encoding"] = "Identity";
+                await http.Response.WriteAsync(text).ConfigureAwait(false);
+            });
+
+            await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
+            await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
+            IPage page = await context.NewPageAsync().ConfigureAwait(false);
+            IResponse response = await page.GoToAsync(Prefix + "/identity.html").ConfigureAwait(false);
+            Assert.That(HeaderMap.All(response.Headers)["content-encoding"], Is.EqualTo("Identity"));
+            Assert.That(await response.TextAsync().ConfigureAwait(false), Is.EqualTo(text));
+        }
+
         [PlaywrightTest("page-network-response.spec.ts", "should throw when requesting body of redirected response")]
         [Test]
         [Timeout(30_000)]
