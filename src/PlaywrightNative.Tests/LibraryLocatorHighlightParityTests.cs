@@ -148,5 +148,65 @@ namespace PlaywrightNative.Tests
             await page.HideHighlightAsync().ConfigureAwait(false);
             await Assertions.Expect(page.Locator("x-pw-highlight")).ToHaveCountAsync(0).ConfigureAwait(false);
         }
+
+        [PlaywrightTest("locator-highlight.spec.ts", "highlight should work with a custom selector engine that runs in the main world")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public async Task HighlightShouldWorkWithACustomSelectorEngineThatRunsInTheMainWorld()
+        {
+            // Engines registered without "contentScript" run in the main world and can see page globals.
+            const string createEngine = @"() => ({
+    query(root, selector) {
+      return window['__engineEnabled'] ? root.querySelector(selector) : null;
+    },
+    queryAll(root, selector) {
+      return window['__engineEnabled'] ? Array.from(root.querySelectorAll(selector)) : [];
+    },
+  })";
+            await Playwright.Selectors.RegisterAsync("highlight-tag", createEngine).ConfigureAwait(false);
+
+            await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
+            await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
+            IPage page = await context.NewPageAsync().ConfigureAwait(false);
+            await page.SetContentAsync("<button>Button</button>").ConfigureAwait(false);
+            await page.EvaluateAsync("() => window['__engineEnabled'] = true").ConfigureAwait(false);
+
+            ILocator button = page.Locator("highlight-tag=button");
+            await button.HighlightAsync().ConfigureAwait(false);
+            await Assertions.Expect(page.Locator("x-pw-highlight")).ToHaveCountAsync(1).ConfigureAwait(false);
+
+            await button.HideHighlightAsync().ConfigureAwait(false);
+            await Assertions.Expect(page.Locator("x-pw-highlight")).ToHaveCountAsync(0).ConfigureAwait(false);
+
+            await button.HighlightAsync().ConfigureAwait(false);
+            await Assertions.Expect(page.Locator("x-pw-highlight")).ToHaveCountAsync(1).ConfigureAwait(false);
+
+            await page.HideHighlightAsync().ConfigureAwait(false);
+            await Assertions.Expect(page.Locator("x-pw-highlight")).ToHaveCountAsync(0).ConfigureAwait(false);
+        }
+
+        [PlaywrightTest("locator-highlight.spec.ts", "highlight should resolve relative to the frame of the locator")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public async Task HighlightShouldResolveRelativeToTheFrameOfTheLocator()
+        {
+            await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
+            await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
+            IPage page = await context.NewPageAsync().ConfigureAwait(false);
+            await page.SetContentAsync("<iframe name=\"frame\" srcdoc=\"<button>foo</button>\"></iframe><button>bar</button>").ConfigureAwait(false);
+            IFrame frame = page.Frame("frame");
+
+            await page.Locator("button").HighlightAsync().ConfigureAwait(false);
+            await frame.Locator("button").HighlightAsync().ConfigureAwait(false);
+            await Assertions.Expect(page.Locator("x-pw-highlight")).ToHaveCountAsync(1).ConfigureAwait(false);
+            await Assertions.Expect(frame.Locator("x-pw-highlight")).ToHaveCountAsync(1).ConfigureAwait(false);
+
+            await page.Locator("button").HideHighlightAsync().ConfigureAwait(false);
+            await Assertions.Expect(page.Locator("x-pw-highlight")).ToHaveCountAsync(0).ConfigureAwait(false);
+            await Assertions.Expect(frame.Locator("x-pw-highlight")).ToHaveCountAsync(1).ConfigureAwait(false);
+
+            await frame.Locator("button").HideHighlightAsync().ConfigureAwait(false);
+            await Assertions.Expect(frame.Locator("x-pw-highlight")).ToHaveCountAsync(0).ConfigureAwait(false);
+        }
     }
 }
