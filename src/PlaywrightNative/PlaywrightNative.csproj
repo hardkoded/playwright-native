@@ -40,5 +40,6 @@
   <ItemGroup>
     <EmbeddedResource Include="Helpers/deviceDescriptorsSource.json" />
     <EmbeddedResource Include="Helpers/clockSource.js" />
+    <EmbeddedResource Include="Helpers/coverageScriptSource.js" />
   </ItemGroup>
 </Project>

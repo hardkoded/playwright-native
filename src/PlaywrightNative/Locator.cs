@@ -902,7 +902,8 @@ namespace PlaywrightNative
                 {
                     IElementHandle handle = await WaitForHandleAsync(timeout, "locator.setInputFiles").ConfigureAwait(false);
                     await handle.SetInputFilesAsync(files, noWaitAfter, timeout).ConfigureAwait(false);
-                }).ConfigureAwait(false);
+                },
+                page: _frame.Page).ConfigureAwait(false);
         }
 
         /// <inheritdoc/>

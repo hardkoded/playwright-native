@@ -441,7 +441,8 @@ namespace PlaywrightNative.Helpers
                 "Wait for event \"console\"",
                 "Page",
                 "waitForEvent",
-                () => consoleWait).ConfigureAwait(false);
+                () => consoleWait,
+                page: page).ConfigureAwait(false);
         }
 
         private static int SyncConsoleMessageCount(IPage page)
