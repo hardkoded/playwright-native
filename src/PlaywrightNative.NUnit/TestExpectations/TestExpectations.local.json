@@ -393,12 +393,5 @@
     "parameters": ["webkit"],
     "expectations": ["SKIP"],
     "comment": "Same macOS-14 WebKit 2251 frame-session gap: javascript errors arrive via Console.messageAdded (source=javascript), which is unavailable without per-frame Console.enable."
-  },
-  {
-    "testIdPattern": "[connect-over-cdp.spec.ts] should connect when an existing page has been discarded",
-    "platforms": ["linux"],
-    "parameters": ["chromium", "headless"],
-    "expectations": ["SKIP"],
-    "comment": "Upstream forces headless: false (chrome://discards needs a real tab). The Linux headless CI job runs without xvfb, so there is no display to launch headed Chromium."
   }
 ]

@@ -1175,9 +1175,16 @@ namespace PlaywrightNative.Chromium
 
             // Initialize the page asynchronously (enable CDP domains).
             _ = crPage.InitializeAsync().ContinueWith(
-                t => _logger?.LogError(t.Exception, "Failed to initialize page {TargetId}", targetId),
+                t =>
+                {
+                    _logger?.LogError(t.Exception, "Failed to initialize page {TargetId}", targetId);
+
+                    // Official reportAsNew(error): a failed page still counts as
+                    // initialized, so connectOverCDP does not wait for it forever.
+                    crPage.DidFailInitialization();
+                },
                 default,
-                TaskContinuationOptions.OnlyOnFaulted,
+                TaskContinuationOptions.NotOnRanToCompletion,
                 TaskScheduler.Default);
         }
 
