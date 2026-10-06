@@ -1761,6 +1761,12 @@ namespace PlaywrightNative
         public Task<T> WaitForEventAsync<T>(PlaywrightEvent<T> pageEvent, Func<T, bool> predicate = null, float? timeout = null)
             => PageWaitForEventHelper.WaitAsync(this, pageEvent, predicate, timeout);
 
+        /// <summary>Returns the page HTML, optionally including open shadow roots.</summary>
+        /// <param name="includeShadow">Whether to serialize open shadow roots as declarative shadow DOM.</param>
+        /// <returns>The serialized document HTML.</returns>
+        internal Task<string> ContentAsync(bool includeShadow)
+            => _crPage.ContentAsync(includeShadow);
+
         /// <summary>
         /// Returns the cached instance for <paramref name="frame"/>.
         /// </summary>

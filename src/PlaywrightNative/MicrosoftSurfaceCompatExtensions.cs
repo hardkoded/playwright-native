@@ -117,6 +117,31 @@ namespace PlaywrightNative
             }
         }
 
+        /// <summary>
+        /// Gets the full HTML contents of the page, including the doctype. Official
+        /// <c>page.content({ includeShadow })</c>, which <c>Microsoft.Playwright</c> does not expose yet.
+        /// </summary>
+        /// <param name="page">The page.</param>
+        /// <param name="options">Call options.</param>
+        /// <returns>The serialized document HTML.</returns>
+        public static Task<string> ContentAsync(this IPage page, PageContentOptions options)
+        {
+            bool includeShadow = options?.IncludeShadow ?? false;
+            switch (page)
+            {
+                case Page chromium:
+                    return chromium.ContentAsync(includeShadow);
+                case FirefoxPage firefox:
+                    return firefox.ContentAsync(includeShadow);
+                case WKPage webkit:
+                    return webkit.ContentAsync(includeShadow);
+                default:
+                    return includeShadow
+                        ? throw new NotSupportedException("includeShadow is not supported for " + page?.GetType().Name + ".")
+                        : page.ContentAsync();
+            }
+        }
+
         /// <summary>Legacy drag-and-drop with source/target positions.</summary>
         public static Task DragAndDropAsync(
             this IPage page,
