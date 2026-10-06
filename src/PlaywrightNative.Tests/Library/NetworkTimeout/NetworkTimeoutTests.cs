@@ -34,7 +34,7 @@ namespace PlaywrightNative.Tests
     /// File-level <c>mode !== 'default'</c> does not apply here.
     /// </summary>
     [TestFixture]
-    public class LibraryNetworkTimeoutParityTests : PlaywrightTestEx
+    public class NetworkTimeoutTests : PlaywrightTestEx
     {
         [PlaywrightTest("network-timeout.spec.ts", "httpRequest should honor socketTimeout while connecting")]
         [Test]
