@@ -1306,6 +1306,7 @@ namespace PlaywrightNative.Helpers
                     await RunTestHookAsync(hooks?.BeforeHitTarget, timeoutMs, sw, trial, log).ConfigureAwait(false);
                 }
 
+                await RunTestHookAsync(hooks?.BeforePointerAction, timeoutMs, sw, trial, log).ConfigureAwait(false);
                 double[] pagePoint = await MapToPageAsync(handle, localPoint).ConfigureAwait(false);
                 await moveAsync(pagePoint).ConfigureAwait(false);
                 if (force != true)
@@ -1340,7 +1341,6 @@ namespace PlaywrightNative.Helpers
                     }
                 }
 
-                await RunTestHookAsync(hooks?.BeforePointerAction, timeoutMs, sw, trial, log).ConfigureAwait(false);
                 await pressAsync().ConfigureAwait(false);
                 return;
             }

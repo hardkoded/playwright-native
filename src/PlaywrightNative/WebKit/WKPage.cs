@@ -6037,8 +6037,12 @@ namespace PlaywrightNative.WebKit
         /// <param name="expectNavigation">
         /// When <see langword="true"/>, lengthen the WebKit empty poll for form/link clicks.
         /// </param>
+        /// <param name="pointerAction">
+        /// When <see langword="true"/>, <paramref name="action"/> is the pointer
+        /// action itself (not the hover move before it).
+        /// </param>
         /// <returns>A task that completes when the action and wait finish.</returns>
-        internal Task RunWithSignalsAsync(bool waitAfter, float? timeout, Func<Task> action, bool expectNavigation = false)
+        internal Task RunWithSignalsAsync(bool waitAfter, float? timeout, Func<Task> action, bool expectNavigation = false, bool pointerAction = false)
             => ActionSignals.RunAsync(
                 _frameManager.Signals,
                 () =>
@@ -6064,7 +6068,8 @@ namespace PlaywrightNative.WebKit
                     _frameManager.FrameCommittedSameDocumentNavigation(_frameManager.MainFrame.FrameId, url);
                     _mainFrameUrl = _frameManager.MainFrame.Url;
                 },
-                expectNavigation);
+                expectNavigation,
+                pointerAction);
 
         private static void DisposeTargetSession(ref WKTargetSession session)
         {

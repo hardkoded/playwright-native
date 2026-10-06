@@ -200,7 +200,8 @@ namespace PlaywrightNative.WebKit
                                         await _page.Mouse.UpAsync(button, i).ConfigureAwait(false);
                                     }
                                 }),
-                            expectNavigation).ConfigureAwait(false);
+                            expectNavigation,
+                            pointerAction: true).ConfigureAwait(false);
                     }).ConfigureAwait(false);
             }).ConfigureAwait(false);
         }

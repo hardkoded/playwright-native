@@ -60,6 +60,10 @@ namespace PlaywrightNative.Helpers
         /// When <see langword="true"/>, WebKit uses a longer empty poll for
         /// late form GETs (submit / link clicks).
         /// </param>
+        /// <param name="pointerAction">
+        /// When <see langword="true"/>, <paramref name="action"/> is the pointer
+        /// action itself, so the after-pointer-action test hook runs after it.
+        /// </param>
         /// <returns>A task that completes when the action and wait finish.</returns>
         internal static async Task RunAsync(
             ActionSignalHubState hub,
@@ -69,7 +73,8 @@ namespace PlaywrightNative.Helpers
             Func<Task> action,
             IPage page = null,
             Action<string> commitSameDocumentUrl = null,
-            bool expectNavigation = false)
+            bool expectNavigation = false,
+            bool pointerAction = false)
         {
             if (action == null)
             {
@@ -79,6 +84,11 @@ namespace PlaywrightNative.Helpers
             if (!waitAfter || hub == null)
             {
                 await action().ConfigureAwait(false);
+                if (pointerAction)
+                {
+                    await RunAfterPointerActionHookAsync().ConfigureAwait(false);
+                }
+
                 return;
             }
 
@@ -215,6 +225,7 @@ namespace PlaywrightNative.Helpers
                     barrier,
                     () => sawDocumentRequest,
                     expectNavigation,
+                    pointerAction,
                     log);
                 await WaitForOrTimeoutAsync(waitAfterTask, timeout, sw, log).ConfigureAwait(false);
             }
@@ -242,6 +253,7 @@ namespace PlaywrightNative.Helpers
             ActionSignalBarrier barrier,
             Func<bool> sawDocumentRequest,
             bool expectNavigation,
+            bool pointerAction,
             StringBuilder log)
         {
             await action().ConfigureAwait(false);
@@ -250,10 +262,9 @@ namespace PlaywrightNative.Helpers
                 log.Append("  - waiting for scheduled navigations to finish\n");
             }
 
-            Func<Task> afterPointerAction = ActionTestHooks.Current?.AfterPointerAction;
-            if (afterPointerAction != null)
+            if (pointerAction)
             {
-                await afterPointerAction().ConfigureAwait(false);
+                await RunAfterPointerActionHookAsync().ConfigureAwait(false);
             }
 
             // Snapshot URL before WebKit's async form/link navigation lands so
@@ -382,6 +393,9 @@ namespace PlaywrightNative.Helpers
             // listeners run before click() resolves.
             await Task.Delay(1).ConfigureAwait(false);
         }
+
+        private static Task RunAfterPointerActionHookAsync()
+            => ActionTestHooks.Current?.AfterPointerAction?.Invoke() ?? Task.CompletedTask;
 
         private static async Task WaitForWebKitNavigationSettleAsync(
             IPage page,

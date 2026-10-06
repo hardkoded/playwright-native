@@ -166,7 +166,8 @@ namespace PlaywrightNative.Chromium
                                         await _crElement.Page.Mouse.UpAsync(inputButton, i).ConfigureAwait(false);
                                     }
                                 }),
-                            expectNavigation).ConfigureAwait(false);
+                            expectNavigation,
+                            pointerAction: true).ConfigureAwait(false);
                     }).ConfigureAwait(false);
             }).ConfigureAwait(false);
         }

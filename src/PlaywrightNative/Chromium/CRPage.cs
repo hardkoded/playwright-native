@@ -5503,8 +5503,12 @@ namespace PlaywrightNative.Chromium
         /// form/link clicks so auto-wait does not return before the document request
         /// (ShouldAwaitFormGetOnClick under Windows suite load).
         /// </param>
+        /// <param name="pointerAction">
+        /// When <see langword="true"/>, <paramref name="action"/> is the pointer
+        /// action itself (not the hover move before it).
+        /// </param>
         /// <returns>A task that completes when the action and wait finish.</returns>
-        internal Task RunWithSignalsAsync(bool waitAfter, float? timeout, Func<Task> action, bool expectNavigation = false)
+        internal Task RunWithSignalsAsync(bool waitAfter, float? timeout, Func<Task> action, bool expectNavigation = false, bool pointerAction = false)
             => ActionSignals.RunAsync(
                 _frameManager.Signals,
                 InputActionEpilogueAsync,
@@ -5513,7 +5517,8 @@ namespace PlaywrightNative.Chromium
                 action,
                 PublicPage,
                 CommitLiveSameDocumentUrl,
-                expectNavigation);
+                expectNavigation,
+                pointerAction);
 
         private void CommitLiveSameDocumentUrl(string url)
         {
