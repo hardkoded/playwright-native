@@ -76,9 +76,9 @@ namespace PlaywrightNative
         public BrowserChannel Channel { get; set; }
 
         /// <summary>
-        /// Network proxy used by the browser process. Chromium also needs a launch-level
-        /// proxy (even a dummy <c>per-context</c> server) when contexts override
-        /// <see cref="IBrowser.NewContextAsync(BrowserContextOptions)"/> with their own proxy.
+        /// Network proxy used by the browser process. Contexts can override it with their
+        /// own proxy in <see cref="IBrowser.NewContextAsync(BrowserContextOptions)"/>. The
+        /// legacy <c>per-context</c> placeholder server is ignored.
         /// </summary>
         public Proxy Proxy { get; set; }
 
