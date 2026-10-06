@@ -26,7 +26,7 @@ using PlaywrightNative.Helpers;
 namespace PlaywrightNative.Chromium
 {
     /// <summary>Public <see cref="IRequest"/> wrapping <see cref="CRRequest"/>.</summary>
-    internal sealed partial class ChromiumRequest : IRequest, IHasOwningPage
+    internal sealed partial class ChromiumRequest : IRequest, IHasOwningPage, IHasWallTime
     {
         private readonly CRRequest _crRequest;
         private readonly Func<CRResponse, ChromiumResponse> _resolveResponse;
@@ -78,6 +78,9 @@ namespace PlaywrightNative.Chromium
 
         /// <inheritdoc/>
         public IPage OwningPage => ResolveFrame()?.Page;
+
+        /// <inheritdoc/>
+        public double WallTimeMs => _crRequest.WallTimeMs;
 
         /// <inheritdoc/>
         public Dictionary<string, string> Headers

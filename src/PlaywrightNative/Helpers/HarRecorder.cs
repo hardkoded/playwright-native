@@ -930,6 +930,11 @@ namespace PlaywrightNative.Helpers
 
         private static DateTimeOffset StartedAt(IRequest request)
         {
+            if (request is IHasWallTime hasWallTime && hasWallTime.WallTimeMs > 0)
+            {
+                return DateTimeOffset.FromUnixTimeMilliseconds((long)Math.Round(hasWallTime.WallTimeMs));
+            }
+
             RequestTimingResult timing = request?.Timing;
             if (timing != null && timing.StartTime > 0)
             {

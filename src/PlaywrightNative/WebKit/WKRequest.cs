@@ -34,7 +34,7 @@ namespace PlaywrightNative.WebKit
     /// corresponding response and redirect chain. Mirrors <c>CRRequest</c>.
     /// Implements <see cref="IRequest"/> directly.
     /// </summary>
-    internal partial class WKRequest : IRequest, IHasOwningPage
+    internal partial class WKRequest : IRequest, IHasOwningPage, IHasWallTime
     {
         private readonly TaskCompletionSource<string> _finished =
             new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -151,6 +151,9 @@ namespace PlaywrightNative.WebKit
 
         /// <inheritdoc/>
         public IPage OwningPage => _frame?.Page;
+
+        /// <inheritdoc/>
+        public double WallTimeMs { get; set; }
 
         /// <inheritdoc/>
         public byte[] PostDataBuffer => _postDataBuffer;

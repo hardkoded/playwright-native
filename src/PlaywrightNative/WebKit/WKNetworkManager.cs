@@ -852,7 +852,8 @@ namespace PlaywrightNative.WebKit
 
             request.DocumentUrl = isNavigationRequest ? url : frame?.Url;
             request.TimestampSeconds = ResourceTimingParser.ReadDouble(p, "timestamp");
-            double wallTime = ResourceTimingParser.ReadDouble(p, "wallTime");
+            double wallTime = ResourceTimingParser.ReadDouble(p, "walltime");
+            request.WallTimeMs = wallTime * 1000;
             if (wallTime <= 0)
             {
                 wallTime = request.TimestampSeconds;
