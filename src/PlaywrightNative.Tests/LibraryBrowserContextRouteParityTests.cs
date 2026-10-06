@@ -706,6 +706,14 @@ namespace PlaywrightNative.Tests
             await context.CloseAsync().ConfigureAwait(false);
         }
 
+        [PlaywrightTest("browsercontext-route.spec.ts", "should respect URLPattern ignoreCase")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public void ShouldRespectURLPatternIgnoreCase()
+        {
+            Assert.Ignore("Official it.skip(globalThis.URLPattern === undefined): URLPattern is not supported in this environment.");
+        }
+
         private static SameSiteAttribute DefaultSameSite()
         {
             // Upstream defaultSameSiteCookieValue: Chromium and WebKit/Linux are Lax;
