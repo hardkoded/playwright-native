@@ -14,7 +14,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading.Tasks;
 using PlaywrightNative.Input;
 
@@ -28,16 +30,19 @@ namespace PlaywrightNative.Chromium
     {
         private readonly CRSession _session;
         private readonly CRDragManager _dragManager;
+        private readonly bool _isMac;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="CRRawKeyboard"/> class.
         /// </summary>
         /// <param name="session">The CDP session to send commands on.</param>
         /// <param name="dragManager">Chromium drag interceptor.</param>
-        public CRRawKeyboard(CRSession session, CRDragManager dragManager)
+        /// <param name="isMac">Whether the browser runs on macOS and needs editing commands.</param>
+        public CRRawKeyboard(CRSession session, CRDragManager dragManager, bool isMac)
         {
             _session = session;
             _dragManager = dragManager;
+            _isMac = isMac;
         }
 
         /// <summary>
@@ -52,6 +57,7 @@ namespace PlaywrightNative.Chromium
             }
 
             string type = string.IsNullOrEmpty(key.Text) ? "rawKeyDown" : "keyDown";
+            string[] commands = CommandsForCode(key.Code, modifiers);
 
             await _session.SendAsync("Input.dispatchKeyEvent", new
             {
@@ -59,6 +65,7 @@ namespace PlaywrightNative.Chromium
                 modifiers = modifiers.ToCdpMask(),
                 windowsVirtualKeyCode = key.KeyCodeWithoutLocation == 0 ? key.KeyCode : key.KeyCodeWithoutLocation,
                 code = key.Code,
+                commands,
                 key = key.Key,
                 text = key.Text,
                 unmodifiedText = key.Text,
@@ -91,6 +98,26 @@ namespace PlaywrightNative.Chromium
         public Task InsertTextAsync(string text)
         {
             return _session.SendAsync("Input.insertText", new { text });
+        }
+
+        /// <summary>
+        /// Returns the macOS editing commands Chromium should run for a key press. Chromium
+        /// skips native key bindings for synthetic events, so shortcuts like Meta+A need them.
+        /// Mirrors upstream <c>crInput.ts</c> <c>_commandsForCode</c>.
+        /// </summary>
+        private string[] CommandsForCode(string code, IReadOnlyCollection<Input.KeyboardModifier> modifiers)
+        {
+            if (!_isMac)
+            {
+                return Array.Empty<string>();
+            }
+
+            // Commands that insert text are not supported. Drop the trailing ':' to match the
+            // Chromium command names.
+            return MacEditingCommands.Resolve(MacEditingCommands.BuildShortcut(modifiers, code))
+                .Where(command => !command.StartsWith("insert", StringComparison.Ordinal))
+                .Select(command => command[..^1])
+                .ToArray();
         }
     }
 }
