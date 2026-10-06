@@ -70,15 +70,14 @@ namespace PlaywrightNative.Chromium
             => EvaluateAsync<JsonElement?>(expression, arg);
 
         /// <inheritdoc/>
-        public Task<T> EvaluateAsync<T>(string expression, object arg = default)
+        public async Task<T> EvaluateAsync<T>(string expression, object arg = default)
         {
-            string functionDeclaration = EvaluateWithArg.AsFunction(expression);
-            if (arg != null)
-            {
-                return _crHandle.EvaluateFunctionAsync<T>(functionDeclaration, arg);
-            }
-
-            return _crHandle.EvaluateFunctionAsync<T>(functionDeclaration);
+            // Same tagged serialization as page.evaluate, so results map onto T the same way.
+            string functionDeclaration = EvaluateHandleArg.WithSerializedHandleResult(EvaluateWithArg.AsFunction(expression));
+            JsonElement serialized = arg != null
+                ? await _crHandle.EvaluateFunctionAsync<JsonElement>(functionDeclaration, arg).ConfigureAwait(false)
+                : await _crHandle.EvaluateFunctionAsync<JsonElement>(functionDeclaration).ConfigureAwait(false);
+            return JsonValueHelper.Parse<T>(serialized);
         }
 
         /// <inheritdoc/>

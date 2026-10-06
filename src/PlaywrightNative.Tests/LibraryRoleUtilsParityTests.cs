@@ -122,7 +122,7 @@ namespace PlaywrightNative.Tests
                 foreach (string testFile in testFiles)
                 {
                     await Page.GoToAsync(TestConstants.ServerUrl + testFile).ConfigureAwait(false);
-                    LabelResult[] result = await Page.EvaluateAsync<LabelResult[]>(script).ConfigureAwait(false);
+                    LabelResult[] result = await Page.EvalOnSelectorAsync<LabelResult[]>("body", script).ConfigureAwait(false);
                     foreach (LabelResult item in result)
                     {
                         if (!failing.Contains(item.Title))
@@ -794,7 +794,7 @@ namespace PlaywrightNative.Tests
                     }
 
                     await Page.GoToAsync(TestConstants.ServerUrl + "/wpt/accname/manual/" + testFile).ConfigureAwait(false);
-                    StepResult[] result = await Page.EvaluateAsync<StepResult[]>(script).ConfigureAwait(false);
+                    StepResult[] result = await Page.EvalOnSelectorAsync<StepResult[]>("body", script).ConfigureAwait(false);
                     foreach (StepResult step in result)
                     {
                         Assert.That(step.Received, Is.EqualTo(step.Expected), $"checking \"{step.Selector}\" in {testFile}");
@@ -812,11 +812,7 @@ namespace PlaywrightNative.Tests
 
         private async Task<NameAndRole> GetNameAndRoleAsync(string selector)
         {
-            // Page.EvaluateAsync maps camelCase results onto the DTO; ElementHandle evaluation
-            // on Chromium does not, so pass the $eval element as an argument instead.
-            await using IElementHandle element = await Page.QuerySelectorAsync(selector).ConfigureAwait(false)
-                ?? throw new InvalidOperationException($"Unable to resolve \"{selector}\"");
-            NameAndRoleResult result = await Page.EvaluateAsync<NameAndRoleResult>(_nameAndRoleScript, element).ConfigureAwait(false);
+            NameAndRoleResult result = await Page.EvalOnSelectorAsync<NameAndRoleResult>(selector, _nameAndRoleScript).ConfigureAwait(false);
             return new NameAndRole(result.Role, result.Name);
         }
 
