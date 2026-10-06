@@ -124,9 +124,6 @@ namespace PlaywrightNative.Helpers
             }
         }
 
-        internal Task CollectFromAllPagesAsync()
-            => Task.WhenAll(_context.Pages.Select(CollectFromPageAsync));
-
         internal async Task CollectFromPageAsync(IPage page)
         {
             if (page == null || page.IsClosed)
@@ -160,7 +157,7 @@ namespace PlaywrightNative.Helpers
 
         private async Task FlushAsync()
         {
-            await CollectFromAllPagesAsync().ConfigureAwait(false);
+            await Task.WhenAll(_context.Pages.Select(CollectFromPageAsync)).ConfigureAwait(false);
             await HarvestOriginsWithoutPageAsync().ConfigureAwait(false);
         }
 

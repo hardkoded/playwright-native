@@ -497,7 +497,8 @@ namespace PlaywrightNative
                     (_context as IHasPlaywrightLogger)?.Logger,
                     "page.click",
                     () => ClickAction.RunOnSelectorAsync(sel => QueryActionAsync(sel, strict), selector, h => h.ClickAsync(button, clickCount, delay, position, modifiers, force, noWaitAfter, timeout, trial, scroll, steps), timeout, "page.click", scroll)),
-                new Dictionary<string, object> { ["selector"] = selector });
+                new Dictionary<string, object> { ["selector"] = selector },
+                page: this);
 
         /// <inheritdoc/>
         public async Task CloseAsync(bool? runBeforeUnload = default, string reason = default)
@@ -564,7 +565,8 @@ namespace PlaywrightNative
                 "Double click " + ActionTrace.LocatorLabel(selector),
                 "Page",
                 "dblclick",
-                () => ClickAction.RunOnSelectorAsync(sel => QueryActionAsync(sel, strict), selector, h => h.DblClickAsync(button, delay, position, modifiers, force, noWaitAfter, timeout, trial, scroll), timeout, "page.dblclick", scroll));
+                () => ClickAction.RunOnSelectorAsync(sel => QueryActionAsync(sel, strict), selector, h => h.DblClickAsync(button, delay, position, modifiers, force, noWaitAfter, timeout, trial, scroll), timeout, "page.dblclick", scroll),
+                page: this);
 
         /// <inheritdoc/>
         public Task DragAndDropAsync(
@@ -685,7 +687,8 @@ namespace PlaywrightNative
                         : EvaluateWithArg.Wrap(expression, arg);
                     return EvaluateSerializedAsync<JsonElement?>(toEval);
                 },
-                consoleBaseline);
+                consoleBaseline,
+                page: this);
         }
 
         /// <inheritdoc/>
@@ -707,7 +710,8 @@ namespace PlaywrightNative
                         : EvaluateWithArg.Wrap(expression, arg);
                     return EvaluateSerializedAsync<T>(toEval);
                 },
-                consoleBaseline);
+                consoleBaseline,
+                page: this);
         }
 
         /// <inheritdoc/>
@@ -731,7 +735,8 @@ namespace PlaywrightNative
                     CRJSHandle handle = await _crPage.EvaluateHandleInternalAsync(toEval).ConfigureAwait(false);
                     return WrapJSHandle(handle);
                 },
-                consoleBaseline);
+                consoleBaseline,
+                page: this);
         }
 
         /// <inheritdoc/>
@@ -938,7 +943,7 @@ namespace PlaywrightNative
         {
             url = NavigationTimeout.CompleteUserUrl(NavigationUrl.Resolve(Context, url));
             IResponse result = null;
-            await ActionTrace.RunAsync(_context, ActionTrace.NavigateTitle(url), "Page", "goto", async () =>
+            await ActionTrace.RunAsync(_context, ActionTrace.NavigateTitle(url), "Page", "goto", page: this, body: async () =>
             {
                 int timeoutMs = NavigationTimeout.ResolveMs(
                     timeout,
@@ -958,7 +963,7 @@ namespace PlaywrightNative
         public async Task<IResponse> ReloadAsync(WaitUntilState waitUntil = default, float? timeout = default)
         {
             IResponse result = null;
-            await ActionTrace.RunAsync(_context, null, "Page", "reload", async () =>
+            await ActionTrace.RunAsync(_context, null, "Page", "reload", page: this, body: async () =>
             {
                 int timeoutMs = timeout.HasValue ? (int)timeout.Value : (int)_defaultNavigationTimeout;
                 CRResponse captured = await _crPage.ReloadAsync(waitUntil, timeoutMs).ConfigureAwait(false);
@@ -1030,7 +1035,8 @@ namespace PlaywrightNative
                 ActionTrace.HoverTitle(selector),
                 "Page",
                 "hover",
-                () => ElementQuery.WaitRunAsync(sel => QueryActionAsync(sel, strict), selector, h => h.HoverAsync(position, modifiers, force, timeout, trial, scroll), timeout, "page.hover", scroll));
+                () => ElementQuery.WaitRunAsync(sel => QueryActionAsync(sel, strict), selector, h => h.HoverAsync(position, modifiers, force, timeout, trial, scroll), timeout, "page.hover", scroll),
+                page: this);
 
         /// <inheritdoc/>
         public Task<string> InnerHTMLAsync(string selector, float? timeout = default, bool? strict = default)
@@ -1352,7 +1358,8 @@ namespace PlaywrightNative
                         PathIo.WriteBytes(path, bytes);
                     }
                 },
-                result: new Dictionary<string, object> { ["binary"] = "<Buffer>" }).ConfigureAwait(false);
+                result: new Dictionary<string, object> { ["binary"] = "<Buffer>" },
+                page: this).ConfigureAwait(false);
             return bytes;
         }
 
@@ -1472,7 +1479,8 @@ namespace PlaywrightNative
                 () => PlaywrightApiLog.RunAsync(
                     (_context as IHasPlaywrightLogger)?.Logger,
                     "page.setContent",
-                    () => _crPage.SetContentAsync(html, waitUntil, timeoutMs)));
+                    () => _crPage.SetContentAsync(html, waitUntil, timeoutMs)),
+                page: this);
         }
 
         /// <inheritdoc/>
@@ -1677,7 +1685,7 @@ namespace PlaywrightNative
 
         /// <inheritdoc/>
         public Task WaitForTimeoutAsync(float timeout)
-            => ActionTrace.RunAsync(_context, "Wait for timeout", "Page", "waitForTimeout", () => Task.Delay((int)timeout));
+            => ActionTrace.RunAsync(_context, "Wait for timeout", "Page", "waitForTimeout", () => Task.Delay((int)timeout), page: this);
 
         /// <inheritdoc/>
         public Task WaitForURLAsync(string urlString, Regex urlRegex, Func<string, bool> urlFunc, float? timeout = default, WaitUntilState waitUntil = default)

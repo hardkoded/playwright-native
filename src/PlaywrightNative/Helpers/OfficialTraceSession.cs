@@ -401,7 +401,7 @@ namespace PlaywrightNative.Helpers
         /// <summary>
         /// Completes an action started with <see cref="TryBeginAction"/>.
         /// </summary>
-        internal async Task ContinueActionAsync(string callId, Func<Task> body, object result = null)
+        internal async Task ContinueActionAsync(string callId, Func<Task> body, object result = null, IPage page = null)
         {
             await ContinueActionAsync<object>(
                 callId,
@@ -410,13 +410,14 @@ namespace PlaywrightNative.Helpers
                     await body().ConfigureAwait(false);
                     return null;
                 },
-                result).ConfigureAwait(false);
+                result,
+                page).ConfigureAwait(false);
         }
 
         /// <summary>
         /// Completes an action started with <see cref="TryBeginAction"/>.
         /// </summary>
-        internal async Task<T> ContinueActionAsync<T>(string callId, Func<Task<T>> body, object result = null)
+        internal async Task<T> ContinueActionAsync<T>(string callId, Func<Task<T>> body, object result = null, IPage page = null)
         {
             if (body == null)
             {
@@ -478,7 +479,7 @@ namespace PlaywrightNative.Helpers
 
                 await CapturePhaseAsync(callId, "after", method).ConfigureAwait(false);
                 await CaptureAfterActionAsync(callId, method).ConfigureAwait(false);
-                await CaptureCoverageAsync().ConfigureAwait(false);
+                await CaptureCoverageAsync(page).ConfigureAwait(false);
             }
 
             return value;
@@ -1213,12 +1214,12 @@ namespace PlaywrightNative.Helpers
             }
         }
 
-        private async Task CaptureCoverageAsync()
+        private async Task CaptureCoverageAsync(IPage page)
         {
             CoverageRecorder recorder = CoverageRecorderOrNull();
-            if (recorder != null)
+            if (recorder != null && page != null)
             {
-                await recorder.CollectFromAllPagesAsync().ConfigureAwait(false);
+                await recorder.CollectFromPageAsync(page).ConfigureAwait(false);
             }
         }
 
