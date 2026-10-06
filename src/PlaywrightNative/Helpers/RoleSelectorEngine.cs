@@ -97,11 +97,12 @@ namespace PlaywrightNative.Helpers
   };
 
   const isElementStyleVisibilityVisible = (element, style) => {
-    const detailsOrSummary = element.closest && element.closest('details,summary');
-    if (detailsOrSummary && detailsOrSummary !== element && detailsOrSummary.nodeName === 'DETAILS' && !detailsOrSummary.open)
-      return false;
     style = style || getComputedStyleSafe(element);
     if (!style) return true;
+    // Element.checkVisibility checks for content-visibility and also looks at
+    // styles up the flat tree including user-agent ShadowRoots, such as the
+    // details element for example.
+    if (!element.checkVisibility()) return false;
     return style.visibility === 'visible';
   };
 
@@ -115,10 +116,25 @@ namespace PlaywrightNative.Helpers
     return parent ? belongsToDisplayNoneOrAriaHiddenOrNonSlotted(parent) : false;
   };
 
+  const isVisibleTextNode = (node) => {
+    const range = node.ownerDocument.createRange();
+    range.selectNode(node);
+    const rect = range.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  };
+
   const isElementHiddenForAria = (element) => {
     if (isElementIgnoredForAria(element)) return true;
     const style = getComputedStyleSafe(element);
     const isSlot = element.nodeName === 'SLOT';
+    if (style && style.display === 'contents' && !isSlot) {
+      // display:contents is not rendered itself, but its child nodes are.
+      for (let child = element.firstChild; child; child = child.nextSibling) {
+        if (child.nodeType === 1 && !isElementHiddenForAria(child)) return false;
+        if (child.nodeType === 3 && isVisibleTextNode(child)) return false;
+      }
+      return true;
+    }
     const isOptionInsideSelect = element.nodeName === 'OPTION' && !!element.closest('select');
     if (!isOptionInsideSelect && !isSlot && !isElementStyleVisibilityVisible(element, style))
       return true;
