@@ -17,6 +17,7 @@
 using System;
 using System.Diagnostics;
 using System.Globalization;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Playwright;
@@ -83,6 +84,7 @@ namespace PlaywrightNative.Helpers
 
             ActionSignalBarrier barrier = new ActionSignalBarrier();
             hub.AddBarrier(barrier);
+            StringBuilder log = new StringBuilder();
             bool sawDocumentRequest = false;
             bool sawDownload = false;
             void OnRequest(object sender, IRequest request)
@@ -169,6 +171,20 @@ namespace PlaywrightNative.Helpers
                 }
             }
 
+            void OnFrameNavigated(object sender, IFrame frame)
+            {
+                // Official SignalBarrier logs committed top-level navigations.
+                if (frame?.ParentFrame != null)
+                {
+                    return;
+                }
+
+                lock (log)
+                {
+                    log.Append("  - navigated to \"").Append(frame?.Url).Append("\"\n");
+                }
+            }
+
             void OnDownload(object sender, IDownload download)
             {
                 // Official SignalBarrier: a download resolves the click wait
@@ -182,6 +198,7 @@ namespace PlaywrightNative.Helpers
                 page.Request += OnRequest;
                 page.RequestFailed += OnRequestFailed;
                 page.Download += OnDownload;
+                page.FrameNavigated += OnFrameNavigated;
             }
 
             try
@@ -197,8 +214,9 @@ namespace PlaywrightNative.Helpers
                     sw,
                     barrier,
                     () => sawDocumentRequest,
-                    expectNavigation);
-                await WaitForOrTimeoutAsync(waitAfterTask, timeout, sw).ConfigureAwait(false);
+                    expectNavigation,
+                    log);
+                await WaitForOrTimeoutAsync(waitAfterTask, timeout, sw, log).ConfigureAwait(false);
             }
             finally
             {
@@ -207,6 +225,7 @@ namespace PlaywrightNative.Helpers
                     page.Request -= OnRequest;
                     page.RequestFailed -= OnRequestFailed;
                     page.Download -= OnDownload;
+                    page.FrameNavigated -= OnFrameNavigated;
                 }
 
                 hub.RemoveBarrier(barrier);
@@ -222,9 +241,20 @@ namespace PlaywrightNative.Helpers
             Stopwatch sw,
             ActionSignalBarrier barrier,
             Func<bool> sawDocumentRequest,
-            bool expectNavigation)
+            bool expectNavigation,
+            StringBuilder log)
         {
             await action().ConfigureAwait(false);
+            lock (log)
+            {
+                log.Append("  - waiting for scheduled navigations to finish\n");
+            }
+
+            Func<Task> afterPointerAction = ActionTestHooks.Current?.AfterPointerAction;
+            if (afterPointerAction != null)
+            {
+                await afterPointerAction().ConfigureAwait(false);
+            }
 
             // Snapshot URL before WebKit's async form/link navigation lands so
             // expectNavigation can wait for a real commit, not just a barrier
@@ -467,7 +497,7 @@ namespace PlaywrightNative.Helpers
             return !string.Equals(currentUrl, baseline, StringComparison.Ordinal);
         }
 
-        private static async Task WaitForOrTimeoutAsync(Task task, float? timeout, Stopwatch sw)
+        private static async Task WaitForOrTimeoutAsync(Task task, float? timeout, Stopwatch sw, StringBuilder log)
         {
             int timeoutMs = TimeoutSettings.TimeoutMs(timeout);
             if (timeoutMs == Timeout.Infinite)
@@ -479,13 +509,13 @@ namespace PlaywrightNative.Helpers
             int remaining = timeoutMs - (int)(sw?.ElapsedMilliseconds ?? 0);
             if (remaining <= 0)
             {
-                throw ClickTimeout(timeoutMs);
+                throw ClickTimeout(timeoutMs, log);
             }
 
             Task delay = Task.Delay(remaining);
             if (await Task.WhenAny(task, delay).ConfigureAwait(false) != task)
             {
-                throw ClickTimeout(timeoutMs);
+                throw ClickTimeout(timeoutMs, log);
             }
 
             await task.ConfigureAwait(false);
@@ -577,7 +607,7 @@ namespace PlaywrightNative.Helpers
                 && reason.IndexOf("SSL", StringComparison.OrdinalIgnoreCase) < 0
                 && reason.IndexOf("TLS", StringComparison.OrdinalIgnoreCase) < 0;
 
-        private static TimeoutException ClickTimeout(int timeoutMs)
+        private static TimeoutException ClickTimeout(int timeoutMs, StringBuilder log = null)
         {
             string apiName = ClickAction.ApiName.Value;
             if (string.IsNullOrEmpty(apiName))
@@ -585,8 +615,17 @@ namespace PlaywrightNative.Helpers
                 apiName = "page.click";
             }
 
+            string callLog = string.Empty;
+            if (log != null)
+            {
+                lock (log)
+                {
+                    callLog = log.Length == 0 ? string.Empty : "\nCall log:\n" + log;
+                }
+            }
+
             return new TimeoutException(
-                apiName + ": Timeout " + timeoutMs.ToString(CultureInfo.InvariantCulture) + "ms exceeded.");
+                apiName + ": Timeout " + timeoutMs.ToString(CultureInfo.InvariantCulture) + "ms exceeded." + callLog);
         }
     }
 }

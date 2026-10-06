@@ -34,7 +34,7 @@ namespace PlaywrightNative.WebKit
     /// point — no content-quad geometry, hit-testing, or stability waits (sufficient for the
     /// element shapes exercised today; complex layouts would need the full upstream machinery).
     /// </summary>
-    internal sealed partial class WKElementHandle : WKJSHandle, IElementHandle
+    internal sealed partial class WKElementHandle : WKJSHandle, IElementHandle, IProtocolScrollable
     {
         private readonly WKPage _page;
         private readonly bool _initializePreview;
@@ -60,6 +60,9 @@ namespace PlaywrightNative.WebKit
 
         /// <inheritdoc/>
         public override IElementHandle AsElement() => this;
+
+        /// <inheritdoc/>
+        Task<string> IProtocolScrollable.ScrollRectIntoViewIfNeededAsync() => ScrollRectIntoViewIfNeededAsync();
 
         /// <inheritdoc/>
         public async Task<ElementHandleBoundingBoxResult> BoundingBoxAsync()

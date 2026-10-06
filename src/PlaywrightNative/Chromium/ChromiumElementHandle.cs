@@ -28,7 +28,7 @@ using PlaywrightNative.Input;
 namespace PlaywrightNative.Chromium
 {
     /// <summary>Public <see cref="IElementHandle"/> wrapping <see cref="CRElementHandle"/>.</summary>
-    internal sealed partial class ChromiumElementHandle : ChromiumJSHandle, IElementHandle
+    internal sealed partial class ChromiumElementHandle : ChromiumJSHandle, IElementHandle, IProtocolScrollable
     {
         private readonly CRElementHandle _crElement;
 
@@ -40,6 +40,9 @@ namespace PlaywrightNative.Chromium
 
         /// <inheritdoc/>
         public override IElementHandle AsElement() => this;
+
+        /// <inheritdoc/>
+        Task<string> IProtocolScrollable.ScrollRectIntoViewIfNeededAsync() => ScrollRectIntoViewIfNeededAsync();
 
         /// <inheritdoc/>
         public async Task<ElementHandleBoundingBoxResult> BoundingBoxAsync()
@@ -582,7 +585,7 @@ namespace PlaywrightNative.Chromium
         {
             try
             {
-                await _crElement.Page.Session.SendAsync(
+                await (_crElement.ExecutionContext?.Session ?? _crElement.Page.Session).SendAsync(
                     "DOM.scrollIntoViewIfNeeded",
                     new { objectId = _crElement.ObjectId }).ConfigureAwait(false);
                 return ScrollIntoViewIfNeededAction.ResultDone;

@@ -1637,6 +1637,12 @@ namespace PlaywrightNative.Chromium
                     return context;
                 }
 
+                if (frame.IsDetached)
+                {
+                    // A detached frame never gets a new context.
+                    throw new PlaywrightException("Frame was detached");
+                }
+
                 if (context != null && context.Destroyed.IsCompleted
                     && ReferenceEquals(frame.ExecutionContext, context))
                 {
