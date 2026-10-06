@@ -332,6 +332,29 @@ namespace PlaywrightNative.Tests
             await Assertions.Expect(page.Locator(".item").Filter(visible: false).GetByText("data1")).ToHaveTextAsync("Hidden data1").ConfigureAwait(false);
         }
 
+        [PlaywrightTest("locator-misc-2.spec.ts", "should support visible()")]
+        [Test]
+        [Timeout(30_000)]
+        public async Task ShouldSupportVisible()
+        {
+            await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
+            await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
+            IPage page = await context.NewPageAsync().ConfigureAwait(false);
+            await page.SetContentAsync(@"<div>
+    <div class=""item"" style=""display: none"">Hidden data0</div>
+    <div class=""item"">visible data1</div>
+    <div class=""item"" style=""display: none"">Hidden data1</div>
+    <div class=""item"">visible data2</div>
+    <div class=""item"" style=""display: none"">Hidden data2</div>
+    <div class=""item"">visible data3</div>
+    </div>
+  ").ConfigureAwait(false);
+            ILocator locator = page.Locator(".item").Visible().Nth(1);
+            await Assertions.Expect(locator).ToHaveTextAsync("visible data2").ConfigureAwait(false);
+            await Assertions.Expect(page.Locator(".item").Visible().GetByText("data3")).ToHaveTextAsync("visible data3").ConfigureAwait(false);
+            await Assertions.Expect(page.Locator(".item").Visible()).ToHaveCountAsync(3).ConfigureAwait(false);
+        }
+
         [PlaywrightTest("locator-misc-2.spec.ts", "locator.count should work with deleted Map in main world")]
         [Test]
         [Timeout(30_000)]

@@ -23,8 +23,8 @@ using Microsoft.Playwright;
 namespace PlaywrightNative.Helpers
 {
     /// <summary>
-    /// Official injected <c>isElementVisible</c>: style visibility, closed
-    /// <c>&lt;details&gt;</c>, <c>display:contents</c>, and a non-empty box.
+    /// Official injected <c>isElementVisible</c>: <c>checkVisibility()</c>, style
+    /// visibility, <c>display:contents</c>, and a non-empty box.
     /// Opacity 0 and off-screen boxes stay visible. Used by element-handle and
     /// page-level <c>isVisible</c> / <c>isHidden</c>.
     /// </summary>
@@ -41,15 +41,29 @@ namespace PlaywrightNative.Helpers
         const rect = range.getBoundingClientRect();
         return rect.width > 0 && rect.height > 0;
     }
-    function isStyleVisible(element, style) {
+    function getStyle(element) {
+        const view = element.ownerDocument && element.ownerDocument.defaultView;
+        return view ? view.getComputedStyle(element) : null;
+    }
+    // WebKit does not create renderers for list box options, so checkVisibility() returns false for them.
+    function isWebKitListBoxOptionVisible(element, style) {
         const ua = navigator.userAgent || '';
         const isWebKit = /AppleWebKit/.test(ua) && !/Chrome|Chromium|Edg\//.test(ua);
-        if (typeof element.checkVisibility === 'function' && !isWebKit) {
-            if (!element.checkVisibility()) return false;
+        if (!isWebKit || element.nodeName !== 'OPTION' || style.display === 'none') return false;
+        const select = element.closest('select');
+        if (!select || !(select.multiple || select.size > 1)) return false;
+        for (let e = element.parentElement; e && e !== select; e = e.parentElement) {
+            const parentStyle = getStyle(e);
+            if (parentStyle && parentStyle.display === 'none') return false;
         }
-        const detailsOrSummary = element.closest && element.closest('details,summary');
-        if (detailsOrSummary && detailsOrSummary !== element && detailsOrSummary.nodeName === 'DETAILS' && !detailsOrSummary.open)
-            return false;
+        const selectStyle = getStyle(select);
+        return !selectStyle || isStyleVisible(select, selectStyle);
+    }
+    function isStyleVisible(element, style) {
+        // Element.checkVisibility checks for content-visibility and also looks at
+        // styles up the flat tree including user-agent ShadowRoots, such as the
+        // details element for example.
+        if (!element.checkVisibility() && !isWebKitListBoxOptionVisible(element, style)) return false;
         if (style.visibility !== 'visible') return false;
         return true;
     }
@@ -63,8 +77,7 @@ namespace PlaywrightNative.Helpers
             String(element.getAttribute('loading') || '').toLowerCase() === 'lazy') {
             return !!(element.isConnected);
         }
-        const view = element.ownerDocument && element.ownerDocument.defaultView;
-        const style = view ? view.getComputedStyle(element) : null;
+        const style = getStyle(element);
         if (!style) return true;
         if (style.display === 'contents') {
             for (let child = element.firstChild; child; child = child.nextSibling) {
