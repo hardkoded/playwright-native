@@ -25,10 +25,8 @@ namespace PlaywrightNative.Tests
 {
     /// <summary>
     /// Official <c>library/browsercontext-fetch-happy-eyeballs.spec.ts</c>
-    /// titles that do not need Node <c>__testHookLookup</c>. Skipped
-    /// (Node-only internals): <c>get should work</c>,
-    /// <c>get should work on request fixture</c>,
-    /// <c>https post should work with ignoreHTTPSErrors option</c>.
+    /// parity. Titles that drive the Node <c>__testHookLookup</c> DNS hook
+    /// are ignored.
     /// </summary>
     [TestFixture]
     [NonParallelizable]
@@ -77,6 +75,30 @@ namespace PlaywrightNative.Tests
                 await _ownedServer.StopAsync().ConfigureAwait(false);
                 _ownedServer = null;
             }
+        }
+
+        [PlaywrightTest("browsercontext-fetch-happy-eyeballs.spec.ts", "get should work")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public void GetShouldWork()
+        {
+            Assert.Ignore("Node __testHookLookup DNS hook");
+        }
+
+        [PlaywrightTest("browsercontext-fetch-happy-eyeballs.spec.ts", "get should work on request fixture")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public void GetShouldWorkOnRequestFixture()
+        {
+            Assert.Ignore("Node __testHookLookup DNS hook");
+        }
+
+        [PlaywrightTest("browsercontext-fetch-happy-eyeballs.spec.ts", "https post should work with ignoreHTTPSErrors option")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public void HttpsPostShouldWorkWithIgnoreHTTPSErrorsOption()
+        {
+            Assert.Ignore("Node __testHookLookup DNS hook");
         }
 
         [PlaywrightTest("browsercontext-fetch-happy-eyeballs.spec.ts", "should work with ip6 and port as the host")]
