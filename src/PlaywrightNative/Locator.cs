@@ -1076,8 +1076,8 @@ namespace PlaywrightNative
         {
             _ = timeout;
             string id = ToString();
-            PageHighlights.Forget(Page, id);
-            await Page.EvaluateAsync(ElementStateScript.HideHighlightByIdFunction, id).ConfigureAwait(false);
+            PageHighlights.Forget(Page, _frame, id);
+            await _frame.EvaluateAsync(ElementStateScript.HideHighlightByIdFunction, id).ConfigureAwait(false);
         }
 
         /// <inheritdoc/>
@@ -1363,7 +1363,7 @@ namespace PlaywrightNative
             string tooltip = ToString();
             string payload = "{\"tooltip\":" + JsonSerializer.Serialize(tooltip) + ",\"style\":" + JsonSerializer.Serialize(style ?? string.Empty) + ",\"id\":" + JsonSerializer.Serialize(tooltip) + "}";
             await handle.EvaluateAsync<bool>(ElementStateScript.HighlightFunction, payload).ConfigureAwait(false);
-            PageHighlights.Remember(Page, this, style, tooltip);
+            PageHighlights.Remember(Page, _frame, this, style, tooltip);
         }
 
         internal Locator WithAnyFrame()

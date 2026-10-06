@@ -500,5 +500,30 @@ namespace PlaywrightNative.Tests
         {
             Assert.Ignore("Node-only: playwright.selectors.register with a query-time navigation helper.");
         }
+
+        [PlaywrightTest("locator-query.spec.ts", "should support locator.within")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public async Task ShouldSupportLocatorWithin()
+        {
+            await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
+            await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
+            IPage page = await context.NewPageAsync().ConfigureAwait(false);
+            await page.SetContentAsync(@"
+    <table>
+      <tr><td>a1</td><td>a2</td><td>a3</td></tr>
+      <tr><td>b1</td><td>b2</td><td>b3</td></tr>
+      <tr><td>c1</td><td>c2</td><td>c3</td></tr>
+    </table>
+    <span>outside</span>
+  ").ConfigureAwait(false);
+
+            await Assertions.Expect(page.GetByRole("cell").Within(page.GetByRole("row"))).ToHaveTextAsync(new[] { "a1", "a2", "a3", "b1", "b2", "b3", "c1", "c2", "c3" }).ConfigureAwait(false);
+            await Assertions.Expect(page.GetByRole("cell").Nth(1).Within(page.GetByRole("row"))).ToHaveTextAsync(new[] { "a2", "b2", "c2" }).ConfigureAwait(false);
+            await Assertions.Expect(page.GetByRole("cell").Last.Within(page.GetByRole("row"))).ToHaveTextAsync(new[] { "a3", "b3", "c3" }).ConfigureAwait(false);
+            await Assertions.Expect(page.GetByRole("cell").Nth(1).Within(page.GetByRole("row").Nth(2))).ToHaveTextAsync(new[] { "c2" }).ConfigureAwait(false);
+            await Assertions.Expect(page.Locator("span").Within(page.GetByRole("row"))).ToHaveCountAsync(0).ConfigureAwait(false);
+            await Assertions.Expect(page.GetByRole("cell").Nth(1).Within(page.GetByRole("row")).Nth(1)).ToHaveTextAsync("b2").ConfigureAwait(false);
+        }
     }
 }
