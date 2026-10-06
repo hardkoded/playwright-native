@@ -81,6 +81,7 @@ namespace PlaywrightNative.Chromium
                 windowsVirtualKeyCode = key.KeyCodeWithoutLocation == 0 ? key.KeyCode : key.KeyCodeWithoutLocation,
                 code = key.Code,
                 location = key.Location,
+                isKeypad = key.Location == 3,
             });
         }
 
