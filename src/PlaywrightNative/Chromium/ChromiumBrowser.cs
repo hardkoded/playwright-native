@@ -110,6 +110,12 @@ namespace PlaywrightNative.Chromium
         /// </summary>
         internal Proxy LaunchProxy { get; set; }
 
+        /// <summary>
+        /// Gets the <c>args</c> the browser was launched with, or <see langword="null"/>
+        /// when Playwright did not launch it (for example <c>connectOverCDP</c>).
+        /// </summary>
+        internal IReadOnlyList<string> LaunchArgs { get; init; }
+
         /// <inheritdoc/>
         public async Task CloseAsync(string reason = default)
         {

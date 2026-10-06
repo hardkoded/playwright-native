@@ -834,6 +834,12 @@ namespace PlaywrightNative
                 ? extras.Coverage
                 : throw new NotSupportedException("This page does not expose PlaywrightNative coverage.");
 
+        /// <summary>WebMCP tools registered by the main frame. Child frames use <c>frame.Webmcp()</c>.</summary>
+        /// <param name="page">The page.</param>
+        /// <returns>The main frame WebMCP API.</returns>
+        public static IWebMCP Webmcp(this IPage page)
+            => page.MainFrame.Webmcp();
+
         /// <summary>Legacy frame lookup by URL pattern.</summary>
         public static IFrame FrameByUrl(this IPage page, string urlString, Regex urlRegex, Func<string, bool> urlFunc)
             => PageCompatDispatch.FrameByUrl(page, urlString, urlRegex, urlFunc);
