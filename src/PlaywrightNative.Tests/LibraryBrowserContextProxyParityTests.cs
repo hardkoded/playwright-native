@@ -167,6 +167,18 @@ namespace PlaywrightNative.Tests
             }
         }
 
+        [PlaywrightTest("browsercontext-proxy.spec.ts", "should ignore legacy 'per-context' launch proxy")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public Task ShouldIgnoreLegacyPerContextLaunchProxy()
+            => ShouldIgnoreLegacyLaunchProxyAsync("per-context");
+
+        [PlaywrightTest("browsercontext-proxy.spec.ts", "should ignore legacy 'http://per-context' launch proxy")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public Task ShouldIgnoreLegacyHttpPerContextLaunchProxy()
+            => ShouldIgnoreLegacyLaunchProxyAsync("http://per-context");
+
         [PlaywrightTest("browsercontext-proxy.spec.ts", "should use proxy")]
         [Test]
         [Timeout(TestConstants.DefaultTestTimeout)]
@@ -767,6 +779,34 @@ namespace PlaywrightNative.Tests
 
         private string[] NonFaviconUrls()
             => _proxy.RequestUrls.Where(url => url.IndexOf("favicon", StringComparison.Ordinal) < 0).ToArray();
+
+        private async Task ShouldIgnoreLegacyLaunchProxyAsync(string launchProxy)
+        {
+            EnsureServer();
+            _proxy.ForwardTo(ServerPort, allowConnectRequests: true);
+            IBrowser browser = await BrowserLauncher.LaunchAsync(proxy: new Proxy { Server = launchProxy }).ConfigureAwait(false);
+            try
+            {
+                IBrowserContext context = await browser.NewContextAsync(new() { Proxy = new Proxy { Server = _proxy.Host } }).ConfigureAwait(false);
+                IPage page = await context.NewPageAsync().ConfigureAwait(false);
+                await page.GoToAsync("http://non-existent.com/target.html").ConfigureAwait(false);
+                Assert.That(await page.TitleAsync().ConfigureAwait(false), Is.EqualTo("Served by the proxy"));
+                IAPIResponse response = await context.APIRequest.GetAsync("http://non-existent.com/target.html").ConfigureAwait(false);
+                Assert.That(await response.TextAsync().ConfigureAwait(false), Does.Contain("Served by the proxy"));
+                Assert.That(_proxy.ConnectHosts, Does.Contain("non-existent.com:80"));
+
+                IBrowserContext directContext = await browser.NewContextAsync().ConfigureAwait(false);
+                IPage directPage = await directContext.NewPageAsync().ConfigureAwait(false);
+                await directPage.GoToAsync(Prefix + "/target.html").ConfigureAwait(false);
+                Assert.That(await directPage.TitleAsync().ConfigureAwait(false), Is.EqualTo("Served by the proxy"));
+                IAPIResponse directResponse = await directContext.APIRequest.GetAsync(Prefix + "/target.html").ConfigureAwait(false);
+                Assert.That(directResponse.Ok, Is.True);
+            }
+            finally
+            {
+                await DisposeQuietlyAsync(browser).ConfigureAwait(false);
+            }
+        }
 
         private static async Task<Exception> CatchGotoAsync(IPage page, string url)
         {
