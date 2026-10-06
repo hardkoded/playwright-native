@@ -305,12 +305,13 @@ namespace PlaywrightNative.Tests
         [Timeout(TestConstants.DefaultTestTimeout)]
         public async Task ShouldTransferSetsAsEmptyObjects()
         {
+            // .NET has no JS Set, so build it in the page and transfer it back as the argument.
+            Dictionary<string, object> set = await Page.EvaluateAsync<Dictionary<string, object>>("() => new Set([1, 2])").ConfigureAwait(false);
             string result = await Page.EvaluateAsync<string>(
                 "a => a.x.constructor.name + ' ' + JSON.stringify(a.x)",
-                new Dictionary<string, object> { ["x"] = new HashSet<int> { 1, 2 } })
+                new Dictionary<string, object> { ["x"] = set })
                 .ConfigureAwait(false);
             Assert.That(result, Is.EqualTo("Object {}"));
-            Dictionary<string, object> set = await Page.EvaluateAsync<Dictionary<string, object>>("() => new Set([1, 2])").ConfigureAwait(false);
             Assert.That(set, Is.Empty);
         }
 
