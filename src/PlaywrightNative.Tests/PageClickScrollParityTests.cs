@@ -276,6 +276,44 @@ namespace PlaywrightNative.Tests
             Assert.That(await page.EvaluateAsync<bool>("window._clicked").ConfigureAwait(false), Is.True);
         }
 
+        [PlaywrightTest("page-click-scroll.spec.ts", "should scroll instantly on retry when scroll-behavior is smooth")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public async Task ShouldScrollInstantlyOnRetryWhenScrollBehaviorIsSmooth()
+        {
+            await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
+            await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
+            IPage page = await context.NewPageAsync().ConfigureAwait(false);
+
+            // The fixed header covers everything but the bottom strip of the viewport.
+            // The first attempt centers the button under the header, so the click is
+            // retried with a different scroll alignment using the native scrollIntoView().
+            await page.SetContentAsync(@"
+    <style>
+      html { scroll-behavior: smooth; }
+      body { margin: 0; }
+      .spacer { height: 2000px; }
+      #header { position: fixed; top: 0; left: 0; right: 0; bottom: 50px; background: rgba(0, 0, 0, 0.1); }
+      button { height: 30px; }
+    </style>
+    <div id=""header""></div>
+    <div class=""spacer""></div>
+    <button onclick=""window.clicked = true"">Target</button>
+    <div class=""spacer""></div>
+    <script>
+      window.scrolls = [];
+      addEventListener('scroll', () => window.scrolls.push(window.scrollY));
+    </script>
+  ").ConfigureAwait(false);
+            await page.ClickAsync("button").ConfigureAwait(false);
+            Assert.That(await page.EvaluateAsync<bool>("window.clicked").ConfigureAwait(false), Is.True);
+
+            // Every scroll performed by Playwright should be a single instant jump,
+            // and never a smooth animation that fires a scroll event per frame.
+            double[] scrolls = await page.EvaluateAsync<double[]>("() => window['scrolls']").ConfigureAwait(false);
+            Assert.That(scrolls.Length, Is.LessThanOrEqualTo(2));
+        }
+
         [PlaywrightTest("page-click-scroll.spec.ts", "should not scroll on hover when scroll is \"none\"")]
         [Test]
         [Timeout(TestConstants.DefaultTestTimeout)]

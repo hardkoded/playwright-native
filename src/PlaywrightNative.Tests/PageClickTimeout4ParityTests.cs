@@ -19,6 +19,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Threading.Tasks;
 using NUnit.Framework;
+using PlaywrightNative.Helpers;
 using PlaywrightNative.NUnit;
 using PlaywrightNative.TestServer;
 
@@ -26,9 +27,8 @@ namespace PlaywrightNative.Tests
 {
     /// <summary>
     /// Official <c>page-click-timeout-4.spec.ts</c> parity for unstable-position
-    /// and overlay hit-target click timeouts. Skipped (Node-only internals):
-    /// <c>should click for the second time after first timeout</c> uses
-    /// <c>__testHookBeforePointerAction</c>.
+    /// and overlay hit-target click timeouts. Upstream <c>__testHook*</c>
+    /// click options map to <see cref="ActionTestHooks"/>.
     /// </summary>
     [TestFixture]
     public class PageClickTimeout4ParityTests : PageTestEx
@@ -102,6 +102,32 @@ namespace PlaywrightNative.Tests
             Assert.That(error.Message, Does.Contain("waiting for element to be visible, enabled and stable"));
             Assert.That(error.Message, Does.Contain("element is not stable"));
             Assert.That(error.Message, Does.Contain("retrying click action"));
+        }
+
+        [PlaywrightTest("page-click-timeout-4.spec.ts", "should click for the second time after first timeout")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public async Task ShouldClickForTheSecondTimeAfterFirstTimeout()
+        {
+            EnsureServer();
+            await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
+            await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
+            IPage page = await context.NewPageAsync().ConfigureAwait(false);
+            await page.GoToAsync(Prefix + "/input/button.html").ConfigureAwait(false);
+            Exception error;
+            using (ActionTestHooks.Use(new ActionTestHooks { BeforePointerAction = () => Task.Delay(1500) }))
+            {
+                error = Assert.CatchAsync(() => page.ClickAsync("button", new() { Timeout = 1000 }));
+            }
+
+            Assert.That(error.Message, Does.Contain("page.click: Timeout 1000ms exceeded."));
+
+            Assert.That(await page.EvaluateAsync<string>("result").ConfigureAwait(false), Is.EqualTo("Was not clicked"));
+            await page.WaitForTimeoutAsync(2000).ConfigureAwait(false);
+            Assert.That(await page.EvaluateAsync<string>("result").ConfigureAwait(false), Is.EqualTo("Was not clicked"));
+
+            await page.ClickAsync("button").ConfigureAwait(false);
+            Assert.That(await page.EvaluateAsync<string>("result").ConfigureAwait(false), Is.EqualTo("Clicked"));
         }
 
         [PlaywrightTest("page-click-timeout-4.spec.ts", "should fail to click the button behind a large header after scrolling around")]

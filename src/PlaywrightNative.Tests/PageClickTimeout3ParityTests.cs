@@ -18,6 +18,7 @@ using System;
 using System.Globalization;
 using System.Threading.Tasks;
 using NUnit.Framework;
+using PlaywrightNative.Helpers;
 using PlaywrightNative.NUnit;
 using PlaywrightNative.TestServer;
 
@@ -25,9 +26,8 @@ namespace PlaywrightNative.Tests
 {
     /// <summary>
     /// Official <c>page-click-timeout-3.spec.ts</c> parity for hit-target
-    /// click timeouts. Skipped (Node-only internals):
-    /// <c>should fail when element jumps during hit testing</c> uses
-    /// <c>__testHookBeforeHitTarget</c>.
+    /// click timeouts. Upstream <c>__testHook*</c> click options map to
+    /// <see cref="ActionTestHooks"/>.
     /// </summary>
     [TestFixture]
     public class PageClickTimeout3ParityTests : PageTestEx
@@ -75,6 +75,38 @@ namespace PlaywrightNative.Tests
                 await _ownedServer.StopAsync().ConfigureAwait(false);
                 _ownedServer = null;
             }
+        }
+
+        [PlaywrightTest("page-click-timeout-3.spec.ts", "should fail when element jumps during hit testing")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public async Task ShouldFailWhenElementJumpsDuringHitTesting()
+        {
+            await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
+            await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
+            IPage page = await context.NewPageAsync().ConfigureAwait(false);
+            await page.SetContentAsync("<button>Click me</button>").ConfigureAwait(false);
+            bool clicked = false;
+            IElementHandle handle = await page.QuerySelectorAsync("button").ConfigureAwait(false);
+            Task TestHookBeforeHitTargetAsync() => page.EvaluateAsync(@"() => {
+    const margin = parseInt(document.querySelector('button').style.marginLeft || '0', 10) + 100;
+    document.querySelector('button').style.marginLeft = margin + 'px';
+  }");
+            Exception error;
+            using (ActionTestHooks.Use(new ActionTestHooks { BeforeHitTarget = TestHookBeforeHitTargetAsync }))
+            {
+                error = Assert.CatchAsync(async () =>
+                {
+                    await handle.ClickAsync(new() { Timeout = 5000 }).ConfigureAwait(false);
+                    clicked = true;
+                });
+            }
+
+            Assert.That(clicked, Is.False);
+            Assert.That(await page.EvaluateAsync<object>("window.clicked").ConfigureAwait(false), Is.Null);
+            Assert.That(error.Message, Does.Contain("elementHandle.click: Timeout 5000ms exceeded."));
+            Assert.That(error.Message, Does.Contain("<body>…</body> intercepts pointer events"));
+            Assert.That(error.Message, Does.Contain("retrying click action"));
         }
 
         [PlaywrightTest("page-click-timeout-3.spec.ts", "should timeout waiting for hit target")]

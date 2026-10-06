@@ -22,6 +22,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
 using NUnit.Framework;
+using PlaywrightNative.Helpers;
 using PlaywrightNative.NUnit;
 using PlaywrightNative.TestServer;
 
@@ -30,9 +31,7 @@ namespace PlaywrightNative.Tests
     /// <summary>
     /// Official <c>page-autowaiting-basic.spec.ts</c> parity for click
     /// navigation auto-wait and collapsed action/expect call logs.
-    /// Skipped (Node-only internals):
-    /// <c>should report navigation in the log when clicking anchor</c> uses
-    /// <c>__testHookAfterPointerAction</c>.
+    /// Upstream <c>__testHook*</c> click options map to <see cref="ActionTestHooks"/>.
     /// </summary>
     [TestFixture]
     [NonParallelizable]
@@ -268,6 +267,27 @@ namespace PlaywrightNative.Tests
             await page.FillAsync("input[type=text]", "admin").ConfigureAwait(false);
             await page.ClickAsync("input[type=submit]").ConfigureAwait(false);
             await page.GoToAsync(EmptyPage).ConfigureAwait(false);
+        }
+
+        [PlaywrightTest("page-autowaiting-basic.spec.ts", "should report navigation in the log when clicking anchor")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public async Task ShouldReportNavigationInTheLogWhenClickingAnchor()
+        {
+            EnsureServer();
+            await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
+            await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
+            IPage page = await context.NewPageAsync().ConfigureAwait(false);
+            await page.SetContentAsync($"<a href=\"{Prefix + "/frames/one-frame.html"}\">click me</a>").ConfigureAwait(false);
+            Exception error;
+            using (ActionTestHooks.Use(new ActionTestHooks { AfterPointerAction = () => Task.Delay(6000) }))
+            {
+                error = Assert.CatchAsync(() => page.ClickAsync("a", new() { Timeout = 5000 }));
+            }
+
+            Assert.That(error.Message, Does.Contain("page.click: Timeout 5000ms exceeded."));
+            Assert.That(error.Message, Does.Contain("waiting for scheduled navigations to finish"));
+            Assert.That(error.Message, Does.Contain($"navigated to \"{Prefix + "/frames/one-frame.html"}\""));
         }
 
         [PlaywrightTest("page-autowaiting-basic.spec.ts", "should report and collapse log in action")]
