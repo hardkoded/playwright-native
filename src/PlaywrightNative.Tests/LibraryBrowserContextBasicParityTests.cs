@@ -22,6 +22,7 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
 using NUnit.Framework;
+using PlaywrightNative.Helpers;
 using PlaywrightNative.NUnit;
 using PlaywrightNative.TestServer;
 
@@ -29,8 +30,6 @@ namespace PlaywrightNative.Tests
 {
     /// <summary>
     /// Official <c>library/browsercontext-basic.spec.ts</c> parity.
-    /// Skipped (official <c>it.skip</c> / Node-only): default user agent
-    /// (<c>_channel.defaultUserAgentForTest</c>).
     /// Official <c>it.fixme</c> Chromium: should emulate navigator.onLine
     /// across navigations.
     /// </summary>
@@ -494,6 +493,35 @@ namespace PlaywrightNative.Tests
             await context.CloseAsync().ConfigureAwait(false);
         }
 
+        [PlaywrightTest("browsercontext-basic.spec.ts", "should retry click after disabling javascript")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public async Task ShouldRetryClickAfterDisablingJavascript()
+        {
+            IBrowserContext context = await _browser.NewContextAsync(new() { JavaScriptEnabled = false }).ConfigureAwait(false);
+            IPage page = await context.NewPageAsync().ConfigureAwait(false);
+            await page.SetContentAsync(@"
+    <details><summary>Continue</summary>Details</details>
+    <div id=""cover"" style=""position: fixed; inset: 0;""></div>
+  ").ConfigureAwait(false);
+            bool clicked = false;
+            Task clickTask = ClickAsync();
+
+            // Give it enough time to go through a few retries while the button is covered.
+            await page.WaitForTimeoutAsync(2000).ConfigureAwait(false);
+            Assert.That(clicked, Is.False);
+            await page.Locator("#cover").EvaluateAsync("e => e.remove()").ConfigureAwait(false);
+            await clickTask.ConfigureAwait(false);
+            await Expect(page.Locator("details")).ToHaveAttributeAsync("open", string.Empty).ConfigureAwait(false);
+            await context.CloseAsync().ConfigureAwait(false);
+
+            async Task ClickAsync()
+            {
+                await page.Locator("summary").ClickAsync().ConfigureAwait(false);
+                clicked = true;
+            }
+        }
+
         [PlaywrightTest("browsercontext-basic.spec.ts", "should work with offline option")]
         [Test]
         [Timeout(TestConstants.DefaultTestTimeout)]
@@ -662,6 +690,15 @@ namespace PlaywrightNative.Tests
                 await frame.EvaluateAsync<bool>("(() => matchMedia('(prefers-color-scheme: dark)').matches)()").ConfigureAwait(false),
                 Is.True);
             await page.CloseAsync().ConfigureAwait(false);
+        }
+
+        [PlaywrightTest("browsercontext-basic.spec.ts", "default user agent")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public async Task DefaultUserAgent()
+        {
+            string userAgent = ((IHasDefaultUserAgent)Browser).DefaultUserAgent;
+            Assert.That(await Page.EvaluateAsync<string>("() => navigator.userAgent").ConfigureAwait(false), Is.EqualTo(userAgent));
         }
 
         [PlaywrightTest("browsercontext-basic.spec.ts", "should create two pages in parallel in various contexts")]

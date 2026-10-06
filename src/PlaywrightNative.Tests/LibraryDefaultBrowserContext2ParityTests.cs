@@ -26,6 +26,7 @@ using System.Text.Json.Serialization;
 using System.Threading.Tasks;
 using Microsoft.Playwright;
 using NUnit.Framework;
+using PlaywrightNative.Helpers;
 using PlaywrightNative.NUnit;
 using PlaywrightNative.TestServer;
 
@@ -34,14 +35,10 @@ namespace PlaywrightNative.Tests
     /// <summary>
     /// Official <c>library/defaultbrowsercontext-2.spec.ts</c> parity.
     /// Do not edit leftover <c>LaunchPersistent*</c> tests.
-    /// Skipped (Node-only): <c>should have passed URL when launching with
-    /// ignoreDefaultArgs: true</c> (<c>toImpl</c> defaultArgs),
-    /// <c>should handle timeout</c> / <c>should handle exception</c>
-    /// (<c>__testHookBeforeCreateBrowser</c>),
+    /// Ignored (Node-only): <c>should handle timeout</c> /
+    /// <c>should handle exception</c> (<c>__testHookBeforeCreateBrowser</c>),
     /// <c>should connect to a browser with the default page</c>
-    /// (<c>__testHookOnConnectToBrowser</c>),
-    /// <c>user agent is up to date</c>
-    /// (<c>_channel.defaultUserAgentForTest</c>).
+    /// (<c>__testHookOnConnectToBrowser</c>).
     /// </summary>
     [TestFixture]
     [NonParallelizable]
@@ -446,6 +443,60 @@ namespace PlaywrightNative.Tests
             }
         }
 
+        [PlaywrightTest("defaultbrowsercontext-2.spec.ts", "should have passed URL when launching with ignoreDefaultArgs: true")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public async Task ShouldHavePassedURLWhenLaunchingWithIgnoreDefaultArgsTrue()
+        {
+            EnsureServer();
+            IBrowserType browserType = PersistentBrowserType();
+            string userDataDir = CreateUserDataDir();
+            try
+            {
+                List<string> args = ((BrowserTypeInfo)browserType)
+                    .DefaultArgs(new BrowserTypeLaunchOptions { Headless = true }, isPersistent: true, userDataDir)
+                    .Where(a => a != "about:blank")
+                    .ToList();
+                BrowserTypeLaunchPersistentContextOptions options = new()
+                {
+                    ExecutablePath = PersistentExecutablePath(),
+                    Headless = true,
+                    Args = TestConstants.IsFirefox ? args.Concat(new[] { "-new-tab", EmptyPage }).ToList() : args.Append(EmptyPage).ToList(),
+                    IgnoreDefaultArgs = true,
+                };
+                IBrowserContext browserContext = await browserType.LaunchPersistentContextAsync(userDataDir, options).ConfigureAwait(false);
+                if (browserContext.Pages.Count == 0)
+                {
+                    await browserContext.WaitForPageAsync().ConfigureAwait(false);
+                }
+
+                await browserContext.Pages[0].WaitForLoadStateAsync().ConfigureAwait(false);
+                List<string> gotUrls = browserContext.Pages.Select(page => page.Url).ToList();
+                Assert.That(gotUrls, Is.EqualTo(new[] { EmptyPage }));
+                await browserContext.CloseAsync().ConfigureAwait(false);
+            }
+            finally
+            {
+                TryDeleteDirectory(userDataDir);
+            }
+        }
+
+        [PlaywrightTest("defaultbrowsercontext-2.spec.ts", "should handle timeout")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public void ShouldHandleTimeout()
+        {
+            Assert.Ignore("Node __testHookBeforeCreateBrowser hook");
+        }
+
+        [PlaywrightTest("defaultbrowsercontext-2.spec.ts", "should handle exception")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public void ShouldHandleException()
+        {
+            Assert.Ignore("Node __testHookBeforeCreateBrowser hook");
+        }
+
         [PlaywrightTest("defaultbrowsercontext-2.spec.ts", "should fire close event for a persistent context")]
         [Test]
         [Timeout(TestConstants.DefaultTestTimeout)]
@@ -491,6 +542,14 @@ namespace PlaywrightNative.Tests
             Assert.That(await launch.Page.InnerHTMLAsync("defaultContextCSS=div").ConfigureAwait(false), Is.EqualTo("hello"));
         }
 
+        [PlaywrightTest("defaultbrowsercontext-2.spec.ts", "should connect to a browser with the default page")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public void ShouldConnectToABrowserWithTheDefaultPage()
+        {
+            Assert.Ignore("Node __testHookOnConnectToBrowser hook");
+        }
+
         [PlaywrightTest("defaultbrowsercontext-2.spec.ts", "should support har option")]
         [Test]
         [Timeout(TestConstants.DefaultTestTimeout)]
@@ -501,6 +560,17 @@ namespace PlaywrightNative.Tests
             await launch.Page.GoToAsync("http://no.playwright/").ConfigureAwait(false);
             Assert.That(await launch.Page.EvaluateAsync<string>("window.value").ConfigureAwait(false), Is.EqualTo("foo"));
             await Assertions.Expect(launch.Page.Locator("body")).ToHaveCSSAsync("background-color", "rgb(255, 0, 0)").ConfigureAwait(false);
+        }
+
+        [PlaywrightTest("defaultbrowsercontext-2.spec.ts", "user agent is up to date")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public async Task UserAgentIsUpToDate()
+        {
+            string userAgent = ((IHasDefaultUserAgent)Browser).DefaultUserAgent;
+            await using PersistentLaunch launch = await LaunchPersistentAsync().ConfigureAwait(false);
+            Assert.That(await launch.Page.EvaluateAsync<string>("() => navigator.userAgent").ConfigureAwait(false), Is.EqualTo(userAgent));
+            await launch.Context.CloseAsync().ConfigureAwait(false);
         }
 
         [PlaywrightTest("defaultbrowsercontext-2.spec.ts", "dialog.accept should work")]

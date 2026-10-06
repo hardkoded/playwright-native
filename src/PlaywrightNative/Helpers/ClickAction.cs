@@ -2238,6 +2238,15 @@ namespace PlaywrightNative.Helpers
                 return;
             }
 
+            // WebKit runs no rAF callbacks in a page with JavaScript disabled,
+            // so the awaited page rAF below would never settle. Official waits
+            // between action retries outside the page (issue 42977).
+            if (handle is WebKit.WKJSHandle { OwnerPage.IsJavaScriptDisabled: true })
+            {
+                await DelayOrAbortAsync(32).ConfigureAwait(false);
+                return;
+            }
+
             try
             {
                 Task pageRaf = handle.EvaluateAsync(

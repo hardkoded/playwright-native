@@ -18,6 +18,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Text.Json;
@@ -184,6 +185,23 @@ namespace PlaywrightNative.Chromium
         }
 
         /// <summary>
+        /// Official <c>chromium.defaultArgs</c>: the full argument list a
+        /// launch passes when <c>ignoreDefaultArgs</c> is not set, including
+        /// the profile, the debugging transport, and the initial page.
+        /// </summary>
+        /// <param name="options">Launch options.</param>
+        /// <param name="userDataDir">User data directory.</param>
+        /// <returns>The argument list.</returns>
+        internal static List<string> DefaultLaunchArgs(BrowserTypeLaunchOptions options, string userDataDir)
+        {
+            List<string> args = GetDefaultArgs(options.Headless, options.ChromiumSandbox, options.Args?.ToArray(), devtools: options.Devtools, ignoreDefaultArgsList: options.IgnoreDefaultArgsList);
+            args.Add($"--user-data-dir={userDataDir}");
+            args.Add("--remote-debugging-port=0");
+            args.Add("about:blank");
+            return args;
+        }
+
+        /// <summary>
         /// Launches a Chromium browser process and connects to it via WebSocket.
         /// </summary>
         /// <param name="executablePath">Path to the Chromium executable.</param>
@@ -291,16 +309,22 @@ namespace PlaywrightNative.Chromium
                 }
             }
 
+            // Official ignoreDefaultArgs: true passes only the caller's args;
+            // the profile and initial page come from DefaultLaunchArgs.
             if (!string.IsNullOrEmpty(userDataDir))
             {
                 Directory.CreateDirectory(userDataDir);
-                launchArgs.Add($"--user-data-dir={userDataDir}");
+                if (!ignoreDefaultArgs)
+                {
+                    launchArgs.Add($"--user-data-dir={userDataDir}");
+                }
+
                 if (deleteUserDataDirOnClose)
                 {
                     tempUserDataDir = userDataDir;
                 }
             }
-            else if (!hasUserDataDir)
+            else if (!hasUserDataDir && !ignoreDefaultArgs)
             {
                 tempUserDataDir = Path.Combine(Path.GetTempPath(), "playwright_chromium_" + Path.GetRandomFileName());
                 Directory.CreateDirectory(tempUserDataDir);
@@ -311,7 +335,10 @@ namespace PlaywrightNative.Chromium
             // (--no-startup-window leaks processes and times out leftover
             // oopif). Official launch() still exposes no pages: close the
             // leftover about:blank after connect.
-            launchArgs.Add("about:blank");
+            if (!ignoreDefaultArgs)
+            {
+                launchArgs.Add("about:blank");
+            }
 
             WebSocketTransport transport = null;
             CRConnection connection = null;

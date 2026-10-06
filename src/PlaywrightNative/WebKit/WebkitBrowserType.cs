@@ -18,6 +18,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.IO.Pipes;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading.Tasks;
@@ -119,6 +120,17 @@ namespace PlaywrightNative.WebKit
         }
 
         /// <summary>
+        /// Official <c>webkit.defaultArgs</c>: the full argument list a launch
+        /// passes when <c>ignoreDefaultArgs</c> is not set.
+        /// </summary>
+        /// <param name="options">Launch options.</param>
+        /// <param name="isPersistent">Whether the launch is for a persistent context.</param>
+        /// <param name="userDataDir">User data directory.</param>
+        /// <returns>The argument list.</returns>
+        internal static List<string> DefaultLaunchArgs(BrowserTypeLaunchOptions options, bool isPersistent, string userDataDir)
+            => GetDefaultArgs(options.Headless, options.Args?.ToArray(), isPersistent ? userDataDir : null);
+
+        /// <summary>
         /// Launches a WebKit process and connects via pipe transport.
         /// </summary>
         /// <param name="executablePath">Path to the WebKit launcher (e.g. <c>pw_run.sh</c> on Unix).</param>
@@ -134,6 +146,7 @@ namespace PlaywrightNative.WebKit
         /// <param name="handleSIGINT">When <see langword="true"/>, close the browser on Ctrl-C.</param>
         /// <param name="handleSIGTERM">When <see langword="true"/>, close the browser on SIGTERM.</param>
         /// <param name="handleSIGHUP">When <see langword="true"/>, close the browser on SIGHUP.</param>
+        /// <param name="ignoreDefaultArgs">When <see langword="true"/>, pass only <paramref name="args"/>.</param>
         /// <returns>A connected <see cref="WKBrowser"/>.</returns>
         internal static async Task<WKBrowser> LaunchAsync(
             string executablePath,
@@ -148,14 +161,15 @@ namespace PlaywrightNative.WebKit
             bool deleteUserDataDirOnClose = false,
             bool handleSIGINT = true,
             bool handleSIGTERM = true,
-            bool handleSIGHUP = true)
+            bool handleSIGHUP = true,
+            bool ignoreDefaultArgs = false)
         {
             if (string.IsNullOrEmpty(executablePath))
             {
                 throw new ArgumentException("WebKit executable path is required.", nameof(executablePath));
             }
 
-            List<string> launchArgs = GetDefaultArgs(headless, args, userDataDir);
+            List<string> launchArgs = ignoreDefaultArgs ? new List<string>(args ?? []) : GetDefaultArgs(headless, args, userDataDir);
             WebKitMacProxyBypassShim macBypassShim = WebKitMacProxyBypassShim.TryStart(proxy, out Proxy effectiveProxy);
 
             // Darwin: no URL userinfo (CFNetwork 407-challenges via ExtraHTTPHeaders).

@@ -235,8 +235,9 @@ namespace PlaywrightNative.Helpers
             // returns. A rAF pair lets willCheck / Network land before Page.enable.
             // Navigable targets (expectNavigation) get a longer empty ceiling;
             // ordinary buttons stay short so Darwin multi-click / scroll=none survive.
+            // A page with JavaScript disabled runs no rAF callbacks.
             bool chromiumPage = string.Equals(page?.GetType().Name, "Page", StringComparison.Ordinal);
-            if (!chromiumPage && page != null)
+            if (!chromiumPage && page != null && page is not WebKit.WKPage { IsJavaScriptDisabled: true })
             {
                 try
                 {

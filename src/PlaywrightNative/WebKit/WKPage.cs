@@ -454,6 +454,12 @@ namespace PlaywrightNative.WebKit
         internal WKBrowserContext WKContext => _context;
 
         /// <summary>
+        /// Gets whether the owning context set <c>javaScriptEnabled: false</c>.
+        /// WebKit then runs no rAF callbacks in the page.
+        /// </summary>
+        internal bool IsJavaScriptDisabled => Context is WKBrowserContext { IsJavaScriptDisabled: true };
+
+        /// <summary>
         /// Page-level extra HTTP headers last passed to
         /// <see cref="SetExtraHttpHeadersAsync"/>.
         /// </summary>
@@ -9884,19 +9890,11 @@ namespace PlaywrightNative.WebKit
                 }
 
                 // Page.overrideUserAgent is bound to the previous target; re-apply
-                // an explicit context UA, or re-run the macOS Safari-token default.
+                // the context UA.
                 WKBrowserContext ctx = _context ?? OwnerContext as WKBrowserContext;
                 if (ctx != null)
                 {
-                    string userAgent = ((IHasUserAgent)ctx).UserAgent;
-                    if (!string.IsNullOrEmpty(userAgent))
-                    {
-                        await SetUserAgentAsync(userAgent).ConfigureAwait(false);
-                    }
-                    else
-                    {
-                        await ctx.ReapplyDefaultSafariUserAgentAsync(this).ConfigureAwait(false);
-                    }
+                    await SetUserAgentAsync(((IHasUserAgent)ctx).UserAgent).ConfigureAwait(false);
                 }
             }
 #pragma warning disable RCS1075
