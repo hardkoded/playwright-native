@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
@@ -49,8 +50,11 @@ namespace PlaywrightNative.Tests
 
         private const string IframeSkipReason = "Firefox does not support registering WebMCP tools in iframes yet, https://bugzilla.mozilla.org/show_bug.cgi?id=2019743";
 
+        // Keyed by test id: a timed-out test can still run its TearDown later,
+        // and it must close its own context, not the one of the next test.
+        private readonly ConcurrentDictionary<string, IBrowserContext> _contexts = new();
+
         private IBrowser _browser;
-        private IBrowserContext _context;
 
         private IPage Page { get; set; }
 
@@ -97,17 +101,17 @@ namespace PlaywrightNative.Tests
                 Assert.Ignore("Test server is unavailable.");
             }
 
-            _context = await _browser.NewContextAsync().ConfigureAwait(false);
-            Page = await _context.NewPageAsync().ConfigureAwait(false);
+            IBrowserContext context = await _browser.NewContextAsync().ConfigureAwait(false);
+            _contexts[TestContext.CurrentContext.Test.ID] = context;
+            Page = await context.NewPageAsync().ConfigureAwait(false);
         }
 
         [TearDown]
         public async Task CloseContextAsync()
         {
-            if (_context != null)
+            if (_contexts.TryRemove(TestContext.CurrentContext.Test.ID, out IBrowserContext context))
             {
-                await _context.CloseAsync().ConfigureAwait(false);
-                _context = null;
+                await context.CloseAsync().ConfigureAwait(false);
             }
         }
 
