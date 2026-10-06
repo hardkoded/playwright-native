@@ -11,9 +11,12 @@ using System.IO;
 using System.Net;
 using System.Net.Http;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography.X509Certificates;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using Microsoft.Playwright;
+using PlaywrightNative.Helpers;
 
 namespace PlaywrightNative
 {
@@ -92,7 +95,7 @@ namespace PlaywrightNative
                 try
                 {
                     using HttpRequestMessage request = new(HttpMethod.Head, url);
-                    using HttpResponseMessage response = await client.SendAsync(request).ConfigureAwait(false);
+                    using HttpResponseMessage response = await HttpRequestHelper.SendAsync(client, request, HttpCompletionOption.ResponseContentRead).ConfigureAwait(false);
                     if (response.IsSuccessStatusCode)
                     {
                         return true;
@@ -335,10 +338,15 @@ namespace PlaywrightNative
 
         private HttpClient BuildHttpClient()
         {
-            HttpClientHandler handler = new()
-            {
-                CheckCertificateRevocationList = true,
-            };
+            // PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT is a misnomer, it actually controls the socket's
+            // max idle timeout. Unfortunately, we cannot rename it without breaking existing user workflows.
+            string timeoutEnv = Environment.GetEnvironmentVariable(ConnectionTimeoutEnvVar);
+            int socketTimeout = !string.IsNullOrEmpty(timeoutEnv) && int.TryParse(timeoutEnv, out int timeoutMs) && timeoutMs > 0
+                ? timeoutMs
+                : HttpRequestHelper.NetDefaultTimeout;
+
+            SocketsHttpHandler handler = HttpRequestHelper.CreateHandler(socketTimeout);
+            handler.SslOptions.CertificateRevocationCheckMode = X509RevocationMode.Online;
 
             if (WebProxy != null)
             {
@@ -346,20 +354,11 @@ namespace PlaywrightNative
                 handler.UseProxy = true;
             }
 
-            HttpClient client = new(handler, disposeHandler: true);
-
-            string timeoutEnv = Environment.GetEnvironmentVariable(ConnectionTimeoutEnvVar);
-            if (!string.IsNullOrEmpty(timeoutEnv) && int.TryParse(timeoutEnv, out int timeoutMs) && timeoutMs > 0)
+            // The socket idle timeout governs; large downloads must not hit a whole-request timeout.
+            return new HttpClient(handler, disposeHandler: true)
             {
-                client.Timeout = TimeSpan.FromMilliseconds(timeoutMs);
-            }
-            else
-            {
-                // Downloads are large; allow plenty of time by default.
-                client.Timeout = TimeSpan.FromMinutes(30);
-            }
-
-            return client;
+                Timeout = Timeout.InfiniteTimeSpan,
+            };
         }
 
         private string[] DownloadUrls(string buildId)
@@ -384,7 +383,8 @@ namespace PlaywrightNative
                     {
                         log?.LogInformation("Downloading {Browser} {BuildId} from {Url} (attempt {Attempt})", Browser, buildId, url, attempt + 1);
 
-                        using HttpResponseMessage response = await client.GetAsync(new Uri(url), HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false);
+                        using HttpRequestMessage request = new(HttpMethod.Get, url);
+                        using HttpResponseMessage response = await HttpRequestHelper.SendAsync(client, request, HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false);
                         if (!response.IsSuccessStatusCode)
                         {
                             int code = (int)response.StatusCode;
