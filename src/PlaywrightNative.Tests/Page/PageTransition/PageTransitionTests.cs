@@ -26,7 +26,7 @@ namespace PlaywrightNative.Tests
     /// Official <c>page-transition.spec.ts</c>.
     /// </summary>
     [TestFixture]
-    public class PageTransitionParityTests : PageTestEx
+    public class PageTransitionTests : PageTestEx
     {
         [PlaywrightTest("page-transition.spec.ts", "should not crash when filter transition completes")]
         [Test]
