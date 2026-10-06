@@ -29,10 +29,7 @@ namespace PlaywrightNative.Tests
 {
     /// <summary>
     /// Official <c>library/browsercontext-proxy.spec.ts</c> parity.
-    /// Skipped (Node-only channel type validation):
-    /// <c>should throw for bad server value</c> (<c>proxy.server: expected
-    /// string, got number</c>; C# <see cref="Proxy.Server"/> is already a
-    /// string). Do not edit leftover <c>ContextProxyTests</c>,
+    /// Do not edit leftover <c>ContextProxyTests</c>,
     /// <c>ContextProxyAuthTests</c>, or <c>LoopbackHttpProxy</c>.
     /// </summary>
     [TestFixture]
@@ -178,6 +175,12 @@ namespace PlaywrightNative.Tests
         [Timeout(TestConstants.DefaultTestTimeout)]
         public Task ShouldIgnoreLegacyHttpPerContextLaunchProxy()
             => ShouldIgnoreLegacyLaunchProxyAsync("http://per-context");
+
+        [PlaywrightTest("browsercontext-proxy.spec.ts", "should throw for bad server value")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public void ShouldThrowForBadServerValue()
+            => Assert.Ignore("Proxy.Server is a string in C#, so a numeric server value cannot be passed.");
 
         [PlaywrightTest("browsercontext-proxy.spec.ts", "should use proxy")]
         [Test]

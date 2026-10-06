@@ -28,10 +28,7 @@ namespace PlaywrightNative.Tests
 {
     /// <summary>
     /// Official <c>library/proxy.spec.ts</c> parity. Launch-level
-    /// <c>browserType.launch({ proxy })</c>. Skipped (Node-only type
-    /// validation): <c>should throw for bad server value</c>
-    /// (<c>proxy.server: expected string, got number</c>; C#
-    /// <see cref="Proxy.Server"/> is already a string). Official
+    /// <c>browserType.launch({ proxy })</c>. Official
     /// <c>it.fixme</c> on <c>should use proxy with emulated user agent</c>.
     /// Do not edit leftover <c>ContextProxyTests</c>,
     /// <c>ContextProxyAuthTests</c>, or <c>LoopbackHttpProxy</c>.
@@ -129,6 +126,12 @@ namespace PlaywrightNative.Tests
             TestServerSetup.Server?.Reset();
             TestServerSetup.HttpsServer?.Reset();
         }
+
+        [PlaywrightTest("proxy.spec.ts", "should throw for bad server value")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public void ShouldThrowForBadServerValue()
+            => Assert.Ignore("Proxy.Server is a string in C#, so a numeric server value cannot be passed.");
 
         [PlaywrightTest("proxy.spec.ts", "should use proxy @smoke")]
         [Test]
