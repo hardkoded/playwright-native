@@ -58,9 +58,7 @@ namespace PlaywrightNative.WebKit
         private float _defaultNavigationTimeout = 30_000;
         private Dictionary<string, string> _extraHttpHeaders;
         private ViewportSize _viewport;
-        private string _userAgent;
-        private string _defaultSafariUserAgent;
-        private bool _defaultSafariUaInitInstalled;
+        private string _userAgent = WKBrowser.DefaultUserAgent;
         private string _locale;
         private string _timezoneId;
         private bool _offline;
@@ -1188,14 +1186,7 @@ namespace PlaywrightNative.WebKit
                 await SetGeolocationOverrideAsync(_geolocation).ConfigureAwait(false);
             }
 
-            if (!string.IsNullOrEmpty(_userAgent))
-            {
-                await page.SetUserAgentAsync(_userAgent).ConfigureAwait(false);
-            }
-            else
-            {
-                await EnsureDefaultUserAgentHasSafariTokenAsync(page).ConfigureAwait(false);
-            }
+            await page.SetUserAgentAsync(_userAgent).ConfigureAwait(false);
 
             if (!string.IsNullOrEmpty(_timezoneId))
             {
@@ -1448,7 +1439,7 @@ namespace PlaywrightNative.WebKit
         {
             GeolocationValidator.Validate(geolocation);
             _viewport = ViewportSizeHelper.Resolve(viewport);
-            _userAgent = userAgent;
+            _userAgent = string.IsNullOrEmpty(userAgent) ? WKBrowser.DefaultUserAgent : userAgent;
             _locale = locale;
             _timezoneId = timezoneId;
             _offline = offline == true;
@@ -2279,14 +2270,7 @@ namespace PlaywrightNative.WebKit
                 await wkPage.AddRouteAsync(entry).ConfigureAwait(false);
             }
 
-            if (!string.IsNullOrEmpty(_userAgent))
-            {
-                await wkPage.SetUserAgentAsync(_userAgent).ConfigureAwait(false);
-            }
-            else
-            {
-                await EnsureDefaultUserAgentHasSafariTokenAsync(wkPage).ConfigureAwait(false);
-            }
+            await wkPage.SetUserAgentAsync(_userAgent).ConfigureAwait(false);
 
             if (!string.IsNullOrEmpty(_timezoneId))
             {
@@ -3027,174 +3011,6 @@ namespace PlaywrightNative.WebKit
             T result = await waitTask.ConfigureAwait(false);
             await actionTask.ConfigureAwait(false);
             return result;
-        }
-
-        /// <summary>
-        /// Re-applies the macOS Safari-token default on <paramref name="page"/>
-        /// after a cross-process navigation drops the per-target override.
-        /// </summary>
-        /// <param name="page">The page whose target just committed.</param>
-        /// <returns>A task that completes when the override is applied or skipped.</returns>
-        internal Task ReapplyDefaultSafariUserAgentAsync(WKPage page)
-            => EnsureDefaultUserAgentHasSafariTokenAsync(page);
-
-        /// <summary>
-        /// macOS WebKit's default <c>navigator.userAgent</c> often omits the
-        /// trailing <c>Safari/…</c> token that upstream Playwright and the
-        /// page-basic sanity check expect. Append one derived from AppleWebKit
-        /// when the context did not set an explicit user agent.
-        /// </summary>
-        /// <param name="page">The page to normalize.</param>
-        /// <returns>A task that completes when the override is applied or skipped.</returns>
-        private async Task EnsureDefaultUserAgentHasSafariTokenAsync(WKPage page)
-        {
-            if (page == null
-                || !RuntimeInformation.IsOSPlatform(OSPlatform.OSX)
-                || !string.IsNullOrEmpty(_userAgent))
-            {
-                return;
-            }
-
-            string ua = _defaultSafariUserAgent;
-
-            // ApplyEmulation runs before Target.resume. Probing navigator.userAgent
-            // on a paused Darwin target wedges Runtime.evaluate until the 20s
-            // WKSession command timeout — even budgeted WhenAny attempts leave
-            // orphans that then make StampNavigatorUserAgentAsync hang and eat
-            // LaunchAsyncHandleSIGINTFalseShouldStartAPage's NUnit 30s budget.
-            // Use the fallback Safari-token UA until the page is live; after
-            // resume EvaluateOnCurrent / recycle re-stamp covers the document.
-            if (string.IsNullOrEmpty(ua) && page.InitializedTask.IsCompleted)
-            {
-                // Cap each probe: zombie targets after Darwin recycle hang until
-                // the 20s WKSession command timeout. Five unbounded retries ate
-                // LaunchAsyncHandleSIGTERMFalseShouldStartAPage's NUnit 30s budget.
-                DateTime deadline = DateTime.UtcNow.AddSeconds(2);
-                for (int attempt = 0; attempt < 5 && DateTime.UtcNow < deadline; attempt++)
-                {
-                    try
-                    {
-                        TimeSpan remaining = deadline - DateTime.UtcNow;
-                        if (remaining <= TimeSpan.Zero)
-                        {
-                            break;
-                        }
-
-                        TimeSpan attemptBudget = remaining > TimeSpan.FromMilliseconds(800)
-                            ? TimeSpan.FromMilliseconds(800)
-                            : remaining;
-                        Task<string> evalTask = page.EvaluateAsync<string>("() => navigator.userAgent");
-                        Task finished = await Task.WhenAny(evalTask, Task.Delay(attemptBudget))
-                            .ConfigureAwait(false);
-                        if (finished != evalTask)
-                        {
-                            _ = evalTask.ContinueWith(
-                                t => _ = t.Exception,
-                                CancellationToken.None,
-                                TaskContinuationOptions.OnlyOnFaulted,
-                                TaskScheduler.Default);
-                        }
-                        else
-                        {
-                            ua = await evalTask.ConfigureAwait(false);
-                            if (!string.IsNullOrEmpty(ua))
-                            {
-                                break;
-                            }
-                        }
-                    }
-#pragma warning disable RCS1075
-                    catch (Exception)
-#pragma warning restore RCS1075
-                    {
-                        // Page may not be evaluable yet (or mid-swap); retry briefly.
-                    }
-
-                    await Task.Delay(50).ConfigureAwait(false);
-                }
-            }
-
-            if (!string.IsNullOrEmpty(ua)
-                && ua.Contains("Safari/", StringComparison.Ordinal)
-                && ua.Contains("Version/", StringComparison.Ordinal))
-            {
-                await StampNavigatorUserAgentAsync(page, ua).ConfigureAwait(false);
-                return;
-            }
-
-            // MiniBrowser's default navigator.userAgent often omits Version/ and
-            // Safari/. Page.overrideUserAgent also fails to stick before the
-            // first document is live, so stamp both the protocol override and a
-            // navigator getter (init script) without assigning _userAgent.
-            string baseUa = string.IsNullOrEmpty(ua)
-                ? "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)"
-                : ua;
-            string withSafari = WithSafariTokens(baseUa);
-            _defaultSafariUserAgent = withSafari;
-            await page.SetUserAgentAsync(withSafari).ConfigureAwait(false);
-            await StampNavigatorUserAgentAsync(page, withSafari).ConfigureAwait(false);
-
-            static string WithSafariTokens(string userAgent)
-            {
-                string result = string.IsNullOrEmpty(userAgent)
-                    ? "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)"
-                    : userAgent.TrimEnd();
-                Match webkit = Regex.Match(result, @"AppleWebKit/([\d.]+)");
-                string version = webkit.Success ? webkit.Groups[1].Value : "605.1.15";
-                if (!result.Contains("Version/", StringComparison.Ordinal))
-                {
-                    result += " Version/" + version;
-                }
-
-                if (!result.Contains("Safari/", StringComparison.Ordinal))
-                {
-                    result += " Safari/" + version;
-                }
-
-                return result;
-            }
-        }
-
-        private async Task StampNavigatorUserAgentAsync(WKPage page, string userAgent)
-        {
-            if (page == null || string.IsNullOrEmpty(userAgent))
-            {
-                return;
-            }
-
-            string literal = JsonSerializer.Serialize(userAgent);
-            string script =
-                "(() => { const ua = " + literal + @";
-  try {
-    Object.defineProperty(navigator, 'userAgent', {
-      configurable: true,
-      enumerable: true,
-      get() { return ua; }
-    });
-  } catch (e) {}
-})()";
-
-            // ApplyEmulation stamps before Target.resume. Unbounded EvaluateAsync
-            // on a paused Darwin target burns the full 20s WKSession command
-            // timeout (LaunchAsyncHandleSIGINTFalseShouldStartAPage empty-stack
-            // 30s). Only evaluate once the page is live, and bound the attempt;
-            // the init script below still covers navigations / EvaluateOnCurrent.
-            if (page.InitializedTask.IsCompleted)
-            {
-                await EvaluateWithShortBudgetAsync(
-                        page,
-                        script,
-                        TimeSpan.FromSeconds(1.5))
-                    .ConfigureAwait(false);
-            }
-
-            if (_defaultSafariUaInitInstalled)
-            {
-                return;
-            }
-
-            _defaultSafariUaInitInstalled = true;
-            await AddInitScriptAsync(script, scriptPath: null).ConfigureAwait(false);
         }
 
         private sealed class NoopContextDisposable : IAsyncDisposable

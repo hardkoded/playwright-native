@@ -41,8 +41,19 @@ namespace PlaywrightNative.WebKit
     /// sent with the <see cref="WKConnection.BrowserCloseMessageId"/> sentinel id so
     /// the response is discarded.
     /// </remarks>
-    internal sealed partial class WKBrowser : IBrowser, IHasPlaywrightLogger, IHasLaunchProxy, IHasTracesDir, IHasArtifactsDir
+    internal sealed partial class WKBrowser : IBrowser, IHasDefaultUserAgent, IHasPlaywrightLogger, IHasLaunchProxy, IHasTracesDir, IHasArtifactsDir
     {
+        /// <summary>
+        /// Official <c>BROWSER_VERSION</c> from <c>wkBrowser.ts</c>.
+        /// </summary>
+        internal const string BrowserVersion = "26.4";
+
+        /// <summary>
+        /// Official <c>DEFAULT_USER_AGENT</c> from <c>wkBrowser.ts</c>. Every
+        /// context without an explicit <c>userAgent</c> uses it.
+        /// </summary>
+        internal const string DefaultUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/" + BrowserVersion + " Safari/605.1.15";
+
         private readonly WKConnection _connection;
         private readonly BrowserProcessManager _processManager;
         private readonly ILoggerFactory _loggerFactory;
@@ -81,13 +92,16 @@ namespace PlaywrightNative.WebKit
         public bool IsConnected => !_closed && !_connection.IsClosed;
 
         /// <inheritdoc/>
-        public string Version => "26.4";
+        public string Version => BrowserVersion;
 
         /// <inheritdoc/>
         public IBrowserType BrowserType => BrowserTypeInfo.Webkit;
 
         /// <inheritdoc/>
         public IPlaywrightLogger Logger { get; set; }
+
+        /// <inheritdoc/>
+        string IHasDefaultUserAgent.DefaultUserAgent => DefaultUserAgent;
 
         /// <inheritdoc/>
         Proxy IHasLaunchProxy.LaunchProxy => LaunchProxy;

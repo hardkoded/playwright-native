@@ -26,7 +26,7 @@ namespace PlaywrightNative.Tests
 {
     /// <summary>
     /// Official <c>library/browser.spec.ts</c> parity. Six portable titles.
-    /// Skip Node-only <c>newContext should not leave a context upon failure</c>
+    /// Ignore Node-only <c>newContext should not leave a context upon failure</c>
     /// (<c>toImpl</c> / <c>__testHookBeforeSetStorageState</c>).
     /// </summary>
     [TestFixture]
@@ -142,6 +142,14 @@ namespace PlaywrightNative.Tests
             IBrowserContext context = await _browser.NewContextAsync().ConfigureAwait(false);
             Assert.That(events, Is.EqualTo(new[] { context }));
             await context.CloseAsync().ConfigureAwait(false);
+        }
+
+        [PlaywrightTest("browser.spec.ts", "newContext should not leave a context upon failure")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public void NewContextShouldNotLeaveAContextUponFailure()
+        {
+            Assert.Ignore("Node __testHookBeforeSetStorageState hook");
         }
 
         private static async Task DisposeQuietlyAsync(IAsyncDisposable disposable)
