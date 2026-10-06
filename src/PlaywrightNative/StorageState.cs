@@ -20,12 +20,11 @@ namespace PlaywrightNative
         public ICollection<StorageStateOrigin> Origins { get; set; } = new List<StorageStateOrigin>();
 
         /// <summary>
-        /// Virtual WebAuthn passkeys, when collected with
-        /// <see cref="IBrowserContext.StorageStateAsync(string, bool?, bool?)"/>.
+        /// Virtual WebAuthn passkeys, when collected with credentials enabled.
         /// Omitted from JSON when <see langword="null"/>.
         /// </summary>
         [JsonPropertyName("credentials")]
-        public ICollection<VirtualCredential> Credentials { get; set; }
+        public ICollection<StorageStateCredential> Credentials { get; set; }
 
         /// <inheritdoc/>
         public bool Equals(StorageState other)
@@ -52,7 +51,7 @@ namespace PlaywrightNative
             => 412870874 +
                 EqualityComparer<ICollection<Cookie>>.Default.GetHashCode(Cookies) +
                 EqualityComparer<ICollection<StorageStateOrigin>>.Default.GetHashCode(Origins) +
-                EqualityComparer<ICollection<VirtualCredential>>.Default.GetHashCode(Credentials);
+                EqualityComparer<ICollection<StorageStateCredential>>.Default.GetHashCode(Credentials);
 
         /// <inheritdoc/>
         public override bool Equals(object obj) => Equals(obj as StorageState);

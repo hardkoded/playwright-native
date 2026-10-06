@@ -16,6 +16,7 @@
  */
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -71,11 +72,17 @@ namespace PlaywrightNative.Helpers
         }
 
         /// <inheritdoc/>
-        public async Task<VirtualCredential> CreateAsync(string rpId, string id = default, string userHandle = default, string privateKey = default, string publicKey = default)
+        public async Task<VirtualCredential> CreateAsync(string rpId, string id = default, string userHandle = default, string privateKey = default, string publicKey = default, long? signCount = default)
         {
             if (string.IsNullOrEmpty(rpId))
             {
                 throw new ArgumentException("Relying party id must not be empty.", nameof(rpId));
+            }
+
+            long count = signCount ?? 0;
+            if (count < 0 || count > uint.MaxValue)
+            {
+                throw new PlaywrightException("signCount must be between 0 and 4294967295, got " + count.ToString(CultureInfo.InvariantCulture));
             }
 
             VirtualCredential credential = VirtualCredentialFactory.Create(rpId, id, userHandle, privateKey, publicKey);
@@ -86,7 +93,7 @@ namespace PlaywrightNative.Helpers
                 UserHandle = credential.UserHandle,
                 PrivateKey = credential.PrivateKey,
                 PublicKey = credential.PublicKey,
-                SignCount = 0,
+                SignCount = (uint)count,
                 IsResident = true,
             };
 
@@ -179,7 +186,8 @@ namespace PlaywrightNative.Helpers
         }
 
         private static VirtualCredential ToPublic(CredentialRecord record)
-            => new VirtualCredential
+        {
+            VirtualCredential credential = new VirtualCredential
             {
                 Id = record.Id,
                 RpId = record.RpId,
@@ -187,6 +195,9 @@ namespace PlaywrightNative.Helpers
                 PrivateKey = record.PrivateKey,
                 PublicKey = record.PublicKey,
             };
+            VirtualCredentialExtras.SetSignCount(credential, record.SignCount);
+            return credential;
+        }
 
         private static Dictionary<string, object> Fail(string name, string message)
             => new Dictionary<string, object>(StringComparer.Ordinal)

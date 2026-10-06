@@ -719,8 +719,8 @@ namespace PlaywrightNative.WebKit
             => GetCookiesAsync(urls);
 
         /// <inheritdoc/>
-        public Task<string> StorageStateAsync(string path = default, bool? indexedDB = default, bool? credentials = default)
-            => StorageStateHelper.ExportAsync(this, path, indexedDB == true, credentials == true);
+        public Task<string> StorageStateAsync(string path = default, bool? indexedDB = default, bool? credentials = default, bool? opfs = default)
+            => StorageStateHelper.ExportAsync(this, path, indexedDB == true, credentials == true, opfs == true);
 
         /// <inheritdoc/>
         public async Task GrantPermissionsAsync(IEnumerable<string> permissions, string origin = default)

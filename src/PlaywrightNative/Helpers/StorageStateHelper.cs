@@ -57,13 +57,16 @@ namespace PlaywrightNative.Helpers
         /// IndexedDB databases are collected from each open page.
         /// When <paramref name="includeCredentials"/> is <see langword="true"/>,
         /// virtual WebAuthn passkeys are included.
+        /// When <paramref name="includeOpfs"/> is <see langword="true"/>,
+        /// the Origin Private File System of each origin is collected.
         /// </summary>
         /// <param name="context">The context to snapshot.</param>
         /// <param name="path">Optional file path to write.</param>
         /// <param name="includeIndexedDB">When <see langword="true"/>, collect IndexedDB.</param>
         /// <param name="includeCredentials">When <see langword="true"/>, collect passkeys.</param>
+        /// <param name="includeOpfs">When <see langword="true"/>, collect OPFS.</param>
         /// <returns>The storage-state JSON.</returns>
-        internal static async Task<string> ExportAsync(IBrowserContext context, string path, bool includeIndexedDB = false, bool includeCredentials = false)
+        internal static async Task<string> ExportAsync(IBrowserContext context, string path, bool includeIndexedDB = false, bool includeCredentials = false, bool includeOpfs = false)
         {
             if (context == null)
             {
@@ -73,7 +76,7 @@ namespace PlaywrightNative.Helpers
             StorageState state = new()
             {
                 Cookies = ToCookies(await context.GetCookiesAsync().ConfigureAwait(false)),
-                Origins = await CollectOriginsAsync(context, includeIndexedDB).ConfigureAwait(false),
+                Origins = await CollectOriginsAsync(context, includeIndexedDB, includeOpfs).ConfigureAwait(false),
             };
 
             if (includeCredentials)
@@ -248,7 +251,7 @@ namespace PlaywrightNative.Helpers
                 {
                     await ApplyCredentialsAsync(
                         context,
-                        state.Credentials ?? Array.Empty<VirtualCredential>()).ConfigureAwait(false);
+                        state.Credentials ?? Array.Empty<StorageStateCredential>()).ConfigureAwait(false);
                 }
             }
             catch (Exception ex) when (ex is PlaywrightException || ex is ArgumentException)
@@ -263,9 +266,9 @@ namespace PlaywrightNative.Helpers
             }
         }
 
-        private static List<VirtualCredential> CopyCredentials(IReadOnlyList<VirtualCredential> source)
+        private static List<StorageStateCredential> CopyCredentials(IReadOnlyList<VirtualCredential> source)
         {
-            List<VirtualCredential> copy = new();
+            List<StorageStateCredential> copy = new();
             if (source == null)
             {
                 return copy;
@@ -278,20 +281,21 @@ namespace PlaywrightNative.Helpers
                     continue;
                 }
 
-                copy.Add(new VirtualCredential
+                copy.Add(new StorageStateCredential
                 {
                     Id = credential.Id,
                     RpId = credential.RpId,
                     UserHandle = credential.UserHandle,
                     PrivateKey = credential.PrivateKey,
                     PublicKey = credential.PublicKey,
+                    SignCount = VirtualCredentialExtras.GetSignCount(credential),
                 });
             }
 
             return copy;
         }
 
-        private static async Task ApplyCredentialsAsync(IBrowserContext context, ICollection<VirtualCredential> credentials)
+        private static async Task ApplyCredentialsAsync(IBrowserContext context, ICollection<StorageStateCredential> credentials)
         {
             if (credentials == null)
             {
@@ -308,7 +312,7 @@ namespace PlaywrightNative.Helpers
             }
 
             int restored = 0;
-            foreach (VirtualCredential credential in credentials)
+            foreach (StorageStateCredential credential in credentials)
             {
                 if (credential == null || string.IsNullOrEmpty(credential.RpId))
                 {
@@ -320,7 +324,8 @@ namespace PlaywrightNative.Helpers
                     credential.Id,
                     credential.UserHandle,
                     credential.PrivateKey,
-                    credential.PublicKey).ConfigureAwait(false);
+                    credential.PublicKey,
+                    credential.SignCount).ConfigureAwait(false);
                 restored++;
             }
 
@@ -379,7 +384,7 @@ namespace PlaywrightNative.Helpers
             return result;
         }
 
-        private static async Task<List<StorageStateOrigin>> CollectOriginsAsync(IBrowserContext context, bool includeIndexedDB)
+        private static async Task<List<StorageStateOrigin>> CollectOriginsAsync(IBrowserContext context, bool includeIndexedDB, bool includeOpfs)
         {
             HashSet<string> originsToSave = new(StringComparer.Ordinal);
             if (context is IHasStorageStateInternals internals)
@@ -458,7 +463,7 @@ namespace PlaywrightNative.Helpers
 
                     try
                     {
-                        StorageStateOrigin collected = await CollectFromFrameAsync(frame, origin, includeIndexedDB).ConfigureAwait(false);
+                        StorageStateOrigin collected = await CollectFromFrameAsync(frame, origin, includeIndexedDB, includeOpfs).ConfigureAwait(false);
                         if (collected != null)
                         {
                             result.Add(collected);
@@ -498,7 +503,7 @@ namespace PlaywrightNative.Helpers
                 foreach (string origin in originsToSave)
                 {
                     await probe.GoToAsync(origin).ConfigureAwait(false);
-                    StorageStateOrigin collected = await CollectFromPageAsync(probe, origin, includeIndexedDB).ConfigureAwait(false);
+                    StorageStateOrigin collected = await CollectFromPageAsync(probe, origin, includeIndexedDB, includeOpfs).ConfigureAwait(false);
                     if (collected != null)
                     {
                         result.Add(collected);
@@ -529,10 +534,10 @@ namespace PlaywrightNative.Helpers
             return result;
         }
 
-        private static Task<StorageStateOrigin> CollectFromPageAsync(IPage page, string origin, bool includeIndexedDB)
-            => CollectFromFrameAsync(page?.MainFrame ?? page as IFrame, origin, includeIndexedDB);
+        private static Task<StorageStateOrigin> CollectFromPageAsync(IPage page, string origin, bool includeIndexedDB, bool includeOpfs)
+            => CollectFromFrameAsync(page?.MainFrame ?? page as IFrame, origin, includeIndexedDB, includeOpfs);
 
-        private static async Task<StorageStateOrigin> CollectFromFrameAsync(IFrame frame, string origin, bool includeIndexedDB)
+        private static async Task<StorageStateOrigin> CollectFromFrameAsync(IFrame frame, string origin, bool includeIndexedDB, bool includeOpfs)
         {
             if (frame == null)
             {
@@ -560,7 +565,12 @@ namespace PlaywrightNative.Helpers
             bool hasIndexed = includeIndexedDB
                 && indexed.ValueKind == JsonValueKind.Array
                 && indexed.GetArrayLength() > 0;
-            if (items.Count == 0 && !hasIndexed)
+            List<StorageStateOpfsEntry> opfs = includeOpfs
+                ? JsonSerializer.Deserialize<List<StorageStateOpfsEntry>>(
+                    await frame.EvaluateAsync<string>(OfficialStorageScript.CollectOpfs).ConfigureAwait(false),
+                    JsonOptions)
+                : null;
+            if (items.Count == 0 && !hasIndexed && !(opfs?.Count > 0))
             {
                 return null;
             }
@@ -570,6 +580,7 @@ namespace PlaywrightNative.Helpers
                 Origin = origin,
                 LocalStorage = items,
                 IndexedDB = hasIndexed ? indexed : default,
+                Opfs = opfs,
             };
         }
 
@@ -634,9 +645,12 @@ namespace PlaywrightNative.Helpers
                     string indexedJson = origin.IndexedDB.ValueKind == JsonValueKind.Array
                         ? origin.IndexedDB.GetRawText()
                         : "[]";
+                    string opfsJson = origin.Opfs == null
+                        ? string.Empty
+                        : ",\"opfs\":" + JsonSerializer.Serialize(origin.Opfs, JsonOptions);
                     string originJson = "{\"localStorage\":"
                         + JsonSerializer.Serialize(origin.LocalStorage ?? new List<NameValueEntry>(), JsonOptions)
-                        + ",\"indexedDB\":" + indexedJson + "}";
+                        + ",\"indexedDB\":" + indexedJson + opfsJson + "}";
                     await page.EvaluateAsync<bool>(OfficialStorageScript.Restore(originJson)).ConfigureAwait(false);
                 }
             }

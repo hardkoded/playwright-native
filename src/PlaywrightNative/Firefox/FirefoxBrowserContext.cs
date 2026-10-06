@@ -291,7 +291,7 @@ namespace PlaywrightNative.Firefox
             => GetCookiesAsync(urls);
 
         /// <inheritdoc/>
-        public Task<string> StorageStateAsync(string path = default, bool? indexedDB = default, bool? credentials = default)
+        public Task<string> StorageStateAsync(string path = default, bool? indexedDB = default, bool? credentials = default, bool? opfs = default)
             => throw NotImplementedHelper.ForMethod(nameof(StorageStateAsync));
 
         /// <inheritdoc/>

@@ -19,6 +19,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Playwright;
@@ -367,6 +368,63 @@ namespace PlaywrightNative.Tests
             await context.CloseAsync().ConfigureAwait(false);
         }
 
+        [PlaywrightTest("browsercontext-storage-state.spec.ts", "should work when service worker is intefering and the origin is not open")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public async Task ShouldWorkWhenServiceWorkerIsInteferingAndTheOriginIsNotOpen()
+        {
+            EnsureServer();
+            Server.SetRoute("/", http =>
+            {
+                http.Response.ContentType = "text/html";
+                return http.Response.WriteAsync(@"
+                    <script>
+                        window.localStorage.foo = 'bar';
+                        window.registrationPromise = navigator.serviceWorker.register('sw.js');
+                        window.activationPromise = new Promise(resolve => navigator.serviceWorker.oncontrollerchange = resolve);
+                    </script>
+                ");
+            });
+            Server.SetRoute("/sw.js", http =>
+            {
+                http.Response.ContentType = "application/javascript";
+                return http.Response.WriteAsync(@"
+                    const kHtmlPage = `
+                        <script>
+                            window.localStorage.fromServiceWorker = 'yes';
+                            window.location.href = 'redirected.html';
+                        </script>
+                    `;
+
+                    self.addEventListener('fetch', event => {
+                        if (new URL(event.request.url).pathname !== '/')
+                            return;
+                        const blob = new Blob([kHtmlPage], { type: 'text/html' });
+                        event.respondWith(new Response(blob, { status: 200, statusText: 'OK' }));
+                    });
+
+                    self.addEventListener('activate', event => {
+                        event.waitUntil(clients.claim());
+                    });
+                ");
+            });
+            Server.SetRoute("/redirected.html", http =>
+            {
+                http.Response.ContentType = "text/html";
+                return http.Response.WriteAsync("<html></html>");
+            });
+
+            IBrowserContext context = await _browser.NewContextAsync().ConfigureAwait(false);
+            IPage page = await context.NewPageAsync().ConfigureAwait(false);
+            await page.GoToAsync(Prefix).ConfigureAwait(false);
+            await page.EvaluateAsync("(() => window[\"activationPromise\"])()").ConfigureAwait(false);
+            await page.GoToAsync("about:blank").ConfigureAwait(false);
+
+            JsonElement origins = Origins(await context.StorageStateAsync().ConfigureAwait(false));
+            AssertJsonEqual("[{\"name\":\"foo\",\"value\":\"bar\"}]", origins[0].GetProperty("localStorage").GetRawText());
+            await context.CloseAsync().ConfigureAwait(false);
+        }
+
         [PlaywrightTest("browsercontext-storage-state.spec.ts", "should set local storage in third-party context")]
         [Test]
         [Timeout(TestConstants.DefaultTestTimeout)]
@@ -506,6 +564,101 @@ namespace PlaywrightNative.Tests
             }
         }
 
+        [PlaywrightTest("browsercontext-storage-state.spec.ts", "should round-trip OPFS")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public async Task ShouldRoundTripOPFS()
+        {
+            if (TestConstants.IsWebKit)
+            {
+                Assert.Ignore("OPFS is unavailable in non-persistent WebKit contexts");
+            }
+
+            EnsureServer();
+            IBrowserContext context = await _browser.NewContextAsync().ConfigureAwait(false);
+            IPage page = await context.NewPageAsync().ConfigureAwait(false);
+            await page.GoToAsync(EmptyPage).ConfigureAwait(false);
+            await page.EvaluateAsync(@"async () => {
+                const root = await navigator.storage.getDirectory();
+                const nested = await root.getDirectoryHandle('nested', { create: true });
+                await nested.getDirectoryHandle('empty', { create: true });
+
+                const binary = await nested.getFileHandle('data.bin', { create: true });
+                const binaryWritable = await binary.createWritable();
+                await binaryWritable.write(new Uint8Array([0, 1, 2, 255]));
+                await binaryWritable.close();
+
+                const text = await root.getFileHandle('hello.txt', { create: true });
+                const textWritable = await text.createWritable();
+                await textWritable.write('Hello, world!');
+                await textWritable.close();
+            }").ConfigureAwait(false);
+
+            AssertJsonEqual("{\"cookies\":[],\"origins\":[]}", await context.StorageStateAsync().ConfigureAwait(false));
+
+            string path = Path.Combine(Path.GetTempPath(), "pwsharp-storage-state-" + Guid.NewGuid().ToString("N") + ".json");
+            try
+            {
+                string storageState = await context.StorageStateAsync(path, opfs: true).ConfigureAwait(false);
+                AssertJsonEqual(
+                    "[{\"origin\":\"" + Prefix + "\",\"localStorage\":[],\"opfs\":["
+                        + "{\"path\":\"hello.txt\",\"type\":\"file\",\"base64\":\"SGVsbG8sIHdvcmxkIQ==\"},"
+                        + "{\"path\":\"nested\",\"type\":\"directory\"},"
+                        + "{\"path\":\"nested/data.bin\",\"type\":\"file\",\"base64\":\"AAEC/w==\"},"
+                        + "{\"path\":\"nested/empty\",\"type\":\"directory\"}]}]",
+                    Origins(storageState).GetRawText());
+                AssertJsonEqual(storageState, File.ReadAllText(path));
+                AssertJsonEqual(storageState, await context.APIRequest.StorageStateAsync(opfs: true).ConfigureAwait(false));
+
+                async Task CheckContextAsync(IBrowserContext target)
+                {
+                    AssertJsonEqual(storageState, await target.StorageStateAsync(opfs: true).ConfigureAwait(false));
+                    IPage checkPage = await target.NewPageAsync().ConfigureAwait(false);
+                    await checkPage.GoToAsync(EmptyPage).ConfigureAwait(false);
+                    JsonElement result = await checkPage.EvaluateAsync<JsonElement>(@"async () => {
+                        const root = await navigator.storage.getDirectory();
+                        const hello = await (await root.getFileHandle('hello.txt')).getFile();
+                        const nested = await root.getDirectoryHandle('nested');
+                        const data = await (await nested.getFileHandle('data.bin')).getFile();
+                        const empty = await nested.getDirectoryHandle('empty');
+                        const emptyEntries = [];
+                        for await (const name of empty.keys())
+                            emptyEntries.push(name);
+                        return {
+                            text: await hello.text(),
+                            bytes: [...new Uint8Array(await data.arrayBuffer())],
+                            empty: emptyEntries,
+                        };
+                    }").ConfigureAwait(false);
+                    AssertJsonEqual("{\"text\":\"Hello, world!\",\"bytes\":[0,1,2,255],\"empty\":[]}", result.GetRawText());
+                }
+
+                IBrowserContext context2 = await _browser.NewContextAsync(new BrowserContextOptions { StorageStatePath = path }).ConfigureAwait(false);
+                await CheckContextAsync(context2).ConfigureAwait(false);
+                await context2.CloseAsync().ConfigureAwait(false);
+
+                IBrowserContext context3 = await _browser.NewContextAsync().ConfigureAwait(false);
+                IPage page3 = await context3.NewPageAsync().ConfigureAwait(false);
+                await page3.GoToAsync(EmptyPage).ConfigureAwait(false);
+                await page3.EvaluateAsync(@"async () => {
+                    const root = await navigator.storage.getDirectory();
+                    await root.getFileHandle('stale.txt', { create: true });
+                }").ConfigureAwait(false);
+                await context3.SetStorageStateAsync(storageState).ConfigureAwait(false);
+                await CheckContextAsync(context3).ConfigureAwait(false);
+                await context3.CloseAsync().ConfigureAwait(false);
+            }
+            finally
+            {
+                if (File.Exists(path))
+                {
+                    File.Delete(path);
+                }
+
+                await context.CloseAsync().ConfigureAwait(false);
+            }
+        }
+
         [PlaywrightTest("browsercontext-storage-state.spec.ts", "should support IndexedDB")]
         [Test]
         [Timeout(TestConstants.DefaultTestTimeout)]
@@ -549,6 +702,18 @@ namespace PlaywrightNative.Tests
             await restored.CloseAsync().ConfigureAwait(false);
             await context.CloseAsync().ConfigureAwait(false);
         }
+
+        [PlaywrightTest("browsercontext-storage-state.spec.ts", "should roundtrip IndexedDB Map and Set with newContext")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public Task ShouldRoundtripIndexedDBMapAndSetWithNewContext()
+            => ShouldRoundtripIndexedDBMapAndSetAsync("newContext");
+
+        [PlaywrightTest("browsercontext-storage-state.spec.ts", "should roundtrip IndexedDB Map and Set with setStorageState")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public Task ShouldRoundtripIndexedDBMapAndSetWithSetStorageState()
+            => ShouldRoundtripIndexedDBMapAndSetAsync("setStorageState");
 
         [PlaywrightTest("browsercontext-storage-state.spec.ts", "should support empty indexedDB")]
         [Test]
@@ -795,6 +960,82 @@ namespace PlaywrightNative.Tests
             Assert.That(actual.UserHandle, Is.EqualTo(expected.UserHandle));
             Assert.That(actual.PrivateKey, Is.EqualTo(expected.PrivateKey));
             Assert.That(actual.PublicKey, Is.EqualTo(expected.PublicKey));
+        }
+
+        private static void AssertJsonEqual(string expected, string actual)
+            => Assert.That(JsonNode.DeepEquals(JsonNode.Parse(expected), JsonNode.Parse(actual)), Is.True, actual);
+
+        private async Task ShouldRoundtripIndexedDBMapAndSetAsync(string restore)
+        {
+            EnsureServer();
+            IBrowserContext source = await _browser.NewContextAsync().ConfigureAwait(false);
+            IPage page = await source.NewPageAsync().ConfigureAwait(false);
+            await page.GoToAsync(EmptyPage).ConfigureAwait(false);
+            await page.EvaluateAsync(@"() => new Promise((resolve, reject) => {
+                const request = indexedDB.open('collections', 1);
+                request.onupgradeneeded = () => request.result.createObjectStore('store');
+                request.onerror = () => reject(request.error);
+                request.onsuccess = () => {
+                    const db = request.result;
+                    const transaction = db.transaction('store', 'readwrite');
+                    const store = transaction.objectStore('store');
+                    store.put(new Map([['mk', 'mv']]), 'map');
+                    store.put(new Set([1, 2]), 'set');
+                    transaction.oncomplete = () => {
+                        db.close();
+                        resolve();
+                    };
+                    transaction.onerror = () => reject(transaction.error);
+                };
+            })").ConfigureAwait(false);
+
+            string path = Path.Combine(Path.GetTempPath(), "pwsharp-storage-state-" + Guid.NewGuid().ToString("N") + ".json");
+            try
+            {
+                string storageState = await source.StorageStateAsync(path, indexedDB: true).ConfigureAwait(false);
+                IBrowserContext context = await _browser.NewContextAsync(restore == "newContext" ? new BrowserContextOptions { StorageStatePath = path } : new BrowserContextOptions()).ConfigureAwait(false);
+                if (restore == "setStorageState")
+                {
+                    await context.SetStorageStateAsync(storageState).ConfigureAwait(false);
+                }
+
+                AssertJsonEqual(storageState, await context.StorageStateAsync(new() { IndexedDB = true }).ConfigureAwait(false));
+
+                IPage restoredPage = await context.NewPageAsync().ConfigureAwait(false);
+                await restoredPage.GoToAsync(EmptyPage).ConfigureAwait(false);
+                JsonElement values = await restoredPage.EvaluateAsync<JsonElement>(@"async () => {
+                    const db = await new Promise((resolve, reject) => {
+                        const request = indexedDB.open('collections', 1);
+                        request.onerror = () => reject(request.error);
+                        request.onsuccess = () => resolve(request.result);
+                    });
+                    const transaction = db.transaction('store', 'readonly');
+                    const store = transaction.objectStore('store');
+                    transaction.oncomplete = () => db.close();
+                    const [map, set] = await Promise.all(['map', 'set'].map(key => new Promise((resolve, reject) => {
+                        const request = store.get(key);
+                        request.onsuccess = () => resolve(request.result);
+                        request.onerror = () => reject(request.error);
+                    })));
+                    return {
+                        isMap: map instanceof Map,
+                        map: [...map],
+                        isSet: set instanceof Set,
+                        set: [...set],
+                    };
+                }").ConfigureAwait(false);
+                AssertJsonEqual("{\"isMap\":true,\"map\":[[\"mk\",\"mv\"]],\"isSet\":true,\"set\":[1,2]}", values.GetRawText());
+                await context.CloseAsync().ConfigureAwait(false);
+            }
+            finally
+            {
+                if (File.Exists(path))
+                {
+                    File.Delete(path);
+                }
+
+                await source.CloseAsync().ConfigureAwait(false);
+            }
         }
 
         private static JsonElement Origins(string json)

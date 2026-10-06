@@ -396,12 +396,12 @@ namespace PlaywrightNative.Helpers
         }
 
         /// <inheritdoc/>
-        public Task<string> StorageStateAsync(string path = default, bool? indexedDB = default)
+        public Task<string> StorageStateAsync(string path = default, bool? indexedDB = default, bool? opfs = default)
         {
             EnsureNotDisposed();
             if (_context != null)
             {
-                return _context.StorageStateAsync(path, indexedDB);
+                return _context.StorageStateAsync(path, indexedDB, opfs: opfs);
             }
 
             if (_standalone?.Cookies != null)
@@ -412,7 +412,7 @@ namespace PlaywrightNative.Helpers
             StorageState state = new StorageState
             {
                 Cookies = ExportStandaloneCookies(_standalone?.Cookies),
-                Origins = ExportStandaloneOrigins(_standalone?.Origins, indexedDB == true),
+                Origins = ExportStandaloneOrigins(_standalone?.Origins, indexedDB == true, opfs == true),
             };
             string json = StorageStateHelper.Serialize(state);
             if (!string.IsNullOrEmpty(path))
@@ -579,7 +579,7 @@ namespace PlaywrightNative.Helpers
                     FailOnStatusCode = failOnStatusCode,
                     MaxRedirects = maxRedirects,
                     Cookies = cookies,
-                    Origins = CopyStandaloneOrigins(state.Origins, includeIndexedDB: true),
+                    Origins = CopyStandaloneOrigins(state.Origins, includeIndexedDB: true, includeOpfs: true),
                     HttpCredentials = SnapshotCredentials(httpCredentials),
                     Proxy = proxy,
                     ClientCertificates = ClientCertificateHelper.Snapshot(clientCertificates),
@@ -1652,7 +1652,8 @@ namespace PlaywrightNative.Helpers
 
         private static List<StorageStateOrigin> CopyStandaloneOrigins(
             IEnumerable<StorageStateOrigin> origins,
-            bool includeIndexedDB)
+            bool includeIndexedDB,
+            bool includeOpfs)
         {
             List<StorageStateOrigin> result = new List<StorageStateOrigin>();
             if (origins == null)
@@ -1674,6 +1675,9 @@ namespace PlaywrightNative.Helpers
                     LocalStorage = origin.LocalStorage == null
                         ? new List<NameValueEntry>()
                         : new List<NameValueEntry>(origin.LocalStorage),
+                    Opfs = includeOpfs
+                        ? new List<StorageStateOpfsEntry>(origin.Opfs ?? Array.Empty<StorageStateOpfsEntry>())
+                        : null,
                 };
                 if (includeIndexedDB
                     && origin.IndexedDB.ValueKind != JsonValueKind.Undefined
@@ -1694,8 +1698,9 @@ namespace PlaywrightNative.Helpers
 
         private static List<StorageStateOrigin> ExportStandaloneOrigins(
             IEnumerable<StorageStateOrigin> origins,
-            bool includeIndexedDB)
-            => CopyStandaloneOrigins(origins, includeIndexedDB);
+            bool includeIndexedDB,
+            bool includeOpfs)
+            => CopyStandaloneOrigins(origins, includeIndexedDB, includeOpfs);
 
         private static Cookie ParseSetCookie(string header, string url)
         {
