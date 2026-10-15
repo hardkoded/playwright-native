@@ -2481,6 +2481,29 @@ namespace PlaywrightNative
         private async Task<IFrame> ResolveContentFrameAsync()
         {
             IReadOnlyList<IElementHandle> hosts = await _scope.ResolveAllAsync().ConfigureAwait(false);
+            try
+            {
+                return await ResolveContentFrameAsync(hosts).ConfigureAwait(false);
+            }
+            finally
+            {
+                // The iframe handles are temporary. Release them so a removed
+                // iframe can be garbage collected.
+                foreach (IElementHandle host in hosts)
+                {
+                    try
+                    {
+                        await host.DisposeAsync().ConfigureAwait(false);
+                    }
+                    catch (PlaywrightException)
+                    {
+                    }
+                }
+            }
+        }
+
+        private async Task<IFrame> ResolveContentFrameAsync(IReadOnlyList<IElementHandle> hosts)
+        {
             if (hosts.Count == 0)
             {
                 return null;

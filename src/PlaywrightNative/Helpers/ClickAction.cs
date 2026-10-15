@@ -495,7 +495,7 @@ namespace PlaywrightNative.Helpers
     if (visible) {
         return false;
     }
-    el.scrollIntoView({ block: 'center', inline: 'center' });
+    el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
     return true;
 }";
 
@@ -515,7 +515,7 @@ namespace PlaywrightNative.Helpers
             const kids = node.childNodes || [];
             for (let i = 0; i < kids.length; i++) {
                 if (kids[i].nodeType === 1 && kids[i].scrollIntoView) {
-                    kids[i].scrollIntoView({ block: block, inline: block });
+                    kids[i].scrollIntoView({ block: block, inline: block, behavior: 'instant' });
                     return true;
                 }
             }
@@ -544,14 +544,14 @@ namespace PlaywrightNative.Helpers
                 const root = (node.ownerDocument && node.ownerDocument.documentElement) || document.documentElement;
                 const vw = (view.innerWidth > 0 ? view.innerWidth : (root && root.clientWidth)) || 0;
                 const vh = (view.innerHeight > 0 ? view.innerHeight : (root && root.clientHeight)) || 0;
-                view.scrollBy(left + ((right - left) / 2) - (vw / 2), top + ((bottom - top) / 2) - (vh / 2));
+                view.scrollBy({ left: left + ((right - left) / 2) - (vw / 2), top: top + ((bottom - top) / 2) - (vh / 2), behavior: 'instant' });
                 return true;
             }
         }
     } catch (e) {
     }
     if (node && node.scrollIntoView) {
-        node.scrollIntoView({ block: block, inline: block });
+        node.scrollIntoView({ block: block, inline: block, behavior: 'instant' });
         return true;
     }
     return false;
@@ -661,7 +661,7 @@ namespace PlaywrightNative.Helpers
             const kids = el.childNodes || [];
             for (let i = 0; i < kids.length; i++) {
                 if (kids[i].nodeType === 1 && kids[i].scrollIntoView) {
-                    kids[i].scrollIntoView({ block: 'center', inline: 'center' });
+                    kids[i].scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
                     return true;
                 }
                 if (kids[i].nodeType === 3) {
@@ -674,7 +674,7 @@ namespace PlaywrightNative.Helpers
         }
         if (r) {
         } else if (el.scrollIntoView) {
-            el.scrollIntoView({ block: 'center', inline: 'center' });
+            el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
             return true;
         } else {
             r = el.getBoundingClientRect();
@@ -686,7 +686,7 @@ namespace PlaywrightNative.Helpers
     const root = (el.ownerDocument && el.ownerDocument.documentElement) || document.documentElement;
     const vw = (view.innerWidth > 0 ? view.innerWidth : (root && root.clientWidth)) || 0;
     const vh = (view.innerHeight > 0 ? view.innerHeight : (root && root.clientHeight)) || 0;
-    view.scrollBy(r.left + (r.width / 2) - (vw / 2), r.top + (r.height / 2) - (vh / 2));
+    view.scrollBy({ left: r.left + (r.width / 2) - (vw / 2), top: r.top + (r.height / 2) - (vh / 2), behavior: 'instant' });
     return true;
 }";
 
@@ -992,7 +992,7 @@ namespace PlaywrightNative.Helpers
         if (p[0] >= 1 && p[1] >= 1 && p[0] <= vp.w - 1 && p[1] <= vp.h - 1) {
             return true;
         }
-        view.scrollBy(p[0] - (vp.w / 2), p[1] - (vp.h / 2));
+        view.scrollBy({ left: p[0] - (vp.w / 2), top: p[1] - (vp.h / 2), behavior: 'instant' });
         let node = el.parentElement;
         while (node) {
             let overflow = '';
@@ -1265,12 +1265,27 @@ namespace PlaywrightNative.Helpers
 
             int timeoutMs = TimeoutSettings.TimeoutMs(timeout);
             Stopwatch sw = Stopwatch.StartNew();
+            ActionTestHooks hooks = ActionTestHooks.Current;
+
+            // Official _retryAction: hit-target misses retry the whole action,
+            // and the timeout reports every retry in one call log.
+            StringBuilder log = null;
+            int hitMisses = 0;
             while (true)
             {
                 float? remaining = timeoutMs == Timeout.Infinite
                     ? timeout
                     : RemainingTimeout(timeoutMs, sw);
-                await PrepareAsync(handle, force, remaining, trial, position, scroll).ConfigureAwait(false);
+                await RunTestHookAsync(hooks?.BeforeStable, timeoutMs, sw, trial, log).ConfigureAwait(false);
+                try
+                {
+                    await PrepareAsync(handle, force, remaining, trial, position, scroll).ConfigureAwait(false);
+                }
+                catch (TimeoutException) when (log != null)
+                {
+                    throw new TimeoutException(TimeoutMessage(timeoutMs, trial) + "\n" + log);
+                }
+
                 if (ActionTrial.IsTrial(trial))
                 {
                     return;
@@ -1286,6 +1301,12 @@ namespace PlaywrightNative.Helpers
                     throw new PlaywrightException("Unable to compute a click point for the element.");
                 }
 
+                if (force != true)
+                {
+                    await RunTestHookAsync(hooks?.BeforeHitTarget, timeoutMs, sw, trial, log).ConfigureAwait(false);
+                }
+
+                await RunTestHookAsync(hooks?.BeforePointerAction, timeoutMs, sw, trial, log).ConfigureAwait(false);
                 double[] pagePoint = await MapToPageAsync(handle, localPoint).ConfigureAwait(false);
                 await moveAsync(pagePoint).ConfigureAwait(false);
                 if (force != true)
@@ -1298,9 +1319,21 @@ namespace PlaywrightNative.Helpers
                             throw new PlaywrightException(NotAttachedMessage);
                         }
 
+                        if (log == null)
+                        {
+                            log = new StringBuilder("Call log:\n  - attempting click action\n");
+                        }
+
+                        if (hitMisses++ < 2)
+                        {
+                            log.Append("    - ").Append(hit).Append('\n');
+                            log.Append("  - retrying click action\n");
+                            log.Append("    - waiting 500ms\n");
+                        }
+
                         if (timeoutMs != Timeout.Infinite && sw.ElapsedMilliseconds >= timeoutMs)
                         {
-                            throw new TimeoutException(TimeoutMessage(timeoutMs, trial) + "\n    - " + hit + "\n");
+                            throw new TimeoutException(TimeoutMessage(timeoutMs, trial) + "\n" + log);
                         }
 
                         await Task.Delay(500).ConfigureAwait(false);
@@ -1323,6 +1356,10 @@ namespace PlaywrightNative.Helpers
         /// <param name="timeout">Timeout in milliseconds. <c>0</c> waits forever.</param>
         /// <param name="apiName">Name used in timeout and annotation messages.</param>
         /// <param name="scroll">Scroll option forwarded to the wait helper.</param>
+        /// <param name="isFrameDetached">
+        /// Reports whether the owning frame detached. A detached frame fails the
+        /// click instead of re-querying, like official <c>frame.click</c>.
+        /// </param>
         /// <returns>A task that completes when the click finishes.</returns>
         internal static async Task RunOnSelectorAsync(
             Func<string, Task<IElementHandle>> querySelectorAsync,
@@ -1330,7 +1367,8 @@ namespace PlaywrightNative.Helpers
             Func<IElementHandle, Task> onHandle,
             float? timeout,
             string apiName,
-            ActionScroll scroll)
+            ActionScroll scroll,
+            Func<bool> isFrameDetached = null)
         {
             if (onHandle == null)
             {
@@ -1341,6 +1379,7 @@ namespace PlaywrightNative.Helpers
             Stopwatch sw = Stopwatch.StartNew();
             int[] waits = { 0, 20, 100, 100, 500 };
             int retry = 0;
+            bool detached = false;
 
             while (true)
             {
@@ -1356,13 +1395,30 @@ namespace PlaywrightNative.Helpers
                         scroll).ConfigureAwait(false);
                     return;
                 }
+                catch (TimeoutException ex) when (detached && timeoutMs != Timeout.Infinite)
+                {
+                    // Official retryWithProgressIfNotConnected logs the detach,
+                    // and the timeout reports the full action budget.
+                    int details = ex.Message.IndexOf('\n', StringComparison.Ordinal);
+                    throw new TimeoutException(
+                        apiName + ": Timeout " + timeoutMs.ToString(CultureInfo.InvariantCulture) + "ms exceeded.\n" +
+                        "Call log:\n  - element was detached from the DOM, retrying\n" +
+                        (details < 0 ? string.Empty : "  - " + ex.Message.Substring(details + 1).Replace("Call log:\n", string.Empty, StringComparison.Ordinal)),
+                        ex);
+                }
                 catch (Exception ex) when (IsRetryable(ex))
                 {
+                    if (isFrameDetached != null && isFrameDetached())
+                    {
+                        throw new PlaywrightException(apiName + ": Frame was detached", ex);
+                    }
+
                     if (timeoutMs != Timeout.Infinite && sw.ElapsedMilliseconds >= timeoutMs)
                     {
                         throw;
                     }
 
+                    detached |= !(ex.Message ?? string.Empty).Contains(HitMissedMessage, StringComparison.Ordinal);
                     int wait = waits[Math.Min(retry, waits.Length - 1)];
                     retry++;
                     if (wait > 0)
@@ -1617,6 +1673,7 @@ namespace PlaywrightNative.Helpers
 
             int waitingForCount = 0;
             int hitLogs = 0;
+            int scrollRetry = 0;
             int unstableLogs = 0;
             bool hoverForHandlers = false;
 
@@ -1771,7 +1828,7 @@ namespace PlaywrightNative.Helpers
 
                     if (scroll != ActionScroll.None)
                     {
-                        string align = alignments[retry % alignments.Length];
+                        string align = alignments[scrollRetry++ % alignments.Length];
                         try
                         {
                             await handle.EvaluateAsync<bool>(ScrollAlignedFunction, align).ConfigureAwait(false);
@@ -2141,6 +2198,31 @@ namespace PlaywrightNative.Helpers
             {
                 return null;
             }
+        }
+
+        /// <summary>
+        /// Runs a test hook raced against the action timeout, like upstream
+        /// <c>progress.race(__testHook...())</c>. A hook that outlives the
+        /// timeout fails the action, so nothing runs after the timeout.
+        /// </summary>
+        private static async Task RunTestHookAsync(Func<Task> hook, int timeoutMs, Stopwatch sw, bool? trial, StringBuilder log)
+        {
+            if (hook == null)
+            {
+                return;
+            }
+
+            Task hookTask = hook();
+            if (timeoutMs != Timeout.Infinite)
+            {
+                long left = Math.Max(0, timeoutMs - sw.ElapsedMilliseconds);
+                if (await Task.WhenAny(hookTask, Task.Delay((int)left)).ConfigureAwait(false) != hookTask)
+                {
+                    throw new TimeoutException(TimeoutMessage(timeoutMs, trial) + (log == null ? string.Empty : "\n" + log));
+                }
+            }
+
+            await hookTask.ConfigureAwait(false);
         }
 
         private static float? RemainingTimeout(int timeoutMs, Stopwatch sw)
