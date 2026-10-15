@@ -18,6 +18,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
@@ -584,6 +585,90 @@ namespace PlaywrightNative.Helpers
                     Proxy = proxy,
                     ClientCertificates = ClientCertificateHelper.Snapshot(clientCertificates),
                 });
+        }
+
+        /// <summary>
+        /// Official <c>APIRequestContext.addCookies</c>. Browser-bound contexts add
+        /// to the browser context; global contexts add to their own cookie jar.
+        /// </summary>
+        /// <param name="cookies">Cookies to add.</param>
+        /// <returns>A task that completes when the cookies are stored.</returns>
+        internal Task AddCookiesAsync(IEnumerable<Cookie> cookies)
+        {
+            EnsureNotDisposed();
+            if (_context != null)
+            {
+                return _context.AddCookiesAsync(cookies);
+            }
+
+            // Validate every cookie before storing any (official rewriteCookies).
+            List<Cookie> rewritten = cookies.Select(ContextCookies.Rewrite).ToList();
+            _standalone.Cookies ??= new List<Cookie>();
+            foreach (Cookie cookie in rewritten)
+            {
+                Cookie stored = new Cookie
+                {
+                    Name = cookie.Name,
+                    Value = cookie.Value,
+                    Domain = cookie.Domain,
+                    Path = cookie.Path,
+                    Expires = cookie.Expires ?? -1,
+                    HttpOnly = cookie.HttpOnly ?? false,
+                    Secure = cookie.Secure ?? false,
+                    SameSite = cookie.SameSite ?? Microsoft.Playwright.SameSiteAttribute.Lax,
+                };
+                _standalone.Cookies.RemoveAll(existing => SameStandaloneCookie(existing, stored));
+                _standalone.Cookies.Add(stored);
+            }
+
+            _standalone.Cookies.RemoveAll(IsExpiredSetCookie);
+            return Task.CompletedTask;
+        }
+
+        /// <summary>
+        /// Official <c>APIRequestContext.cookies</c>.
+        /// </summary>
+        /// <param name="urls">Optional URLs; when empty, returns every cookie.</param>
+        /// <returns>The matching cookies.</returns>
+        internal Task<IReadOnlyList<BrowserContextCookiesResult>> CookiesAsync(IEnumerable<string> urls)
+        {
+            EnsureNotDisposed();
+            if (_context != null)
+            {
+                return _context.GetCookiesAsync(urls);
+            }
+
+            List<BrowserContextCookiesResult> all = ExportStandaloneCookies(_standalone.Cookies)
+                .Select(cookie => new BrowserContextCookiesResult
+                {
+                    Name = cookie.Name,
+                    Value = cookie.Value,
+                    Domain = cookie.Domain,
+                    Path = cookie.Path,
+                    Expires = cookie.Expires.Value,
+                    HttpOnly = cookie.HttpOnly.Value,
+                    Secure = cookie.Secure.Value,
+                    SameSite = cookie.SameSite.Value,
+                })
+                .ToList();
+            return Task.FromResult(ContextCookies.FilterByUrls(all, urls));
+        }
+
+        /// <summary>
+        /// Official <c>APIRequestContext.clearCookies</c>.
+        /// </summary>
+        /// <param name="options">Optional name / domain / path filters.</param>
+        /// <returns>A task that completes when the matching cookies are removed.</returns>
+        internal Task ClearCookiesAsync(BrowserContextClearCookiesOptions options)
+        {
+            EnsureNotDisposed();
+            if (_context != null)
+            {
+                return _context.ClearCookiesAsync(options);
+            }
+
+            _standalone.Cookies?.RemoveAll(cookie => CookieMatchesClearFilter(cookie, options));
+            return Task.CompletedTask;
         }
 
         private static HttpClient CreateClient(
@@ -1616,6 +1701,21 @@ namespace PlaywrightNative.Helpers
                     string.IsNullOrEmpty(left.Path) ? "/" : left.Path,
                     string.IsNullOrEmpty(right.Path) ? "/" : right.Path,
                     StringComparison.Ordinal);
+
+        // Official cookieMatchesClearFilter: a missing filter matches everything,
+        // a string compares exactly, a regex tests the value.
+        private static bool CookieMatchesClearFilter(Cookie cookie, BrowserContextClearCookiesOptions options)
+        {
+            static bool Matches(string value, string filter, Regex regex)
+                => regex != null
+                    ? regex.IsMatch(value ?? string.Empty)
+                    : string.IsNullOrEmpty(filter) || string.Equals(value, filter, StringComparison.Ordinal);
+
+            return options == null
+                || (Matches(cookie.Name, options.Name ?? options.NameString, options.NameRegex)
+                    && Matches(cookie.Domain, options.Domain ?? options.DomainString, options.DomainRegex)
+                    && Matches(cookie.Path, options.Path ?? options.PathString, options.PathRegex));
+        }
 
         private static List<Cookie> ExportStandaloneCookies(IEnumerable<Cookie> cookies)
         {
@@ -3032,9 +3132,12 @@ namespace PlaywrightNative.Helpers
 
         private async Task<string> ResolveUserAgentAsync()
         {
-            if (!string.IsNullOrEmpty(_standalone?.UserAgent))
+            if (_standalone != null)
             {
-                return _standalone.UserAgent;
+                // Official GlobalAPIRequestContext: options.userAgent || getUserAgent().
+                return string.IsNullOrEmpty(_standalone.UserAgent)
+                    ? PlaywrightUserAgent.GetUserAgent()
+                    : _standalone.UserAgent;
             }
 
             if (_context is IHasUserAgent has && !string.IsNullOrEmpty(has.UserAgent))

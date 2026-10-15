@@ -21,11 +21,13 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Sockets;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
@@ -38,10 +40,8 @@ namespace PlaywrightNative.Tests
     /// <summary>
     /// Official <c>library/global-fetch.spec.ts</c> parity. Leftover
     /// <c>ApiResponse*</c> already covers server address / security
-    /// details. Skip Node-only <c>should set playwright as user-agent</c>
-    /// (<c>getPlaywrightVersion</c> / <c>node/X.X</c>) and
-    /// <c>should be able to construct with context options</c>
-    /// (<c>_instrumentation.runBeforeCreateRequestContext</c>).
+    /// details. Titles that need Node internals (test-runner
+    /// instrumentation, Node system error fields) are ignored.
     /// </summary>
     [TestFixture]
     [NonParallelizable]
@@ -584,6 +584,59 @@ namespace PlaywrightNative.Tests
             await request.DisposeAsync().ConfigureAwait(false);
         }
 
+        [PlaywrightTest("global-fetch.spec.ts", "should set playwright as user-agent")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public async Task ShouldSetPlaywrightAsUserAgent()
+        {
+            EnsureServer();
+            IAPIRequestContext request = await Playwright.APIRequest.NewContextAsync().ConfigureAwait(false);
+            try
+            {
+                Task<string> serverRequest = Server.WaitForRequest("/empty.html", req => req.Headers["user-agent"].ToString());
+                Task<IAPIResponse> responseTask = request.GetAsync(EmptyPage);
+                await Task.WhenAll(serverRequest, responseTask).ConfigureAwait(false);
+                string arch = RuntimeInformation.OSArchitecture.ToString().ToUpperInvariant();
+                string version = typeof(Playwright).Assembly.GetName().Version.ToString(3);
+                string userAgentMasked = Regex.Replace(
+                    serverRequest.Result
+                        .Replace(arch, "<ARCH>", StringComparison.OrdinalIgnoreCase)
+                        .Replace(version, "X.X.X", StringComparison.Ordinal),
+                    "\\d+",
+                    "X");
+
+                string suffix = string.IsNullOrEmpty(Environment.GetEnvironmentVariable("CI")) ? string.Empty : " CI/X";
+
+                // The .NET embedder token is csharp/<runtime major.minor> (PW_LANG_NAME=csharp), not node/X.X.
+                if (OperatingSystem.IsWindows())
+                {
+                    Assert.That(userAgentMasked, Is.EqualTo("Playwright/X.X.X (<ARCH>; windows X.X) csharp/X.X" + suffix));
+                }
+                else if (OperatingSystem.IsLinux())
+                {
+                    Assert.That(
+                        Regex.Replace(userAgentMasked, "<ARCH>; \\w+ [^)]+", "<ARCH>; distro version"),
+                        Is.EqualTo("Playwright/X.X.X (<ARCH>; distro version) csharp/X.X" + suffix));
+                }
+                else if (OperatingSystem.IsMacOS())
+                {
+                    Assert.That(userAgentMasked, Is.EqualTo("Playwright/X.X.X (<ARCH>; macOS X.X) csharp/X.X" + suffix));
+                }
+            }
+            finally
+            {
+                await request.DisposeAsync().ConfigureAwait(false);
+            }
+        }
+
+        [PlaywrightTest("global-fetch.spec.ts", "should be able to construct with context options")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public void ShouldBeAbleToConstructWithContextOptions()
+        {
+            Assert.Ignore("Node test runner _instrumentation.runBeforeCreateRequestContext");
+        }
+
         [PlaywrightTest("global-fetch.spec.ts", "should return empty body")]
         [Test]
         [Timeout(TestConstants.DefaultTestTimeout)]
@@ -1073,6 +1126,22 @@ namespace PlaywrightNative.Tests
             Assert.That(await response.TextAsync().ConfigureAwait(false), Is.EqualTo("Hello!"));
             Assert.That(requestCount, Is.EqualTo(4));
             await request.DisposeAsync().ConfigureAwait(false);
+        }
+
+        [PlaywrightTest("global-fetch.spec.ts", "should expose node error code on network errors")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public void ShouldExposeNodeErrorCodeOnNetworkErrors()
+        {
+            Assert.Ignore("Node system error fields (error.code)");
+        }
+
+        [PlaywrightTest("global-fetch.spec.ts", "should append node error code to the message")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public void ShouldAppendNodeErrorCodeToTheMessage()
+        {
+            Assert.Ignore("Node system error fields (error.code)");
         }
 
         [PlaywrightTest("global-fetch.spec.ts", "should not crash when server refuses body before reading it")]
