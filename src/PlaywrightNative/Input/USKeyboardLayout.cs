@@ -175,8 +175,24 @@ namespace PlaywrightNative.Input
             AddKey(map, "MediaTrackPrevious", 177, "MediaTrackPrevious", string.Empty);
             AddKey(map, "MediaPlayPause", 179, "MediaPlayPause", string.Empty);
 
+            // Numpad. Digit and decimal keys act as navigation keys unless Shift is held.
+            AddKey(map, "NumLock", 144, "NumLock", string.Empty);
+            AddKey(map, "NumpadDivide", 111, "/", "/", location: 3);
+            AddKey(map, "NumpadMultiply", 106, "*", "*", location: 3);
+            AddKey(map, "NumpadSubtract", 109, "-", "-", location: 3);
+            AddNumpad(map, "Numpad7", 36, 103, "Home", "7");
+            AddNumpad(map, "Numpad8", 38, 104, "ArrowUp", "8");
+            AddNumpad(map, "Numpad9", 33, 105, "PageUp", "9");
+            AddNumpad(map, "Numpad4", 37, 100, "ArrowLeft", "4");
+            AddNumpad(map, "Numpad5", 12, 101, "Clear", "5");
+            AddNumpad(map, "Numpad6", 39, 102, "ArrowRight", "6");
+            AddKey(map, "NumpadAdd", 107, "+", "+", location: 3);
+            AddNumpad(map, "Numpad1", 35, 97, "End", "1");
+            AddNumpad(map, "Numpad2", 40, 98, "ArrowDown", "2");
+            AddNumpad(map, "Numpad3", 34, 99, "PageDown", "3");
+            AddNumpad(map, "Numpad0", 45, 96, "Insert", "0");
+            AddNumpad(map, "NumpadDecimal", 46, 110, "Delete", ".");
             AddKey(map, "NumpadEnter", 13, "Enter", "\r", location: 3);
-            AddKey(map, "NumpadSubtract", 109, "-", string.Empty, location: 3);
 
             // Modifier keys — both location variants share keyCodeWithoutLocation.
             map["ShiftLeft"] = new KeyDefinition { KeyCode = 160, KeyCodeWithoutLocation = 16, Code = "ShiftLeft", Key = "Shift", Location = 1 };
@@ -212,6 +228,30 @@ namespace PlaywrightNative.Input
 
             map[name] = def;
             return def;
+        }
+
+        private static void AddNumpad(Dictionary<string, KeyDefinition> map, string code, int keyCode, int shiftKeyCode, string key, string shiftKey)
+        {
+            KeyDefinition shifted = new()
+            {
+                KeyCode = shiftKeyCode,
+                KeyCodeWithoutLocation = shiftKeyCode,
+                Code = code,
+                Key = shiftKey,
+                Text = shiftKey,
+                Location = 3,
+            };
+
+            map[code] = new KeyDefinition
+            {
+                KeyCode = keyCode,
+                KeyCodeWithoutLocation = keyCode,
+                Code = code,
+                Key = key,
+                Text = string.Empty,
+                Location = 3,
+                Shifted = shifted,
+            };
         }
 
         private static void AddPrintable(Dictionary<string, KeyDefinition> map, string code, int keyCode, string key, string shiftedKey)
