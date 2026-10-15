@@ -560,5 +560,81 @@ namespace PlaywrightNative.Tests
             await Assertions.Expect(locator).ToBeVisibleAsync().ConfigureAwait(false);
             Assert.That(await locator.GetAttributeAsync("name").ConfigureAwait(false), Is.EqualTo("frame1"));
         }
+
+        [PlaywrightTest("locator-frame.spec.ts", "should treat elements inside hidden iframe as hidden")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public async Task ShouldTreatElementsInsideHiddenIframeAsHidden()
+        {
+            await Page.SetContentAsync(@"
+    <iframe name=""hidden"" style=""visibility: hidden"" srcdoc=""<button>Hidden</button>""></iframe>
+    <div style=""visibility: hidden"">
+      <iframe name=""hidden-parent"" srcdoc=""<button>Hidden parent</button>""></iframe>
+      <iframe name=""visible-override"" style=""visibility: visible"" srcdoc=""<button>Visible override</button>""></iframe>
+    </div>
+    <iframe name=""outer"" style=""visibility: hidden"" srcdoc=""<iframe name='inner' srcdoc='<button>Nested</button>'></iframe>""></iframe>
+  ").ConfigureAwait(false);
+
+            foreach (ILocator hiddenButton in new[]
+            {
+                Page.FrameLocator("[name=hidden]").Locator("button"),
+                Page.FrameLocator("[name=hidden-parent]").Locator("button"),
+                Page.FrameLocator("[name=outer]").FrameLocator("[name=inner]").Locator("button"),
+            })
+            {
+                await Assertions.Expect(hiddenButton).ToBeAttachedAsync().ConfigureAwait(false);
+                Assert.That(await hiddenButton.IsVisibleAsync().ConfigureAwait(false), Is.False);
+                Assert.That(await hiddenButton.IsHiddenAsync().ConfigureAwait(false), Is.True);
+                await Assertions.Expect(hiddenButton).ToBeHiddenAsync().ConfigureAwait(false);
+                await Assertions.Expect(hiddenButton).Not.ToBeVisibleAsync().ConfigureAwait(false);
+                await hiddenButton.WaitForAsync(new() { State = WaitForSelectorState.Hidden }).ConfigureAwait(false);
+            }
+
+            ILocator button = Page.FrameLocator("[name=visible-override]").Locator("button");
+            Assert.That(await button.IsVisibleAsync().ConfigureAwait(false), Is.True);
+            await Assertions.Expect(button).ToBeVisibleAsync().ConfigureAwait(false);
+            await button.WaitForAsync(new() { State = WaitForSelectorState.Visible }).ConfigureAwait(false);
+        }
+
+        [PlaywrightTest("locator-frame.spec.ts", "should wait for hidden iframe to become visible")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public async Task ShouldWaitForHiddenIframeToBecomeVisible()
+        {
+            await Page.SetContentAsync("<iframe name=\"frame\" style=\"visibility: hidden\" srcdoc=\"<button onclick='window.__clicked = true'>Button</button>\"></iframe>").ConfigureAwait(false);
+            ILocator button = Page.FrameLocator("[name=frame]").Locator("button");
+            await Assertions.Expect(button).ToBeHiddenAsync().ConfigureAwait(false);
+
+            Exception error = Assert.CatchAsync(() => button.ClickAsync(new() { Timeout = 1000 }));
+            Assert.That(error.Message, Does.Contain("element is inside a hidden frame, retrying"));
+            Assert.That(await button.EvaluateAsync<object>("() => window.__clicked").ConfigureAwait(false), Is.Null);
+
+            Task clickTask = button.ClickAsync();
+            Task visibleTask = Assertions.Expect(button).ToBeVisibleAsync();
+            await Page.EvaluateAsync("() => document.querySelector('iframe').style.visibility = 'visible'").ConfigureAwait(false);
+            await Task.WhenAll(clickTask, visibleTask).ConfigureAwait(false);
+            Assert.That(await button.EvaluateAsync<bool>("() => window.__clicked").ConfigureAwait(false), Is.True);
+
+            await Page.EvaluateAsync("() => document.querySelector('iframe').style.visibility = 'hidden'").ConfigureAwait(false);
+            await Assertions.Expect(button).ToBeHiddenAsync().ConfigureAwait(false);
+            Assert.That(await button.IsVisibleAsync().ConfigureAwait(false), Is.False);
+        }
+
+        [PlaywrightTest("locator-frame.spec.ts", "should treat elements inside hidden cross-origin iframe as hidden")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public async Task ShouldTreatElementsInsideHiddenCrossOriginIframeAsHidden()
+        {
+            await Page.GoToAsync(EmptyPage).ConfigureAwait(false);
+            await Page.SetContentAsync("<iframe style=\"visibility: hidden\" src=\"" + TestConstants.CrossProcessUrl + "/frames/frame.html\"></iframe>").ConfigureAwait(false);
+            ILocator div = Page.FrameLocator("iframe").Locator("div");
+            await Assertions.Expect(div).ToHaveTextAsync("Hi, I'm frame").ConfigureAwait(false);
+            Assert.That(await div.IsVisibleAsync().ConfigureAwait(false), Is.False);
+            await Assertions.Expect(div).ToBeHiddenAsync().ConfigureAwait(false);
+
+            await Page.EvaluateAsync("() => document.querySelector('iframe').style.visibility = 'visible'").ConfigureAwait(false);
+            await Assertions.Expect(div).ToBeVisibleAsync().ConfigureAwait(false);
+            Assert.That(await div.IsVisibleAsync().ConfigureAwait(false), Is.True);
+        }
     }
 }

@@ -923,5 +923,28 @@ namespace PlaywrightNative.Tests
             await PollUntilAsync(() => Task.FromResult(Page.Frames.Count == 3), "expected 3 frames").ConfigureAwait(false);
             await Assertions.Expect(Page.FrameLocator().Locator("button")).ToHaveCountAsync(1).ConfigureAwait(false);
         }
+
+        [PlaywrightTest("locator-any-frame.spec.ts", "should treat elements inside hidden iframe as hidden")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public async Task ShouldTreatElementsInsideHiddenIframeAsHidden()
+        {
+            await RoutePageAsync(Page, "empty.html", "<iframe src=\"a.html\" style=\"visibility: hidden\"></iframe>").ConfigureAwait(false);
+            await RoutePageAsync(Page, "a.html", "<button onclick=\"window.__clicked = true\">Click me</button>").ConfigureAwait(false);
+            await Page.GoToAsync(EmptyPage).ConfigureAwait(false);
+            ILocator button = Page.FrameLocator().Locator("button");
+            await Assertions.Expect(button).ToBeAttachedAsync().ConfigureAwait(false);
+            Assert.That(await button.IsVisibleAsync().ConfigureAwait(false), Is.False);
+            await Assertions.Expect(button).ToBeHiddenAsync().ConfigureAwait(false);
+
+            Exception error = Assert.CatchAsync(() => button.ClickAsync(new() { Timeout = 1000 }));
+            Assert.That(error.Message, Does.Contain("element is inside a hidden frame, retrying"));
+            Assert.That(await FrameAt(Page, 1).EvaluateAsync<object>("() => window.__clicked").ConfigureAwait(false), Is.Null);
+
+            await Page.EvaluateAsync("() => document.querySelector('iframe').style.visibility = 'visible'").ConfigureAwait(false);
+            await Assertions.Expect(button).ToBeVisibleAsync().ConfigureAwait(false);
+            await button.ClickAsync().ConfigureAwait(false);
+            Assert.That(await FrameAt(Page, 1).EvaluateAsync<bool>("() => window.__clicked").ConfigureAwait(false), Is.True);
+        }
     }
 }
