@@ -218,15 +218,15 @@ jobs:
       env:
         PRODUCT: CHROMIUM
       run: |
-        dotnet test ./src/PlaywrightNative.Tests/PlaywrightNative.Tests.csproj --no-build -c Release -f net10.0 -s src/PlaywrightNative.Tests/test.runsettings ${TEST_FILTER:+--filter "$TEST_FILTER"}
+        ./.github/workflows/dotnet-test-with-retries.sh
     - name: Test (Chromium, Linux headful)
       if: ${{ matrix.browser == 'chromium' && matrix.os == 'ubuntu-latest' && matrix.mode == 'headful' }}
       env:
         PRODUCT: CHROMIUM
         HEADLESS: "false"
       run: |
-        xvfb-run --auto-servernum --server-args="-screen 0 1280x960x24" -- \
-          dotnet test ./src/PlaywrightNative.Tests/PlaywrightNative.Tests.csproj --no-build -c Release -f net10.0 -s src/PlaywrightNative.Tests/test.runsettings ${TEST_FILTER:+--filter "$TEST_FILTER"}
+        ./.github/workflows/dotnet-test-with-retries.sh \
+          xvfb-run --auto-servernum --server-args="-screen 0 1280x960x24" --
     - name: Test (Chromium, Windows)
       if: ${{ matrix.browser == 'chromium' && matrix.os == 'windows-latest' }}
       shell: bash
@@ -234,7 +234,7 @@ jobs:
         PRODUCT: CHROMIUM
         HEADLESS: ${{ matrix.mode == 'headless' && 'true' || 'false' }}
       run: |
-        dotnet test ./src/PlaywrightNative.Tests/PlaywrightNative.Tests.csproj --no-build -c Release -f net10.0 -s src/PlaywrightNative.Tests/test.runsettings ${TEST_FILTER:+--filter "$TEST_FILTER"}
+        ./.github/workflows/dotnet-test-with-retries.sh
     - name: Test (WebKit)
       if: matrix.browser == 'webkit'
       shell: bash
@@ -251,4 +251,4 @@ jobs:
         # AddScriptTag/AddStyleTag, EmulateMedia, PDF, screenshots, SetContent,
         # SetViewportSize) and the macOS-14 inner-target hang. Retire entries
         # as the underlying work lands.
-        dotnet test ./src/PlaywrightNative.Tests/PlaywrightNative.Tests.csproj --no-build -c Release -f net10.0 -s src/PlaywrightNative.Tests/test.runsettings ${TEST_FILTER:+--filter "$TEST_FILTER"}
+        ./.github/workflows/dotnet-test-with-retries.sh
