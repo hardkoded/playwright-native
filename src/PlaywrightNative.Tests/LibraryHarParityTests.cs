@@ -281,6 +281,48 @@ namespace PlaywrightNative.Tests
             Assert.That(entry.GetProperty("request").GetProperty("bodySize").GetInt32(), Is.EqualTo(0));
         }
 
+        [PlaywrightTest("har.spec.ts", "should populate entry startedDateTime from the browser")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public async Task ShouldPopulateEntryStartedDateTimeFromTheBrowser()
+        {
+            EnsureServer();
+            await using HarSession session = await PageWithHarAsync().ConfigureAwait(false);
+            await session.Page.GoToAsync(EmptyPage).ConfigureAwait(false);
+
+            // The browser issues a request after a short delay, then we deliberately
+            // block the test thread. If `startedDateTime` is populated from our clock
+            // at observation time it can land inside the busy-loop window (i.e. close
+            // to `unblockedAt`); if it comes from the browser via the debugging
+            // protocol it will be tied to when the browser actually sent the request.
+            // Protocol events keep flowing on other threads in .NET, so the response
+            // wait is registered before the busy loop instead of after it.
+            // `window.builtins` is upstream test-only injected state. No clock is
+            // installed here, so the page `setTimeout` is the same function.
+            Task<IResponse> responseTask = session.Page.WaitForResponseAsync("**/delayed-fetch");
+            await session.Page.EvaluateAsync("() => { setTimeout(() => { void fetch('/delayed-fetch'); }, 50); }").ConfigureAwait(false);
+
+            long blockUntil = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + 300;
+            while (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() < blockUntil)
+            {
+                // Busy loop.
+            }
+
+            long unblockedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+            await responseTask.ConfigureAwait(false);
+            JsonElement log = await session.GetLogAsync().ConfigureAwait(false);
+
+            JsonElement entry = log.GetProperty("entries").EnumerateArray()
+                .First(e => e.GetProperty("request").GetProperty("url").GetString().EndsWith("/delayed-fetch", StringComparison.Ordinal));
+            long startedAt = DateTimeOffset.Parse(entry.GetProperty("startedDateTime").GetString(), CultureInfo.InvariantCulture).ToUnixTimeMilliseconds();
+
+            // The recorded time should be tied to when the browser actually sent the
+            // request (during the busy loop), not to when we observed the protocol
+            // event (after the busy loop).
+            Assert.That(startedAt, Is.LessThan(unblockedAt - 100));
+        }
+
         [PlaywrightTest("har.spec.ts", "should include response")]
         [Test]
         [Timeout(TestConstants.DefaultTestTimeout)]
