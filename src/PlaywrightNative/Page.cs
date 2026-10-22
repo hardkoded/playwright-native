@@ -1078,7 +1078,9 @@ namespace PlaywrightNative
         /// <inheritdoc/>
         public Task<IPage> OpenerAsync()
         {
-            if (_crPage.Opener == null)
+            // An opener that closed before this page got a public wrapper (e.g. it had
+            // no renderer when connecting over CDP) has no closed public page to check.
+            if (_crPage.Opener == null || _crPage.Opener.ClosedTask.IsCompleted)
             {
                 return Task.FromResult<IPage>(null);
             }
