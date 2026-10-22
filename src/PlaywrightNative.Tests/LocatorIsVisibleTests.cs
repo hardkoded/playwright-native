@@ -145,6 +145,80 @@ namespace PlaywrightNative.Tests
             await Assertions.Expect(page.Locator("ul")).ToBeHiddenAsync().ConfigureAwait(false);
         }
 
+        [PlaywrightTest("locator-is-visible.spec.ts", "isVisible and isHidden should work with nested details")]
+        [Test]
+        [Timeout(30_000)]
+        public async Task IsVisibleAndIsHiddenShouldWorkWithNestedDetails()
+        {
+            await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
+            await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
+            IPage page = await context.NewPageAsync().ConfigureAwait(false);
+            await page.SetContentAsync(@"<details>
+    <summary>outer</summary>
+    <details open>
+      <summary>inner</summary>
+      <button>hidden button</button>
+    </details>
+  </details>").ConfigureAwait(false);
+
+            await Assertions.Expect(page.Locator("summary", new() { HasText = "outer" })).ToBeVisibleAsync().ConfigureAwait(false);
+            await Assertions.Expect(page.Locator("summary", new() { HasText = "inner" })).ToBeHiddenAsync().ConfigureAwait(false);
+            await Assertions.Expect(page.Locator("button")).ToBeHiddenAsync().ConfigureAwait(false);
+            await Assertions.Expect(page.GetByRole(AriaRole.Button)).ToHaveCountAsync(0).ConfigureAwait(false);
+        }
+
+        [PlaywrightTest("locator-is-visible.spec.ts", "isVisible and isHidden should work with unslotted content")]
+        [Test]
+        [Timeout(30_000)]
+        public async Task IsVisibleAndIsHiddenShouldWorkWithUnslottedContent()
+        {
+            await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
+            await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
+            IPage page = await context.NewPageAsync().ConfigureAwait(false);
+            await page.SetContentAsync(@"
+    <div id=unslotted><span>hidden 1</span><div><span>hidden 2</span></div></div>
+    <div id=slotted><span>visible</span></div>
+    <script>
+      unslotted.attachShadow({ mode: 'open' }).innerHTML = 'nothing to see here';
+      slotted.attachShadow({ mode: 'open' }).innerHTML = '<slot></slot>';
+    </script>
+  ").ConfigureAwait(false);
+
+            await Assertions.Expect(page.Locator("span", new() { HasText = "hidden 1" })).ToBeHiddenAsync().ConfigureAwait(false);
+            await Assertions.Expect(page.Locator("span", new() { HasText = "hidden 2" })).ToBeHiddenAsync().ConfigureAwait(false);
+            await Assertions.Expect(page.Locator("span", new() { HasText = "visible" })).ToBeVisibleAsync().ConfigureAwait(false);
+        }
+
+        [PlaywrightTest("locator-is-visible.spec.ts", "isVisible and isHidden should work with list box options")]
+        [Test]
+        [Timeout(30_000)]
+        public async Task IsVisibleAndIsHiddenShouldWorkWithListBoxOptions()
+        {
+            await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
+            await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
+            IPage page = await context.NewPageAsync().ConfigureAwait(false);
+            await page.SetContentAsync(@"
+    <select multiple>
+      <option>visible 1</option>
+      <optgroup label=""group""><option>visible 2</option></optgroup>
+      <option hidden>hidden 1</option>
+      <optgroup label=""hidden group"" style=""display:none""><option>hidden 2</option></optgroup>
+    </select>
+    <select size=3><option>visible 3</option></select>
+    <select multiple style=""display:none""><option>hidden 3</option></select>
+  ").ConfigureAwait(false);
+
+            foreach (string name in new[] { "visible 1", "visible 2", "visible 3" })
+            {
+                await Assertions.Expect(page.GetByRole(AriaRole.Option, new() { Name = name, Exact = true })).ToBeVisibleAsync().ConfigureAwait(false);
+            }
+
+            foreach (string text in new[] { "hidden 1", "hidden 2", "hidden 3" })
+            {
+                await Assertions.Expect(page.Locator("option", new() { HasText = text })).ToBeHiddenAsync().ConfigureAwait(false);
+            }
+        }
+
         [PlaywrightTest("locator-is-visible.spec.ts", "isVisible inside a button")]
         [Test]
         [Timeout(30_000)]

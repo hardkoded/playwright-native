@@ -145,6 +145,14 @@ namespace PlaywrightNative
         public static ILocator Filter(this ILocator locator, bool visible)
             => RequireLocator(locator).Filter(visible);
 
+        /// <summary>
+        /// Narrows the locator to visible elements only. Same as <c>Filter(visible: true)</c>.
+        /// </summary>
+        /// <param name="locator">The locator to narrow.</param>
+        /// <returns>A locator that matches only visible elements.</returns>
+        public static ILocator Visible(this ILocator locator)
+            => RequireLocator(locator).Filter(visible: true);
+
         /// <summary>Legacy has filter.</summary>
         public static ILocator Filter(this ILocator locator, ILocator has)
             => RequireLocator(locator).Has(has);

@@ -832,27 +832,7 @@ namespace PlaywrightNative.Helpers
     catch (e) { return []; }
   }
 
-  function isElementVisible(element) {
-    if (!element) return false;
-    const view = element.ownerDocument && element.ownerDocument.defaultView;
-    const style = view ? view.getComputedStyle(element) : null;
-    if (!style) return true;
-    if (style.display === 'contents') {
-      for (let child = element.firstChild; child; child = child.nextSibling) {
-        if (child.nodeType === 1 && isElementVisible(child)) return true;
-        if (child.nodeType === 3) {
-          const range = element.ownerDocument.createRange();
-          range.selectNode(child);
-          const rect = range.getBoundingClientRect();
-          if (rect.width > 0 && rect.height > 0) return true;
-        }
-      }
-      return false;
-    }
-    if (style.visibility !== 'visible') return false;
-    const rect = element.getBoundingClientRect();
-    return rect.width > 0 && rect.height > 0;
-  }
+  const isElementVisible = " + DomVisibility.IsVisibleFunction + @";
 
   function sortInDomOrder(elements) {
     const list = elements.slice();
