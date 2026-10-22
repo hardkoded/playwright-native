@@ -483,6 +483,22 @@ namespace PlaywrightNative.Chromium
         public Task WaitForTimeoutAsync(float timeout)
             => Task.Delay((int)timeout);
 
+        /// <summary>
+        /// Calls <paramref name="functionDeclaration"/> in the frame utility world and
+        /// returns its result by value.
+        /// </summary>
+        /// <typeparam name="T">The type to deserialize the result to.</typeparam>
+        /// <param name="functionDeclaration">The JavaScript function to call.</param>
+        /// <param name="args">Arguments passed by value.</param>
+        /// <returns>The deserialized result.</returns>
+        internal async Task<T> EvaluateInUtilityWorldAsync<T>(string functionDeclaration, params object[] args)
+        {
+            EvaluateWithArg.ThrowIfDetached(this);
+            CRExecutionContext context = await ((Page)_page).CrPage.GetUtilityWorldAsync(_crFrame).ConfigureAwait(false)
+                ?? throw new PlaywrightException("Frame utility world is not available.");
+            return await context.EvaluateFunctionAsync<T>(functionDeclaration, args).ConfigureAwait(false);
+        }
+
         private async Task<T> EvaluatePreparedInFrameAsync<T>(string handleFn, object[] handleArgs)
         {
             object[] args = EvaluateHandleArg.AsCallFunctionArguments(handleArgs);

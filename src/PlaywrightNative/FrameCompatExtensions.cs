@@ -606,6 +606,12 @@ namespace PlaywrightNative
                 WaitUntil = options?.WaitUntil,
             });
 
+        /// <summary>WebMCP tools registered by this frame.</summary>
+        /// <param name="frame">The frame.</param>
+        /// <returns>The frame WebMCP API.</returns>
+        public static IWebMCP Webmcp(this IFrame frame)
+            => new WebMCP(frame);
+
         /// <summary>Any-frame search from this frame.</summary>
         public static IFrameLocator FrameLocator(this IFrame frame)
             => new FrameLocator(frame);
