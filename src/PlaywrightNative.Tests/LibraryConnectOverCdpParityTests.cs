@@ -271,13 +271,6 @@ namespace PlaywrightNative.Tests
 
                 // The renderer process is shut down asynchronously after the discard.
                 await discards.WaitForTimeoutAsync(3000).ConfigureAwait(false);
-                IReadOnlyList<string> rows = await discards.GetByRole(AriaRole.Row).AllInnerTextsAsync().ConfigureAwait(false);
-                TestContext.Out.WriteLine("discards rows:\n" + string.Join("\n", rows.Select(text => System.Text.RegularExpressions.Regex.Replace(text, @"\s+", " "))));
-                using (HttpClient http = new HttpClient())
-                {
-                    string targets = await http.GetStringAsync(new Uri("http://127.0.0.1:" + port + "/json/list")).ConfigureAwait(false);
-                    TestContext.Out.WriteLine("targets:\n" + targets);
-                }
 
                 // Connecting should not hang on the discarded page, and the page should not be reported.
                 IBrowser cdpBrowser = await Playwright.Chromium.ConnectOverCDPAsync("http://127.0.0.1:" + port + "/").ConfigureAwait(false);

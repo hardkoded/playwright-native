@@ -269,6 +269,9 @@ namespace PlaywrightNative.Chromium
                 browser.FlushPendingOopifs();
                 if (processManager == null)
                 {
+                    // Target.setAutoAttach does not wait for new targets being attached.
+                    // Official makes a dummy call afterwards, which fixes this.
+                    await connection.RootSession.SendAsync("Target.getTargetInfo").ConfigureAwait(false);
                     await browser.AdoptExistingOopifsAsync().ConfigureAwait(false);
 
                     // Official _waitForAllPagesToBeInitialized. Pages without a
@@ -1177,7 +1180,10 @@ namespace PlaywrightNative.Chromium
             _ = crPage.InitializeAsync().ContinueWith(
                 t =>
                 {
-                    _logger?.LogError(t.Exception, "Failed to initialize page {TargetId}", targetId);
+                    if (t.IsFaulted)
+                    {
+                        _logger?.LogError(t.Exception, "Failed to initialize page {TargetId}", targetId);
+                    }
 
                     // Official reportAsNew(error): a failed page still counts as
                     // initialized, so connectOverCDP does not wait for it forever.
