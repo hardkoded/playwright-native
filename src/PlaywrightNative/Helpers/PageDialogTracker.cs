@@ -251,7 +251,8 @@ namespace PlaywrightNative.Helpers
                     "Accept dialog",
                     "Dialog",
                     "accept",
-                    () => AcceptSilentAsync(promptText));
+                    () => AcceptSilentAsync(promptText),
+                    page: Page);
             }
 
             public async Task DismissAsync()

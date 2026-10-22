@@ -36,6 +36,9 @@ namespace PlaywrightNative.Helpers
                 const items = [];
                 for (let i = 0; i < localStorage.length; i++) {
                     const name = localStorage.key(i);
+                    if (name.startsWith('__pwCoverage.')) {
+                        continue;
+                    }
                     const value = localStorage.getItem(name) || '';
                     const codes = [];
                     for (let j = 0; j < value.length; j++) {
@@ -263,6 +266,63 @@ namespace PlaywrightNative.Helpers
             }
         }
 
+        /// <summary>
+        /// Official <c>browserContext.visitOrigins</c>: opens a blank internal
+        /// page and calls <paramref name="callback"/> on its main frame at each
+        /// of <paramref name="origins"/>.
+        /// </summary>
+        /// <param name="context">The context to visit the origins in.</param>
+        /// <param name="origins">The origins to visit.</param>
+        /// <param name="callback">Called with the main frame and the origin.</param>
+        /// <returns>A task that completes once every origin was visited.</returns>
+        internal static async Task VisitOriginsAsync(IBrowserContext context, IEnumerable<string> origins, Func<IFrame, string, Task> callback)
+        {
+            IHasStorageStateInternals flag = context as IHasStorageStateInternals;
+            if (flag != null)
+            {
+                flag.CreatingStorageStatePage = true;
+            }
+
+            IPage probe = null;
+            try
+            {
+                probe = await context.NewPageAsync().ConfigureAwait(false);
+
+                // Await fulfill so GoTo cannot race a fire-and-forget handler and
+                // hang until the default 30s navigation timeout (seen on Windows headful).
+                await probe.RouteAsync("**/*", async route =>
+                {
+                    await route.FulfillAsync(new() { Body = "<html></html>" }).ConfigureAwait(false);
+                }).ConfigureAwait(false);
+
+                foreach (string origin in origins)
+                {
+                    await probe.GoToAsync(origin).ConfigureAwait(false);
+                    await callback(probe.MainFrame, origin).ConfigureAwait(false);
+                }
+            }
+            finally
+            {
+                if (probe != null)
+                {
+                    try
+                    {
+                        await probe.CloseAsync().ConfigureAwait(false);
+                    }
+#pragma warning disable RCS1075
+                    catch (Exception)
+#pragma warning restore RCS1075
+                    {
+                    }
+                }
+
+                if (flag != null)
+                {
+                    flag.CreatingStorageStatePage = false;
+                }
+            }
+        }
+
         private static List<VirtualCredential> CopyCredentials(IReadOnlyList<VirtualCredential> source)
         {
             List<VirtualCredential> copy = new();
@@ -477,60 +537,17 @@ namespace PlaywrightNative.Helpers
                 return result;
             }
 
-            IHasStorageStateInternals flag = context as IHasStorageStateInternals;
-            if (flag != null)
+            await VisitOriginsAsync(context, originsToSave, async (frame, origin) =>
             {
-                flag.CreatingStorageStatePage = true;
-            }
-
-            IPage probe = null;
-            try
-            {
-                probe = await context.NewPageAsync().ConfigureAwait(false);
-
-                // Await fulfill so GoTo cannot race a fire-and-forget handler and
-                // hang until the default 30s navigation timeout (seen on Windows headful).
-                await probe.RouteAsync("**/*", async route =>
+                StorageStateOrigin collected = await CollectFromFrameAsync(frame, origin, includeIndexedDB).ConfigureAwait(false);
+                if (collected != null)
                 {
-                    await route.FulfillAsync(new() { Body = "<html></html>" }).ConfigureAwait(false);
-                }).ConfigureAwait(false);
-
-                foreach (string origin in originsToSave)
-                {
-                    await probe.GoToAsync(origin).ConfigureAwait(false);
-                    StorageStateOrigin collected = await CollectFromPageAsync(probe, origin, includeIndexedDB).ConfigureAwait(false);
-                    if (collected != null)
-                    {
-                        result.Add(collected);
-                    }
+                    result.Add(collected);
                 }
-            }
-            finally
-            {
-                if (probe != null)
-                {
-                    try
-                    {
-                        await probe.CloseAsync().ConfigureAwait(false);
-                    }
-#pragma warning disable RCS1075
-                    catch (Exception)
-#pragma warning restore RCS1075
-                    {
-                    }
-                }
-
-                if (flag != null)
-                {
-                    flag.CreatingStorageStatePage = false;
-                }
-            }
+            }).ConfigureAwait(false);
 
             return result;
         }
-
-        private static Task<StorageStateOrigin> CollectFromPageAsync(IPage page, string origin, bool includeIndexedDB)
-            => CollectFromFrameAsync(page?.MainFrame ?? page as IFrame, origin, includeIndexedDB);
 
         private static async Task<StorageStateOrigin> CollectFromFrameAsync(IFrame frame, string origin, bool includeIndexedDB)
         {

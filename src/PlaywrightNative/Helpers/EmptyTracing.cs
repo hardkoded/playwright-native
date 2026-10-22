@@ -44,12 +44,12 @@ namespace PlaywrightNative.Helpers
         }
 
         /// <inheritdoc/>
-        public Task StartAsync(PlaywrightNative.TracingStartOptions options)
+        public async Task StartAsync(PlaywrightNative.TracingStartOptions options)
         {
             if (_context is IHasOfficialTrace host)
             {
                 host.OfficialTrace ??= new OfficialTraceSession(_context);
-                host.OfficialTrace.Start(options, chunk: false);
+                await host.OfficialTrace.StartAsync(options, chunk: false).ConfigureAwait(false);
 
                 // Also keep the chrome-events recorder so Direct StopAsync(.json)
                 // can write traceEvents (groups) instead of an official zip.
@@ -60,7 +60,7 @@ namespace PlaywrightNative.Helpers
                     _openGroups.Clear();
                 }
 
-                return Task.CompletedTask;
+                return;
             }
 
             // Standalone APIRequest tracing has no browser context. Still start
@@ -76,7 +76,7 @@ namespace PlaywrightNative.Helpers
                     _openGroups.Clear();
                 }
 
-                return Task.CompletedTask;
+                return;
             }
 
             OwnOfficial().Start(options, chunk: false);
@@ -86,8 +86,6 @@ namespace PlaywrightNative.Helpers
                 _events.Clear();
                 _openGroups.Clear();
             }
-
-            return Task.CompletedTask;
         }
 
         Task ITracing.StartAsync(Microsoft.Playwright.TracingStartOptions options)
@@ -108,12 +106,12 @@ namespace PlaywrightNative.Helpers
         }
 
         /// <inheritdoc/>
-        public Task StartChunkAsync(string name = default, string title = default)
+        public async Task StartChunkAsync(string name = default, string title = default)
         {
             OfficialTraceSession official = OfficialSessionOrNull();
             if (official != null && official.IsRecording)
             {
-                official.Start(new TracingStartOptions { Name = name, Title = title }, chunk: true);
+                await official.StartAsync(new TracingStartOptions { Name = name, Title = title }, chunk: true).ConfigureAwait(false);
                 lock (_gate)
                 {
                     _events.Clear();
@@ -121,12 +119,11 @@ namespace PlaywrightNative.Helpers
                     _recording = true;
                 }
 
-                return Task.CompletedTask;
+                return;
             }
 
             _ = name;
             _ = title;
-            return Task.CompletedTask;
         }
 
         /// <inheritdoc/>

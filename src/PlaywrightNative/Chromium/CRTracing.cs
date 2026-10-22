@@ -50,10 +50,10 @@ namespace PlaywrightNative.Chromium
         }
 
         /// <inheritdoc/>
-        public Task StartAsync(PlaywrightNative.TracingStartOptions options)
+        public async Task StartAsync(PlaywrightNative.TracingStartOptions options)
         {
             OfficialTraceSession session = OfficialSession();
-            session.Start(options, chunk: false);
+            await session.StartAsync(options, chunk: false).ConfigureAwait(false);
 
             // Keep an in-memory chrome-events buffer for Direct StopAsync(.json) paths
             // (groups / non-empty traceEvents). Official zip remains for .zip stops.
@@ -65,8 +65,6 @@ namespace PlaywrightNative.Chromium
                 _events.Add(ChromeTraceEvents.GroupBegin("__tracing__"));
                 _events.Add(ChromeTraceEvents.GroupEnd("__tracing__"));
             }
-
-            return Task.CompletedTask;
         }
 
         Task ITracing.StartAsync(Microsoft.Playwright.TracingStartOptions options)
@@ -98,12 +96,12 @@ namespace PlaywrightNative.Chromium
         }
 
         /// <inheritdoc/>
-        public Task StartChunkAsync(string name = default, string title = default)
+        public async Task StartChunkAsync(string name = default, string title = default)
         {
             OfficialTraceSession official = OfficialSessionOrNull();
             if (official != null && official.IsRecording)
             {
-                official.Start(new TracingStartOptions { Name = name, Title = title }, chunk: true);
+                await official.StartAsync(new TracingStartOptions { Name = name, Title = title }, chunk: true).ConfigureAwait(false);
                 lock (_gate)
                 {
                     _events.Clear();
@@ -113,7 +111,7 @@ namespace PlaywrightNative.Chromium
                     _events.Add(ChromeTraceEvents.GroupEnd("__tracing__"));
                 }
 
-                return Task.CompletedTask;
+                return;
             }
 
             _ = name;
@@ -127,8 +125,6 @@ namespace PlaywrightNative.Chromium
 
                 _events.Clear();
             }
-
-            return Task.CompletedTask;
         }
 
         /// <inheritdoc/>

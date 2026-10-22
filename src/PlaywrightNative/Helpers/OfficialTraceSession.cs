@@ -50,6 +50,8 @@ namespace PlaywrightNative.Helpers
         private readonly List<Task> _pendingCaptures = new();
         private readonly IBrowserContext _context;
         private readonly bool _apiOnly;
+        private readonly string _coverageSessionId = "browser-context@" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture);
+        private CoverageRecorder _coverage;
         private TracingStartOptions _options;
         private bool _recording;
         private bool _networkAttached;
@@ -121,6 +123,24 @@ namespace PlaywrightNative.Helpers
         }
 
         /// <summary>
+        /// Gets the id that scopes the coverage stashes, official <c>context.guid</c>.
+        /// </summary>
+        internal string CoverageSessionId => _coverageSessionId;
+
+        /// <summary>
+        /// Official <c>instrumentation.onPageWillClose</c>: pulls the coverage of
+        /// <paramref name="page"/> before it goes away.
+        /// </summary>
+        /// <param name="context">The owning context.</param>
+        /// <param name="page">The page that is closing.</param>
+        /// <returns>A task that completes once the coverage is pulled.</returns>
+        internal static Task OnPageWillCloseAsync(IBrowserContext context, IPage page)
+        {
+            CoverageRecorder recorder = (context as IHasOfficialTrace)?.OfficialTrace?.CoverageRecorderOrNull();
+            return recorder == null ? Task.CompletedTask : recorder.CollectFromPageAsync(page);
+        }
+
+        /// <summary>
         /// Returns the official session on <paramref name="context"/> when it
         /// is recording.
         /// </summary>
@@ -161,6 +181,7 @@ namespace PlaywrightNative.Helpers
                     next.Snapshots ??= _options.Snapshots;
                     next.ScreenSnapshots ??= _options.ScreenSnapshots;
                     next.AriaSnapshots ??= _options.AriaSnapshots;
+                    next.Coverage ??= _options.Coverage;
                     next.Sources ??= _options.Sources;
                     if (string.IsNullOrEmpty(next.Name))
                     {
@@ -214,11 +235,37 @@ namespace PlaywrightNative.Helpers
 
                 _name = string.IsNullOrEmpty(_options.Name) ? "trace" : _options.Name;
                 WriteContextOptions();
+                if (_options.Coverage == true && !_apiOnly && _context != null)
+                {
+                    _coverage ??= new CoverageRecorder(_context, _coverageSessionId);
+                }
             }
 
             if (!chunk && !_apiOnly)
             {
                 AttachNetwork();
+            }
+        }
+
+        /// <summary>
+        /// Starts tracing or a new chunk, then installs the coverage script when
+        /// the <c>_coverage</c> option is set.
+        /// </summary>
+        /// <param name="options">The tracing options.</param>
+        /// <param name="chunk">Whether this starts a new chunk.</param>
+        /// <returns>A task that completes once tracing started.</returns>
+        internal async Task StartAsync(TracingStartOptions options, bool chunk)
+        {
+            Start(options, chunk);
+            CoverageRecorder recorder;
+            lock (_gate)
+            {
+                recorder = _options?.Coverage == true ? _coverage : null;
+            }
+
+            if (recorder != null)
+            {
+                await recorder.InstallAsync().ConfigureAwait(false);
             }
         }
 
@@ -354,7 +401,7 @@ namespace PlaywrightNative.Helpers
         /// <summary>
         /// Completes an action started with <see cref="TryBeginAction"/>.
         /// </summary>
-        internal async Task ContinueActionAsync(string callId, Func<Task> body, object result = null)
+        internal async Task ContinueActionAsync(string callId, Func<Task> body, object result = null, IPage page = null)
         {
             await ContinueActionAsync<object>(
                 callId,
@@ -363,13 +410,14 @@ namespace PlaywrightNative.Helpers
                     await body().ConfigureAwait(false);
                     return null;
                 },
-                result).ConfigureAwait(false);
+                result,
+                page).ConfigureAwait(false);
         }
 
         /// <summary>
         /// Completes an action started with <see cref="TryBeginAction"/>.
         /// </summary>
-        internal async Task<T> ContinueActionAsync<T>(string callId, Func<Task<T>> body, object result = null)
+        internal async Task<T> ContinueActionAsync<T>(string callId, Func<Task<T>> body, object result = null, IPage page = null)
         {
             if (body == null)
             {
@@ -431,6 +479,7 @@ namespace PlaywrightNative.Helpers
 
                 await CapturePhaseAsync(callId, "after", method).ConfigureAwait(false);
                 await CaptureAfterActionAsync(callId, method).ConfigureAwait(false);
+                await CaptureCoverageAsync(page).ConfigureAwait(false);
             }
 
             return value;
@@ -816,119 +865,43 @@ namespace PlaywrightNative.Helpers
 
         internal async Task StopAsync(string path, bool keepRecording)
         {
-            // Hard wall-clock so a stuck BodyAsync / zip write cannot hang
-            // StopChunk for the full NUnit budget (ShouldNotEmitAfterWithoutBefore
-            // under Windows headful suite load).
-            Task stop = StopInnerAsync();
-            Task finished = await Task.WhenAny(stop, Task.Delay(5_000)).ConfigureAwait(false);
-            if (finished == stop)
+            // Collected before the chunk stops, while the pages can still be evaluated in.
+            PlaywrightException coverageError = null;
+            try
             {
-                await stop.ConfigureAwait(false);
+                await TakeCoverageAsync(discard: string.IsNullOrEmpty(path)).ConfigureAwait(false);
+            }
+            catch (PlaywrightException ex)
+            {
+                coverageError = ex;
             }
 
-            async Task StopInnerAsync()
+            // The chunk is torn down either way, the coverage error is reported after.
+            try
             {
-                // Always bound-flush pending network body captures. Clearing them
-                // on StopChunk dropped CSS (ShouldRespectTracesDirAndName) while
-                // CaptureResourceAsync already caps BodyAsync at 500ms so this
-                // cannot wedge StopChunk the way an unbounded flush did
-                // (ShouldNotEmitAfterWithoutBefore).
-                await FlushPendingAsync().ConfigureAwait(false);
-
-                List<string> trace;
-                List<string> network;
-                Dictionary<string, byte[]> resources;
-                string name;
-                string tracesDir;
-                lock (_gate)
-                {
-                    if (!_recording)
-                    {
-                        if (!string.IsNullOrEmpty(path))
-                        {
-                            throw new PlaywrightException("Must start tracing before stopping");
-                        }
-
-                        return;
-                    }
-
-                    CloseOpenGroupsLocked();
-                    foreach (string line in _consoleLines)
-                    {
-                        _traceLines.Add(line);
-                    }
-
-                    _consoleLines.Clear();
-                    if (_wsLines.Count > 0)
-                    {
-                        _resources["resources/ws.jsonl"] = Encoding.UTF8.GetBytes(JoinLines(_wsLines));
-                    }
-
-                    if (_options?.Sources == true && _chunkCallIds.Count > 0)
-                    {
-                        _resources["src/0000000000000000000000000000000000000000.ts"] = Encoding.UTF8.GetBytes("// source");
-                    }
-
-                    EnsureReferencedStylesheet();
-
-                    trace = new List<string>(_traceLines);
-                    network = new List<string>(_networkLines);
-                    resources = new Dictionary<string, byte[]>(_resources, StringComparer.Ordinal);
-                    foreach (KeyValuePair<string, byte[]> item in _networkResources)
-                    {
-                        resources[item.Key] = item.Value;
-                    }
-
-                    name = _name;
-                    tracesDir = ResolveTracesDir();
-                    if (_stacks.Count > 0)
-                    {
-                        var stackMap = new Dictionary<string, object>(StringComparer.Ordinal);
-                        foreach (KeyValuePair<string, string> stack in _stacks)
-                        {
-                            stackMap[stack.Key] = new[]
-                            {
-                                new Dictionary<string, object> { ["file"] = stack.Value },
-                            };
-                        }
-
-                        resources["trace.stacks"] = Encoding.UTF8.GetBytes(Serialize(stackMap));
-                    }
-
-                    _traceLines.Clear();
-                    _resources.Clear();
-                    _chunkCallIds.Clear();
-                    _callMethods.Clear();
-                    _openEvaluateConsoleBaselines.Clear();
-                    _wsLines.Clear();
-                    _stacks.Clear();
-                    if (!keepRecording)
-                    {
-                        _recording = false;
-                        _options = null;
-                        _networkLines.Clear();
-                        _networkResources.Clear();
-                        _sessionWsOpenLines.Clear();
-                    }
-                    else
-                    {
-                        WriteContextOptions();
-                    }
-                }
-
+                await StopChunkAsync(path, keepRecording).ConfigureAwait(false);
+            }
+            finally
+            {
                 if (!keepRecording)
                 {
-                    DetachNetwork();
+                    CoverageRecorder recorder;
+                    lock (_gate)
+                    {
+                        recorder = _coverage;
+                        _coverage = null;
+                    }
+
+                    if (recorder != null)
+                    {
+                        await recorder.UninstallAsync().ConfigureAwait(false);
+                    }
                 }
+            }
 
-                WriteTracesDirFiles(tracesDir, name, trace, network, resources);
-
-                if (string.IsNullOrEmpty(path))
-                {
-                    return;
-                }
-
-                await WriteZipAsync(path, trace, network, resources).ConfigureAwait(false);
+            if (coverageError != null)
+            {
+                throw coverageError;
             }
         }
 
@@ -1113,6 +1086,169 @@ namespace PlaywrightNative.Helpers
             using Stream stream = entry.Open();
             byte[] bytes = Encoding.UTF8.GetBytes(text);
             await stream.WriteAsync(bytes).ConfigureAwait(false);
+        }
+
+        private async Task StopChunkAsync(string path, bool keepRecording)
+        {
+            // Hard wall-clock so a stuck BodyAsync / zip write cannot hang
+            // StopChunk for the full NUnit budget (ShouldNotEmitAfterWithoutBefore
+            // under Windows headful suite load).
+            Task stop = StopInnerAsync();
+            Task finished = await Task.WhenAny(stop, Task.Delay(5_000)).ConfigureAwait(false);
+            if (finished == stop)
+            {
+                await stop.ConfigureAwait(false);
+            }
+
+            async Task StopInnerAsync()
+            {
+                // Always bound-flush pending network body captures. Clearing them
+                // on StopChunk dropped CSS (ShouldRespectTracesDirAndName) while
+                // CaptureResourceAsync already caps BodyAsync at 500ms so this
+                // cannot wedge StopChunk the way an unbounded flush did
+                // (ShouldNotEmitAfterWithoutBefore).
+                await FlushPendingAsync().ConfigureAwait(false);
+
+                List<string> trace;
+                List<string> network;
+                Dictionary<string, byte[]> resources;
+                string name;
+                string tracesDir;
+                lock (_gate)
+                {
+                    if (!_recording)
+                    {
+                        if (!string.IsNullOrEmpty(path))
+                        {
+                            throw new PlaywrightException("Must start tracing before stopping");
+                        }
+
+                        return;
+                    }
+
+                    CloseOpenGroupsLocked();
+                    foreach (string line in _consoleLines)
+                    {
+                        _traceLines.Add(line);
+                    }
+
+                    _consoleLines.Clear();
+                    if (_wsLines.Count > 0)
+                    {
+                        _resources["resources/ws.jsonl"] = Encoding.UTF8.GetBytes(JoinLines(_wsLines));
+                    }
+
+                    if (_options?.Sources == true && _chunkCallIds.Count > 0)
+                    {
+                        _resources["src/0000000000000000000000000000000000000000.ts"] = Encoding.UTF8.GetBytes("// source");
+                    }
+
+                    EnsureReferencedStylesheet();
+
+                    trace = new List<string>(_traceLines);
+                    network = new List<string>(_networkLines);
+                    resources = new Dictionary<string, byte[]>(_resources, StringComparer.Ordinal);
+                    foreach (KeyValuePair<string, byte[]> item in _networkResources)
+                    {
+                        resources[item.Key] = item.Value;
+                    }
+
+                    name = _name;
+                    tracesDir = ResolveTracesDir();
+                    if (_stacks.Count > 0)
+                    {
+                        var stackMap = new Dictionary<string, object>(StringComparer.Ordinal);
+                        foreach (KeyValuePair<string, string> stack in _stacks)
+                        {
+                            stackMap[stack.Key] = new[]
+                            {
+                                new Dictionary<string, object> { ["file"] = stack.Value },
+                            };
+                        }
+
+                        resources["trace.stacks"] = Encoding.UTF8.GetBytes(Serialize(stackMap));
+                    }
+
+                    _traceLines.Clear();
+                    _resources.Clear();
+                    _chunkCallIds.Clear();
+                    _callMethods.Clear();
+                    _openEvaluateConsoleBaselines.Clear();
+                    _wsLines.Clear();
+                    _stacks.Clear();
+                    if (!keepRecording)
+                    {
+                        _recording = false;
+                        _options = null;
+                        _networkLines.Clear();
+                        _networkResources.Clear();
+                        _sessionWsOpenLines.Clear();
+                    }
+                    else
+                    {
+                        WriteContextOptions();
+                    }
+                }
+
+                if (!keepRecording)
+                {
+                    DetachNetwork();
+                }
+
+                WriteTracesDirFiles(tracesDir, name, trace, network, resources);
+
+                if (string.IsNullOrEmpty(path))
+                {
+                    return;
+                }
+
+                await WriteZipAsync(path, trace, network, resources).ConfigureAwait(false);
+            }
+        }
+
+        private CoverageRecorder CoverageRecorderOrNull()
+        {
+            lock (_gate)
+            {
+                return _coverage;
+            }
+        }
+
+        private async Task CaptureCoverageAsync(IPage page)
+        {
+            CoverageRecorder recorder = CoverageRecorderOrNull();
+            if (recorder != null && page != null)
+            {
+                await recorder.CollectFromPageAsync(page).ConfigureAwait(false);
+            }
+        }
+
+        private async Task TakeCoverageAsync(bool discard)
+        {
+            CoverageRecorder recorder;
+            lock (_gate)
+            {
+                recorder = _recording ? _coverage : null;
+            }
+
+            if (recorder == null)
+            {
+                return;
+            }
+
+            string json = await recorder.TakeAsync(discard).ConfigureAwait(false);
+            if (json == null)
+            {
+                return;
+            }
+
+            lock (_gate)
+            {
+                if (_recording)
+                {
+                    _resources["trace.coverage"] = Encoding.UTF8.GetBytes(json);
+                }
+            }
         }
 
         private void WriteStack(string callId)

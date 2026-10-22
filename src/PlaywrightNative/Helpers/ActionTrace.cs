@@ -35,7 +35,7 @@ namespace PlaywrightNative.Helpers
             return new SuppressScope();
         }
 
-        internal static Task RunAsync(IBrowserContext context, string title, string className, string method, Func<Task> body, object parameters = null, object result = null)
+        internal static Task RunAsync(IBrowserContext context, string title, string className, string method, Func<Task> body, object parameters = null, object result = null, IPage page = null)
         {
             OfficialTraceSession session = OfficialTraceSession.Active(context);
             if (session == null || Suppress.Value > 0 || Depth.Value > 0)
@@ -52,10 +52,10 @@ namespace PlaywrightNative.Helpers
                 return body();
             }
 
-            return RunInsideAsync(() => session.ContinueActionAsync(callId, body, result));
+            return RunInsideAsync(() => session.ContinueActionAsync(callId, body, result, page));
         }
 
-        internal static Task<T> RunAsync<T>(IBrowserContext context, string title, string className, string method, Func<Task<T>> body, object parameters = null, object result = null)
+        internal static Task<T> RunAsync<T>(IBrowserContext context, string title, string className, string method, Func<Task<T>> body, object parameters = null, object result = null, IPage page = null)
         {
             OfficialTraceSession session = OfficialTraceSession.Active(context);
             if (session == null || Suppress.Value > 0 || Depth.Value > 0)
@@ -69,10 +69,10 @@ namespace PlaywrightNative.Helpers
                 return body();
             }
 
-            return RunInsideAsync(() => session.ContinueActionAsync(callId, body, result));
+            return RunInsideAsync(() => session.ContinueActionAsync(callId, body, result, page));
         }
 
-        internal static Task<T> EvaluateUserAsync<T>(IBrowserContext context, Func<Task<T>> body, int consoleMessageCount = 0)
+        internal static Task<T> EvaluateUserAsync<T>(IBrowserContext context, Func<Task<T>> body, int consoleMessageCount = 0, IPage page = null)
         {
             if (body == null)
             {
@@ -92,10 +92,10 @@ namespace PlaywrightNative.Helpers
             }
 
             session.NoteEvaluateConsoleBaseline(callId, consoleMessageCount);
-            return RunInsideAsync(() => session.ContinueActionAsync(callId, body, null));
+            return RunInsideAsync(() => session.ContinueActionAsync(callId, body, null, page));
         }
 
-        internal static Task<T> EvaluateHandleUserAsync<T>(IBrowserContext context, Func<Task<T>> body, int consoleMessageCount = 0)
+        internal static Task<T> EvaluateHandleUserAsync<T>(IBrowserContext context, Func<Task<T>> body, int consoleMessageCount = 0, IPage page = null)
         {
             if (body == null)
             {
@@ -115,7 +115,7 @@ namespace PlaywrightNative.Helpers
             }
 
             session.NoteEvaluateConsoleBaseline(callId, consoleMessageCount);
-            return RunInsideAsync(() => session.ContinueActionAsync(callId, body, null));
+            return RunInsideAsync(() => session.ContinueActionAsync(callId, body, null, page));
         }
 
         internal static string NavigateTitle(string url)
