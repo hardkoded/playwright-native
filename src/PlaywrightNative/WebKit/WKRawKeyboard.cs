@@ -68,48 +68,10 @@ namespace PlaywrightNative.WebKit
             return mask;
         }
 
-        /// <summary>
-        /// Builds the macEditingCommands shortcut string for a key press: held modifiers
-        /// (in <c>Shift+Control+Alt+Meta</c> order) followed by the physical key code,
-        /// joined with <c>+</c>. Mirrors upstream <c>wkInput.ts</c>.
-        /// </summary>
-        /// <param name="modifiers">The held modifiers.</param>
-        /// <param name="code">The physical <c>event.code</c> of the key.</param>
-        /// <returns>The shortcut string used to look up macOS editing commands.</returns>
-        public static string BuildShortcut(IReadOnlyCollection<Input.KeyboardModifier> modifiers, string code)
-        {
-            List<string> parts = new();
-            if (modifiers != null)
-            {
-                if (modifiers.Contains(Input.KeyboardModifier.Shift))
-                {
-                    parts.Add("Shift");
-                }
-
-                if (modifiers.Contains(Input.KeyboardModifier.Control))
-                {
-                    parts.Add("Control");
-                }
-
-                if (modifiers.Contains(Input.KeyboardModifier.Alt))
-                {
-                    parts.Add("Alt");
-                }
-
-                if (modifiers.Contains(Input.KeyboardModifier.Meta))
-                {
-                    parts.Add("Meta");
-                }
-            }
-
-            parts.Add(code);
-            return string.Join("+", parts);
-        }
-
         /// <inheritdoc/>
         public Task KeyDownAsync(IReadOnlyCollection<Input.KeyboardModifier> modifiers, Input.KeyDefinition key, bool autoRepeat)
         {
-            string shortcut = BuildShortcut(modifiers, key.Code);
+            string shortcut = MacEditingCommands.BuildShortcut(modifiers, key.Code);
 
             // Linux/Windows WebKit uses native Ctrl+A select-all. The macOS table maps
             // Control+KeyA to moveToBeginningOfParagraph, which would steal selectAll.

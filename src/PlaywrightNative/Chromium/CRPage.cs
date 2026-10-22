@@ -137,7 +137,7 @@ namespace PlaywrightNative.Chromium
             // DragManager mirrors upstream crDragDrop: intercept HTML5 drag so custom
             // DataTransfer types are preserved without chromium/x-drag-id.
             CRDragManager dragManager = new CRDragManager(this);
-            _keyboard = new Input.Keyboard(new CRRawKeyboard(_client, dragManager));
+            _keyboard = new Input.Keyboard(new CRRawKeyboard(_client, dragManager, browser.UserAgent.Contains("Macintosh", StringComparison.Ordinal)));
             _mouse = new Input.Mouse(new CRRawMouse(_client, dragManager), _keyboard);
             _touchscreen = new Input.Touchscreen(new CRRawTouchscreen(_client), _keyboard);
 
