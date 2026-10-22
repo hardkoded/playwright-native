@@ -180,6 +180,8 @@ def collect_official(playwright_tests: Path) -> tuple[set[str], list[dict]]:
                         "rel": rel,
                         "title": title,
                         "line": text[: match.start()].count("\n") + 1,
+                        # `test('name #' + i, ...)`: the literal is only a prefix.
+                        "prefix": text[match.end() :].lstrip().startswith("+"),
                     }
                 )
     return specs, titles
@@ -238,6 +240,8 @@ def main() -> int:
             skipped_official.append(rec)
             continue
         if (spec, title) in local_pairs or (spec, normalize_title(title)) in local_norm:
+            continue
+        if rec["prefix"] and any(s == spec and t.startswith(title) for s, t in local_pairs):
             continue
         # glob / urlMatches assertion strings are not test titles
         if spec == "interception.spec.ts" and (
