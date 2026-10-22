@@ -113,15 +113,13 @@ namespace PlaywrightNative.Tests
     internal sealed class OfficialTlsSniRejectServer : IAsyncDisposable
     {
         private readonly TcpListener _listener;
-        private readonly X509Certificate2 _cert;
         private readonly CancellationTokenSource _cts = new();
         private readonly Task _acceptLoop;
         private readonly SslProtocols _protocol;
 
-        private OfficialTlsSniRejectServer(TcpListener listener, X509Certificate2 cert, SslProtocols protocol)
+        private OfficialTlsSniRejectServer(TcpListener listener, SslProtocols protocol)
         {
             _listener = listener;
-            _cert = cert;
             _protocol = protocol;
             Port = ((IPEndPoint)listener.LocalEndpoint).Port;
             _acceptLoop = AcceptLoopAsync();
@@ -133,12 +131,9 @@ namespace PlaywrightNative.Tests
 
         internal static OfficialTlsSniRejectServer Start(SslProtocols protocol)
         {
-            X509Certificate2 cert = OfficialClientCertificateServer.LoadPem(
-                OfficialClientCertificateServer.Asset("client-certificates/server/server_cert.pem"),
-                OfficialClientCertificateServer.Asset("client-certificates/server/server_key.pem"));
             TcpListener listener = new(IPAddress.Loopback, 0);
             listener.Start();
-            return new OfficialTlsSniRejectServer(listener, cert, protocol);
+            return new OfficialTlsSniRejectServer(listener, protocol);
         }
 
         public async ValueTask DisposeAsync()
@@ -161,7 +156,6 @@ namespace PlaywrightNative.Tests
             }
 
             _cts.Dispose();
-            _cert.Dispose();
         }
 
         private async Task AcceptLoopAsync()
@@ -198,9 +192,12 @@ namespace PlaywrightNative.Tests
                 await using (NetworkStream stream = client.GetStream())
                 await using (SslStream ssl = new(stream, leaveInnerStreamOpen: false))
                 {
+                    // Upstream rejects from SNICallback, after the ClientHello
+                    // arrives. SslStream only runs the selection callback when no
+                    // ServerCertificate is set; setting both throws before the
+                    // handshake reads anything.
                     SslServerAuthenticationOptions options = new()
                     {
-                        ServerCertificate = _cert,
                         ClientCertificateRequired = true,
                         EnabledSslProtocols = _protocol,
                         CertificateRevocationCheckMode = X509RevocationMode.NoCheck,

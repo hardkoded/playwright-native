@@ -20,6 +20,7 @@ using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Playwright;
+using PlaywrightNative.Chromium;
 using PlaywrightNative.WebKit;
 
 namespace PlaywrightNative.Helpers
@@ -404,7 +405,7 @@ namespace PlaywrightNative.Helpers
 
             foreach (IFrame frame in frames)
             {
-                if (frame == null || frame.ParentFrame == null || frame.IsDetached)
+                if (frame == null || frame.ParentFrame == null || frame.IsDetached || LacksExistingContext(frame))
                 {
                     continue;
                 }
@@ -457,7 +458,7 @@ namespace PlaywrightNative.Helpers
 
             foreach (IFrame frame in frames)
             {
-                if (frame == null || frame.IsDetached)
+                if (frame == null || frame.IsDetached || (frame.ParentFrame != null && LacksExistingContext(frame)))
                 {
                     continue;
                 }
@@ -517,6 +518,17 @@ namespace PlaywrightNative.Helpers
                 }
             }
         }
+
+        /// <summary>
+        /// Upstream decorates frames with <c>nonStallingEvaluateInExistingContext</c>:
+        /// a Chromium child frame whose document has no live execution context yet
+        /// (a stalled subframe navigation) is skipped instead of waiting for one.
+        /// </summary>
+        /// <param name="frame">The frame to decorate.</param>
+        /// <returns><see langword="true"/> when evaluating would wait for a new context.</returns>
+        private static bool LacksExistingContext(IFrame frame)
+            => frame is ChromiumFrame chromium
+                && (chromium.Frame.ExecutionContext == null || chromium.Frame.ExecutionContext.Destroyed.IsCompleted);
 
         private static Task FinishAnimationsAsync(IPage page)
         {
