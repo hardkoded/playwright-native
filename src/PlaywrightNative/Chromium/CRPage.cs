@@ -335,6 +335,13 @@ namespace PlaywrightNative.Chromium
         /// </summary>
         internal bool HasCommittedNonInitialNavigation { get; private set; }
 
+        /// <summary>
+        /// True when the target was created with a real URL (browser launched
+        /// with a URL argument), so its first commit can be slow and must not
+        /// be replaced by a synthesized <c>about:blank</c>.
+        /// </summary>
+        internal bool HasPendingStartupUrl { get; set; }
+
         /// <inheritdoc/>
         public async Task InitializeAsync()
         {
@@ -7298,7 +7305,7 @@ namespace PlaywrightNative.Chromium
             // load the first commit can land after 500ms. Wait longer before
             // synthesizing about:blank so reportAsNew does not race the real
             // document's execution context swap.
-            int waitMs = Opener != null ? 5_000 : 500;
+            int waitMs = Opener != null ? 5_000 : HasPendingStartupUrl ? 10_000 : 500;
             await Task.WhenAny(_firstNonInitialNavigationTcs.Task, Task.Delay(waitMs)).ConfigureAwait(false);
             if (_firstNonInitialNavigationTcs.Task.IsCompleted)
             {

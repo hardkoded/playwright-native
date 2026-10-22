@@ -60,6 +60,9 @@ namespace PlaywrightNative.Tests
         private static string HttpsPrefix = TestConstants.HttpsPrefix;
         private static string HttpsEmptyPage = TestConstants.HttpsPrefix + "/empty.html";
 
+        private static bool IsHeadless =>
+            !string.Equals(Environment.GetEnvironmentVariable("HEADLESS"), "false", StringComparison.OrdinalIgnoreCase);
+
         private static SimpleServer Server => _ownedServer ?? TestServerSetup.Server;
 
         private static SimpleServer HttpsServer => _ownedHttps ?? TestServerSetup.HttpsServer;
@@ -431,7 +434,7 @@ namespace PlaywrightNative.Tests
                     new BrowserTypeLaunchPersistentContextOptions
                     {
                         ExecutablePath = PersistentExecutablePath(),
-                        Headless = true,
+                        Headless = IsHeadless,
                         Args = new[] { EmptyPage },
                     })).ConfigureAwait(false);
                 Assert.That(error, Is.Not.Null);
@@ -454,13 +457,13 @@ namespace PlaywrightNative.Tests
             try
             {
                 List<string> args = ((BrowserTypeInfo)browserType)
-                    .DefaultArgs(new BrowserTypeLaunchOptions { Headless = true }, isPersistent: true, userDataDir)
+                    .DefaultArgs(new BrowserTypeLaunchOptions { Headless = IsHeadless }, isPersistent: true, userDataDir)
                     .Where(a => a != "about:blank")
                     .ToList();
                 BrowserTypeLaunchPersistentContextOptions options = new()
                 {
                     ExecutablePath = PersistentExecutablePath(),
-                    Headless = true,
+                    Headless = IsHeadless,
                     Args = TestConstants.IsFirefox ? args.Concat(new[] { "-new-tab", EmptyPage }).ToList() : args.Append(EmptyPage).ToList(),
                     IgnoreDefaultArgs = true,
                 };
@@ -744,7 +747,7 @@ namespace PlaywrightNative.Tests
             string userDataDir = null)
         {
             options ??= new BrowserTypeLaunchPersistentContextOptions();
-            options.Headless = true;
+            options.Headless = IsHeadless;
             IBrowserType browserType = PersistentBrowserType();
             options.ExecutablePath = PersistentExecutablePath();
             bool ownsDir = string.IsNullOrEmpty(userDataDir);
