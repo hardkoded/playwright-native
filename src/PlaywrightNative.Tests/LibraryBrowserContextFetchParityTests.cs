@@ -668,6 +668,82 @@ namespace PlaywrightNative.Tests
             await context.CloseAsync().ConfigureAwait(false);
         }
 
+        [PlaywrightTest("browsercontext-fetch.spec.ts", "page.request.addCookies should add cookies to the browser context")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public async Task PageRequestAddCookiesShouldAddCookiesToTheBrowserContext()
+        {
+            EnsureServer();
+            IBrowserContext context = await _browser.NewContextAsync().ConfigureAwait(false);
+            IPage page = await context.NewPageAsync().ConfigureAwait(false);
+            await page.APIRequest.AddCookiesAsync(new[]
+            {
+                new Cookie { Name = "a", Value = "b", Url = EmptyPage },
+                new Cookie { Name = "c", Value = "d", Domain = "localhost", Path = "/", Expires = (float)((DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() / 1000d) + 3600) },
+            }).ConfigureAwait(false);
+            IReadOnlyList<BrowserContextCookiesResult> cookies = await context.CookiesAsync().ConfigureAwait(false);
+            Assert.That(
+                cookies.Select(c => c.Name + "=" + c.Value).OrderBy(s => s, StringComparer.Ordinal).ToArray(),
+                Is.EqualTo(new[] { "a=b", "c=d" }));
+            Task<string> requestPromise = Server.WaitForRequest("/empty.html", req => req.Headers["Cookie"].ToString());
+            await context.APIRequest.GetAsync(EmptyPage).ConfigureAwait(false);
+            string cookieHeader = await requestPromise.ConfigureAwait(false);
+            Assert.That(
+                cookieHeader.Split(';').Select(s => s.Trim()).OrderBy(s => s, StringComparer.Ordinal).ToArray(),
+                Is.EqualTo(new[] { "a=b", "c=d" }));
+            await page.GoToAsync(EmptyPage).ConfigureAwait(false);
+            string documentCookie = await page.EvaluateAsync<string>("(() => document.cookie)()").ConfigureAwait(false);
+            Assert.That(
+                documentCookie.Split(';').Select(s => s.Trim()).OrderBy(s => s, StringComparer.Ordinal).ToArray(),
+                Is.EqualTo(new[] { "a=b", "c=d" }));
+            await context.CloseAsync().ConfigureAwait(false);
+        }
+
+        [PlaywrightTest("browsercontext-fetch.spec.ts", "page.request.cookies should return browser context cookies")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public async Task PageRequestCookiesShouldReturnBrowserContextCookies()
+        {
+            EnsureServer();
+            IBrowserContext context = await _browser.NewContextAsync().ConfigureAwait(false);
+            IPage page = await context.NewPageAsync().ConfigureAwait(false);
+            await context.AddCookiesAsync(new[]
+            {
+                new Cookie { Name = "a", Value = "b", Url = EmptyPage },
+                new Cookie { Name = "c", Value = "d", Domain = "example.com", Path = "/" },
+            }).ConfigureAwait(false);
+            IReadOnlyList<BrowserContextCookiesResult> all = await page.APIRequest.CookiesAsync().ConfigureAwait(false);
+            Assert.That(all.Select(c => c.Name).OrderBy(s => s, StringComparer.Ordinal).ToArray(), Is.EqualTo(new[] { "a", "c" }));
+            IReadOnlyList<BrowserContextCookiesResult> forUrl = await page.APIRequest.CookiesAsync(EmptyPage).ConfigureAwait(false);
+            Assert.That(forUrl.Select(c => c.Name).ToArray(), Is.EqualTo(new[] { "a" }));
+            IReadOnlyList<BrowserContextCookiesResult> fromContext = await context.CookiesAsync(EmptyPage).ConfigureAwait(false);
+            Assert.That(JsonSerializer.Serialize(forUrl), Is.EqualTo(JsonSerializer.Serialize(fromContext)));
+            await context.CloseAsync().ConfigureAwait(false);
+        }
+
+        [PlaywrightTest("browsercontext-fetch.spec.ts", "page.request.clearCookies should clear browser context cookies")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public async Task PageRequestClearCookiesShouldClearBrowserContextCookies()
+        {
+            EnsureServer();
+            IBrowserContext context = await _browser.NewContextAsync().ConfigureAwait(false);
+            IPage page = await context.NewPageAsync().ConfigureAwait(false);
+            await context.AddCookiesAsync(new[]
+            {
+                new Cookie { Name = "a", Value = "b", Url = EmptyPage },
+                new Cookie { Name = "c", Value = "d", Url = EmptyPage },
+            }).ConfigureAwait(false);
+            await page.APIRequest.ClearCookiesAsync(new Microsoft.Playwright.BrowserContextClearCookiesOptions { Name = "a" }).ConfigureAwait(false);
+            Assert.That((await context.CookiesAsync().ConfigureAwait(false)).Select(c => c.Name).ToArray(), Is.EqualTo(new[] { "c" }));
+            await page.APIRequest.ClearCookiesAsync().ConfigureAwait(false);
+            Assert.That(await context.CookiesAsync().ConfigureAwait(false), Is.Empty);
+            Task<string> requestPromise = Server.WaitForRequest("/empty.html", req => req.Headers["Cookie"].ToString());
+            await page.APIRequest.GetAsync(EmptyPage).ConfigureAwait(false);
+            Assert.That(await requestPromise.ConfigureAwait(false), Is.Null.Or.Empty);
+            await context.CloseAsync().ConfigureAwait(false);
+        }
+
         [PlaywrightTest("browsercontext-fetch.spec.ts", "should preserve cookie order from Set-Cookie header")]
         [Test]
         [Timeout(TestConstants.DefaultTestTimeout)]

@@ -25,7 +25,6 @@ namespace PlaywrightNative.Tests
     /// <summary>
     /// Official <c>expect-misc.spec.ts</c> parity. Official
     /// <c>toHaveURL({})</c> is <see cref="IPageAssertions.ToHaveURLAsync(object, float?)"/>.
-    /// Skipped (JS-only): support URLPattern, should have good stack.
     /// Android <c>test.fixme</c> on viewport ratio is not applied.
     /// </summary>
     [TestFixture]
@@ -659,6 +658,14 @@ Timeout:  10000ms
             await Assertions.Expect(Page).ToHaveURLAsync("DATA:teXT/HTml,<div>a</div>", new() { IgnoreCase = true }).ConfigureAwait(false);
         }
 
+        [PlaywrightTest("expect-misc.spec.ts", "support URLPattern")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public void ToHaveURLSupportURLPattern()
+        {
+            Assert.Ignore("Official test.skip(globalThis.URLPattern === undefined): URLPattern is not supported in this environment.");
+        }
+
         [PlaywrightTest("expect-misc.spec.ts", "pass")]
         [Test]
         [Timeout(TestConstants.DefaultTestTimeout)]
@@ -846,6 +853,14 @@ Timeout: 1000ms")));
             await Assertions.Expect(Page.Locator("div")).Not.ToBeInViewportAsync(new() { Ratio = 0.8f }).ConfigureAwait(false);
         }
 
+        [PlaywrightTest("expect-misc.spec.ts", "should have good stack")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public void ToBeInViewportShouldHaveGoodStack()
+        {
+            Assert.Ignore("Node-only: JS error.stack frames filtered to the spec __filename.");
+        }
+
         [PlaywrightTest("expect-misc.spec.ts", "should report intersection even if fully covered by other element")]
         [Test]
         [Timeout(TestConstants.DefaultTestTimeout)]
@@ -957,6 +972,20 @@ Call log:
             Assert.That(MessageOf(error), Does.Contain("expect(locator).toHaveText(expected) failed"));
             Assert.That(MessageOf(error), Does.Contain("Expected: \"world\""));
             Assert.That(MessageOf(error), Does.Contain("Received: \"hello\""));
+        }
+
+        [PlaywrightTest("expect-misc.spec.ts", "should report page close reason when page closes during expect")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public async Task ShouldReportPageCloseReasonWhenPageClosesDuringExpect()
+        {
+            await Page.SetContentAsync("<div>hello</div>").ConfigureAwait(false);
+            Task promise = Assertions.Expect(Page.Locator("non-existent")).ToHaveTextAsync("world", new() { Timeout = 10000 });
+            await Page.CloseAsync(new() { Reason = "Bye bye." }).ConfigureAwait(false);
+            Exception error = Assert.CatchAsync(() => promise);
+            Assert.That(MessageOf(error), Does.Contain("expect(locator).toHaveText(expected) failed"));
+            Assert.That(MessageOf(error), Does.Contain("Bye bye."));
+            Assert.That(MessageOf(error), Does.Not.Contain("Internal server error"));
         }
     }
 }

@@ -116,6 +116,7 @@ namespace PlaywrightNative
                 PlaywrightNative.Chromium.ChromiumBrowser chromium = new PlaywrightNative.Chromium.ChromiumBrowser(crBrowser, ResolveDownloadsPath(options), options.Logger)
                 {
                     LaunchProxy = proxy,
+                    LaunchArgs = ToArgArray(options.Args) ?? [],
                 };
                 ((PlaywrightNative.Helpers.IHasTracesDir)chromium).TracesDir = options.TracesDir;
                 ((PlaywrightNative.Helpers.IHasArtifactsDir)chromium).ArtifactsDir = options.ArtifactsDir;
@@ -238,6 +239,7 @@ namespace PlaywrightNative
                 PlaywrightNative.Chromium.ChromiumBrowser instance = new(crBrowser, ResolveDownloadsPath(options))
                 {
                     LaunchProxy = proxy,
+                    LaunchArgs = ToArgArray(options.Args) ?? [],
                 };
                 ((PlaywrightNative.Helpers.IHasTracesDir)instance).TracesDir = options.TracesDir;
                 ((PlaywrightNative.Helpers.IHasArtifactsDir)instance).ArtifactsDir = options.ArtifactsDir;

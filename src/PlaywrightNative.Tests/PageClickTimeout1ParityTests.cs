@@ -17,19 +17,38 @@
 using System;
 using System.Threading.Tasks;
 using NUnit.Framework;
+using PlaywrightNative.Helpers;
 using PlaywrightNative.NUnit;
 
 namespace PlaywrightNative.Tests
 {
     /// <summary>
     /// Official <c>page-click-timeout-1.spec.ts</c> parity for click timeouts.
-    /// Skipped (Node-only internals):
-    /// <c>should avoid side effects after timeout</c> uses
-    /// <c>__testHookBeforePointerAction</c>.
+    /// Upstream <c>__testHook*</c> click options map to <see cref="ActionTestHooks"/>.
     /// </summary>
     [TestFixture]
     public class PageClickTimeout1ParityTests : PageTestEx
     {
+        [PlaywrightTest("page-click-timeout-1.spec.ts", "should avoid side effects after timeout")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public async Task ShouldAvoidSideEffectsAfterTimeout()
+        {
+            await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
+            await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
+            IPage page = await context.NewPageAsync().ConfigureAwait(false);
+            await page.GoToAsync(TestConstants.ServerUrl + "/input/button.html").ConfigureAwait(false);
+            Exception error;
+            using (ActionTestHooks.Use(new ActionTestHooks { BeforePointerAction = () => Task.Delay(2500) }))
+            {
+                error = Assert.CatchAsync(() => page.ClickAsync("button", new() { Timeout = 2000 }));
+            }
+
+            await page.WaitForTimeoutAsync(5000).ConfigureAwait(false); // Give it some time to click after the test hook is done waiting.
+            Assert.That(await page.EvaluateAsync<string>("result").ConfigureAwait(false), Is.EqualTo("Was not clicked"));
+            Assert.That(error.Message, Does.Contain("page.click: Timeout 2000ms exceeded."));
+        }
+
         [PlaywrightTest("page-click-timeout-1.spec.ts", "should timeout waiting for button to be enabled")]
         [Test]
         [Timeout(TestConstants.DefaultTestTimeout)]

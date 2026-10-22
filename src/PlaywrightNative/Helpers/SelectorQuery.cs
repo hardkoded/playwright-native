@@ -31,7 +31,7 @@ namespace PlaywrightNative.Helpers
         /// Engine that understands <c>div &gt;&gt; p</c>, <c>*css=div &gt;&gt; p</c>,
         /// <c>css=</c>, and <c>xpath=</c>.
         /// </summary>
-        internal const string ChainEngineScript = @"(() => {
+        internal static readonly string ChainEngineScript = @"(() => {
   const dq = String.fromCharCode(34);
   const sq = String.fromCharCode(39);
   const splitChain = (selector) => {

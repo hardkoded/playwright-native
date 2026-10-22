@@ -94,7 +94,7 @@ namespace PlaywrightNative.Chromium
 
         /// <inheritdoc/>
         public Task ClickAsync(string selector, MouseButton button = default, int? clickCount = default, float? delay = default, Position position = default, IEnumerable<KeyboardModifier> modifiers = default, bool? force = default, bool? noWaitAfter = default, float? timeout = default, bool? trial = default, ActionScroll scroll = default, int? steps = default, bool? strict = default)
-            => ClickAction.RunOnSelectorAsync(sel => QueryActionAsync(sel, strict), selector, h => h.ClickAsync(button, clickCount, delay, position, modifiers, force, noWaitAfter, timeout, trial, scroll, steps), timeout, "frame.click", scroll);
+            => ClickAction.RunOnSelectorAsync(sel => QueryActionAsync(sel, strict), selector, h => h.ClickAsync(button, clickCount, delay, position, modifiers, force, noWaitAfter, timeout, trial, scroll, steps), timeout, "frame.click", scroll, () => IsDetached);
 
         /// <inheritdoc/>
         public Task<string> ContentAsync()
@@ -482,6 +482,22 @@ namespace PlaywrightNative.Chromium
         /// <inheritdoc/>
         public Task WaitForTimeoutAsync(float timeout)
             => Task.Delay((int)timeout);
+
+        /// <summary>
+        /// Calls <paramref name="functionDeclaration"/> in the frame utility world and
+        /// returns its result by value.
+        /// </summary>
+        /// <typeparam name="T">The type to deserialize the result to.</typeparam>
+        /// <param name="functionDeclaration">The JavaScript function to call.</param>
+        /// <param name="args">Arguments passed by value.</param>
+        /// <returns>The deserialized result.</returns>
+        internal async Task<T> EvaluateInUtilityWorldAsync<T>(string functionDeclaration, params object[] args)
+        {
+            EvaluateWithArg.ThrowIfDetached(this);
+            CRExecutionContext context = await ((Page)_page).CrPage.GetUtilityWorldAsync(_crFrame).ConfigureAwait(false)
+                ?? throw new PlaywrightException("Frame utility world is not available.");
+            return await context.EvaluateFunctionAsync<T>(functionDeclaration, args).ConfigureAwait(false);
+        }
 
         private async Task<T> EvaluatePreparedInFrameAsync<T>(string handleFn, object[] handleArgs)
         {

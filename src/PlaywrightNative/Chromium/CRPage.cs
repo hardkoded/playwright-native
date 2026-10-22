@@ -137,7 +137,7 @@ namespace PlaywrightNative.Chromium
             // DragManager mirrors upstream crDragDrop: intercept HTML5 drag so custom
             // DataTransfer types are preserved without chromium/x-drag-id.
             CRDragManager dragManager = new CRDragManager(this);
-            _keyboard = new Input.Keyboard(new CRRawKeyboard(_client, dragManager));
+            _keyboard = new Input.Keyboard(new CRRawKeyboard(_client, dragManager, browser.UserAgent.Contains("Macintosh", StringComparison.Ordinal)));
             _mouse = new Input.Mouse(new CRRawMouse(_client, dragManager), _keyboard);
             _touchscreen = new Input.Touchscreen(new CRRawTouchscreen(_client), _keyboard);
 
@@ -1635,6 +1635,12 @@ namespace PlaywrightNative.Chromium
                 if (context != null && !context.Destroyed.IsCompleted)
                 {
                     return context;
+                }
+
+                if (frame.IsDetached)
+                {
+                    // A detached frame never gets a new context.
+                    throw new PlaywrightException("Frame was detached");
                 }
 
                 if (context != null && context.Destroyed.IsCompleted
@@ -5497,8 +5503,12 @@ namespace PlaywrightNative.Chromium
         /// form/link clicks so auto-wait does not return before the document request
         /// (ShouldAwaitFormGetOnClick under Windows suite load).
         /// </param>
+        /// <param name="pointerAction">
+        /// When <see langword="true"/>, <paramref name="action"/> is the pointer
+        /// action itself (not the hover move before it).
+        /// </param>
         /// <returns>A task that completes when the action and wait finish.</returns>
-        internal Task RunWithSignalsAsync(bool waitAfter, float? timeout, Func<Task> action, bool expectNavigation = false)
+        internal Task RunWithSignalsAsync(bool waitAfter, float? timeout, Func<Task> action, bool expectNavigation = false, bool pointerAction = false)
             => ActionSignals.RunAsync(
                 _frameManager.Signals,
                 InputActionEpilogueAsync,
@@ -5507,7 +5517,8 @@ namespace PlaywrightNative.Chromium
                 action,
                 PublicPage,
                 CommitLiveSameDocumentUrl,
-                expectNavigation);
+                expectNavigation,
+                pointerAction);
 
         private void CommitLiveSameDocumentUrl(string url)
         {
