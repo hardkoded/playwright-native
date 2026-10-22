@@ -448,6 +448,24 @@ function createIntl(clock, NativeIntl) {
   ClockIntl.DateTimeFormat.supportedLocalesOf = NativeIntl.DateTimeFormat.supportedLocalesOf;
   return ClockIntl;
 }
+function createTemporal(clock, NativeTemporal) {
+  const NativeNow = NativeTemporal.Now;
+  const instant = () => NativeTemporal.Instant.fromEpochMilliseconds(Math.trunc(clock.now()));
+  const zonedDateTimeISO = (timeZone) => instant().toZonedDateTimeISO(timeZone != null ? timeZone : NativeNow.timeZoneId());
+  const overrides = {
+    instant,
+    zonedDateTimeISO,
+    plainDateTimeISO: (timeZone) => zonedDateTimeISO(timeZone).toPlainDateTime(),
+    plainDateISO: (timeZone) => zonedDateTimeISO(timeZone).toPlainDate(),
+    plainTimeISO: (timeZone) => zonedDateTimeISO(timeZone).toPlainTime()
+  };
+  const ClockNow = Object.create(Object.getPrototypeOf(NativeNow), Object.getOwnPropertyDescriptors(NativeNow));
+  for (const [key, value] of Object.entries(overrides))
+    Object.defineProperty(ClockNow, key, { value, writable: true, enumerable: false, configurable: true });
+  const ClockTemporal = Object.create(Object.getPrototypeOf(NativeTemporal), Object.getOwnPropertyDescriptors(NativeTemporal));
+  Object.defineProperty(ClockTemporal, "Now", { value: ClockNow, writable: true, enumerable: false, configurable: true });
+  return ClockTemporal;
+}
 function compareTimers(a, b) {
   if (a.callAt < b.callAt)
     return -1;
@@ -481,7 +499,8 @@ function platformOriginals(globalObject) {
     Date: globalObject.Date,
     performance: globalObject.performance,
     Intl: globalObject.Intl,
-    AbortSignal: globalObject.AbortSignal
+    AbortSignal: globalObject.AbortSignal,
+    Temporal: globalObject.Temporal
   };
   const bound = { ...raw };
   for (const key of Object.keys(bound)) {
@@ -551,7 +570,8 @@ function createApi(clock, originals, browserName) {
     Intl: originals.Intl ? createIntl(clock, originals.Intl) : void 0,
     Date: createDate(clock, originals.Date),
     performance: originals.performance ? fakePerformance(clock, originals.performance) : void 0,
-    AbortSignal: originals.AbortSignal ? fakeAbortSignal(clock, originals.AbortSignal, browserName) : void 0
+    AbortSignal: originals.AbortSignal ? fakeAbortSignal(clock, originals.AbortSignal, browserName) : void 0,
+    Temporal: originals.Temporal ? createTemporal(clock, originals.Temporal) : void 0
   };
 }
 function getClearHandler(type) {
@@ -653,12 +673,16 @@ function install(globalObject, config = {}) {
   const { clock, api, originals } = createClock(globalObject, config);
   const toFake = ((_b = config.toFake) == null ? void 0 : _b.length) ? config.toFake : Object.keys(originals);
   for (const method of toFake) {
+    if (method === "Temporal" && !api.Temporal)
+      continue;
     if (method === "Date") {
       globalObject.Date = mirrorDateProperties(api.Date, globalObject.Date);
     } else if (method === "Intl") {
       globalObject.Intl = api[method];
     } else if (method === "AbortSignal") {
       globalObject.AbortSignal = api[method];
+    } else if (method === "Temporal") {
+      globalObject.Temporal = api[method];
     } else if (method === "performance") {
       globalObject.performance = api[method];
       const kEventTimeStamp = Symbol("playwrightEventTimeStamp");
