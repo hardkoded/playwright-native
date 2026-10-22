@@ -1363,6 +1363,7 @@ namespace PlaywrightNative.Chromium
             request.DocumentUrl = isNavigationRequest ? url : frame?.Url;
             request.TimestampSeconds = ResourceTimingParser.ReadDouble(p, "timestamp");
             double wallTime = ResourceTimingParser.ReadDouble(p, "wallTime");
+            request.WallTimeMs = wallTime * 1000;
             if (wallTime <= 0)
             {
                 wallTime = request.TimestampSeconds;

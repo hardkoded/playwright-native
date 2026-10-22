@@ -249,6 +249,29 @@ namespace PlaywrightNative
                 }),
             };
 
+        /// <summary>
+        /// Expanded-parameter start overload. Returns a disposable that stops
+        /// tracing without exporting, which discards the trace.
+        /// </summary>
+        public static async Task<IAsyncDisposable> StartAsync(
+            this ITracing tracing,
+            string name = default,
+            string title = default,
+            bool? screenshots = default,
+            bool? snapshots = default,
+            bool? sources = default)
+        {
+            await tracing.StartAsync(new Microsoft.Playwright.TracingStartOptions
+            {
+                Name = name,
+                Title = title,
+                Screenshots = screenshots,
+                Snapshots = snapshots,
+                Sources = sources,
+            }).ConfigureAwait(false);
+            return AddInitScriptHelper.CreateDisposable(() => tracing.StopAsync());
+        }
+
         /// <summary>Expanded-parameter stop overload.</summary>
         public static Task StopAsync(this ITracing tracing, string path)
             => tracing.StopAsync(new TracingStopOptions { Path = path });
@@ -262,14 +285,20 @@ namespace PlaywrightNative
                 _ => tracing.StopChunkAsync(new TracingStopChunkOptions { Path = path }),
             };
 
-        /// <summary>Expanded-parameter start-chunk overload.</summary>
-        public static Task StartChunkAsync(this ITracing tracing, string name = default, string title = default)
-            => tracing switch
+        /// <summary>
+        /// Expanded-parameter start-chunk overload. Returns a disposable that stops
+        /// the chunk without exporting, which discards the chunk.
+        /// </summary>
+        public static async Task<IAsyncDisposable> StartChunkAsync(this ITracing tracing, string name = default, string title = default)
+        {
+            await (tracing switch
             {
                 CRTracing chromium => chromium.StartChunkAsync(name, title),
                 EmptyTracing empty => empty.StartChunkAsync(name, title),
                 _ => tracing.StartChunkAsync(new TracingStartChunkOptions { Name = name, Title = title }),
-            };
+            }).ConfigureAwait(false);
+            return AddInitScriptHelper.CreateDisposable(() => tracing.StopChunkAsync());
+        }
 
         /// <summary>HAR recording helper on tracing.</summary>
         public static Task<IAsyncDisposable> StartHarAsync(

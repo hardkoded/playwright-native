@@ -19,6 +19,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Text.Json;
 using System.Threading.Tasks;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
@@ -241,6 +242,41 @@ namespace PlaywrightNative.Tests
             await context.ExposeBindingAsync("hi", () => { called = true; }).ConfigureAwait(false);
             await page.EvaluateAsync("(() => window.hi())()").ConfigureAwait(false);
             Assert.That(called, Is.True);
+            await context.CloseAsync().ConfigureAwait(false);
+        }
+
+        [PlaywrightTest("browsercontext-expose-function.spec.ts", "should call binding from pagehide handler when navigating away")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public async Task ShouldCallBindingFromPagehideHandlerWhenNavigatingAway()
+        {
+            if (TestConstants.IsChromium)
+            {
+                Assert.Ignore("upstream it.fixme(chromium): Chromium drops CDP events from the old document after the frame host swap");
+            }
+
+            EnsureServer();
+            IBrowserContext context = await _browser.NewContextAsync().ConfigureAwait(false);
+            IPage page = await context.NewPageAsync().ConfigureAwait(false);
+            List<string> calls = new List<string>();
+            await context.ExposeBindingAsync("reportFromPage", (BindingSource source, string message) => { calls.Add(message); }).ConfigureAwait(false);
+            static string Html(string body) => "<!doctype html>" + body + "<script>addEventListener('pagehide', () => window.reportFromPage('pagehide of ' + location.pathname));</script>";
+            Server.SetRoute("/a.html", async http =>
+            {
+                http.Response.StatusCode = 200;
+                http.Response.ContentType = "text/html";
+                await http.Response.WriteAsync(Html("<a id=\"next\" href=\"/b.html\">next</a>")).ConfigureAwait(false);
+            });
+            Server.SetRoute("/b.html", async http =>
+            {
+                http.Response.StatusCode = 200;
+                http.Response.ContentType = "text/html";
+                await http.Response.WriteAsync(Html("<p>b</p>")).ConfigureAwait(false);
+            });
+            await page.GoToAsync(Prefix + "/a.html").ConfigureAwait(false);
+            await page.ClickAsync("#next").ConfigureAwait(false);
+            await page.WaitForURLAsync("**/b.html").ConfigureAwait(false);
+            await PollEqualAsync(() => Task.FromResult(calls.Contains("pagehide of /a.html")), true).ConfigureAwait(false);
             await context.CloseAsync().ConfigureAwait(false);
         }
 
