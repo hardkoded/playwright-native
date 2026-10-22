@@ -1,0 +1,34 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+reviews:
+  pre_merge_checks:
+    docstrings:
+      mode: "off"
+    custom_checks:
+      - name: "Upstream parity"
+        mode: "error"
+        instructions: |
+          This repo is a .NET port of microsoft/playwright. The rules are in CLAUDE.md ("Upstream Porting Conventions"). Upstream code is in packages/playwright-core/src/server/. Upstream tests are in tests/library and tests/page.
+
+          Run this check only if the PR description, or the issue it closes or refs, names an upstream change: a microsoft/playwright commit, pull request number, or file. If it names none, pass and say the check does not apply.
+
+          Compare against the upstream source in microsoft/playwright if you can read it. If you cannot, check the PR text and say what you could not verify. Do not guess about upstream code.
+
+          Fail with a warning if any of these is true:
+          1. A new or changed public member, or a new symbol in src/PlaywrightNative, has no upstream name and place. It must map to an upstream function, class, type, or constant, in C# casing. A name upstream does not have is allowed only if the PR names it as .NET-only and gives the reason. An Async suffix is fine.
+          2. A test in src/PlaywrightNative.Tests does not port an upstream test. A ported test carries `[PlaywrightTest("<spec-file>.spec.ts", "<original test name>")]`, is named as the PascalCase form of the upstream test name, and has the same assertions. A test must never be changed to match local code. Also compare every upstream test that the upstream commit adds or changes with the port: each one must have a port test, or the PR body must list it under "Not ported" with a reason. A test with no upstream test is allowed only for .NET-only code that the PR names.
+          3. The PR adds behavior that upstream does not have, and does not name it as .NET-only.
+          4. A file generated from upstream code lacks the `Copyright (c) Microsoft Corporation.` and `Modifications copyright (c) Microsoft Corporation.` header.
+          5. The PR skips a flaky or failing test, or adds it to TestExpectations.local.json, instead of fixing the cause.
+
+          In the result, list each failed point with the file and symbol, and name what upstream has instead when you know it.
+  path_instructions:
+    - path: "src/PlaywrightNative/**"
+      instructions: "Only when the PR names an upstream change: every new type, method, field, constant, or file must map to an upstream name and place, in C# casing. Flag a name upstream does not have unless the PR names it as .NET-only. Protocol messages with a known shape must be typed classes, not JsonElement.TryGetProperty."
+    - path: "src/PlaywrightNative.Tests/**"
+      instructions: "Only when the PR names an upstream change: every test must port an upstream test with a [PlaywrightTest] attribute. Flag a test changed to match local code, and an upstream test that the commit adds or changes with no port test and no entry under 'Not ported' in the PR body. A test for .NET-only code that the PR names is fine."
+knowledge_base:
+  linked_repositories:
+    - repository: "microsoft/playwright"
+      instructions: "The upstream project this repo ports. Compare names, tests and behavior against it."
+    - repository: "microsoft/playwright-dotnet"
+      instructions: "The official .NET client. Reference for .NET API conventions."

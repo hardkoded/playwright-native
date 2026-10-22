@@ -14,6 +14,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+using System.IO;
+using System.Reflection;
+using Microsoft.Playwright;
+
 namespace PlaywrightNative.Helpers
 {
     /// <summary>
@@ -23,434 +27,24 @@ namespace PlaywrightNative.Helpers
     internal static class RoleSelectorEngine
     {
         /// <summary>
+        /// Upstream <c>packages/injected/src/roleUtils.ts</c>, bundled into
+        /// <c>roleUtilsSource.js</c>. Declares <c>var roleUtils</c> holding the
+        /// upstream exports (<c>getAriaRole</c>, <c>getElementAccessibleNameText</c>, ...).
+        /// </summary>
+        internal static readonly string RoleUtilsSource = LoadRoleUtilsSource();
+
+        /// <summary>
         /// JS helpers used by the selector-chain <c>queryPart</c> role branch.
         /// </summary>
-        internal const string Functions = @"
-  const kAriaSelectedRoles = ['gridcell', 'option', 'row', 'tab', 'rowheader', 'columnheader', 'treeitem'];
-  const kAriaCheckedRoles = ['checkbox', 'menuitemcheckbox', 'option', 'radio', 'switch', 'menuitemradio', 'treeitem'];
-  const kAriaPressedRoles = ['button'];
-  const kAriaExpandedRoles = ['application', 'button', 'checkbox', 'combobox', 'gridcell', 'link', 'listbox', 'menuitem', 'row', 'rowheader', 'tab', 'treeitem', 'columnheader', 'menuitemcheckbox', 'menuitemradio', 'switch'];
-  const kAriaLevelRoles = ['heading', 'listitem', 'row', 'treeitem'];
-  const kAriaDisabledRoles = ['application', 'button', 'composite', 'gridcell', 'group', 'input', 'link', 'menuitem', 'scrollbar', 'separator', 'tab', 'checkbox', 'columnheader', 'combobox', 'grid', 'listbox', 'menu', 'menubar', 'menuitemcheckbox', 'menuitemradio', 'option', 'radio', 'radiogroup', 'row', 'rowheader', 'searchbox', 'select', 'slider', 'spinbutton', 'switch', 'tablist', 'textbox', 'toolbar', 'tree', 'treegrid', 'treeitem'];
+        internal static readonly string Functions = RoleUtilsSource + @"
+  const kAriaSelectedRoles = roleUtils.kAriaSelectedRoles;
+  const kAriaCheckedRoles = roleUtils.kAriaCheckedRoles;
+  const kAriaPressedRoles = roleUtils.kAriaPressedRoles;
+  const kAriaExpandedRoles = roleUtils.kAriaExpandedRoles;
+  const kAriaLevelRoles = roleUtils.kAriaLevelRoles;
   const kSupportedAttributes = ['checked', 'description', 'disabled', 'expanded', 'include-hidden', 'level', 'name', 'pressed', 'selected'];
 
-  const parentElementOrShadowHost = (element) => {
-    if (element.parentElement) return element.parentElement;
-    if (element.parentNode && element.parentNode.nodeType === 11 && element.parentNode.host)
-      return element.parentNode.host;
-    return null;
-  };
-
-  const elementSafeTagName = (el) => el && typeof el.tagName === 'string' ? el.tagName.toUpperCase() : '';
-
-  const getExplicitAriaRole = (element) => {
-    const roles = String(element.getAttribute('role') || '').split(' ');
-    for (let i = 0; i < roles.length; i++) {
-      const r = roles[i].trim();
-      if (r) return r;
-    }
-    return null;
-  };
-
-  const closestCrossShadow = (element, css) => {
-    while (element) {
-      const closest = element.closest(css);
-      if (closest) return closest;
-      while (element.parentElement) element = element.parentElement;
-      element = parentElementOrShadowHost(element);
-    }
-    return null;
-  };
-
-  const hasExplicitAccessibleName = (e) => e.hasAttribute('aria-label') || e.hasAttribute('aria-labelledby');
-
-  const kAncestorPreventingLandmark = 'article:not([role]), aside:not([role]), main:not([role]), nav:not([role]), section:not([role]), [role=article], [role=complementary], [role=main], [role=navigation], [role=region]';
-
-  const kNameProhibitedRoles = ['caption', 'code', 'deletion', 'emphasis', 'generic', 'insertion', 'paragraph', 'presentation', 'strong', 'subscript', 'superscript'];
-  const kGlobalAriaAttributes = [
-    ['aria-atomic', undefined],
-    ['aria-busy', undefined],
-    ['aria-controls', undefined],
-    ['aria-current', undefined],
-    ['aria-describedby', undefined],
-    ['aria-details', undefined],
-    ['aria-dropeffect', undefined],
-    ['aria-flowto', undefined],
-    ['aria-grabbed', undefined],
-    ['aria-hidden', undefined],
-    ['aria-keyshortcuts', undefined],
-    ['aria-label', kNameProhibitedRoles],
-    ['aria-labelledby', kNameProhibitedRoles],
-    ['aria-live', undefined],
-    ['aria-owns', undefined],
-    ['aria-relevant', undefined],
-    ['aria-roledescription', ['generic']],
-  ];
-
-  const hasGlobalAriaAttribute = (element, forRole) => kGlobalAriaAttributes.some(([attr, prohibited]) =>
-    !(prohibited && prohibited.includes(forRole || '')) && element.hasAttribute(attr));
-
-  const hasTabIndex = (element) => !Number.isNaN(Number(String(element.getAttribute('tabindex'))));
-
-  const isNativelyFocusable = (element) => {
-    const tag = elementSafeTagName(element);
-    if (['BUTTON', 'DETAILS', 'SELECT', 'TEXTAREA'].includes(tag)) return true;
-    if (tag === 'A' || tag === 'AREA') return element.hasAttribute('href');
-    if (tag === 'INPUT') return !element.hidden;
-    return false;
-  };
-
-  const isFocusable = (element) => !isNativelyDisabled(element) && (isNativelyFocusable(element) || hasTabIndex(element));
-
-  const inputTypeToRole = { button: 'button', checkbox: 'checkbox', image: 'button', number: 'spinbutton', radio: 'radio', range: 'slider', reset: 'button', submit: 'button' };
-
-  const isHeaderCell = (element) => !!element && elementSafeTagName(element) === 'TH';
-
-  const isNonEmptyDataCell = (element) => {
-    if (!element || elementSafeTagName(element) !== 'TD') return false;
-    return !!((element.textContent && element.textContent.trim()) || element.children.length > 0);
-  };
-
-  // https://w3c.github.io/html-aam/#html-element-role-mappings
-  const kImplicitRoleByTagName = {
-    A: (e) => e.hasAttribute('href') ? 'link' : null,
-    AREA: (e) => e.hasAttribute('href') ? 'link' : null,
-    ARTICLE: () => 'article',
-    ASIDE: () => 'complementary',
-    BLOCKQUOTE: () => 'blockquote',
-    BUTTON: () => 'button',
-    CAPTION: () => 'caption',
-    CODE: () => 'code',
-    DATALIST: () => 'listbox',
-    DD: () => 'definition',
-    DEL: () => 'deletion',
-    DETAILS: () => 'group',
-    DFN: () => 'term',
-    DIALOG: () => 'dialog',
-    DT: () => 'term',
-    EM: () => 'emphasis',
-    FIELDSET: () => 'group',
-    FIGURE: () => 'figure',
-    FOOTER: (e) => closestCrossShadow(e, kAncestorPreventingLandmark) ? null : 'contentinfo',
-    FORM: (e) => hasExplicitAccessibleName(e) ? 'form' : null,
-    H1: () => 'heading',
-    H2: () => 'heading',
-    H3: () => 'heading',
-    H4: () => 'heading',
-    H5: () => 'heading',
-    H6: () => 'heading',
-    HEADER: (e) => closestCrossShadow(e, kAncestorPreventingLandmark) ? null : 'banner',
-    HR: () => 'separator',
-    HTML: () => 'document',
-    IMG: (e) => (e.getAttribute('alt') === '') && !e.getAttribute('title') && !hasGlobalAriaAttribute(e) && !hasTabIndex(e) ? 'presentation' : 'img',
-    INPUT: (e) => {
-      const type = String(e.type || '').toLowerCase();
-      if (['email', 'search', 'tel', 'text', 'url', ''].includes(type)) {
-        const list = getIdRefs(e, e.getAttribute('list'))[0];
-        if (list && elementSafeTagName(list) === 'DATALIST') return 'combobox';
-        return type === 'search' ? 'searchbox' : 'textbox';
-      }
-      if (type === 'hidden') return null;
-      if (type === 'file') return 'button';
-      return inputTypeToRole[type] || 'textbox';
-    },
-    INS: () => 'insertion',
-    LI: () => 'listitem',
-    MAIN: () => 'main',
-    MARK: () => 'mark',
-    MATH: () => 'math',
-    MENU: () => 'list',
-    METER: () => 'meter',
-    NAV: () => 'navigation',
-    OL: () => 'list',
-    OPTGROUP: () => 'group',
-    OPTION: () => 'option',
-    OUTPUT: () => 'status',
-    P: () => 'paragraph',
-    PROGRESS: () => 'progressbar',
-    SEARCH: () => 'search',
-    SECTION: (e) => hasExplicitAccessibleName(e) ? 'region' : null,
-    SELECT: (e) => (e.multiple || e.size > 1) ? 'listbox' : 'combobox',
-    STRONG: () => 'strong',
-    SUB: () => 'subscript',
-    SUP: () => 'superscript',
-    SVG: () => 'img',
-    TABLE: () => 'table',
-    TBODY: () => 'rowgroup',
-    TD: (e) => {
-      const table = closestCrossShadow(e, 'table');
-      const role = table ? getExplicitAriaRole(table) : '';
-      return (role === 'grid' || role === 'treegrid') ? 'gridcell' : 'cell';
-    },
-    TEXTAREA: () => 'textbox',
-    TFOOT: () => 'rowgroup',
-    TH: (e) => {
-      const scope = e.getAttribute('scope');
-      if (scope === 'col' || scope === 'colgroup') return 'columnheader';
-      if (scope === 'row' || scope === 'rowgroup') return 'rowheader';
-      const nextSibling = e.nextElementSibling;
-      const prevSibling = e.previousElementSibling;
-      const row = !!e.parentElement && elementSafeTagName(e.parentElement) === 'TR' ? e.parentElement : undefined;
-      if (!nextSibling && !prevSibling) {
-        if (row) {
-          const table = closestCrossShadow(row, 'table');
-          if (table && table.rows.length <= 1) return null;
-        }
-        return 'columnheader';
-      }
-      if (isHeaderCell(nextSibling) && isHeaderCell(prevSibling)) return 'columnheader';
-      if (isNonEmptyDataCell(nextSibling) || isNonEmptyDataCell(prevSibling)) return 'rowheader';
-      return 'columnheader';
-    },
-    THEAD: () => 'rowgroup',
-    TIME: () => 'time',
-    TR: () => 'row',
-    UL: () => 'list',
-  };
-
-  const kPresentationInheritanceParents = {
-    DD: ['DL', 'DIV'],
-    DIV: ['DL'],
-    DT: ['DL', 'DIV'],
-    LI: ['OL', 'UL'],
-    TBODY: ['TABLE'],
-    TD: ['TR'],
-    TFOOT: ['TABLE'],
-    TH: ['TR'],
-    THEAD: ['TABLE'],
-    TR: ['THEAD', 'TBODY', 'TFOOT', 'TABLE'],
-  };
-
-  const hasPresentationConflictResolution = (element, role) => hasGlobalAriaAttribute(element, role) || isFocusable(element);
-
-  const getImplicitAriaRole = (element) => {
-    const factory = kImplicitRoleByTagName[elementSafeTagName(element)];
-    const implicitRole = (factory && factory(element)) || '';
-    if (!implicitRole) return null;
-    // Inherit presentation role when required.
-    // https://www.w3.org/TR/wai-aria-1.2/#conflict_resolution_presentation_none
-    let ancestor = element;
-    while (ancestor) {
-      const parent = parentElementOrShadowHost(ancestor);
-      const parents = kPresentationInheritanceParents[elementSafeTagName(ancestor)];
-      if (!parents || !parent || !parents.includes(elementSafeTagName(parent))) break;
-      const parentExplicitRole = getExplicitAriaRole(parent);
-      if ((parentExplicitRole === 'none' || parentExplicitRole === 'presentation') && !hasPresentationConflictResolution(parent, parentExplicitRole))
-        return parentExplicitRole;
-      ancestor = parent;
-    }
-    return implicitRole;
-  };
-
-  const getAriaRole = (element) => getExplicitAriaRole(element) || getImplicitAriaRole(element);
-
-  const getAriaBoolean = (attr) => attr === null ? undefined : String(attr).toLowerCase() === 'true';
-
-  const getComputedStyleSafe = (element) => {
-    const view = element.ownerDocument && element.ownerDocument.defaultView;
-    return view ? view.getComputedStyle(element) : null;
-  };
-
-  const isElementIgnoredForAria = (element) => {
-    const tag = elementSafeTagName(element);
-    return tag === 'STYLE' || tag === 'SCRIPT' || tag === 'NOSCRIPT' || tag === 'TEMPLATE';
-  };
-
-  const isElementStyleVisibilityVisible = (element, style) => {
-    const detailsOrSummary = element.closest && element.closest('details,summary');
-    if (detailsOrSummary && detailsOrSummary !== element && detailsOrSummary.nodeName === 'DETAILS' && !detailsOrSummary.open)
-      return false;
-    style = style || getComputedStyleSafe(element);
-    if (!style) return true;
-    return style.visibility === 'visible';
-  };
-
-  const belongsToDisplayNoneOrAriaHiddenOrNonSlotted = (element) => {
-    if (element.parentElement && element.parentElement.shadowRoot && !element.assignedSlot)
-      return true;
-    const style = getComputedStyleSafe(element);
-    if (!style || style.display === 'none' || getAriaBoolean(element.getAttribute('aria-hidden')) === true)
-      return true;
-    const parent = parentElementOrShadowHost(element);
-    return parent ? belongsToDisplayNoneOrAriaHiddenOrNonSlotted(parent) : false;
-  };
-
-  const isElementHiddenForAria = (element) => {
-    if (isElementIgnoredForAria(element)) return true;
-    const style = getComputedStyleSafe(element);
-    const isSlot = element.nodeName === 'SLOT';
-    const isOptionInsideSelect = element.nodeName === 'OPTION' && !!element.closest('select');
-    if (!isOptionInsideSelect && !isSlot && !isElementStyleVisibilityVisible(element, style))
-      return true;
-    return belongsToDisplayNoneOrAriaHiddenOrNonSlotted(element);
-  };
-
-  const getAriaSelected = (element) => {
-    if (elementSafeTagName(element) === 'OPTION') return !!element.selected;
-    if (kAriaSelectedRoles.indexOf(getAriaRole(element) || '') >= 0)
-      return getAriaBoolean(element.getAttribute('aria-selected')) === true;
-    return false;
-  };
-
-  const getChecked = (element) => {
-    const tag = elementSafeTagName(element);
-    if (tag === 'INPUT' && element.indeterminate) return 'mixed';
-    if (tag === 'INPUT' && (element.type === 'checkbox' || element.type === 'radio')) return !!element.checked;
-    if (kAriaCheckedRoles.indexOf(getAriaRole(element) || '') >= 0) {
-      const checked = element.getAttribute('aria-checked');
-      if (checked === 'true') return true;
-      if (checked === 'mixed') return 'mixed';
-      return false;
-    }
-    return false;
-  };
-
-  const getAriaPressed = (element) => {
-    if (kAriaPressedRoles.indexOf(getAriaRole(element) || '') >= 0) {
-      const pressed = element.getAttribute('aria-pressed');
-      if (pressed === 'true') return true;
-      if (pressed === 'mixed') return 'mixed';
-    }
-    return false;
-  };
-
-  const getAriaExpanded = (element) => {
-    if (elementSafeTagName(element) === 'DETAILS') return !!element.open;
-    if (kAriaExpandedRoles.indexOf(getAriaRole(element) || '') >= 0) {
-      const expanded = element.getAttribute('aria-expanded');
-      if (expanded === null) return undefined;
-      return expanded === 'true';
-    }
-    return undefined;
-  };
-
-  const getAriaLevel = (element) => {
-    const native = { H1: 1, H2: 2, H3: 3, H4: 4, H5: 5, H6: 6 }[elementSafeTagName(element)];
-    if (native) return native;
-    if (kAriaLevelRoles.indexOf(getAriaRole(element) || '') >= 0) {
-      const attr = element.getAttribute('aria-level');
-      const value = attr === null ? NaN : Number(attr);
-      if (Number.isInteger(value) && value >= 1) return value;
-    }
-    return 0;
-  };
-
-  const belongsToDisabledOptGroup = (element) =>
-    elementSafeTagName(element) === 'OPTION' && !!element.closest('OPTGROUP[DISABLED]');
-
-  const belongsToDisabledFieldSet = (element) => {
-    const fieldSetElement = element && element.closest && element.closest('FIELDSET[DISABLED]');
-    if (!fieldSetElement) return false;
-    const legendElement = fieldSetElement.querySelector(':scope > LEGEND');
-    return !legendElement || !legendElement.contains(element);
-  };
-
-  const isNativelyDisabled = (element) => {
-    const tag = elementSafeTagName(element);
-    const isNative = tag === 'BUTTON' || tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA' || tag === 'OPTION' || tag === 'OPTGROUP';
-    return isNative && (element.hasAttribute('disabled') || belongsToDisabledOptGroup(element) || belongsToDisabledFieldSet(element));
-  };
-
-  const hasAriaDisabledInChain = (element) => {
-    const attribute = String(element.getAttribute('aria-disabled') || '').toLowerCase();
-    if (attribute === 'true') return true;
-    if (attribute === 'false') return false;
-    const parent = parentElementOrShadowHost(element);
-    return parent ? hasAriaDisabledInChain(parent) : false;
-  };
-
-  const getAriaDisabled = (element) => {
-    if (isNativelyDisabled(element)) return true;
-    if (kAriaDisabledRoles.indexOf(getAriaRole(element) || '') < 0) return false;
-    return hasAriaDisabledInChain(element);
-  };
-
-  const normalizeWhiteSpace = (text) => String(text || '').replace(/[\u200b\u00ad]/g, '').replace(/\s+/g, ' ').trim();
-
-  const textExcluding = (root, skip) => {
-    let out = '';
-    const walk = (node) => {
-      if (!node || node === skip) return;
-      if (node.nodeType === 3) { out += node.nodeValue || ''; return; }
-      if (node.nodeType !== 1) return;
-      const kids = node.childNodes || [];
-      for (let i = 0; i < kids.length; i++) walk(kids[i]);
-    };
-    walk(root);
-    return out;
-  };
-
-  const getIdRefs = (element, ref) => {
-    if (!ref) return [];
-    let root = element;
-    while (root.parentNode) root = root.parentNode;
-    const ids = String(ref).split(' ').filter((id) => !!id);
-    const result = [];
-    for (let i = 0; i < ids.length; i++) {
-      try {
-        const first = root.querySelector && root.querySelector('#' + CSS.escape(ids[i]));
-        if (first && result.indexOf(first) < 0) result.push(first);
-      } catch (e) { }
-    }
-    return result;
-  };
-
-  const flattenedTextContent = (node) => {
-    if (node.nodeType === 3) return node.nodeValue || '';
-    if (node.nodeType !== 1) return '';
-    if (node.nodeName === 'SLOT') {
-      const assigned = node.assignedNodes ? node.assignedNodes() : [];
-      if (assigned.length) {
-        let out = '';
-        for (let i = 0; i < assigned.length; i++) out += flattenedTextContent(assigned[i]);
-        return out;
-      }
-    }
-    let out = '';
-    const kids = node.childNodes || [];
-    for (let i = 0; i < kids.length; i++) out += flattenedTextContent(kids[i]);
-    return out;
-  };
-
-  const getElementAccessibleNameText = (element) => {
-    const labelled = element.getAttribute('aria-labelledby');
-    if (labelled) {
-      const refs = getIdRefs(element, labelled);
-      const parts = [];
-      for (let i = 0; i < refs.length; i++)
-        parts.push(refs[i].textContent || '');
-      const joined = parts.join(' ');
-      if (normalizeWhiteSpace(joined)) return joined;
-    }
-    const ariaLabel = element.getAttribute('aria-label');
-    if (ariaLabel && String(ariaLabel).trim()) return ariaLabel;
-    if (element.labels && element.labels.length) {
-      let t = '';
-      for (let i = 0; i < element.labels.length; i++)
-        t += textExcluding(element.labels[i], element) + ' ';
-      if (normalizeWhiteSpace(t)) return t;
-    }
-    const tag = elementSafeTagName(element);
-    if (tag === 'IMG') return element.getAttribute('alt') || '';
-    if (tag === 'INPUT') {
-      const type = String(element.type || '').toLowerCase();
-      if (type === 'submit' || type === 'button' || type === 'reset') return element.value || '';
-    }
-    return flattenedTextContent(element) || '';
-  };
-
-  const getElementAccessibleDescription = (element) => {
-    if (element.hasAttribute('aria-describedby')) {
-      const refs = getIdRefs(element, element.getAttribute('aria-describedby'));
-      const parts = [];
-      for (let i = 0; i < refs.length; i++)
-        parts.push(refs[i].textContent || '');
-      return parts.join(' ');
-    }
-    if (element.hasAttribute('aria-description'))
-      return element.getAttribute('aria-description') || '';
-    return element.getAttribute('title') || '';
-  };
+  const normalizeWhiteSpace = (text) => text.replace(/[​­]/g, '').trim().replace(/\s+/g, ' ');
 
   const matchesAttributePart = (value, attr) => {
     const objValue = typeof value === 'string' && !attr.caseSensitive ? value.toUpperCase() : value;
@@ -701,16 +295,16 @@ namespace PlaywrightNative.Helpers
     const options = validateAttributes(parsed.attributes, role);
     const result = [];
     const match = (element) => {
-      if (getAriaRole(element) !== options.role) return;
-      if (options.selected !== undefined && getAriaSelected(element) !== options.selected) return;
-      if (options.checked !== undefined && getChecked(element) !== options.checked) return;
-      if (options.pressed !== undefined && getAriaPressed(element) !== options.pressed) return;
-      if (options.expanded !== undefined && getAriaExpanded(element) !== options.expanded) return;
-      if (options.level !== undefined && getAriaLevel(element) !== options.level) return;
-      if (options.disabled !== undefined && getAriaDisabled(element) !== options.disabled) return;
-      if (!options.includeHidden && isElementHiddenForAria(element)) return;
+      if (roleUtils.getAriaRole(element) !== options.role) return;
+      if (options.selected !== undefined && roleUtils.getAriaSelected(element) !== options.selected) return;
+      if (options.checked !== undefined && roleUtils.getAriaChecked(element) !== options.checked) return;
+      if (options.pressed !== undefined && roleUtils.getAriaPressed(element) !== options.pressed) return;
+      if (options.expanded !== undefined && roleUtils.getAriaExpanded(element) !== options.expanded) return;
+      if (options.level !== undefined && roleUtils.getAriaLevel(element) !== options.level) return;
+      if (options.disabled !== undefined && roleUtils.getAriaDisabled(element) !== options.disabled) return;
+      if (!options.includeHidden && roleUtils.isElementHiddenForAria(element)) return;
       if (options.name !== undefined) {
-        let accessibleName = normalizeWhiteSpace(getElementAccessibleNameText(element));
+        let accessibleName = normalizeWhiteSpace(roleUtils.getElementAccessibleNameText(element, !!options.includeHidden));
         let name = options.name;
         if (typeof name === 'string') name = normalizeWhiteSpace(name);
         let nameOp = options.nameOp || '=';
@@ -719,7 +313,7 @@ namespace PlaywrightNative.Helpers
           return;
       }
       if (options.description !== undefined) {
-        let accessibleDescription = normalizeWhiteSpace(getElementAccessibleDescription(element));
+        let accessibleDescription = normalizeWhiteSpace(roleUtils.getElementAccessibleDescription(element, !!options.includeHidden).text);
         let description = options.description;
         if (typeof description === 'string') description = normalizeWhiteSpace(description);
         let descriptionOp = options.descriptionOp || '=';
@@ -739,10 +333,24 @@ namespace PlaywrightNative.Helpers
       }
       for (let s = 0; s < shadows.length; s++) query(shadows[s]);
     };
-    query(scope);
+    roleUtils.beginAriaCaches();
+    try {
+      query(scope);
+    } finally {
+      roleUtils.endAriaCaches();
+    }
     return result;
   };
 
 ";
+
+        private static string LoadRoleUtilsSource()
+        {
+            Assembly assembly = typeof(RoleSelectorEngine).Assembly;
+            using Stream stream = assembly.GetManifestResourceStream("PlaywrightNative.Helpers.roleUtilsSource.js")
+                ?? throw new PlaywrightException("Bundled Playwright roleUtils source is missing.");
+            using StreamReader reader = new StreamReader(stream);
+            return reader.ReadToEnd();
+        }
     }
 }

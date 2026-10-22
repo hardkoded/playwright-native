@@ -100,7 +100,7 @@ namespace PlaywrightNative.Helpers
 
             if (scroll != ActionScroll.None)
             {
-                await handle.EvaluateAsync<bool>(ElementStateScript.ScrollIntoViewIfNeededFunction).ConfigureAwait(false);
+                await ScrollIntoViewIfNeededAsync(handle).ConfigureAwait(false);
             }
 
             return await onHandle(handle).ConfigureAwait(false);
@@ -179,7 +179,7 @@ namespace PlaywrightNative.Helpers
 
             if (scroll != ActionScroll.None)
             {
-                await handle.EvaluateAsync<bool>(ElementStateScript.ScrollIntoViewIfNeededFunction).ConfigureAwait(false);
+                await ScrollIntoViewIfNeededAsync(handle).ConfigureAwait(false);
             }
 
             await ScreencastActions.AnnotateIfEnabledAsync(handle, apiName).ConfigureAwait(false);
@@ -212,6 +212,22 @@ namespace PlaywrightNative.Helpers
                 {
                 }
             }
+        }
+
+        /// <summary>
+        /// Official actions scroll with the protocol, which is instant even
+        /// under <c>scroll-behavior: smooth</c>. Falls back to the in-page
+        /// scroll, which also reports a detached node.
+        /// </summary>
+        private static async Task ScrollIntoViewIfNeededAsync(IElementHandle handle)
+        {
+            if (handle is IProtocolScrollable scrollable
+                && await scrollable.ScrollRectIntoViewIfNeededAsync().ConfigureAwait(false) == ScrollIntoViewIfNeededAction.ResultDone)
+            {
+                return;
+            }
+
+            await handle.EvaluateAsync<bool>(ElementStateScript.ScrollIntoViewIfNeededFunction).ConfigureAwait(false);
         }
 
         private static bool IsFillApi(string apiName)

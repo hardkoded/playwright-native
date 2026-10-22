@@ -157,7 +157,7 @@ namespace PlaywrightNative
 
                     try
                     {
-                        isVisible = await all[0].IsVisibleAsync().ConfigureAwait(false);
+                        isVisible = await IsElementVisibleAsync(all[0]).ConfigureAwait(false);
                     }
                     catch (PlaywrightException)
                     {
@@ -196,7 +196,7 @@ namespace PlaywrightNative
                                     await ElementHandlesOrEmptyAsync(150).ConfigureAwait(false);
                                 if (lastChance.Count == 1)
                                 {
-                                    bool nowVisible = await lastChance[0].IsVisibleAsync()
+                                    bool nowVisible = await IsElementVisibleAsync(lastChance[0])
                                         .ConfigureAwait(false);
                                     if (nowVisible)
                                     {
@@ -290,7 +290,7 @@ namespace PlaywrightNative
 
                     try
                     {
-                        isHidden = await all[0].IsHiddenAsync().ConfigureAwait(false);
+                        isHidden = !await IsElementVisibleAsync(all[0]).ConfigureAwait(false);
                     }
                     catch (PlaywrightException)
                     {
@@ -1896,7 +1896,7 @@ namespace PlaywrightNative
                 {
                     try
                     {
-                        visible = await all[0].IsVisibleAsync().ConfigureAwait(false);
+                        visible = await IsElementVisibleAsync(all[0]).ConfigureAwait(false);
                     }
                     catch (PlaywrightException)
                     {
@@ -3000,6 +3000,9 @@ namespace PlaywrightNative
 
             return classes;
         }
+
+        private Task<bool> IsElementVisibleAsync(IElementHandle handle)
+            => _locator is Locator locator ? locator.IsElementVisibleAsync(handle) : handle.IsVisibleAsync();
 
         private async Task<IReadOnlyList<IElementHandle>> ElementHandlesOrEmptyAsync(int? queryTimeoutMs = null)
         {

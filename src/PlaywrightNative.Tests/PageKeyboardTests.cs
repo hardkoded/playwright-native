@@ -336,6 +336,30 @@ namespace PlaywrightNative.Tests
                 Is.EqualTo("嗨a"));
         }
 
+        [PlaywrightTest("page-keyboard.spec.ts", "should not type text with Alt modifier")]
+        [Test]
+        [Timeout(30_000)]
+        public async Task ShouldNotTypeTextWithAltModifier()
+        {
+            await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
+            IPage page = await NewPageAsync(browser).ConfigureAwait(false);
+            await page.SetContentAsync("<input><textarea></textarea><div contenteditable></div>").ConfigureAwait(false);
+            foreach (ILocator locator in new[] { page.Locator("input"), page.Locator("textarea"), page.Locator("div") })
+            {
+                await locator.PressAsync("Alt+KeyA").ConfigureAwait(false);
+                await locator.PressAsync("Alt+Digit1").ConfigureAwait(false);
+                await locator.PressAsync("Alt+Shift+KeyA").ConfigureAwait(false);
+                await page.Keyboard.DownAsync("Alt").ConfigureAwait(false);
+                await page.Keyboard.PressAsync("b").ConfigureAwait(false);
+                await page.Keyboard.UpAsync("Alt").ConfigureAwait(false);
+                await locator.PressAsync("c").ConfigureAwait(false);
+            }
+
+            await Assertions.Expect(page.Locator("input")).ToHaveValueAsync("c").ConfigureAwait(false);
+            await Assertions.Expect(page.Locator("textarea")).ToHaveValueAsync("c").ConfigureAwait(false);
+            await Assertions.Expect(page.Locator("div")).ToHaveTextAsync("c").ConfigureAwait(false);
+        }
+
         [PlaywrightTest("page-keyboard.spec.ts", "insertText should only emit input event")]
         [Test]
         [Timeout(30_000)]
@@ -705,6 +729,57 @@ namespace PlaywrightNative.Tests
             Assert.That(await lastEvent.EvaluateAsync<int>("e => e.location").ConfigureAwait(false), Is.EqualTo(3));
             Assert.That(await lastEvent.EvaluateAsync<string>("e => e.key").ConfigureAwait(false), Is.EqualTo("-"));
             Assert.That(await lastEvent.EvaluateAsync<string>("e => e.code").ConfigureAwait(false), Is.EqualTo("NumpadSubtract"));
+        }
+
+        [PlaywrightTest("page-keyboard.spec.ts", "should specify numpad location on keyup")]
+        [Test]
+        [Timeout(30_000)]
+        public async Task ShouldSpecifyNumpadLocationOnKeyup()
+        {
+            await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
+            IPage page = await NewPageAsync(browser).ConfigureAwait(false);
+            await page.GoToAsync(Prefix + "/input/keyboard.html").ConfigureAwait(false);
+            await page.Keyboard.PressAsync("NumpadSubtract").ConfigureAwait(false);
+            Assert.That(
+                await GetResultAsync(page).ConfigureAwait(false),
+                Is.EqualTo(string.Join(
+                    "\n",
+                    "Keydown: - NumpadSubtract NUMPAD []",
+                    "Keypress: - NumpadSubtract NUMPAD 45 []",
+                    "Keyup: - NumpadSubtract NUMPAD []")));
+        }
+
+        [PlaywrightTest("page-keyboard.spec.ts", "should press NumpadDecimal as Delete")]
+        [Test]
+        [Timeout(30_000)]
+        public async Task ShouldPressNumpadDecimalAsDelete()
+        {
+            await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
+            IPage page = await NewPageAsync(browser).ConfigureAwait(false);
+            await page.SetContentAsync("<textarea></textarea>").ConfigureAwait(false);
+            IJSHandle lastEvent = await CaptureLastKeydownAsync(page).ConfigureAwait(false);
+            ILocator textarea = page.Locator("textarea");
+
+            await textarea.PressAsync("NumpadDecimal").ConfigureAwait(false);
+            Assert.That(await lastEvent.EvaluateAsync<string>("e => e.key").ConfigureAwait(false), Is.EqualTo("Delete"));
+            Assert.That(await lastEvent.EvaluateAsync<string>("e => e.code").ConfigureAwait(false), Is.EqualTo("NumpadDecimal"));
+            Assert.That(await lastEvent.EvaluateAsync<int>("e => e.location").ConfigureAwait(false), Is.EqualTo(3));
+            await Assertions.Expect(textarea).ToHaveValueAsync(string.Empty).ConfigureAwait(false);
+        }
+
+        [PlaywrightTest("page-keyboard.spec.ts", "should type numpad digits with Shift")]
+        [Test]
+        [Timeout(30_000)]
+        public async Task ShouldTypeNumpadDigitsWithShift()
+        {
+            await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
+            IPage page = await NewPageAsync(browser).ConfigureAwait(false);
+            await page.SetContentAsync("<textarea></textarea>").ConfigureAwait(false);
+            ILocator textarea = page.Locator("textarea");
+            await textarea.PressAsync("Shift+Numpad1").ConfigureAwait(false);
+            await textarea.PressAsync("Shift+NumpadDecimal").ConfigureAwait(false);
+            await textarea.PressAsync("Shift+Numpad9").ConfigureAwait(false);
+            await Assertions.Expect(textarea).ToHaveValueAsync("1.9").ConfigureAwait(false);
         }
 
         [PlaywrightTest("page-keyboard.spec.ts", "should press Enter")]

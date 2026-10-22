@@ -22,6 +22,7 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
 using NUnit.Framework;
+using PlaywrightNative.Helpers;
 using PlaywrightNative.NUnit;
 using PlaywrightNative.TestServer;
 
@@ -30,14 +31,11 @@ namespace PlaywrightNative.Tests
     /// <summary>
     /// Official <c>page-click.spec.ts</c> parity for <see cref="IPage.ClickAsync"/>,
     /// <see cref="IPage.DblClickAsync"/>, element-handle click, and locator click.
+    /// Upstream <c>__testHook*</c> click options map to <see cref="ActionTestHooks"/>.
     /// Skipped (Node-only internals / no public C# equivalent):
-    /// <c>should not throw protocol error when navigating during the click</c>,
-    /// <c>should retry when navigating during the click</c>,
-    /// <c>should not hang when frame is detached</c> (<c>__testHookBeforeStable</c>);
     /// <c>should not wait with noAutoWaiting</c>,
     /// <c>should not wait with noAutoWaiting 2</c>,
-    /// <c>should not wait with noAutoWaiting 3</c> (<c>__testHookNoAutoWaiting</c>);
-    /// <c>ensure events are dispatched in the individual tasks</c> (<c>window.builtins</c> is Playwright injected internals).
+    /// <c>should not wait with noAutoWaiting 3</c> (<c>__testHookNoAutoWaiting</c>).
     /// </summary>
     [TestFixture]
     [NonParallelizable]
@@ -2046,5 +2044,220 @@ document.querySelector('button').addEventListener('click', () => {
             }).ConfigureAwait(false);
         }
 
+        [PlaywrightTest("page-click.spec.ts", "should not throw protocol error when navigating during the click")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public async Task ShouldNotThrowProtocolErrorWhenNavigatingDuringTheClick()
+        {
+            await WithPageAsync(async page =>
+            {
+                await page.GoToAsync(Prefix + "/input/button.html").ConfigureAwait(false);
+                bool firstTime = true;
+                async Task TestHookBeforeStableAsync()
+                {
+                    if (!firstTime)
+                    {
+                        return;
+                    }
+
+                    firstTime = false;
+                    await page.GoToAsync(Prefix + "/input/button.html").ConfigureAwait(false);
+                }
+
+                using (ActionTestHooks.Use(new ActionTestHooks { BeforeStable = TestHookBeforeStableAsync }))
+                {
+                    await page.ClickAsync("button").ConfigureAwait(false);
+                }
+
+                Assert.That(await page.EvaluateAsync<string>("result").ConfigureAwait(false), Is.EqualTo("Clicked"));
+            }).ConfigureAwait(false);
+        }
+
+        [PlaywrightTest("page-click.spec.ts", "should retry when navigating during the click")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public async Task ShouldRetryWhenNavigatingDuringTheClick()
+        {
+            await WithPageAsync(async page =>
+            {
+                await page.GoToAsync(Prefix + "/input/button.html").ConfigureAwait(false);
+                bool firstTime = true;
+                async Task TestHookBeforeStableAsync()
+                {
+                    if (!firstTime)
+                    {
+                        return;
+                    }
+
+                    firstTime = false;
+                    await page.GoToAsync(EmptyPage).ConfigureAwait(false);
+                }
+
+                Exception error;
+                using (ActionTestHooks.Use(new ActionTestHooks { BeforeStable = TestHookBeforeStableAsync }))
+                {
+                    error = Assert.CatchAsync(() => page.ClickAsync("button", new() { Timeout = 2000 }));
+                }
+
+                Assert.That(error.Message, Does.Contain("element was detached from the DOM, retrying"));
+            }).ConfigureAwait(false);
+        }
+
+        [PlaywrightTest("page-click.spec.ts", "should not hang when frame is detached")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public async Task ShouldNotHangWhenFrameIsDetached()
+        {
+            await WithPageAsync(async page =>
+            {
+                await AttachFrameAsync(page, "frame1", EmptyPage).ConfigureAwait(false);
+                IFrame frame = FrameAt(page, 1);
+                await frame.GoToAsync(Prefix + "/input/button.html").ConfigureAwait(false);
+
+                // Start moving the button.
+                await frame.EvalOnSelectorAsync("button", @"button => {
+    button.style.transition = 'margin 5s linear 0s';
+    button.style.marginLeft = '200px';
+  }").ConfigureAwait(false);
+
+                TaskCompletionSource<bool> detachPromise = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                bool firstTime = true;
+                Task TestHookBeforeStableAsync()
+                {
+                    // Detach the frame after "waiting for stable" has started.
+                    if (!firstTime)
+                    {
+                        return Task.CompletedTask;
+                    }
+
+                    firstTime = false;
+                    _ = Task.Run(async () =>
+                    {
+                        await Task.Delay(1000).ConfigureAwait(false);
+                        await page.EvaluateAsync("() => document.getElementById('frame1').remove()").ConfigureAwait(false);
+                        detachPromise.SetResult(true);
+                    });
+                    return Task.CompletedTask;
+                }
+
+                Task<Exception> promise;
+                using (ActionTestHooks.Use(new ActionTestHooks { BeforeStable = TestHookBeforeStableAsync }))
+                {
+                    promise = CatchAsync(frame.ClickAsync("button"));
+                }
+
+                await detachPromise.Task.ConfigureAwait(false);
+                Exception error = await promise.ConfigureAwait(false);
+                Assert.That(error, Is.Not.Null);
+                Assert.That(error.Message, Does.Match("frame got detached|Frame was detached"));
+            }).ConfigureAwait(false);
+        }
+
+        [PlaywrightTest("page-click.spec.ts", "should not retain removed iframe after clicking inside it")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public async Task ShouldNotRetainRemovedIframeAfterClickingInsideIt()
+        {
+            await WithPageAsync(async page =>
+            {
+                await page.SetContentAsync("<iframe srcdoc=\"<button>Click</button>\"></iframe>").ConfigureAwait(false);
+                ILocator button = page.FrameLocator("iframe").GetByRole(AriaRole.Button);
+                await button.WaitForAsync().ConfigureAwait(false);
+                await page.EvaluateAsync(@"() => {
+    window.iframeRef = new WeakRef(document.querySelector('iframe'));
+  }").ConfigureAwait(false);
+                await button.ClickAsync().ConfigureAwait(false);
+                await page.EvaluateAsync("() => document.querySelector('iframe').remove()").ConfigureAwait(false);
+
+                // Move the mouse away to release Chromium's own last-hovered-node retention.
+                await page.Mouse.MoveAsync(500, 500).ConfigureAwait(false);
+                await page.RequestGCAsync().ConfigureAwait(false);
+                bool retained = await page.EvaluateAsync<bool>("() => Boolean(window.iframeRef.deref())").ConfigureAwait(false);
+                Assert.That(retained, Is.False);
+            }).ConfigureAwait(false);
+        }
+
+        [PlaywrightTest("page-click.spec.ts", "ensure events are dispatched in the individual tasks")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public async Task EnsureEventsAreDispatchedInTheIndividualTasks()
+        {
+            await WithPageAsync(async page =>
+            {
+                await page.SetContentAsync(@"
+    <div id=""outer"" style=""background: #d4d4d4; width: 60px; height: 60px;"">
+      <div id=""inner"" style=""background: #adadad; width: 46px; height: 46px;""></div>
+    </div>
+  ").ConfigureAwait(false);
+
+                // Upstream runs under test, where the utility script exposes the
+                // page's own timers as window.builtins.
+                await page.EvaluateAsync("() => { window.builtins = { setTimeout: window.setTimeout.bind(window) }; }").ConfigureAwait(false);
+
+                await page.EvaluateAsync(@"() => {
+    function onClick(name) {
+      console.log(`click ${name}`);
+
+      window.builtins.setTimeout(function() {
+        console.log(`timeout ${name}`);
+      }, 0);
+
+      void Promise.resolve().then(function() {
+        console.log(`promise ${name}`);
+      });
+    }
+
+    document.getElementById('inner').addEventListener('click', () => onClick('inner'));
+    document.getElementById('outer').addEventListener('click', () => onClick('outer'));
+  }").ConfigureAwait(false);
+
+                // Capture console messages
+                List<string> messages = new List<string>();
+                page.Console += (_, msg) =>
+                {
+                    lock (messages)
+                    {
+                        messages.Add(msg.Text);
+                    }
+                };
+
+                // Click on the inner div element
+                await page.Locator("#inner").ClickAsync().ConfigureAwait(false);
+
+                string[] expected =
+                {
+                    "click inner",
+                    "promise inner",
+                    "click outer",
+                    "promise outer",
+                    "timeout inner",
+                    "timeout outer",
+                };
+                await PollUntilAsync(() =>
+                {
+                    lock (messages)
+                    {
+                        return Task.FromResult(messages.Count >= expected.Length);
+                    }
+                }).ConfigureAwait(false);
+                lock (messages)
+                {
+                    Assert.That(messages, Is.EqualTo(expected));
+                }
+            }).ConfigureAwait(false);
+        }
+
+        private static async Task<Exception> CatchAsync(Task task)
+        {
+            try
+            {
+                await task.ConfigureAwait(false);
+                return null;
+            }
+            catch (Exception ex)
+            {
+                return ex;
+            }
+        }
     }
 }
