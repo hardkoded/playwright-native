@@ -521,5 +521,37 @@ namespace PlaywrightNative.Tests
   ").ConfigureAwait(false);
             Assert.That(await page.GetByRole("alert", description: "  doc-2025.pdf \n was  uploaded ").EvaluateAllAsync<string[]>("els => els.map(e => e.textContent)").ConfigureAwait(false), Is.EqualTo(new[] { "Alert" }));
         }
+
+        [PlaywrightTest("selectors-get-by.spec.ts", "locators should not be affected by global and sticky regex flags")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public async Task LocatorsShouldNotBeAffectedByGlobalAndStickyRegexFlags()
+        {
+            await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
+            await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
+            IPage page = await context.NewPageAsync().ConfigureAwait(false);
+
+            await page.SetContentAsync(@"
+    <div>foo</div><div>foo</div><div>foo</div>
+    <label>foo<input></label><label>foo<input></label><label>foo<input></label>
+    <button>foo</button><button>foo</button><button>foo</button>
+    <input placeholder=foo><input placeholder=foo><input placeholder=foo>
+  ").ConfigureAwait(false);
+
+            // .NET Regex has no global (g) or sticky (y) flag, so the upstream
+            // /foo/g and /foo/y lines use the same pattern as /foo/.
+            await Assertions.Expect(page.GetByText(new Regex("foo"))).ToHaveCountAsync(9).ConfigureAwait(false);
+            await Assertions.Expect(page.GetByText(new Regex("foo"))).ToHaveCountAsync(9).ConfigureAwait(false);
+            await Assertions.Expect(page.GetByText(new Regex("foo"))).ToHaveCountAsync(9).ConfigureAwait(false);
+            await Assertions.Expect(page.GetByLabel(new Regex("foo"))).ToHaveCountAsync(3).ConfigureAwait(false);
+            await Assertions.Expect(page.GetByLabel(new Regex("foo"))).ToHaveCountAsync(3).ConfigureAwait(false);
+            await Assertions.Expect(page.GetByLabel(new Regex("foo"))).ToHaveCountAsync(3).ConfigureAwait(false);
+            await Assertions.Expect(page.GetByRole("button", nameRegex: new Regex("foo"))).ToHaveCountAsync(3).ConfigureAwait(false);
+            await Assertions.Expect(page.GetByRole("button", nameRegex: new Regex("foo"))).ToHaveCountAsync(3).ConfigureAwait(false);
+            await Assertions.Expect(page.GetByRole("button", nameRegex: new Regex("foo"))).ToHaveCountAsync(3).ConfigureAwait(false);
+            await Assertions.Expect(page.GetByPlaceholder(new Regex("foo"))).ToHaveCountAsync(3).ConfigureAwait(false);
+            await Assertions.Expect(page.GetByPlaceholder(new Regex("foo"))).ToHaveCountAsync(3).ConfigureAwait(false);
+            await Assertions.Expect(page.GetByPlaceholder(new Regex("foo"))).ToHaveCountAsync(3).ConfigureAwait(false);
+        }
     }
 }

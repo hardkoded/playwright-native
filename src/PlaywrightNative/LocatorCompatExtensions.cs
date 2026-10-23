@@ -90,6 +90,20 @@ namespace PlaywrightNative
         public static ILocator Has(this ILocator locator, ILocator has)
             => RequireLocator(locator).Has(has);
 
+        /// <summary>
+        /// Returns a locator that matches this locator's elements inside each element matched by
+        /// <paramref name="parent"/>. Same as <c>parent.Locator(locator)</c>, but reads in natural order.
+        /// Relative locators such as <c>Nth</c> or <c>First</c> resolve separately inside each parent.
+        /// </summary>
+        /// <param name="locator">The locator to scope.</param>
+        /// <param name="parent">Locator matching the parent elements to search within.</param>
+        /// <returns>The scoped locator.</returns>
+        public static ILocator Within(this ILocator locator, ILocator parent)
+        {
+            ArgumentNullException.ThrowIfNull(parent);
+            return parent.Locator(locator);
+        }
+
         /// <summary>Legacy <c>hasNot</c> filter.</summary>
         public static ILocator HasNot(this ILocator locator, ILocator hasNot)
             => RequireLocator(locator).HasNot(hasNot);

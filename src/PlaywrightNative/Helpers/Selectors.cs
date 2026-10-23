@@ -67,7 +67,8 @@ namespace PlaywrightNative.Helpers
                     bool ok = (c >= 'a' && c <= 'z')
                         || (c >= 'A' && c <= 'Z')
                         || (c >= '0' && c <= '9')
-                        || c == '_';
+                        || c == '_'
+                        || c == '-';
                     if (!ok)
                     {
                         return false;

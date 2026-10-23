@@ -36,10 +36,11 @@ namespace PlaywrightNative.Helpers
         /// after a later navigation.
         /// </summary>
         /// <param name="page">The page that owns the overlay.</param>
+        /// <param name="frame">The frame the locator resolves relative to.</param>
         /// <param name="locator">The highlighted locator.</param>
         /// <param name="style">Optional extra inline CSS.</param>
         /// <param name="id">Stable overlay id for this locator.</param>
-        internal static void Remember(IPage page, ILocator locator, string style, string id)
+        internal static void Remember(IPage page, IFrame frame, ILocator locator, string style, string id)
         {
             if (page == null || locator == null || string.IsNullOrEmpty(id))
             {
@@ -49,9 +50,10 @@ namespace PlaywrightNative.Helpers
             Registry registry = _pages.GetOrCreateValue(page);
             lock (registry.Sync)
             {
-                RemoveId(registry, id);
+                RemoveId(registry, frame, id);
                 registry.Entries.Add(new Entry
                 {
+                    Frame = frame,
                     Locator = locator,
                     Style = style,
                     Id = id,
@@ -69,8 +71,9 @@ namespace PlaywrightNative.Helpers
         /// Forgets one locator overlay after <c>locator.hideHighlight()</c>.
         /// </summary>
         /// <param name="page">The page that owns the overlay.</param>
+        /// <param name="frame">The frame the locator resolves relative to.</param>
         /// <param name="id">Stable overlay id for this locator.</param>
-        internal static void Forget(IPage page, string id)
+        internal static void Forget(IPage page, IFrame frame, string id)
         {
             if (page == null || string.IsNullOrEmpty(id) || !_pages.TryGetValue(page, out Registry registry))
             {
@@ -79,24 +82,36 @@ namespace PlaywrightNative.Helpers
 
             lock (registry.Sync)
             {
-                RemoveId(registry, id);
+                RemoveId(registry, frame, id);
             }
         }
 
         /// <summary>
-        /// Forgets every overlay after <c>page.hideHighlight()</c>.
+        /// <c>page.hideHighlight()</c>: forgets every overlay and removes it
+        /// from every frame, since locators may highlight in any frame.
         /// </summary>
         /// <param name="page">The page that owns the overlays.</param>
-        internal static void Clear(IPage page)
+        /// <returns>A task that completes when every frame is cleared.</returns>
+        internal static async Task HideAllAsync(IPage page)
         {
-            if (page == null || !_pages.TryGetValue(page, out Registry registry))
+            if (_pages.TryGetValue(page, out Registry registry))
             {
-                return;
+                lock (registry.Sync)
+                {
+                    registry.Entries.Clear();
+                }
             }
 
-            lock (registry.Sync)
+            foreach (IFrame frame in page.Frames)
             {
-                registry.Entries.Clear();
+                try
+                {
+                    await frame.EvaluateAsync(ElementStateScript.HideAllHighlightsFunction).ConfigureAwait(false);
+                }
+                catch (PlaywrightException) when (frame != page.MainFrame)
+                {
+                    // A child frame may detach or navigate while we clear it.
+                }
             }
         }
 
@@ -132,11 +147,11 @@ namespace PlaywrightNative.Helpers
             }
         }
 
-        private static void RemoveId(Registry registry, string id)
+        private static void RemoveId(Registry registry, IFrame frame, string id)
         {
             for (int i = registry.Entries.Count - 1; i >= 0; i--)
             {
-                if (string.Equals(registry.Entries[i].Id, id, StringComparison.Ordinal))
+                if (ReferenceEquals(registry.Entries[i].Frame, frame) && string.Equals(registry.Entries[i].Id, id, StringComparison.Ordinal))
                 {
                     registry.Entries.RemoveAt(i);
                 }
@@ -154,6 +169,8 @@ namespace PlaywrightNative.Helpers
 
         private sealed class Entry
         {
+            internal IFrame Frame { get; set; }
+
             internal ILocator Locator { get; set; }
 
             internal string Style { get; set; }
