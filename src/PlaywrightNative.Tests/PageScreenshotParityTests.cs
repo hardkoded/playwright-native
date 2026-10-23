@@ -20,6 +20,7 @@ using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
 using NUnit.Framework;
+using PlaywrightNative.Helpers;
 using PlaywrightNative.NUnit;
 using PlaywrightNative.TestServer;
 
@@ -27,9 +28,6 @@ namespace PlaywrightNative.Tests
 {
     /// <summary>
     /// Official <c>page-screenshot.spec.ts</c> titles.
-    /// Skipped (Node-only): <c>__testHookBeforeScreenshot</c>,
-    /// <c>should capture screenshots after layoutchanges in transitionend event</c>
-    /// (uses Node <c>window.builtins.Date</c>).
     /// Do not edit leftover <c>PageScreenshot*</c> /
     /// <c>ExpectScreenshot*</c>.
     /// </summary>
@@ -863,6 +861,36 @@ namespace PlaywrightNative.Tests
             }
         }
 
+        [PlaywrightTest("page-screenshot.spec.ts", "should stop animations that happen right before screenshot")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public async Task ShouldStopAnimationsThatHappenRightBeforeScreenshot()
+        {
+            await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
+            await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
+            IPage page = await context.NewPageAsync().ConfigureAwait(false);
+            await page.GoToAsync(Prefix + "/rotate-z.html").ConfigureAwait(false);
+
+            // Stop rotating bar.
+            await page.EvalOnSelectorAsync("div", "el => el.style.setProperty('animation', 'none')").ConfigureAwait(false);
+            byte[] buffer1;
+
+            // Start rotating bar right before screenshot.
+            ScreenshotDecorations.TestHookBeforeScreenshot.Value = () => page.EvalOnSelectorAsync("div", "el => el.style.removeProperty('animation')");
+            try
+            {
+                buffer1 = await page.ScreenshotAsync(new() { Animations = ScreenshotAnimations.Disabled }).ConfigureAwait(false);
+            }
+            finally
+            {
+                ScreenshotDecorations.TestHookBeforeScreenshot.Value = null;
+            }
+
+            await RafRafAsync(page).ConfigureAwait(false);
+            byte[] buffer2 = await page.ScreenshotAsync(new() { Animations = ScreenshotAnimations.Disabled }).ConfigureAwait(false);
+            Assert.That(ScreenshotComparer.Matches(buffer1, buffer2, threshold: 0.2f), Is.True);
+        }
+
         [PlaywrightTest("page-screenshot.spec.ts", "should resume infinite animations")]
         [Test]
         [Timeout(TestConstants.DefaultTestTimeout)]
@@ -923,6 +951,52 @@ namespace PlaywrightNative.Tests
             byte[] screenshot2 = await div.ScreenshotAsync(new() { Animations = ScreenshotAnimations.Allow }).ConfigureAwait(false);
             Assert.That(screenshot2, Is.EqualTo(screenshot1));
             Assert.That(await page.EvaluateAsync<bool>("() => window['__TRANSITION_END']").ConfigureAwait(false), Is.True);
+        }
+
+        [PlaywrightTest("page-screenshot.spec.ts", "should capture screenshots after layoutchanges in transitionend event")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public async Task ShouldCaptureScreenshotsAfterLayoutchangesInTransitionendEvent()
+        {
+            await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
+            await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
+            IPage page = await context.NewPageAsync().ConfigureAwait(false);
+            await page.GoToAsync(Prefix + "/css-transition.html").ConfigureAwait(false);
+            ILocator div = page.Locator("div");
+
+            // Upstream reads the unpatched Date from window.builtins (test-only injected
+            // script); without a clock installed that is the page Date.
+            await div.EvaluateAsync<object>(@"el => {
+      el.addEventListener('transitionend', () => {
+        const builtinDate = (window.builtins && window.builtins.Date) || Date;
+        const time = builtinDate.now();
+        // Block main thread for 200ms, emulating heavy layout.
+        while (builtinDate.now() - time < 200) {}
+        const h1 = document.createElement('h1');
+        h1.textContent = 'woof-woof';
+        document.body.append(h1);
+      }, false);
+    }").ConfigureAwait(false);
+
+            // make sure transition is actually running
+            byte[] running1 = await page.ScreenshotAsync().ConfigureAwait(false);
+            await RafRafAsync(page).ConfigureAwait(false);
+            byte[] running2 = await page.ScreenshotAsync().ConfigureAwait(false);
+            Assert.That(running2, Is.Not.EqualTo(running1));
+
+            // 1. Make a screenshot that finishes all finite animations
+            //    and triggers layout.
+            byte[] screenshot1 = await page.ScreenshotAsync(new() { Animations = ScreenshotAnimations.Disabled }).ConfigureAwait(false);
+
+            // 2. Make a second screenshot after h1 is on screen.
+            await Assertions.Expect(page.Locator("h1")).ToBeVisibleAsync().ConfigureAwait(false);
+            await Assertions.Expect(page.Locator("h1")).ToHaveTextAsync("woof-woof").ConfigureAwait(false);
+            byte[] screenshot2 = await page.ScreenshotAsync().ConfigureAwait(false);
+
+            // 3. Make sure both screenshots are equal, meaning that
+            //    first screenshot actually was taken after transitionend
+            //    changed layout.
+            Assert.That(screenshot2, Is.EqualTo(screenshot1));
         }
 
         [PlaywrightTest("page-screenshot.spec.ts", "should not change animation with playbackRate equal to 0")]
