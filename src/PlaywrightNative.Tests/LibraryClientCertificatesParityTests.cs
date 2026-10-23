@@ -512,6 +512,41 @@ namespace PlaywrightNative.Tests
             }
         }
 
+        [PlaywrightTest("client-certificates.spec.ts", "should respect launch proxy and proxy bypass")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public async Task BrowserShouldRespectLaunchProxyAndProxyBypass()
+        {
+            await using OfficialClientCertificateServer server = await StartCcServerAsync()
+                .ConfigureAwait(false);
+            Uri serverUri = new Uri(server.Url);
+            await using OfficialTestProxy proxyServer = new OfficialTestProxy();
+            proxyServer.ForwardTo(serverUri.Port, allowConnectRequests: true);
+            string proxy = "localhost:" + proxyServer.Port.ToString(CultureInfo.InvariantCulture);
+            string serverHost = ProxiedConnectHost + ":" + serverUri.Port.ToString(CultureInfo.InvariantCulture);
+            ClientCertificate[] clientCertificates = new[] { Trusted(OriginOf(server.Url)) };
+            await using IBrowser browser = await BrowserLauncher.LaunchAsync(proxy: new Proxy { Server = proxy }).ConfigureAwait(false);
+            {
+                IPage page = await browser.NewPageAsync(new() { IgnoreHTTPSErrors = true, ClientCertificates = clientCertificates })
+                    .ConfigureAwait(false);
+                await page.GoToAsync(server.Url).ConfigureAwait(false);
+                await Assertions.Expect(page.GetByTestId("message")).ToHaveTextAsync(TrustedMessage).ConfigureAwait(false);
+                // Headed Chromium also sends its own background requests through the launch proxy.
+                Assert.That(proxyServer.ConnectHosts, Does.Contain(serverHost));
+                await page.CloseAsync().ConfigureAwait(false);
+            }
+
+            proxyServer.ConnectHosts = Array.Empty<string>();
+            {
+                IPage page = await browser.NewPageAsync(new() { IgnoreHTTPSErrors = true, ClientCertificates = clientCertificates, Proxy = new Proxy { Server = proxy, Bypass = serverUri.Host } })
+                    .ConfigureAwait(false);
+                await page.GoToAsync(server.Url).ConfigureAwait(false);
+                await Assertions.Expect(page.GetByTestId("message")).ToHaveTextAsync(TrustedMessage).ConfigureAwait(false);
+                Assert.That(proxyServer.ConnectHosts, Does.Not.Contain(serverHost));
+                await page.CloseAsync().ConfigureAwait(false);
+            }
+        }
+
         [PlaywrightTest("client-certificates.spec.ts", "should pass with matching certificates and when a socks proxy is used")]
         [Test]
         [Timeout(TestConstants.DefaultTestTimeout)]

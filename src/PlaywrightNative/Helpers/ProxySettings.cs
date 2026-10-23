@@ -35,6 +35,16 @@ namespace PlaywrightNative.Helpers
             => proxy != null && !string.IsNullOrEmpty(proxy.Username);
 
         /// <summary>
+        /// Official <c>browserType._validateLaunchOptions</c>: drops the legacy
+        /// <c>per-context</c> placeholder launch proxy. It is no longer needed
+        /// for contexts to set their own proxy.
+        /// </summary>
+        /// <param name="proxy">Launch proxy, or <see langword="null"/>.</param>
+        /// <returns>The launch proxy, or <see langword="null"/> for the placeholder.</returns>
+        internal static Proxy NormalizeLaunchProxy(Proxy proxy)
+            => proxy?.Server is "per-context" or "http://per-context" ? null : proxy;
+
+        /// <summary>
         /// Builds a proxy server URL. Adds an <c>http://</c> scheme when missing.
         /// When <paramref name="includeCredentials"/> is <see langword="true"/> and
         /// the proxy has a username, embeds <c>user:pass@</c> after the scheme.

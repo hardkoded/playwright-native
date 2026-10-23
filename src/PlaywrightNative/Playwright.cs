@@ -104,17 +104,18 @@ namespace PlaywrightNative
         {
             options ??= new BrowserTypeLaunchOptions();
             BrowserTypeLaunchGuard.ThrowIfLaunchForbidden(options);
+            Proxy proxy = ProxySettings.NormalizeLaunchProxy(options.Proxy);
             try
             {
                 string executablePath = await ResolveExecutablePathAsync(SupportedBrowser.Chromium, options).ConfigureAwait(false);
 
                 PlaywrightNative.Chromium.CRBrowser crBrowser = await PlaywrightNative.Chromium.ChromiumBrowserType
-                    .LaunchAsync(executablePath, options.Headless, args: ToArgArray(options.Args), proxy: options.Proxy, chromiumSandbox: options.ChromiumSandbox, timeout: ResolveTimeout(options), ignoreDefaultArgs: options.IgnoreDefaultArgs, environment: options.Env, loggerFactory: options.LoggerFactory, devtools: options.Devtools, handleSIGINT: HandleSIGINT(options), handleSIGTERM: HandleSIGTERM(options), handleSIGHUP: HandleSIGHUP(options), ignoreDefaultArgsList: options.IgnoreDefaultArgsList)
+                    .LaunchAsync(executablePath, options.Headless, args: ToArgArray(options.Args), proxy: proxy, chromiumSandbox: options.ChromiumSandbox, timeout: ResolveTimeout(options), ignoreDefaultArgs: options.IgnoreDefaultArgs, environment: options.Env, loggerFactory: options.LoggerFactory, devtools: options.Devtools, handleSIGINT: HandleSIGINT(options), handleSIGTERM: HandleSIGTERM(options), handleSIGHUP: HandleSIGHUP(options), ignoreDefaultArgsList: options.IgnoreDefaultArgsList)
                     .ConfigureAwait(false);
 
                 PlaywrightNative.Chromium.ChromiumBrowser chromium = new PlaywrightNative.Chromium.ChromiumBrowser(crBrowser, ResolveDownloadsPath(options), options.Logger)
                 {
-                    LaunchProxy = options.Proxy,
+                    LaunchProxy = proxy,
                     LaunchArgs = ToArgArray(options.Args) ?? [],
                 };
                 ((PlaywrightNative.Helpers.IHasTracesDir)chromium).TracesDir = options.TracesDir;
@@ -171,16 +172,17 @@ namespace PlaywrightNative
         {
             options ??= new BrowserTypeLaunchOptions();
             BrowserTypeLaunchGuard.ThrowIfLaunchForbidden(options);
+            Proxy proxy = ProxySettings.NormalizeLaunchProxy(options.Proxy);
             try
             {
                 string executablePath = await ResolveExecutablePathAsync(SupportedBrowser.Webkit, options).ConfigureAwait(false);
 
                 WebKit.WKBrowser wkBrowser = await WebKit.WebkitBrowserType
-                    .LaunchAsync(executablePath, options.Headless, args: ToArgArray(options.Args), proxy: options.Proxy, timeout: ResolveTimeout(options), environment: options.Env, loggerFactory: options.LoggerFactory, handleSIGINT: HandleSIGINT(options), handleSIGTERM: HandleSIGTERM(options), handleSIGHUP: HandleSIGHUP(options))
+                    .LaunchAsync(executablePath, options.Headless, args: ToArgArray(options.Args), proxy: proxy, timeout: ResolveTimeout(options), environment: options.Env, loggerFactory: options.LoggerFactory, handleSIGINT: HandleSIGINT(options), handleSIGTERM: HandleSIGTERM(options), handleSIGHUP: HandleSIGHUP(options))
                     .ConfigureAwait(false);
 
                 wkBrowser.LaunchDownloadsPath = ResolveDownloadsPath(options);
-                wkBrowser.LaunchProxy = options.Proxy;
+                wkBrowser.LaunchProxy = proxy;
                 wkBrowser.Logger = options.Logger;
                 ((PlaywrightNative.Helpers.IHasTracesDir)wkBrowser).TracesDir = options.TracesDir;
                 ((PlaywrightNative.Helpers.IHasArtifactsDir)wkBrowser).ArtifactsDir = options.ArtifactsDir;
@@ -203,6 +205,7 @@ namespace PlaywrightNative
             options ??= new BrowserTypeLaunchOptions();
             BrowserTypeLaunchGuard.ThrowIfPersistentForbidden(options);
             ThrowIfPageArgument(options.Args);
+            Proxy proxy = ProxySettings.NormalizeLaunchProxy(options.Proxy);
             ClientCertificatesProxy certsProxy = null;
             string resolvedDir = null;
             try
@@ -210,7 +213,7 @@ namespace PlaywrightNative
                 string executablePath = await ResolveExecutablePathAsync(SupportedBrowser.Chromium, options).ConfigureAwait(false);
                 bool ownsUserDataDir = string.IsNullOrEmpty(userDataDir);
                 resolvedDir = ResolveUserDataDir(userDataDir);
-                Proxy launchProxy = StartPersistentClientCertificates(options, out certsProxy);
+                Proxy launchProxy = StartPersistentClientCertificates(options, proxy, out certsProxy);
 
                 PlaywrightNative.Chromium.CRBrowser crBrowser = await PlaywrightNative.Chromium.ChromiumBrowserType
                     .LaunchAsync(
@@ -235,7 +238,7 @@ namespace PlaywrightNative
 
                 PlaywrightNative.Chromium.ChromiumBrowser instance = new(crBrowser, ResolveDownloadsPath(options))
                 {
-                    LaunchProxy = options.Proxy,
+                    LaunchProxy = proxy,
                     LaunchArgs = ToArgArray(options.Args) ?? [],
                 };
                 ((PlaywrightNative.Helpers.IHasTracesDir)instance).TracesDir = options.TracesDir;
@@ -243,7 +246,7 @@ namespace PlaywrightNative
                 IBrowserContext context = instance.PersistentContext();
                 if (context is PlaywrightNative.Chromium.ChromiumBrowserContext chromiumCerts)
                 {
-                    chromiumCerts.AttachClientCertificatesProxy(certsProxy, options.Proxy);
+                    chromiumCerts.AttachClientCertificatesProxy(certsProxy, proxy);
                     certsProxy = null;
                 }
 
@@ -317,13 +320,14 @@ namespace PlaywrightNative
             options ??= new BrowserTypeLaunchOptions();
             BrowserTypeLaunchGuard.ThrowIfPersistentForbidden(options);
             ThrowIfPageArgument(options.Args);
+            Proxy proxy = ProxySettings.NormalizeLaunchProxy(options.Proxy);
             ClientCertificatesProxy webkitCertsProxy = null;
             try
             {
                 string executablePath = await ResolveExecutablePathAsync(SupportedBrowser.Webkit, options).ConfigureAwait(false);
                 bool ownsUserDataDir = string.IsNullOrEmpty(userDataDir);
                 string resolvedDir = ResolveUserDataDir(userDataDir);
-                Proxy webkitLaunchProxy = StartPersistentClientCertificates(options, out webkitCertsProxy);
+                Proxy webkitLaunchProxy = StartPersistentClientCertificates(options, proxy, out webkitCertsProxy);
 
                 WebKit.WKBrowser wkBrowser = await WebKit.WebkitBrowserType
                     .LaunchAsync(
@@ -343,13 +347,13 @@ namespace PlaywrightNative
                     .ConfigureAwait(false);
 
                 wkBrowser.LaunchDownloadsPath = ResolveDownloadsPath(options);
-                wkBrowser.LaunchProxy = options.Proxy;
+                wkBrowser.LaunchProxy = proxy;
                 ((PlaywrightNative.Helpers.IHasTracesDir)wkBrowser).TracesDir = options.TracesDir;
                 ((PlaywrightNative.Helpers.IHasArtifactsDir)wkBrowser).ArtifactsDir = options.ArtifactsDir;
                 IBrowserContext context = wkBrowser.PersistentContext();
                 if (context is WebKit.WKBrowserContext webkitCerts)
                 {
-                    webkitCerts.AttachClientCertificatesProxy(webkitCertsProxy, options.Proxy);
+                    webkitCerts.AttachClientCertificatesProxy(webkitCertsProxy, proxy);
                     webkitCertsProxy = null;
                 }
 
@@ -398,19 +402,20 @@ namespace PlaywrightNative
 
         private static Proxy StartPersistentClientCertificates(
             BrowserTypeLaunchOptions options,
+            Proxy launchProxy,
             out ClientCertificatesProxy proxy)
         {
             proxy = null;
             if (options is not BrowserTypeLaunchPersistentContextOptions persistent
                 || !ClientCertificateHelper.HasAny(persistent.ClientCertificates))
             {
-                return options?.Proxy;
+                return launchProxy;
             }
 
             proxy = ClientCertificatesProxy.Create(
                 persistent.ClientCertificates,
                 persistent.IgnoreHTTPSErrors == true,
-                options.Proxy);
+                launchProxy);
             return proxy.BrowserProxy;
         }
 

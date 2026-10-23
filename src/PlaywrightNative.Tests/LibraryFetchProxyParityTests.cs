@@ -361,6 +361,56 @@ namespace PlaywrightNative.Tests
             }
         }
 
+        [PlaywrightTest("fetch-proxy.spec.ts", "should apply proxy.bypass to redirect targets")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public async Task ShouldApplyProxyBypassToRedirectTargets()
+        {
+            EnsureServer();
+            string crossProcessHost = new Uri(CrossProcessPrefix).Authority;
+            if (crossProcessHost == new Uri(Prefix).Authority)
+            {
+                Assert.Ignore("Needs two different host names for the same server");
+            }
+
+            _proxy.ForwardTo(ServerPort, allowConnectRequests: true);
+            Server.SetRedirect("/redirect-to-cross-process", CrossProcessPrefix + "/simple.json");
+            Server.SetRedirect("/redirect-to-same-origin", Prefix + "/simple.json");
+            IBrowserContext context = await _browser.NewContextAsync(new()
+            {
+                Proxy = new Proxy
+                {
+                    Server = "localhost:" + _proxy.Port.ToString(CultureInfo.InvariantCulture),
+                    Bypass = new Uri(Prefix).Host,
+                }
+            }).ConfigureAwait(false);
+            try
+            {
+                {
+                    // Bypassed first hop redirects to a host that must go through the proxy.
+                    IAPIResponse response = await context.APIRequest.GetAsync(Prefix + "/redirect-to-cross-process").ConfigureAwait(false);
+                    Assert.That(response.Url, Is.EqualTo(CrossProcessPrefix + "/simple.json"));
+                    JsonElement? json = await response.JsonAsync().ConfigureAwait(false);
+                    Assert.That(json.Value.GetProperty("foo").GetString(), Is.EqualTo("bar"));
+                    Assert.That(_proxy.ConnectHosts, Is.EqualTo(new[] { crossProcessHost }));
+                    _proxy.ConnectHosts = Array.Empty<string>();
+                }
+
+                {
+                    // Proxied first hop redirects to a bypassed host.
+                    IAPIResponse response = await context.APIRequest.GetAsync(CrossProcessPrefix + "/redirect-to-same-origin").ConfigureAwait(false);
+                    Assert.That(response.Url, Is.EqualTo(Prefix + "/simple.json"));
+                    JsonElement? json = await response.JsonAsync().ConfigureAwait(false);
+                    Assert.That(json.Value.GetProperty("foo").GetString(), Is.EqualTo("bar"));
+                    Assert.That(_proxy.ConnectHosts, Is.EqualTo(new[] { crossProcessHost }));
+                }
+            }
+            finally
+            {
+                await context.CloseAsync().ConfigureAwait(false);
+            }
+        }
+
         private static void EnsureServer()
         {
             if (Server == null)
