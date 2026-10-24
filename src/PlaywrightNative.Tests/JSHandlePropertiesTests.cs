@@ -160,6 +160,53 @@ namespace PlaywrightNative.Tests
             Dictionary<string, IJSHandle> properties = await aHandle.GetPropertiesAsync().ConfigureAwait(false);
             Assert.That(properties, Is.Empty);
         }
+
+        [PlaywrightTest("jshandle-properties.spec.ts", "getProperties should return properties inhertied from super class")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public async Task GetPropertiesShouldReturnPropertiesInhertiedFromSuperClass()
+        {
+            IJSHandle aHandle = await Page.EvaluateHandleAsync(@"() => {
+                class A {
+                    constructor() {
+                        this.a = '1';
+                    }
+                }
+                class B extends A {
+                    constructor() {
+                        super();
+                        this.b = '2';
+                    }
+                }
+                return new B();
+            }").ConfigureAwait(false);
+            Dictionary<string, IJSHandle> properties = await aHandle.GetPropertiesAsync().ConfigureAwait(false);
+            Assert.That(await properties["a"].JsonValueAsync<string>().ConfigureAwait(false), Is.EqualTo("1"));
+            Assert.That(await properties["b"].JsonValueAsync<string>().ConfigureAwait(false), Is.EqualTo("2"));
+        }
+
+        [PlaywrightTest("jshandle-properties.spec.ts", "getProperties should return own enumerable properties only")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public async Task GetPropertiesShouldReturnOwnEnumerablePropertiesOnly()
+        {
+            IJSHandle aHandle = await Page.EvaluateHandleAsync(@"() => {
+                class A {
+                    constructor() {
+                        this.own = 1;
+                        Object.defineProperty(this, 'ownHidden', { value: 2, enumerable: false });
+                    }
+                }
+                A.prototype.inherited = 3;
+                return new A();
+            }").ConfigureAwait(false);
+            Assert.That((await aHandle.GetPropertiesAsync().ConfigureAwait(false)).Keys, Is.EqualTo(new[] { "own" }));
+
+            await Page.SetContentAsync("<div id=d><span>a</span><span>b</span></div>").ConfigureAwait(false);
+            IJSHandle collection = await Page.EvaluateHandleAsync("() => document.querySelector('#d').children").ConfigureAwait(false);
+            Assert.That((await collection.GetPropertiesAsync().ConfigureAwait(false)).Keys, Is.EqualTo(new[] { "0", "1" }));
+        }
+
         [PlaywrightTest("jshandle-properties.spec.ts", "getProperties should work with elements")]
         [Test]
         [Timeout(30_000)]

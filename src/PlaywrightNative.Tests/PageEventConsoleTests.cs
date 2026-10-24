@@ -253,6 +253,32 @@ namespace PlaywrightNative.Tests
             }
         }
 
+        [PlaywrightTest("page-event-console.spec.ts", "should not fail for object that can't be coerced to a primitive")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public async Task ShouldNotFailForObjectThatCantBeCoercedToAPrimitive()
+        {
+            IConsoleMessage message = null;
+            void OnConsole(object sender, IConsoleMessage received)
+            {
+                Page.Console -= OnConsole;
+                message = received;
+            }
+
+            Page.Console += OnConsole;
+            await Task.WhenAll(
+                Page.EvaluateAsync<object>("() => console.log({ toString() { return {}; }, valueOf() { return {}; } })"),
+                Page.WaitForConsoleMessageAsync()).ConfigureAwait(false);
+            if (!TestConstants.IsFirefox)
+            {
+                Assert.That(message.Text, Does.Match(@"\{toString: (Function)?, valueOf: (Function)?\}"));
+            }
+            else
+            {
+                Assert.That(message.Text, Is.EqualTo("JSHandle@object"));
+            }
+        }
+
         [PlaywrightTest("page-event-console.spec.ts", "should trigger correct Log")]
         [Test]
         [Retry(2)]
