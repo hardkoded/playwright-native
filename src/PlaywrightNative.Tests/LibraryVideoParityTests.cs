@@ -18,7 +18,9 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
+using PlaywrightNative.Helpers;
 using PlaywrightNative.NUnit;
 using PlaywrightNative.TestServer;
 using SixLabors.ImageSharp;
@@ -28,8 +30,6 @@ namespace PlaywrightNative.Tests
 {
     /// <summary>
     /// Official <c>library/video.spec.ts</c> titles.
-    /// Skipped (Node <c>_channel.killForTests</c>):
-    /// <c>should throw if browser dies</c>.
     /// Do not edit leftover video classes.
     /// </summary>
     [TestFixture]
@@ -448,6 +448,47 @@ namespace PlaywrightNative.Tests
             }
         }
 
+        [PlaywrightTest("video.spec.ts", "should record video with the requested fps")]
+        [Test]
+        [Timeout(60_000)]
+        public async Task ShouldRecordVideoWithTheRequestedFps()
+        {
+            string dir = TempDir();
+            try
+            {
+                await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
+                IBrowserContext context = await browser.NewContextAsync(new BrowserNewContextOptions { RecordVideoDir = dir, RecordVideoFps = 60 }).ConfigureAwait(false);
+                IPage page = await context.NewPageAsync().ConfigureAwait(false);
+                await EnsureSomeFramesAsync(page).ConfigureAwait(false);
+                await context.CloseAsync().ConfigureAwait(false);
+                OfficialVideo.Probe probe = OfficialVideo.Read(await page.Video.PathAsync().ConfigureAwait(false));
+                Assert.That(probe.Fps, Is.EqualTo(60));
+            }
+            finally
+            {
+                TryDeleteDir(dir);
+            }
+        }
+
+        [PlaywrightTest("video.spec.ts", "should throw on invalid fps")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public async Task ShouldThrowOnInvalidFps()
+        {
+            string dir = TempDir();
+            try
+            {
+                await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
+                PlaywrightException error = Assert.ThrowsAsync<PlaywrightException>(
+                    () => browser.NewContextAsync(new BrowserNewContextOptions { RecordVideoDir = dir, RecordVideoFps = 0 }));
+                Assert.That(error.Message, Does.Contain("\"recordVideo.fps\" must be a positive number, got 0"));
+            }
+            finally
+            {
+                TryDeleteDir(dir);
+            }
+        }
+
         [PlaywrightTest("video.spec.ts", "should be 800x600 with null viewport")]
         [Test]
         [Timeout(60_000)]
@@ -565,6 +606,39 @@ namespace PlaywrightNative.Tests
 
                 Assert.That(saveResult, Is.Not.Null);
                 Assert.That(saveResult.Message, Does.Contain("browser has been closed"));
+            }
+            finally
+            {
+                TryDeleteDir(dir);
+            }
+        }
+
+        [PlaywrightTest("video.spec.ts", "should throw if browser dies")]
+        [Test]
+        [Timeout(60_000)]
+        public async Task ShouldThrowIfBrowserDies()
+        {
+            string dir = TempDir();
+            try
+            {
+                await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
+                IBrowserContext context = await browser.NewContextAsync(new() { RecordVideoDir = dir, RecordVideoSize = new RecordVideoSize { Width = 320, Height = 240 }, ViewportSize = new ViewportSize { Width = 320, Height = 240 } }).ConfigureAwait(false);
+                IPage page = await context.NewPageAsync().ConfigureAwait(false);
+                await EnsureSomeFramesAsync(page).ConfigureAwait(false);
+                await ((IHasKillForTests)browser).KillForTestsAsync().ConfigureAwait(false);
+                string file = Path.Combine(dir, "saved-video-");
+                Exception saveResult = null;
+                try
+                {
+                    await page.Video.SaveAsAsync(file).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    saveResult = ex;
+                }
+
+                Assert.That(saveResult, Is.Not.Null);
+                Assert.That(saveResult.Message, Does.Contain("rowser has been closed"));
             }
             finally
             {

@@ -54,6 +54,19 @@ namespace PlaywrightNative.Helpers
         }
 
         /// <summary>
+        /// Official <c>validateBrowserContextOptions</c>: <c>recordVideo.fps</c> must be positive.
+        /// </summary>
+        /// <param name="recordVideoFps">The requested frame rate, or <see langword="null"/>.</param>
+        internal static void ThrowIfInvalidRecordVideoFps(int? recordVideoFps)
+        {
+            if (recordVideoFps <= 0)
+            {
+                throw new PlaywrightException(
+                    $"\"recordVideo.fps\" must be a positive number, got {recordVideoFps}");
+            }
+        }
+
+        /// <summary>
         /// Official <c>normalizeProxySettings</c>: SOCKS4/5 cannot carry
         /// username/password.
         /// </summary>

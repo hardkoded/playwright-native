@@ -29,6 +29,8 @@ namespace PlaywrightNative.Helpers
     /// </summary>
     internal sealed class ScreencastVideoWriter
     {
+        private const int DefaultFps = 25;
+
         // 16x16 white JPEG; ffmpeg pad/crop expands to the recording size.
         private static readonly byte[] WhiteJpegFrame =
         {
@@ -67,6 +69,7 @@ namespace PlaywrightNative.Helpers
         private readonly string _path;
         private readonly int _width;
         private readonly int _height;
+        private readonly int _fps;
         private readonly object _gate = new();
         private Process _ffmpeg;
         private Task _stderrTask;
@@ -74,11 +77,12 @@ namespace PlaywrightNative.Helpers
         private int _frames;
         private bool _stopped;
 
-        private ScreencastVideoWriter(string path, int width, int height)
+        private ScreencastVideoWriter(string path, int width, int height, int fps)
         {
             _path = path;
             _width = width > 0 ? width & ~1 : 800;
             _height = height > 0 ? height & ~1 : 800;
+            _fps = fps;
         }
 
         /// <summary>
@@ -87,8 +91,9 @@ namespace PlaywrightNative.Helpers
         /// <param name="path">Destination <c>.webm</c> path.</param>
         /// <param name="width">Output width.</param>
         /// <param name="height">Output height.</param>
+        /// <param name="fps">Output frame rate, or <see langword="null"/> for the default 25.</param>
         /// <returns>The writer.</returns>
-        internal static ScreencastVideoWriter Start(string path, int width, int height)
+        internal static ScreencastVideoWriter Start(string path, int width, int height, int? fps = null)
         {
             if (string.IsNullOrEmpty(path))
             {
@@ -103,7 +108,7 @@ namespace PlaywrightNative.Helpers
 
             // Do not start ffmpeg here. Attach must always register IVideo;
             // a missing/broken ffmpeg must not leave page.Video null.
-            return new ScreencastVideoWriter(path, width, height);
+            return new ScreencastVideoWriter(path, width, height, fps ?? DefaultFps);
         }
 
         /// <summary>
@@ -300,12 +305,7 @@ namespace PlaywrightNative.Helpers
                 ProcessStartInfo startInfo = new()
                 {
                     FileName = FfmpegLocator.Resolve(),
-                    Arguments = string.Format(
-                        CultureInfo.InvariantCulture,
-                        "-y -f image2pipe -vcodec mjpeg -i pipe:0 -an -r 25 -c:v libvpx -qmin 0 -qmax 50 -crf 8 -deadline realtime -speed 8 -b:v 1M -threads 1 -vf pad={0}:{1}:0:0:white,crop={0}:{1}:0:0 \"{2}\"",
-                        _width,
-                        _height,
-                        _path),
+                    Arguments = ImagePipeArguments(),
                     RedirectStandardInput = true,
                     RedirectStandardError = true,
                     UseShellExecute = false,
@@ -372,10 +372,11 @@ namespace PlaywrightNative.Helpers
                         FileName = ffmpeg,
                         Arguments = string.Format(
                             CultureInfo.InvariantCulture,
-                            "-y -f lavfi -i color=c=white:s={0}x{1}:d=1 -an -r 25 -c:v libvpx -b:v 1M -pix_fmt yuv420p \"{2}\"",
+                            "-y -f lavfi -i color=c=white:s={0}x{1}:d=1 -an -r {3} -c:v libvpx -b:v 1M -pix_fmt yuv420p \"{2}\"",
                             _width,
                             _height,
-                            _path),
+                            _path,
+                            _fps),
                         RedirectStandardError = true,
                         UseShellExecute = false,
                         CreateNoWindow = true,
@@ -550,12 +551,7 @@ namespace PlaywrightNative.Helpers
             ProcessStartInfo startInfo = new()
             {
                 FileName = ffmpegPath,
-                Arguments = string.Format(
-                    CultureInfo.InvariantCulture,
-                    "-y -f image2pipe -vcodec mjpeg -i pipe:0 -an -r 25 -c:v libvpx -qmin 0 -qmax 50 -crf 8 -deadline realtime -speed 8 -b:v 1M -threads 1 -vf pad={0}:{1}:0:0:white,crop={0}:{1}:0:0 \"{2}\"",
-                    _width,
-                    _height,
-                    _path),
+                Arguments = ImagePipeArguments(),
                 RedirectStandardInput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,
@@ -633,6 +629,28 @@ namespace PlaywrightNative.Helpers
             {
                 return false;
             }
+        }
+
+        /// <summary>
+        /// Official <c>FfmpegVideoRecorder</c> arguments. "-b:v 1M" is the bitrate for
+        /// the default 800x450 video at 25fps. Bitrate and encoder threads scale with
+        /// the pixel rate: a single thread cannot keep up with 1920x1080 at 60fps, and
+        /// the 1M budget visibly blurs it.
+        /// </summary>
+        private string ImagePipeArguments()
+        {
+            double pixelRateScale = Math.Max(1, (double)_width * _height * _fps / (800 * 450 * DefaultFps));
+            long bitrate = (long)Math.Round(pixelRateScale * 1000);
+            int threads = Math.Min(8, (int)Math.Ceiling(pixelRateScale / 4));
+            return string.Format(
+                CultureInfo.InvariantCulture,
+                "-y -f image2pipe -vcodec mjpeg -i pipe:0 -an -r {3} -c:v libvpx -qmin 0 -qmax 50 -crf 8 -deadline realtime -speed 8 -b:v {4}k -threads {5} -vf pad={0}:{1}:0:0:white,crop={0}:{1}:0:0 \"{2}\"",
+                _width,
+                _height,
+                _path,
+                _fps,
+                bitrate,
+                threads);
         }
 
         private async Task DrainErrorAsync(Process process)

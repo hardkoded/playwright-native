@@ -217,6 +217,11 @@ namespace PlaywrightNative
         public RecordVideoSize RecordVideoSize { get; set; }
 
         /// <summary>
+        /// Optional video frame rate in frames per second. Defaults to 25.
+        /// </summary>
+        public int? RecordVideoFps { get; set; }
+
+        /// <summary>
         /// Path to the file with saved storage.
         /// </summary>
         public string StorageStatePath { get; set; }

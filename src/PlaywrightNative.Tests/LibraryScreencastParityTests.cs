@@ -286,6 +286,32 @@ namespace PlaywrightNative.Tests
             }
         }
 
+        [PlaywrightTest("screencast.spec.ts", "start should record video with the requested fps")]
+        [Test]
+        [Timeout(60_000)]
+        public async Task StartShouldRecordVideoWithTheRequestedFps()
+        {
+            await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
+            await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
+            IPage page = await context.NewPageAsync().ConfigureAwait(false);
+            string videoPath = OutputPath("video.webm");
+            await page.Screencast.StartAsync(new ScreencastStartOptions { Path = videoPath, Fps = 60 }).ConfigureAwait(false);
+            await EnsureSomeFramesAsync(page).ConfigureAwait(false);
+            await page.Screencast.StopAsync().ConfigureAwait(false);
+            Assert.That(OfficialVideo.Read(videoPath).Fps, Is.EqualTo(60));
+            await context.CloseAsync().ConfigureAwait(false);
+        }
+
+        [PlaywrightTest("screencast.spec.ts", "start should throw on invalid fps")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public void StartShouldThrowOnInvalidFps()
+        {
+            PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
+                () => Page.Screencast.StartAsync(new ScreencastStartOptions { Path = OutputPath("video.webm"), Fps = -1 }));
+            Assert.That(error.Message, Does.Contain("\"fps\" must be a positive number, got -1"));
+        }
+
         [PlaywrightTest("screencast.spec.ts", "start should fail when another recording is in progress")]
         [Test]
         [Timeout(TestConstants.DefaultTestTimeout)]

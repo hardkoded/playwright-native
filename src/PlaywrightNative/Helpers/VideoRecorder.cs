@@ -43,7 +43,8 @@ namespace PlaywrightNative.Helpers
         /// <param name="recordVideoDir">Destination directory, or <see langword="null"/>.</param>
         /// <param name="recordVideoSize">Optional frame size.</param>
         /// <param name="viewport">Context viewport used for the official default size.</param>
-        internal static void Start(IBrowserContext context, string recordVideoDir, RecordVideoSize recordVideoSize, ViewportSize viewport = null)
+        /// <param name="fps">Optional frame rate, or <see langword="null"/> for the default.</param>
+        internal static void Start(IBrowserContext context, string recordVideoDir, RecordVideoSize recordVideoSize, ViewportSize viewport = null, int? fps = null)
         {
             if (context == null || string.IsNullOrEmpty(recordVideoDir))
             {
@@ -57,7 +58,7 @@ namespace PlaywrightNative.Helpers
             }
 
             Directory.CreateDirectory(recordVideoDir);
-            Sessions.Add(context, new Session(context, recordVideoDir, VideoSize.Resolve(recordVideoSize, viewport)));
+            Sessions.Add(context, new Session(context, recordVideoDir, VideoSize.Resolve(recordVideoSize, viewport), fps));
         }
 
         /// <summary>
@@ -125,14 +126,16 @@ namespace PlaywrightNative.Helpers
             private readonly IBrowserContext _context;
             private readonly string _directory;
             private readonly RecordVideoSize _size;
+            private readonly int? _fps;
             private readonly ConcurrentDictionary<IPage, PageRecording> _recordings = new();
             private bool _detached;
 
-            internal Session(IBrowserContext context, string directory, RecordVideoSize size)
+            internal Session(IBrowserContext context, string directory, RecordVideoSize size, int? fps)
             {
                 _context = context;
                 _directory = directory;
                 _size = size;
+                _fps = fps;
                 _context.Page += OnPage;
                 foreach (IPage page in _context.Pages)
                 {
@@ -196,7 +199,7 @@ namespace PlaywrightNative.Helpers
                 }
 
                 string path = Path.Combine(Path.GetFullPath(_directory), Guid.NewGuid().ToString("N") + ".webm");
-                PageRecording recording = new(page, path, _size);
+                PageRecording recording = new(page, path, _size, _fps);
                 if (!_recordings.TryAdd(page, recording))
                 {
                     return;
@@ -322,12 +325,12 @@ namespace PlaywrightNative.Helpers
             private Task _stopTask;
             private Task _deliverChain = Task.CompletedTask;
 
-            internal PageRecording(IPage page, string path, RecordVideoSize size)
+            internal PageRecording(IPage page, string path, RecordVideoSize size, int? fps)
             {
                 _page = page;
                 _size = size;
                 _video = new PageVideo(page, path);
-                _writer = ScreencastVideoWriter.Start(path, size.Width, size.Height);
+                _writer = ScreencastVideoWriter.Start(path, size.Width, size.Height, fps);
             }
 
             internal IVideo Video => _video;

@@ -41,7 +41,7 @@ namespace PlaywrightNative.WebKit
     /// sent with the <see cref="WKConnection.BrowserCloseMessageId"/> sentinel id so
     /// the response is discarded.
     /// </remarks>
-    internal sealed partial class WKBrowser : IBrowser, IHasPlaywrightLogger, IHasLaunchProxy, IHasTracesDir, IHasArtifactsDir
+    internal sealed partial class WKBrowser : IBrowser, IHasPlaywrightLogger, IHasLaunchProxy, IHasTracesDir, IHasArtifactsDir, IHasKillForTests
     {
         private readonly WKConnection _connection;
         private readonly BrowserProcessManager _processManager;
@@ -198,7 +198,8 @@ namespace PlaywrightNative.WebKit
                 recordVideoDir: options.RecordVideoDir,
                 recordVideoSize: options.RecordVideoSize,
                 strictSelectors: options.StrictSelectors,
-                clientCertificates: options.ClientCertificates).ConfigureAwait(false);
+                clientCertificates: options.ClientCertificates,
+                recordVideoFps: options.RecordVideoFps).ConfigureAwait(false);
 
             if (created is IHasPlaywrightLogger has)
             {
@@ -245,7 +246,8 @@ namespace PlaywrightNative.WebKit
             HarContentPolicy recordHarContent = EnumCompat.UndefinedHarContentPolicy,
             Regex recordHarUrlRegex = default,
             bool? strictSelectors = default,
-            IEnumerable<ClientCertificate> clientCertificates = default)
+            IEnumerable<ClientCertificate> clientCertificates = default,
+            int? recordVideoFps = default)
         {
             return await PlaywrightApiLog.RunAsync(Logger, "browser.newContext", async () =>
             {
@@ -253,6 +255,7 @@ namespace PlaywrightNative.WebKit
                 proxy ??= LaunchProxy;
                 BrowserContextOptionGuard.ThrowIfNullViewportConflicts(viewportSize, deviceScaleFactor, isMobile);
                 BrowserContextOptionGuard.ThrowIfInvalidProxy(proxy);
+                BrowserContextOptionGuard.ThrowIfInvalidRecordVideoFps(recordVideoFps);
                 extraHTTPHeaders = ProxySettings.WithProxyAuthorization(proxy, extraHTTPHeaders);
                 ClientCertificatesProxy certsProxy = ClientCertificatesProxy.TryStart(
                     clientCertificates,
@@ -358,7 +361,7 @@ namespace PlaywrightNative.WebKit
                 await context.ApplyEphemeralStorageShimsAsync().ConfigureAwait(false);
                 await StorageStateHelper.ApplyAsync(context, storageState, storageStatePath).ConfigureAwait(false);
                 HarRecorder.Start(context, recordHarPath, recordHarOmitContent, recordHarUrl, recordHarMode, recordHarContent, recordHarUrlRegex);
-                VideoRecorder.Start(context, recordVideoDir, recordVideoSize, viewportSize);
+                VideoRecorder.Start(context, recordVideoDir, recordVideoSize, viewportSize, recordVideoFps);
                 await ServiceWorkerPolicyHelper.ApplyAsync(context, serviceWorkers).ConfigureAwait(false);
                 Context?.Invoke(this, context);
                 context.Logger = Logger;
@@ -563,6 +566,20 @@ namespace PlaywrightNative.WebKit
             CloseRemainingPages();
 
             RaiseDisconnected();
+        }
+
+        /// <inheritdoc/>
+        async Task IHasKillForTests.KillForTestsAsync()
+        {
+            if (!IsConnected)
+            {
+                return;
+            }
+
+            TaskCompletionSource<bool> disconnected = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            Disconnected += (_, _) => disconnected.TrySetResult(true);
+            await _processManager.KillAsync().ConfigureAwait(false);
+            await disconnected.Task.ConfigureAwait(false);
         }
 
         /// <inheritdoc/>
@@ -993,6 +1010,9 @@ namespace PlaywrightNative.WebKit
             foreach (WKPage page in _pages.Values)
             {
                 page.WKContext?.RemovePage(page);
+
+                // Official browser.didClose: downloads still in flight fail with TargetClosedError.
+                page.AbortDownloads(DriverMessages.BrowserOrContextClosedExceptionMessage);
                 page.DidClose();
             }
 

@@ -26,6 +26,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
 using NUnit.Framework;
+using PlaywrightNative.Helpers;
 using PlaywrightNative.NUnit;
 using PlaywrightNative.TestServer;
 
@@ -35,8 +36,6 @@ namespace PlaywrightNative.Tests
     /// Official <c>library/download.spec.ts</c> parity.
     /// Do not edit leftover <c>PageDownloadTests</c>,
     /// <c>ContextDownload*</c>, or <c>Launch*Download*</c>.
-    /// Official skip (Node-only <c>_channel.killForTests</c>):
-    /// <c>should throw if browser dies</c>.
     /// </summary>
     [TestFixture]
     [NonParallelizable]
@@ -670,6 +669,35 @@ namespace PlaywrightNative.Tests
                     "download.saveAs: " + TargetClosedErrorMessage,
                 },
                 Does.Contain(saveError.Message));
+        }
+
+        [PlaywrightTest("download.spec.ts", "should throw if browser dies")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public async Task ShouldThrowIfBrowserDies()
+        {
+            EnsureServer();
+            if (TestConstants.IsWebKit && IsLinux)
+            {
+                Assert.Ignore("WebKit on linux does not convert to the download immediately upon receiving headers");
+            }
+
+            SetStallRoute(Server, "/downloadStall");
+            await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
+            IPage page = await browser.NewPageAsync().ConfigureAwait(false);
+            await page.SetContentAsync("<a href=\"" + Prefix + "/downloadStall\">click me</a>").ConfigureAwait(false);
+            IDownload download = await ClickDownloadAsync(page).ConfigureAwait(false);
+            Task<Exception> downloadErrorTask = CatchAsync(() => download.PathAsync());
+            Task<Exception> saveErrorTask = CatchAsync(() => download.SaveAsAsync(OutputPath("download.txt")));
+            Task killTask = ((IHasKillForTests)browser).KillForTestsAsync();
+            await Task.WhenAll(downloadErrorTask, saveErrorTask, killTask).ConfigureAwait(false);
+            Exception downloadError = await downloadErrorTask.ConfigureAwait(false);
+            Exception saveError = await saveErrorTask.ConfigureAwait(false);
+            Assert.That(downloadError, Is.Not.Null);
+            Assert.That(downloadError.Message, Is.EqualTo("download.path: " + TargetClosedErrorMessage));
+            Assert.That(saveError, Is.Not.Null);
+            Assert.That(saveError.Message, Does.Contain("download.saveAs: " + TargetClosedErrorMessage));
+            await browser.CloseAsync().ConfigureAwait(false);
         }
 
         [PlaywrightTest("download.spec.ts", "should download large binary.zip")]
