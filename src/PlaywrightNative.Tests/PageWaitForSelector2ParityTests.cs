@@ -41,6 +41,10 @@ namespace PlaywrightNative.Tests
     [TestFixture]
     public class PageWaitForSelector2ParityTests : PageTestEx
     {
+        private const string NodeAdoptionHookReason =
+            "Node-only: drives the server-side __testHookBeforeAdoptNode between the utility-world match "
+            + "and its adoption into the main world. waitForSelector here polls the main world and has no adoption step.";
+
         private const string AddElement = "tag => document.body.appendChild(document.createElement(tag))";
 
         private static SimpleServer _ownedServer;
@@ -620,6 +624,22 @@ namespace PlaywrightNative.Tests
   ").ConfigureAwait(false);
             Assert.That(await page.TextContentAsync("div").ConfigureAwait(false), Is.EqualTo("Find me"));
             await page.WaitForSelectorAsync("div", WaitForSelectorState.Hidden).ConfigureAwait(false);
+        }
+
+        [PlaywrightTest("page-wait-for-selector-2.spec.ts", "should work when navigating before node adoption")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public void ShouldWorkWhenNavigatingBeforeNodeAdoption()
+        {
+            Assert.Ignore(NodeAdoptionHookReason);
+        }
+
+        [PlaywrightTest("page-wait-for-selector-2.spec.ts", "should fail when navigating while on handle")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public void ShouldFailWhenNavigatingWhileOnHandle()
+        {
+            Assert.Ignore(NodeAdoptionHookReason);
         }
 
         [PlaywrightTest("page-wait-for-selector-2.spec.ts", "should fail if element handle was detached while waiting")]

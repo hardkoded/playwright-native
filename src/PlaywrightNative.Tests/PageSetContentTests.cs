@@ -26,7 +26,7 @@ namespace PlaywrightNative.Tests
 {
     /// <summary>
     /// Official <c>page-set-content.spec.ts</c>.
-    /// Skipped (not implemented):
+    /// Skipped (Node-only internals):
     /// <c>should handle timeout properly</c> (needs toImpl utility-world console.debug tamper);
     /// <c>should handle timeout properly 2</c> (needs toImpl document.close infinite loop).
     /// </summary>
@@ -130,6 +130,25 @@ namespace PlaywrightNative.Tests
             await page.SetContentAsync(doctype + "<div>hello</div>").ConfigureAwait(false);
             string result = await page.ContentAsync().ConfigureAwait(false);
             Assert.That(result, Is.EqualTo(doctype + ExpectedHtml));
+        }
+
+        [PlaywrightTest("page-set-content.spec.ts", "should include shadow roots")]
+        [Test]
+        [Timeout(30_000)]
+        public async Task ShouldIncludeShadowRoots()
+        {
+            await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
+            await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
+            IPage page = await context.NewPageAsync().ConfigureAwait(false);
+
+            const string html = "<!DOCTYPE html><html lang=\"en\"><head></head><body><div id=\"host\"><template shadowrootmode=\"open\"><div id=\"nested\"><template shadowrootmode=\"open\"><span>nested</span></template><slot></slot></div></template><span>light</span></div><div id=\"closed\"></div></body></html>";
+
+            // Closed shadow roots are not accessible from script and are never serialized.
+            await page.SetContentAsync(html.Replace("<div id=\"closed\">", "<div id=\"closed\"><template shadowrootmode=\"closed\"><span>closed</span></template>", StringComparison.Ordinal)).ConfigureAwait(false);
+            Assert.That(
+                await page.ContentAsync().ConfigureAwait(false),
+                Is.EqualTo("<!DOCTYPE html><html lang=\"en\"><head></head><body><div id=\"host\"><span>light</span></div><div id=\"closed\"></div></body></html>"));
+            Assert.That(await page.ContentAsync(new() { IncludeShadow = true }).ConfigureAwait(false), Is.EqualTo(html));
         }
 
         [PlaywrightTest("page-set-content.spec.ts", "should respect timeout")]
@@ -321,6 +340,24 @@ namespace PlaywrightNative.Tests
             IFrame child = page.MainFrame.ChildFrames.First();
             string content = await child.ContentAsync().ConfigureAwait(false);
             Assert.That(content, Is.EqualTo(EmptyHtml));
+        }
+
+        [PlaywrightTest("page-set-content.spec.ts", "should handle timeout properly")]
+        [Test]
+        [Timeout(30_000)]
+        public void ShouldHandleTimeoutProperly()
+        {
+            Assert.Ignore("Node-only: toImpl(page).mainFrame().evaluateExpression tampers console.debug in the server utility world. "
+                + "SetContent here does not use a persistent utility world or the console.debug tag.");
+        }
+
+        [PlaywrightTest("page-set-content.spec.ts", "should handle timeout properly 2")]
+        [Test]
+        [Timeout(30_000)]
+        public void ShouldHandleTimeoutProperly2()
+        {
+            Assert.Ignore("Node-only: toImpl(page).mainFrame().evaluateExpression replaces document.close in the server utility world. "
+                + "SetContent here does not use a persistent utility world.");
         }
     }
 }

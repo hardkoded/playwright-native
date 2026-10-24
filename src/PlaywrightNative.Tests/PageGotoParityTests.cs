@@ -19,6 +19,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Text;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
@@ -40,6 +41,10 @@ namespace PlaywrightNative.Tests
     [NonParallelizable]
     public class PageGotoParityTests : PageTestEx
     {
+        private const string NodeListenerLeakReason =
+            "Node-only: asserts no MaxListenersExceededWarning on process.on('warning'). "
+            + ".NET events have no listener cap or leak warning.";
+
         private static SimpleServer _ownedServer;
         private static SimpleServer _ownedHttps;
         private static string Prefix = TestConstants.ServerUrl;
@@ -460,6 +465,18 @@ namespace PlaywrightNative.Tests
             Assert.That(requests.Count, Is.EqualTo(1));
             Assert.That(response.Request.Failure, Is.Null.Or.Empty);
         }
+
+        [PlaywrightTest("page-goto.spec.ts", "should work with Cross-Origin-Opener-Policy and history state")]
+        [Test]
+        [Timeout(30_000)]
+        public Task ShouldWorkWithCrossOriginOpenerPolicyAndHistoryState()
+            => CrossOriginOpenerPolicyHistoryStateAsync(crossOriginEmbedderPolicy: null);
+
+        [PlaywrightTest("page-goto.spec.ts", "should work with Cross-Origin-Opener-Policy and Cross-Origin-Embedder-Policy and history state")]
+        [Test]
+        [Timeout(30_000)]
+        public Task ShouldWorkWithCrossOriginOpenerPolicyAndCrossOriginEmbedderPolicyAndHistoryState()
+            => CrossOriginOpenerPolicyHistoryStateAsync(crossOriginEmbedderPolicy: "require-corp");
 
         [PlaywrightTest("page-goto.spec.ts", "should work with Cross-Origin-Opener-Policy and interception")]
         [Test]
@@ -1252,6 +1269,30 @@ namespace PlaywrightNative.Tests
             Assert.That(response.Url, Is.EqualTo(EmptyPage));
         }
 
+        [PlaywrightTest("page-goto.spec.ts", "should not leak listeners during navigation")]
+        [Test]
+        [Timeout(30_000)]
+        public void ShouldNotLeakListenersDuringNavigation()
+        {
+            Assert.Ignore(NodeListenerLeakReason);
+        }
+
+        [PlaywrightTest("page-goto.spec.ts", "should not leak listeners during bad navigation")]
+        [Test]
+        [Timeout(30_000)]
+        public void ShouldNotLeakListenersDuringBadNavigation()
+        {
+            Assert.Ignore(NodeListenerLeakReason);
+        }
+
+        [PlaywrightTest("page-goto.spec.ts", "should not leak listeners during 20 waitForNavigation")]
+        [Test]
+        [Timeout(30_000)]
+        public void ShouldNotLeakListenersDuring20WaitForNavigation()
+        {
+            Assert.Ignore(NodeListenerLeakReason);
+        }
+
         [PlaywrightTest("page-goto.spec.ts", "should navigate to dataURL and not fire dataURL requests")]
         [Test]
         [Timeout(30_000)]
@@ -1692,6 +1733,37 @@ namespace PlaywrightNative.Tests
             IPage page = await context.NewPageAsync().ConfigureAwait(false);
             await page.GoToAsync(url).ConfigureAwait(false);
             Assert.That(page.Url, Is.EqualTo(url));
+        }
+
+        private async Task CrossOriginOpenerPolicyHistoryStateAsync(string crossOriginEmbedderPolicy)
+        {
+            // https://github.com/microsoft/playwright/issues/42731
+            EnsureServer();
+            Server.SetRoute("/empty.html", async http =>
+            {
+                http.Response.Headers["Cross-Origin-Opener-Policy"] = "same-origin";
+                if (crossOriginEmbedderPolicy != null)
+                {
+                    http.Response.Headers["Cross-Origin-Embedder-Policy"] = crossOriginEmbedderPolicy;
+                }
+
+                await http.Response.WriteAsync(@"
+        <!doctype html>
+        <h1>hello</h1>
+        <script type=""module"">history.replaceState({ key: 1 }, '', location.href);</script>
+      ").ConfigureAwait(false);
+            });
+
+            await using IBrowser browser = await BrowserLauncher.LaunchAsync().ConfigureAwait(false);
+            await using IBrowserContext context = await browser.NewContextAsync().ConfigureAwait(false);
+            IPage page = await context.NewPageAsync().ConfigureAwait(false);
+
+            IResponse response = await page.GoToAsync(EmptyPage).ConfigureAwait(false);
+            Assert.That(response.Status, Is.EqualTo(200));
+            Assert.That(page.Url, Is.EqualTo(EmptyPage));
+            JsonElement state = await page.EvaluateAsync<JsonElement>("() => history.state").ConfigureAwait(false);
+            Assert.That(state.GetRawText(), Is.EqualTo("{\"key\":1}"));
+            await Assertions.Expect(page.Locator("h1")).ToHaveTextAsync("hello").ConfigureAwait(false);
         }
     }
 }

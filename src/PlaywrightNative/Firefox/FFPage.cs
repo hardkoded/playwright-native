@@ -20,6 +20,7 @@ using System.Collections.Generic;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
+using PlaywrightNative.Helpers;
 
 namespace PlaywrightNative.Firefox
 {
@@ -372,19 +373,9 @@ namespace PlaywrightNative.Firefox
         /// <summary>
         /// Returns the full HTML content of the page.
         /// </summary>
-        internal async Task<string> ContentAsync()
-        {
-            return await EvaluateFunctionAsync<string>(@"() => {
-                let retVal = '';
-                if (document.doctype) {
-                    retVal = new XMLSerializer().serializeToString(document.doctype);
-                }
-                if (document.documentElement) {
-                    retVal += document.documentElement.outerHTML;
-                }
-                return retVal;
-            }").ConfigureAwait(false);
-        }
+        /// <param name="includeShadow">Whether to serialize open shadow roots as declarative shadow DOM.</param>
+        internal Task<string> ContentAsync(bool includeShadow = false)
+            => EvaluateFunctionAsync<string>("() => " + PageContent.Expression(includeShadow));
 
         /// <summary>
         /// Sets the page HTML content.

@@ -984,6 +984,11 @@ namespace PlaywrightNative.Firefox
             throw NotImplementedHelper.ForMethod(nameof(DragAndDropAsync));
         }
 
+        /// <summary>Returns the page HTML, optionally including open shadow roots.</summary>
+        /// <param name="includeShadow">Whether to serialize open shadow roots as declarative shadow DOM.</param>
+        /// <returns>The serialized document HTML.</returns>
+        internal Task<string> ContentAsync(bool includeShadow) => _page.ContentAsync(includeShadow);
+
         private async Task PauseInternalAsync()
         {
             int timeoutMs = TimeoutSettings.TimeoutMs(DefaultTimeout);

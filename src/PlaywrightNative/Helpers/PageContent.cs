@@ -43,11 +43,50 @@ namespace PlaywrightNative.Helpers
             })()";
 
         /// <summary>
+        /// JavaScript for official <c>page.content({ includeShadow: true })</c>
+        /// (<c>injectedScript.documentContent</c>): open shadow roots are serialized as
+        /// declarative shadow DOM via <c>getHTML({ shadowRoots })</c>.
+        /// </summary>
+        internal const string EvaluateWithShadowExpression =
+            @"(() => {
+                let content = '';
+                if (document.doctype) {
+                    content = new XMLSerializer().serializeToString(document.doctype);
+                }
+                const root = document.documentElement;
+                if (!root) {
+                    return content;
+                }
+                const shadowRoots = [];
+                const collectShadowRoots = node => {
+                    for (const element of node.querySelectorAll('*')) {
+                        if (element.shadowRoot) {
+                            shadowRoots.push(element.shadowRoot);
+                            collectShadowRoots(element.shadowRoot);
+                        }
+                    }
+                };
+                collectShadowRoots(document);
+                // getHTML() serializes children only, wrap them with the root element tags.
+                const emptyRoot = root.cloneNode(false).outerHTML;
+                const endTagIndex = emptyRoot.lastIndexOf('</');
+                return content + emptyRoot.slice(0, endTagIndex) + root.getHTML({ shadowRoots }) + emptyRoot.slice(endTagIndex);
+            })()";
+
+        /// <summary>
         /// Official message when <c>content()</c> is evaluated while the document is
         /// being replaced by a navigation.
         /// </summary>
         internal const string NavigationError =
             "Unable to retrieve content because the page is navigating and changing the content.";
+
+        /// <summary>
+        /// Picks the content expression for <paramref name="includeShadow"/>.
+        /// </summary>
+        /// <param name="includeShadow">Whether to serialize open shadow roots.</param>
+        /// <returns>The JavaScript expression.</returns>
+        internal static string Expression(bool includeShadow)
+            => includeShadow ? EvaluateWithShadowExpression : EvaluateExpression;
 
         /// <summary>
         /// Runs <paramref name="evaluateAsync"/> and rewrites retriable evaluation
