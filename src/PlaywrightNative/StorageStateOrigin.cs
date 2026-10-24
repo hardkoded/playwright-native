@@ -38,12 +38,21 @@ namespace PlaywrightNative
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
         public JsonElement IndexedDB { get; set; }
 
+        /// <summary>
+        /// Origin Private File System entries for this origin, when collected
+        /// with OPFS enabled. Omitted from JSON when <see langword="null"/>.
+        /// </summary>
+        [JsonPropertyName("opfs")]
+        public ICollection<StorageStateOpfsEntry> Opfs { get; set; }
+
         /// <inheritdoc/>
         public bool Equals(StorageStateOrigin other)
         {
             if (other == null
                 || Origin != other.Origin
-                || !LocalStorage.SequenceEqual(other.LocalStorage))
+                || !LocalStorage.SequenceEqual(other.LocalStorage)
+                || (Opfs == null) != (other.Opfs == null)
+                || (Opfs != null && !Opfs.SequenceEqual(other.Opfs)))
             {
                 return false;
             }

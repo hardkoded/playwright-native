@@ -143,9 +143,15 @@ namespace PlaywrightNative
                 Headers = headers,
             });
 
-        /// <summary>Legacy storage state path string.</summary>
-        public static Task<string> StorageStateAsync(this IAPIRequestContext context, string path)
-            => context.StorageStateAsync(new APIRequestContextStorageStateOptions { Path = path });
+        /// <summary>Legacy storage state with path, indexed DB, and OPFS flags.</summary>
+        public static Task<string> StorageStateAsync(
+            this IAPIRequestContext context,
+            string path = default,
+            bool? indexedDB = default,
+            bool? opfs = default)
+            => context is APIRequestContext sharp
+                ? sharp.StorageStateAsync(path, indexedDB, opfs)
+                : context.StorageStateAsync(new APIRequestContextStorageStateOptions { Path = path, IndexedDB = indexedDB });
 
         /// <summary>Legacy GET with headers.</summary>
         public static Task<IAPIResponse> GetAsync(

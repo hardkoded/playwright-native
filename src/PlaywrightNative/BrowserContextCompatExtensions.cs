@@ -217,21 +217,22 @@ namespace PlaywrightNative
         public static Task<string> StorageStateAsync(this IBrowserContext context, bool credentials)
             => StorageStateAsync(context, path: null, indexedDB: null, credentials: credentials);
 
-        /// <summary>Legacy storage state with path, indexed DB, and credentials flags.</summary>
+        /// <summary>Legacy storage state with path, indexed DB, credentials, and OPFS flags.</summary>
         public static Task<string> StorageStateAsync(
             this IBrowserContext context,
             string path = default,
             bool? indexedDB = default,
-            bool? credentials = default)
+            bool? credentials = default,
+            bool? opfs = default)
         {
             switch (context)
             {
                 case ChromiumBrowserContext chromium:
-                    return chromium.StorageStateAsync(path, indexedDB, credentials);
+                    return chromium.StorageStateAsync(path, indexedDB, credentials, opfs);
                 case FirefoxBrowserContext firefox:
-                    return firefox.StorageStateAsync(path, indexedDB, credentials);
+                    return firefox.StorageStateAsync(path, indexedDB, credentials, opfs);
                 case WKBrowserContext webkit:
-                    return webkit.StorageStateAsync(path, indexedDB, credentials);
+                    return webkit.StorageStateAsync(path, indexedDB, credentials, opfs);
                 default:
                     return context.StorageStateAsync(new BrowserContextStorageStateOptions
                     {

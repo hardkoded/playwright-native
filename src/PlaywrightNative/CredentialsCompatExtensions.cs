@@ -34,15 +34,25 @@ namespace PlaywrightNative
             string id = default,
             string userHandle = default,
             string privateKey = default,
-            string publicKey = default)
+            string publicKey = default,
+            long? signCount = default)
         {
             if (credentials is not ContextCredentials sharp)
             {
                 throw new NotSupportedException("This credentials object does not support PlaywrightNative extensions.");
             }
 
-            return sharp.CreateAsync(rpId, id, userHandle, privateKey, publicKey);
+            return sharp.CreateAsync(rpId, id, userHandle, privateKey, publicKey, signCount);
         }
+
+        /// <summary>
+        /// Gets the signature counter of <paramref name="credential"/>. Each
+        /// assertion increments it.
+        /// </summary>
+        /// <param name="credential">A credential returned by <see cref="ICredentials"/>.</param>
+        /// <returns>The current signature counter.</returns>
+        public static long GetSignCount(this VirtualCredential credential)
+            => VirtualCredentialExtras.GetSignCount(credential);
 
         /// <summary>Legacy get by rpId.</summary>
         public static Task<IReadOnlyList<VirtualCredential>> GetAsync(this ICredentials credentials, string rpId)

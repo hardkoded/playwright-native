@@ -510,8 +510,8 @@ namespace PlaywrightNative.Chromium
             => GetCookiesAsync(urls);
 
         /// <inheritdoc/>
-        public Task<string> StorageStateAsync(string path = default, bool? indexedDB = default, bool? credentials = default)
-            => StorageStateHelper.ExportAsync(this, path, indexedDB == true, credentials == true);
+        public Task<string> StorageStateAsync(string path = default, bool? indexedDB = default, bool? credentials = default, bool? opfs = default)
+            => StorageStateHelper.ExportAsync(this, path, indexedDB == true, credentials == true, opfs == true);
 
         /// <inheritdoc/>
         public async Task GrantPermissionsAsync(IEnumerable<string> permissions, string origin = default)
@@ -547,6 +547,13 @@ namespace PlaywrightNative.Chromium
             // returned page is immediately usable (GoToAsync depends on lifecycle
             // wiring that InitializedTask gates on).
             await crPage.InitializedTask.ConfigureAwait(false);
+
+            // Official crPage: the storage state page must not be served by the
+            // origin's service worker, or it collects/restores the wrong document.
+            if (_creatingStorageStatePage)
+            {
+                await crPage.Session.SendAsync("Network.setBypassServiceWorker", new { bypass = true }).ConfigureAwait(false);
+            }
 
             Page directPage = GetOrCreatePage(crPage);
             await ApplyContextChromeAsync(directPage).ConfigureAwait(false);

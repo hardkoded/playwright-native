@@ -18,7 +18,9 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using NUnit.Framework;
 using PlaywrightNative.NUnit;
 using PlaywrightNative.TestServer;
@@ -112,6 +114,15 @@ namespace PlaywrightNative.Tests
                 publicKey: { challenge, rpId, userVerification: 'preferred' },
             });
             return cred.id;
+        }";
+
+        private const string SignCountScript = @"async ({ rpId }) => {
+            const challenge = crypto.getRandomValues(new Uint8Array(32));
+            const cred = await navigator.credentials.get({
+                publicKey: { challenge, rpId, userVerification: 'preferred' },
+            });
+            const resp = cred.response;
+            return new DataView(resp.authenticatorData).getUint32(33);
         }";
 
         private static SimpleServer _ownedServer;
@@ -311,6 +322,121 @@ namespace PlaywrightNative.Tests
             Assert.That(gotId, Is.EqualTo(createdId));
             await context.CloseAsync().ConfigureAwait(false);
             await setupContext.CloseAsync().ConfigureAwait(false);
+        }
+
+        [PlaywrightTest("browsercontext-webauthn.spec.ts", "should seed and report signCount")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public async Task ShouldSeedAndReportSignCount()
+        {
+            EnsureServer();
+            IBrowserContext context = await _browser.NewContextAsync().ConfigureAwait(false);
+            VirtualCredential fresh = await context.Credentials.CreateAsync("fresh.example.com").ConfigureAwait(false);
+            Assert.That(fresh.GetSignCount(), Is.EqualTo(0));
+
+            VirtualCredential seeded = await context.Credentials.CreateAsync(Hostname, signCount: 41).ConfigureAwait(false);
+            Assert.That(seeded.GetSignCount(), Is.EqualTo(41));
+            await context.Credentials.InstallAsync().ConfigureAwait(false);
+            IPage page = await context.NewPageAsync().ConfigureAwait(false);
+            await page.GoToAsync(EmptyPage).ConfigureAwait(false);
+
+            // Each assertion increments the counter and reports the new value to the page.
+            Assert.That(await AssertAndGetSignCountAsync(page, Hostname).ConfigureAwait(false), Is.EqualTo(42));
+            Assert.That(await AssertAndGetSignCountAsync(page, Hostname).ConfigureAwait(false), Is.EqualTo(43));
+            IReadOnlyList<VirtualCredential> seededList = await context.Credentials.GetAsync(new() { Id = seeded.Id }).ConfigureAwait(false);
+            Assert.That(seededList, Has.Exactly(1).Items);
+            AssertCredential(seededList[0], seeded, 43);
+            IReadOnlyList<VirtualCredential> freshList = await context.Credentials.GetAsync(new() { Id = fresh.Id }).ConfigureAwait(false);
+            Assert.That(freshList, Has.Exactly(1).Items);
+            AssertCredential(freshList[0], fresh, 0);
+
+            // A captured credential continues from the same counter in another context.
+            VirtualCredential captured = (await context.Credentials.GetAsync(new() { Id = seeded.Id }).ConfigureAwait(false))[0];
+            IBrowserContext context2 = await _browser.NewContextAsync().ConfigureAwait(false);
+            await context2.Credentials.CreateAsync(captured.RpId, captured.Id, captured.UserHandle, captured.PrivateKey, captured.PublicKey, captured.GetSignCount()).ConfigureAwait(false);
+            await context2.Credentials.InstallAsync().ConfigureAwait(false);
+            IPage page2 = await context2.NewPageAsync().ConfigureAwait(false);
+            await page2.GoToAsync(EmptyPage).ConfigureAwait(false);
+            Assert.That(await AssertAndGetSignCountAsync(page2, Hostname).ConfigureAwait(false), Is.EqualTo(44));
+            await context2.CloseAsync().ConfigureAwait(false);
+            await context.CloseAsync().ConfigureAwait(false);
+        }
+
+        [PlaywrightTest("browsercontext-webauthn.spec.ts", "should reject invalid signCount")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public async Task ShouldRejectInvalidSignCount()
+        {
+            IBrowserContext context = await _browser.NewContextAsync().ConfigureAwait(false);
+            PlaywrightException error = Assert.ThrowsAsync<PlaywrightException>(
+                () => context.Credentials.CreateAsync("example.com", signCount: -1));
+            Assert.That(error.Message, Does.Contain("signCount must be between 0 and 4294967295, got -1"));
+            Assert.That(await context.Credentials.GetAsync().ConfigureAwait(false), Is.Empty);
+            await context.CloseAsync().ConfigureAwait(false);
+        }
+
+        [PlaywrightTest("browsercontext-webauthn.spec.ts", "should preserve signCount via the storageState option")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public async Task ShouldPreserveSignCountViaTheStorageStateOption()
+        {
+            EnsureServer();
+            IBrowserContext setupContext = await _browser.NewContextAsync().ConfigureAwait(false);
+            await setupContext.Credentials.CreateAsync(Hostname).ConfigureAwait(false);
+            await setupContext.Credentials.InstallAsync().ConfigureAwait(false);
+            IPage setupPage = await setupContext.NewPageAsync().ConfigureAwait(false);
+            await setupPage.GoToAsync(EmptyPage).ConfigureAwait(false);
+            Assert.That(await AssertAndGetSignCountAsync(setupPage, Hostname).ConfigureAwait(false), Is.EqualTo(1));
+
+            string storageState = await setupContext.StorageStateAsync(credentials: true).ConfigureAwait(false);
+            VirtualCredential captured = (await setupContext.Credentials.GetAsync().ConfigureAwait(false))[0];
+            Assert.That(captured.GetSignCount(), Is.EqualTo(1));
+            JsonObject expected = new JsonObject
+            {
+                ["cookies"] = new JsonArray(),
+                ["origins"] = new JsonArray(),
+                ["credentials"] = new JsonArray(new JsonObject
+                {
+                    ["id"] = captured.Id,
+                    ["rpId"] = captured.RpId,
+                    ["userHandle"] = captured.UserHandle,
+                    ["privateKey"] = captured.PrivateKey,
+                    ["publicKey"] = captured.PublicKey,
+                    ["signCount"] = captured.GetSignCount(),
+                }),
+            };
+            Assert.That(JsonNode.DeepEquals(expected, JsonNode.Parse(storageState)), Is.True, storageState);
+
+            IBrowserContext context = await _browser.NewContextAsync(new() { StorageState = storageState }).ConfigureAwait(false);
+            IPage page = await context.NewPageAsync().ConfigureAwait(false);
+            await page.GoToAsync(EmptyPage).ConfigureAwait(false);
+            Assert.That(await AssertAndGetSignCountAsync(page, Hostname).ConfigureAwait(false), Is.EqualTo(2));
+
+            // Storage state saved by older versions has no signCount, the counter starts from zero.
+            JsonNode legacyStorageState = JsonNode.Parse(storageState);
+            legacyStorageState["credentials"][0].AsObject().Remove("signCount");
+            IBrowserContext legacyContext = await _browser.NewContextAsync(new() { StorageState = legacyStorageState.ToJsonString() }).ConfigureAwait(false);
+            IPage legacyPage = await legacyContext.NewPageAsync().ConfigureAwait(false);
+            await legacyPage.GoToAsync(EmptyPage).ConfigureAwait(false);
+            Assert.That(await AssertAndGetSignCountAsync(legacyPage, Hostname).ConfigureAwait(false), Is.EqualTo(1));
+            await legacyContext.CloseAsync().ConfigureAwait(false);
+            await context.CloseAsync().ConfigureAwait(false);
+            await setupContext.CloseAsync().ConfigureAwait(false);
+        }
+
+        private static Task<long> AssertAndGetSignCountAsync(IPage page, string rpId)
+            => page.EvaluateAsync<long>(
+                SignCountScript,
+                new Dictionary<string, string>(StringComparer.Ordinal) { ["rpId"] = rpId });
+
+        private static void AssertCredential(VirtualCredential actual, VirtualCredential expected, long signCount)
+        {
+            Assert.That(actual.Id, Is.EqualTo(expected.Id));
+            Assert.That(actual.RpId, Is.EqualTo(expected.RpId));
+            Assert.That(actual.UserHandle, Is.EqualTo(expected.UserHandle));
+            Assert.That(actual.PrivateKey, Is.EqualTo(expected.PrivateKey));
+            Assert.That(actual.PublicKey, Is.EqualTo(expected.PublicKey));
+            Assert.That(actual.GetSignCount(), Is.EqualTo(signCount));
         }
 
         private static void EnsureServer()

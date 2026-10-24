@@ -51,17 +51,20 @@ namespace PlaywrightNative.Helpers
                     try { return obj instanceof ArrayBuffer || Object.prototype.toString.call(obj) === '[object ArrayBuffer]'; }
                     catch (error) { return false; }
                 }
+                function isMap(obj) {
+                    try { return obj instanceof Map || Object.prototype.toString.call(obj) === '[object Map]'; }
+                    catch (error) { return false; }
+                }
+                function isSet(obj) {
+                    try { return obj instanceof Set || Object.prototype.toString.call(obj) === '[object Set]'; }
+                    catch (error) { return false; }
+                }
                 const typedArrayConstructors = {
                     i8: Int8Array, ui8: Uint8Array, ui8c: Uint8ClampedArray,
                     i16: Int16Array, ui16: Uint16Array, i32: Int32Array, ui32: Uint32Array,
                     f32: Float32Array, f64: Float64Array, bi64: BigInt64Array, bui64: BigUint64Array
                 };
-                function typedArrayToBase64(array) {
-                    if ('toBase64' in array)
-                        return array.toBase64();
-                    const binary = Array.from(new Uint8Array(array.buffer, array.byteOffset, array.byteLength)).map(b => String.fromCharCode(b)).join('');
-                    return btoa(binary);
-                }
+                " + TypedArrayToBase64 + @"
                 function serializeAsCallArgument(value) {
                     const visitorInfo = { visited: new Map(), lastId: 0 };
                     function serialize(inner) {
@@ -117,6 +120,22 @@ namespace PlaywrightNative.Helpers
                         const existing = visitorInfo.visited.get(inner);
                         if (existing)
                             return { ref: existing };
+                        if (isMap(inner)) {
+                            const m = [];
+                            const id = ++visitorInfo.lastId;
+                            visitorInfo.visited.set(inner, id);
+                            for (const [k, v] of inner.entries())
+                                m.push({ k: serialize(k), v: serialize(v) });
+                            return { m: m, id: id };
+                        }
+                        if (isSet(inner)) {
+                            const s = [];
+                            const id = ++visitorInfo.lastId;
+                            visitorInfo.visited.set(inner, id);
+                            for (const item of inner.values())
+                                s.push(serialize(item));
+                            return { s: s, id: id };
+                        }
                         if (Array.isArray(inner)) {
                             const a = [];
                             const id = ++visitorInfo.lastId;
@@ -245,6 +264,50 @@ namespace PlaywrightNative.Helpers
                 }
             })()";
 
+        internal const string CollectOpfs =
+            @"(async () => {
+                " + TypedArrayToBase64 + @"
+                " + DirectoryEntries + @"
+                async function collect(directory, parentPath) {
+                    const entries = await directoryEntries(directory);
+                    entries.sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
+                    const results = await Promise.all(entries.map(async ([name, handle]) => {
+                        const path = parentPath ? parentPath + '/' + name : name;
+                        if (handle.kind === 'directory')
+                            return [{ path: path, type: 'directory' }, ...await collect(handle, path)];
+                        const file = await handle.getFile();
+                        const base64 = typedArrayToBase64(new Uint8Array(await file.arrayBuffer()));
+                        return [{ path: path, type: 'file', base64: base64 }];
+                    }));
+                    return results.flat();
+                }
+                try {
+                    return JSON.stringify(await collect(await navigator.storage.getDirectory(), ''));
+                } catch (e) {
+                    throw new Error('Unable to serialize OPFS: ' + (e && e.message ? e.message : e));
+                }
+            })()";
+
+        private const string TypedArrayToBase64 =
+            @"function typedArrayToBase64(array) {
+                    if ('toBase64' in array)
+                        return array.toBase64();
+                    const binary = Array.from(new Uint8Array(array.buffer, array.byteOffset, array.byteLength)).map(b => String.fromCharCode(b)).join('');
+                    return btoa(binary);
+                }";
+
+        private const string DirectoryEntries =
+            @"async function directoryEntries(directory) {
+                    const result = [];
+                    const iterator = directory.entries();
+                    while (true) {
+                        const entry = await iterator.next();
+                        if (entry.done)
+                            return result;
+                        result.push(entry.value);
+                    }
+                }";
+
         internal static string Restore(string originStateJson)
         {
             return @"(async () => {
@@ -295,6 +358,20 @@ namespace PlaywrightNative.Helpers
                                     continue;
                                 result[entry.k] = parseEvaluationResultValue(entry.v, handles, refs);
                             }
+                            return result;
+                        }
+                        if ('m' in value) {
+                            const result = new Map();
+                            refs.set(value.id, result);
+                            for (const entry of value.m)
+                                result.set(parseEvaluationResultValue(entry.k, handles, refs), parseEvaluationResultValue(entry.v, handles, refs));
+                            return result;
+                        }
+                        if ('s' in value) {
+                            const result = new Set();
+                            refs.set(value.id, result);
+                            for (const item of value.s)
+                                result.add(parseEvaluationResultValue(item, handles, refs));
                             return result;
                         }
                         if ('ta' in value) {
@@ -353,6 +430,40 @@ namespace PlaywrightNative.Helpers
                         db.close();
                     }
                 }
+                " + DirectoryEntries + @"
+                async function restoreOPFS() {
+                    let root;
+                    try {
+                        root = await navigator.storage.getDirectory();
+                    } catch (e) {
+                        // OPFS may be unavailable, e.g. on insecure origins or in WebKit contexts
+                        // that fail with 'unknown transient reason'. There is nothing to clear then,
+                        // so only fail when there are entries to restore.
+                        if (!originState || originState.opfs === undefined)
+                            return;
+                        throw e;
+                    }
+                    await Promise.all((await directoryEntries(root)).map(([name]) => root.removeEntry(name, { recursive: true })));
+                    for (const entry of (originState && originState.opfs) || []) {
+                        const parts = entry.path.split('/');
+                        let directory = root;
+                        for (const part of parts.slice(0, -1))
+                            directory = await directory.getDirectoryHandle(part, { create: true });
+                        const name = parts[parts.length - 1];
+                        if (entry.type === 'directory') {
+                            await directory.getDirectoryHandle(name, { create: true });
+                            continue;
+                        }
+                        const binary = atob(entry.base64);
+                        const bytes = new Uint8Array(binary.length);
+                        for (let i = 0; i < binary.length; i++)
+                            bytes[i] = binary.charCodeAt(i);
+                        const handle = await directory.getFileHandle(name, { create: true });
+                        const writable = await handle.createWritable();
+                        await writable.write(bytes);
+                        await writable.close();
+                    }
+                }
                 const registrations = navigator.serviceWorker ? await navigator.serviceWorker.getRegistrations() : [];
                 await Promise.all(registrations.map(async r => {
                     if (!r.installing && !r.waiting && !r.active)
@@ -373,6 +484,11 @@ namespace PlaywrightNative.Helpers
                 localStorage.clear();
                 for (const item of (originState && originState.localStorage) || [])
                     localStorage.setItem(item.name, item.value);
+                try {
+                    await restoreOPFS();
+                } catch (e) {
+                    throw new Error('Unable to restore OPFS: ' + (e && e.message ? e.message : e));
+                }
                 return true;
             })()";
         }
