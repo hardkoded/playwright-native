@@ -198,6 +198,21 @@ namespace PlaywrightNative
             };
         }
 
+        /// <summary>
+        /// Official <c>browserType.defaultArgs</c>: the arguments a launch
+        /// passes when <c>ignoreDefaultArgs</c> is not set.
+        /// </summary>
+        /// <param name="options">Launch options.</param>
+        /// <param name="isPersistent">Whether the launch is for a persistent context.</param>
+        /// <param name="userDataDir">User data directory.</param>
+        /// <returns>The argument list.</returns>
+        internal List<string> DefaultArgs(BrowserTypeLaunchOptions options, bool isPersistent, string userDataDir) => _name switch
+        {
+            "chromium" => PlaywrightNative.Chromium.ChromiumBrowserType.DefaultLaunchArgs(options, userDataDir),
+            "webkit" => PlaywrightNative.WebKit.WebkitBrowserType.DefaultLaunchArgs(options, isPersistent, userDataDir),
+            _ => throw new NotSupportedException("defaultArgs is not supported for " + _name + "."),
+        };
+
 #pragma warning disable SA1137, SA1201, SA1202, SA1208, SA1210, SA1502, SA1518, SA1600, SA1601, SA1611, SA1615, SA1648
         Task<IBrowser> IBrowserType.ConnectAsync(string endpoint, BrowserTypeConnectOptions options) => Task.FromResult<IBrowser>(default!);
 

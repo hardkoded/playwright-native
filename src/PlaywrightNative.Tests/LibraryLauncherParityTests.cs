@@ -26,7 +26,7 @@ namespace PlaywrightNative.Tests
 {
     /// <summary>
     /// Official <c>library/launcher.spec.ts</c> parity. Three portable
-    /// titles. Skip Node-only <c>should kill browser process on timeout
+    /// titles. Ignore Node-only <c>should kill browser process on timeout
     /// after close</c> (<c>__testHookGracefullyClose</c>).
     /// </summary>
     [TestFixture]
@@ -48,6 +48,14 @@ namespace PlaywrightNative.Tests
         {
             Assert.That(Playwright.Devices["iPhone 6"], Is.Not.Null);
             Assert.That(Playwright.Devices["iPhone 6"].DefaultBrowserType, Is.EqualTo("webkit"));
+        }
+
+        [PlaywrightTest("launcher.spec.ts", "should kill browser process on timeout after close")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public void ShouldKillBrowserProcessOnTimeoutAfterClose()
+        {
+            Assert.Ignore("Node __testHookGracefullyClose hook");
         }
 
         [PlaywrightTest("launcher.spec.ts", "should throw a friendly error if its headed and there is no xserver on linux running")]

@@ -176,7 +176,7 @@ namespace PlaywrightNative
                 string executablePath = await ResolveExecutablePathAsync(SupportedBrowser.Webkit, options).ConfigureAwait(false);
 
                 WebKit.WKBrowser wkBrowser = await WebKit.WebkitBrowserType
-                    .LaunchAsync(executablePath, options.Headless, args: ToArgArray(options.Args), proxy: options.Proxy, timeout: ResolveTimeout(options), environment: options.Env, loggerFactory: options.LoggerFactory, handleSIGINT: HandleSIGINT(options), handleSIGTERM: HandleSIGTERM(options), handleSIGHUP: HandleSIGHUP(options))
+                    .LaunchAsync(executablePath, options.Headless, args: ToArgArray(options.Args), proxy: options.Proxy, timeout: ResolveTimeout(options), environment: options.Env, loggerFactory: options.LoggerFactory, handleSIGINT: HandleSIGINT(options), handleSIGTERM: HandleSIGTERM(options), handleSIGHUP: HandleSIGHUP(options), ignoreDefaultArgs: options.IgnoreDefaultArgs)
                     .ConfigureAwait(false);
 
                 wkBrowser.LaunchDownloadsPath = ResolveDownloadsPath(options);
@@ -202,7 +202,7 @@ namespace PlaywrightNative
         {
             options ??= new BrowserTypeLaunchOptions();
             BrowserTypeLaunchGuard.ThrowIfPersistentForbidden(options);
-            ThrowIfPageArgument(options.Args);
+            ThrowIfPageArgument(options);
             ClientCertificatesProxy certsProxy = null;
             string resolvedDir = null;
             try
@@ -278,7 +278,7 @@ namespace PlaywrightNative
         {
             options ??= new BrowserTypeLaunchOptions();
             BrowserTypeLaunchGuard.ThrowIfPersistentForbidden(options);
-            ThrowIfPageArgument(options.Args);
+            ThrowIfPageArgument(options);
             string executablePath = await ResolveExecutablePathAsync(SupportedBrowser.Firefox, options).ConfigureAwait(false);
             bool ownsUserDataDir = string.IsNullOrEmpty(userDataDir);
             string resolvedDir = ResolveUserDataDir(userDataDir);
@@ -316,7 +316,7 @@ namespace PlaywrightNative
         {
             options ??= new BrowserTypeLaunchOptions();
             BrowserTypeLaunchGuard.ThrowIfPersistentForbidden(options);
-            ThrowIfPageArgument(options.Args);
+            ThrowIfPageArgument(options);
             ClientCertificatesProxy webkitCertsProxy = null;
             try
             {
@@ -339,7 +339,8 @@ namespace PlaywrightNative
                         deleteUserDataDirOnClose: ownsUserDataDir,
                         handleSIGINT: HandleSIGINT(options),
                         handleSIGTERM: HandleSIGTERM(options),
-                        handleSIGHUP: HandleSIGHUP(options))
+                        handleSIGHUP: HandleSIGHUP(options),
+                        ignoreDefaultArgs: options.IgnoreDefaultArgs)
                     .ConfigureAwait(false);
 
                 wkBrowser.LaunchDownloadsPath = ResolveDownloadsPath(options);
@@ -355,8 +356,8 @@ namespace PlaywrightNative
 
                 // Apply locale / userAgent before the initial about:blank finishes
                 // init. setLanguages must precede document creation (locale stays
-                // en-US otherwise), and userAgent must be known before
-                // EnsureDefaultUserAgentHasSafariTokenAsync runs on macOS.
+                // en-US otherwise), and the initial page must get the explicit
+                // userAgent instead of the default one.
                 if (options is BrowserTypeLaunchPersistentContextOptions persistentEarly
                     && context is WebKit.WKBrowserContext webkitEarly
                     && (!string.IsNullOrEmpty(persistentEarly.Locale)
@@ -731,14 +732,15 @@ namespace PlaywrightNative
             return resolved;
         }
 
-        private static void ThrowIfPageArgument(IEnumerable<string> args)
+        private static void ThrowIfPageArgument(BrowserTypeLaunchOptions options)
         {
-            if (args == null)
+            // Official _innerDefaultArgs check: skipped with ignoreDefaultArgs.
+            if (options.Args == null || options.IgnoreDefaultArgs)
             {
                 return;
             }
 
-            foreach (string arg in args)
+            foreach (string arg in options.Args)
             {
                 if (!string.IsNullOrEmpty(arg) && !arg.StartsWith('-'))
                 {

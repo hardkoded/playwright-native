@@ -26,7 +26,7 @@ namespace PlaywrightNative.Tests
 {
     /// <summary>
     /// Official <c>library/browsertype-launch.spec.ts</c> parity. Twelve
-    /// portable titles. Skip Node-only <c>should handle timeout</c> and
+    /// portable titles. Ignore Node-only <c>should handle timeout</c> and
     /// <c>should handle exception and report launch log</c>
     /// (<c>__testHookBeforeCreateBrowser</c>).
     /// </summary>
@@ -130,6 +130,22 @@ namespace PlaywrightNative.Tests
             PlaywrightException error = Assert.CatchAsync<PlaywrightException>(
                 () => CurrentBrowserType().LaunchAsync(new BrowserTypeLaunchOptions { ExecutablePath = "random-invalid-path" }));
             Assert.That(error.Message, Does.Contain("Failed to launch"));
+        }
+
+        [PlaywrightTest("browsertype-launch.spec.ts", "should handle timeout")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public void ShouldHandleTimeout()
+        {
+            Assert.Ignore("Node __testHookBeforeCreateBrowser hook");
+        }
+
+        [PlaywrightTest("browsertype-launch.spec.ts", "should handle exception and report launch log")]
+        [Test]
+        [Timeout(TestConstants.DefaultTestTimeout)]
+        public void ShouldHandleExceptionAndReportLaunchLog()
+        {
+            Assert.Ignore("Node __testHookBeforeCreateBrowser hook");
         }
 
         [PlaywrightTest("browsertype-launch.spec.ts", "should accept objects as options")]

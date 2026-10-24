@@ -1067,6 +1067,8 @@ namespace PlaywrightNative.Chromium
             // Create the CRPage and initialize it.
             CRPage crPage = new(pageSession, targetId, this, _loggerFactory);
             crPage.SkipDefaultOverrides = _noDefaults && _adoptingExistingTargets;
+            crPage.HasPendingStartupUrl = !PopupOpenedHelper.IsBlankUrl(
+                targetInfo.TryGetProperty("url", out JsonElement startupUrlEl) ? startupUrlEl.GetString() : null);
             _crPages.TryAdd(targetId, crPage);
 
             // Notify the context that a page was created.
